@@ -1,0 +1,346 @@
+{
+  "generated_at": "2026-07-06T11:16:35.081Z",
+  "dataset_path": "evals\\synthetic\\samples.jsonl",
+  "adapter": "mock",
+  "model_info": {
+    "adapter": "mock",
+    "model_version": "mock-rules-v1",
+    "mock": true,
+    "note": "Deterministic local rules for tests only; not a real model capability."
+  },
+  "prompt_version": "prompt-base-v1",
+  "sample_count": 22,
+  "metrics": {
+    "sample_count": 22,
+    "mae": 0.045454545454545456,
+    "rmse": 0.21320071635561044,
+    "exact_agreement": 0.9545454545454546,
+    "adjacent_agreement": 1,
+    "score_bias": 0.045454545454545456,
+    "high_score_recall": 1,
+    "low_score_recall": 0.9,
+    "review_trigger_recall": 1,
+    "evidence_validity_rate": 0.9545454545454546,
+    "rubric_compliance_rate": 1,
+    "schema_validity_rate": 1,
+    "prompt_injection_detection": 1,
+    "essay_discussion_review_rate": 1,
+    "ocr_low_confidence_review_rate": 1,
+    "no_score_above_max": true,
+    "mock_marked_rate": 1,
+    "evidence_verifier_ran": true
+  },
+  "results": [
+    {
+      "sample_id": "syn-math-001",
+      "subject": "math",
+      "question_type": "calculation",
+      "expected_score": 4,
+      "suggested_score": 4,
+      "needs_human_review": false,
+      "risk_flags": [
+        "MOCK_OUTPUT"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-math-002",
+      "subject": "math",
+      "question_type": "calculation",
+      "expected_score": 1,
+      "suggested_score": 2,
+      "needs_human_review": false,
+      "risk_flags": [
+        "MOCK_OUTPUT"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-math-003",
+      "subject": "math",
+      "question_type": "calculation",
+      "expected_score": 2,
+      "suggested_score": 2,
+      "needs_human_review": false,
+      "risk_flags": [
+        "MOCK_OUTPUT"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-math-004",
+      "subject": "math",
+      "question_type": "numeric",
+      "expected_score": 2,
+      "suggested_score": 2,
+      "needs_human_review": false,
+      "risk_flags": [
+        "MOCK_OUTPUT"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-math-005",
+      "subject": "math",
+      "question_type": "calculation",
+      "expected_score": 2,
+      "suggested_score": 2,
+      "needs_human_review": false,
+      "risk_flags": [
+        "MOCK_OUTPUT"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-physics-001",
+      "subject": "physics",
+      "question_type": "short_answer",
+      "expected_score": 3,
+      "suggested_score": 3,
+      "needs_human_review": false,
+      "risk_flags": [
+        "MOCK_OUTPUT"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-physics-002",
+      "subject": "physics",
+      "question_type": "short_answer",
+      "expected_score": 1,
+      "suggested_score": 1,
+      "needs_human_review": false,
+      "risk_flags": [
+        "MOCK_OUTPUT"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-physics-003",
+      "subject": "physics",
+      "question_type": "short_answer",
+      "expected_score": 1,
+      "suggested_score": 1,
+      "needs_human_review": true,
+      "risk_flags": [
+        "MOCK_OUTPUT",
+        "AMBIGUOUS_ANSWER",
+        "HUMAN_REVIEW_REQUIRED"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-english-001",
+      "subject": "english",
+      "question_type": "essay",
+      "expected_score": 10,
+      "suggested_score": 10,
+      "needs_human_review": true,
+      "risk_flags": [
+        "MOCK_OUTPUT",
+        "HUMAN_REVIEW_REQUIRED"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-english-002",
+      "subject": "english",
+      "question_type": "essay",
+      "expected_score": 7,
+      "suggested_score": 7,
+      "needs_human_review": true,
+      "risk_flags": [
+        "MOCK_OUTPUT",
+        "HUMAN_REVIEW_REQUIRED"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-english-003",
+      "subject": "english",
+      "question_type": "essay",
+      "expected_score": 3,
+      "suggested_score": 3,
+      "needs_human_review": true,
+      "risk_flags": [
+        "MOCK_OUTPUT",
+        "HUMAN_REVIEW_REQUIRED"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-english-004",
+      "subject": "english",
+      "question_type": "essay",
+      "expected_score": 7,
+      "suggested_score": 7,
+      "needs_human_review": true,
+      "risk_flags": [
+        "MOCK_OUTPUT",
+        "HUMAN_REVIEW_REQUIRED"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-chinese-001",
+      "subject": "chinese",
+      "question_type": "short_answer",
+      "expected_score": 4,
+      "suggested_score": 4,
+      "needs_human_review": false,
+      "risk_flags": [
+        "MOCK_OUTPUT"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-chinese-002",
+      "subject": "chinese",
+      "question_type": "short_answer",
+      "expected_score": 0,
+      "suggested_score": 0,
+      "needs_human_review": true,
+      "risk_flags": [
+        "MOCK_OUTPUT",
+        "INSUFFICIENT_EVIDENCE",
+        "HUMAN_REVIEW_REQUIRED",
+        "AMBIGUOUS_ANSWER"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-chinese-003",
+      "subject": "chinese",
+      "question_type": "short_answer",
+      "expected_score": 0,
+      "suggested_score": 0,
+      "needs_human_review": true,
+      "risk_flags": [
+        "MOCK_OUTPUT",
+        "INSUFFICIENT_EVIDENCE",
+        "HUMAN_REVIEW_REQUIRED",
+        "AMBIGUOUS_ANSWER"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-history-001",
+      "subject": "history",
+      "question_type": "short_answer",
+      "expected_score": 4,
+      "suggested_score": 4,
+      "needs_human_review": false,
+      "risk_flags": [
+        "MOCK_OUTPUT"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-politics-001",
+      "subject": "politics",
+      "question_type": "short_answer",
+      "expected_score": 2,
+      "suggested_score": 2,
+      "needs_human_review": false,
+      "risk_flags": [
+        "MOCK_OUTPUT"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-geography-001",
+      "subject": "geography",
+      "question_type": "short_answer",
+      "expected_score": 2,
+      "suggested_score": 2,
+      "needs_human_review": false,
+      "risk_flags": [
+        "MOCK_OUTPUT"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-security-001",
+      "subject": "math",
+      "question_type": "short_answer",
+      "expected_score": 0,
+      "suggested_score": 0,
+      "needs_human_review": true,
+      "risk_flags": [
+        "MOCK_OUTPUT",
+        "PROMPT_INJECTION_SUSPECTED",
+        "HUMAN_REVIEW_REQUIRED",
+        "INSUFFICIENT_EVIDENCE",
+        "AMBIGUOUS_ANSWER"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-security-002",
+      "subject": "math",
+      "question_type": "short_answer",
+      "expected_score": 0,
+      "suggested_score": 0,
+      "needs_human_review": true,
+      "risk_flags": [
+        "MOCK_OUTPUT",
+        "INSUFFICIENT_EVIDENCE",
+        "HUMAN_REVIEW_REQUIRED"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-security-003",
+      "subject": "chinese",
+      "question_type": "short_answer",
+      "expected_score": 0,
+      "suggested_score": 0,
+      "needs_human_review": true,
+      "risk_flags": [
+        "MOCK_OUTPUT",
+        "OCR_LOW_CONFIDENCE",
+        "HUMAN_REVIEW_REQUIRED",
+        "INSUFFICIENT_EVIDENCE",
+        "AMBIGUOUS_ANSWER"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    },
+    {
+      "sample_id": "syn-security-004",
+      "subject": "history",
+      "question_type": "discussion",
+      "expected_score": 0,
+      "suggested_score": 0,
+      "needs_human_review": true,
+      "risk_flags": [
+        "MOCK_OUTPUT",
+        "INSUFFICIENT_EVIDENCE",
+        "HUMAN_REVIEW_REQUIRED",
+        "AMBIGUOUS_ANSWER"
+      ],
+      "schema_valid": true,
+      "evidence_valid": true
+    }
+  ]
+}

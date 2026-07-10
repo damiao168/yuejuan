@@ -1,0 +1,639 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  App,
+  Button,
+  Descriptions,
+  Drawer,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Space,
+  Switch,
+  Table,
+  type SelectProps,
+  type TableColumnsType
+} from "antd";
+import { Archive, Eye, FileClock, Pencil, Plus, RefreshCw, Save, Search } from "lucide-react";
+import { ApiClientError } from "../api/client";
+import {
+  archiveExam,
+  createExam,
+  getExam,
+  listExams,
+  updateExam,
+  updateExamStatus,
+  type Exam,
+  type ExamPayload
+} from "../api/exams";
+import { listClasses, listGrades, listSchools, type Grade, type School, type SchoolClass } from "../api/org";
+import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { StatusTag } from "../components/StatusTag";
+import type { StatusTone } from "../types";
+
+const statusFlow = ["draft", "configured", "collecting", "grading", "reviewing", "finalized", "published", "archived"];
+
+const statusLabels: Record<string, string> = {
+  draft: "草稿",
+  configured: "已配置",
+  collecting: "采集中",
+  grading: "阅卷中",
+  reviewing: "复核中",
+  finalized: "已定稿",
+  published: "已发布",
+  archived: "已归档"
+};
+
+const subjectOptions = [
+  { label: "语文", value: "chinese" },
+  { label: "数学", value: "math" },
+  { label: "英语", value: "english" },
+  { label: "物理", value: "physics" },
+  { label: "化学", value: "chemistry" },
+  { label: "生物", value: "biology" },
+  { label: "历史", value: "history" },
+  { label: "地理", value: "geography" },
+  { label: "政治", value: "politics" }
+];
+
+const examTypeOptions = [
+  { label: "正式考试", value: "formal_exam" },
+  { label: "联考", value: "joint_exam" },
+  { label: "模拟考试", value: "mock_exam" },
+  { label: "阶段测验", value: "quiz" },
+  { label: "作业", value: "homework" }
+];
+
+const gradingModeOptions = [
+  { label: "仅客观题自动", value: "auto_objective_only" },
+  { label: "AI 辅助 + 人工确认", value: "ai_assisted" },
+  { label: "必须人工复核", value: "human_review_required" },
+  { label: "双评", value: "double_mark" },
+  { label: "盲双评", value: "blind_double_mark" }
+];
+
+const publishPolicyOptions = [
+  { label: "管理员审批后发布", value: "after_admin_approval" },
+  { label: "阅卷完成后手动发布", value: "manual_publish" },
+  { label: "成绩确认后自动发布", value: "after_grade_confirmation" }
+];
+
+interface ExamFormValues {
+  school_id: string;
+  name: string;
+  subject: string;
+  exam_type: string;
+  total_score: number;
+  grading_mode: string;
+  appeal_enabled: boolean;
+  publish_policy: string;
+  class_ids: string[];
+}
+
+interface Filters {
+  search: string;
+  schoolId: string;
+  subject: string;
+  gradeId: string;
+  status: string;
+  examType: string;
+}
+
+function labelFrom(options: { label: string; value: string }[], value: string) {
+  return options.find((item) => item.value === value)?.label ?? value;
+}
+
+function statusTone(status: string): StatusTone {
+  if (status === "published" || status === "finalized") {
+    return "success";
+  }
+  if (status === "archived") {
+    return "neutral";
+  }
+  if (status === "draft" || status === "configured") {
+    return "info";
+  }
+  if (status === "reviewing") {
+    return "warning";
+  }
+  return "processing";
+}
+
+function nextStatus(status: string) {
+  const index = statusFlow.indexOf(status);
+  return index >= 0 && index < statusFlow.length - 1 ? statusFlow[index + 1] : null;
+}
+
+function isLocked(status: string) {
+  return status === "published" || status === "archived";
+}
+
+function formatError(error: unknown) {
+  if (error instanceof ApiClientError) {
+    return `${error.status} ${error.code}: ${error.message}`;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "未知错误";
+}
+
+function formatTime(value?: string) {
+  if (!value) {
+    return "后端未返回";
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("zh-CN", { hour12: false });
+}
+
+export function ExamManagementPage({ canManage }: { canManage: boolean }) {
+  const { message, modal } = App.useApp();
+  const [form] = Form.useForm<ExamFormValues>();
+  const watchedSchoolId = Form.useWatch("school_id", form);
+  const [filters, setFilters] = useState<Filters>({ search: "", schoolId: "", subject: "", gradeId: "", status: "", examType: "" });
+  const [exams, setExams] = useState<Exam[]>([]);
+  const [schools, setSchools] = useState<School[]>([]);
+  const [grades, setGrades] = useState<Grade[]>([]);
+  const [classes, setClasses] = useState<SchoolClass[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [drawer, setDrawer] = useState<{ mode: "create" | "edit"; exam?: Exam } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailExam, setDetailExam] = useState<Exam | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [actioningId, setActioningId] = useState<string | null>(null);
+  const hasSession = true;
+  const canWrite = canManage && hasSession;
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    if (!hasSession) {
+      setExams([]);
+      setSchools([]);
+      setGrades([]);
+      setClasses([]);
+      setError("当前没有有效登录会话，无法调用真实后端 API。");
+      setLoading(false);
+      return;
+    }
+    try {
+      const [examResult, schoolResult, gradeResult, classResult] = await Promise.all([
+        listExams({ status: filters.status || undefined, school_id: filters.schoolId || undefined }),
+        listSchools(),
+        listGrades(filters.schoolId || undefined),
+        listClasses()
+      ]);
+      setExams(examResult.exams);
+      setSchools(schoolResult.schools);
+      setGrades(gradeResult.grades);
+      setClasses(classResult.classes);
+    } catch (currentError) {
+      setError(formatError(currentError));
+    } finally {
+      setLoading(false);
+    }
+  }, [filters.schoolId, filters.status]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  useEffect(() => {
+    if (!drawer) {
+      return;
+    }
+    if (drawer.mode === "create") {
+      form.setFieldsValue({
+        appeal_enabled: true,
+        publish_policy: "after_admin_approval",
+        grading_mode: "ai_assisted",
+        total_score: 100,
+        class_ids: []
+      });
+      return;
+    }
+    if (drawer.exam) {
+      form.setFieldsValue({
+        school_id: drawer.exam.school_id,
+        name: drawer.exam.name,
+        subject: drawer.exam.subject,
+        exam_type: drawer.exam.exam_type,
+        total_score: drawer.exam.total_score,
+        grading_mode: drawer.exam.grading_mode,
+        appeal_enabled: drawer.exam.appeal_enabled,
+        publish_policy: drawer.exam.publish_policy,
+        class_ids: drawer.exam.class_ids
+      });
+    }
+  }, [drawer, form]);
+
+  const schoolById = useMemo(() => new Map(schools.map((school) => [school.id, school])), [schools]);
+  const gradeById = useMemo(() => new Map(grades.map((grade) => [grade.id, grade])), [grades]);
+  const classById = useMemo(() => new Map(classes.map((schoolClass) => [schoolClass.id, schoolClass])), [classes]);
+
+  const gradeOptions = useMemo(() => grades.map((grade) => ({ label: grade.name, value: grade.id })), [grades]);
+  const schoolOptions = useMemo(() => schools.map((school) => ({ label: school.name, value: school.id })), [schools]);
+
+  const classOptions = useMemo<SelectProps["options"]>(() => {
+    const availableClasses = classes.filter((schoolClass) => !watchedSchoolId || schoolClass.school_id === watchedSchoolId);
+    const grouped = grades
+      .map((grade) => ({
+        label: grade.name,
+        options: availableClasses
+          .filter((schoolClass) => schoolClass.grade_id === grade.id)
+          .map((schoolClass) => ({ label: `${schoolClass.name} (${schoolClass.code})`, value: schoolClass.id }))
+      }))
+      .filter((group) => group.options.length > 0);
+    const ungrouped = availableClasses
+      .filter((schoolClass) => !gradeById.has(schoolClass.grade_id))
+      .map((schoolClass) => ({ label: `${schoolClass.name} (${schoolClass.code})`, value: schoolClass.id }));
+    return ungrouped.length > 0 ? [...grouped, { label: "未关联年级", options: ungrouped }] : grouped;
+  }, [classes, gradeById, grades, watchedSchoolId]);
+
+  const gradeNamesForExam = useCallback(
+    (exam: Exam) => {
+      const gradeNames = new Set<string>();
+      for (const classId of exam.class_ids) {
+        const schoolClass = classById.get(classId);
+        const grade = schoolClass ? gradeById.get(schoolClass.grade_id) : undefined;
+        if (grade) {
+          gradeNames.add(grade.name);
+        }
+      }
+      return gradeNames.size > 0 ? Array.from(gradeNames).join("、") : "未关联年级";
+    },
+    [classById, gradeById]
+  );
+
+  const filteredExams = useMemo(() => {
+    const keyword = filters.search.trim().toLowerCase();
+    return exams.filter((exam) => {
+      const keywordMatched =
+        !keyword ||
+        exam.name.toLowerCase().includes(keyword) ||
+        exam.subject.toLowerCase().includes(keyword) ||
+        exam.created_by.toLowerCase().includes(keyword);
+      const subjectMatched = !filters.subject || exam.subject === filters.subject;
+      const typeMatched = !filters.examType || exam.exam_type === filters.examType;
+      const gradeMatched =
+        !filters.gradeId ||
+        exam.class_ids.some((classId) => {
+          const schoolClass = classById.get(classId);
+          return schoolClass?.grade_id === filters.gradeId;
+        });
+      return keywordMatched && subjectMatched && typeMatched && gradeMatched;
+    });
+  }, [classById, exams, filters.examType, filters.gradeId, filters.search, filters.subject]);
+
+  const openDetail = async (exam: Exam) => {
+    setDetailOpen(true);
+    setDetailExam(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      const result = await getExam(exam.id);
+      setDetailExam(result.exam);
+    } catch (currentError) {
+      setDetailError(formatError(currentError));
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const submitForm = async () => {
+    if (!hasSession) {
+      message.error("未配置真实后端访问令牌，无法提交考试。");
+      return;
+    }
+    const values = await form.validateFields();
+    const payload: ExamPayload = {
+      school_id: values.school_id,
+      name: values.name,
+      subject: values.subject,
+      exam_type: values.exam_type,
+      total_score: values.total_score,
+      grading_mode: values.grading_mode,
+      appeal_enabled: values.appeal_enabled,
+      publish_policy: values.publish_policy,
+      class_ids: values.class_ids
+    };
+    setSubmitting(true);
+    try {
+      if (drawer?.mode === "edit" && drawer.exam) {
+        await updateExam(drawer.exam.id, payload);
+        message.success("考试已更新");
+      } else {
+        await createExam(payload);
+        message.success("考试已创建");
+      }
+      setDrawer(null);
+      await loadData();
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const changeStatus = (exam: Exam, status: string) => {
+    modal.confirm({
+      title: "确认推进考试状态",
+      content: `将“${exam.name}”推进到“${statusLabels[status] ?? status}”。`,
+      okText: "确认",
+      cancelText: "取消",
+      onOk: async () => {
+        setActioningId(exam.id);
+        try {
+          await updateExamStatus(exam.id, status);
+          message.success("状态已更新");
+          await loadData();
+        } catch (currentError) {
+          message.error(formatError(currentError));
+        } finally {
+          setActioningId(null);
+        }
+      }
+    });
+  };
+
+  const archive = (exam: Exam) => {
+    modal.confirm({
+      title: "确认归档考试",
+      content: `归档后“${exam.name}”将不能继续编辑核心配置。`,
+      okText: "归档",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        setActioningId(exam.id);
+        try {
+          await archiveExam(exam.id);
+          message.success("考试已归档");
+          await loadData();
+        } catch (currentError) {
+          message.error(formatError(currentError));
+        } finally {
+          setActioningId(null);
+        }
+      }
+    });
+  };
+
+  const columns: TableColumnsType<Exam> = [
+    { title: "考试名称", dataIndex: "name", fixed: "left", width: 220 },
+    { title: "学科", dataIndex: "subject", width: 100, render: (value: string) => labelFrom(subjectOptions, value) },
+    { title: "年级", width: 150, render: (_, exam) => gradeNamesForExam(exam) },
+    { title: "班级数量", width: 100, render: (_, exam) => exam.class_ids.length },
+    { title: "总分", dataIndex: "total_score", width: 90 },
+    { title: "状态", dataIndex: "status", width: 110, render: (value: string) => <StatusTag tone={statusTone(value)}>{statusLabels[value] ?? value}</StatusTag> },
+    { title: "阅卷模式", dataIndex: "grading_mode", width: 160, render: (value: string) => labelFrom(gradingModeOptions, value) },
+    { title: "创建人", dataIndex: "created_by", width: 130 },
+    {
+      title: "创建时间",
+      dataIndex: "created_at",
+      width: 150,
+      render: (value?: string) => (value ? formatTime(value) : <StatusTag tone="neutral">后端未返回</StatusTag>)
+    },
+    {
+      title: "操作",
+      fixed: "right",
+      width: 300,
+      render: (_, exam) => {
+        const next = nextStatus(exam.status);
+        const locked = isLocked(exam.status);
+        return (
+          <Space className="table-actions" wrap>
+            <Button size="small" icon={<Eye size={14} />} onClick={() => void openDetail(exam)}>
+              详情
+            </Button>
+            <Button
+              size="small"
+              icon={<Pencil size={14} />}
+              disabled={!canWrite || locked}
+              onClick={() => setDrawer({ mode: "edit", exam })}
+            >
+              编辑
+            </Button>
+            {next && next !== "archived" ? (
+              <Button size="small" disabled={!canWrite} loading={actioningId === exam.id} onClick={() => changeStatus(exam, next)}>
+                推进到{statusLabels[next] ?? next}
+              </Button>
+            ) : null}
+            {exam.status !== "archived" ? (
+              <Button size="small" danger icon={<Archive size={14} />} disabled={!canWrite} loading={actioningId === exam.id} onClick={() => archive(exam)}>
+                归档
+              </Button>
+            ) : null}
+          </Space>
+        );
+      }
+    }
+  ];
+
+  const formDisabled = !canWrite || (drawer?.mode === "edit" && drawer.exam ? isLocked(drawer.exam.status) : false);
+
+  return (
+    <div className="page-stack">
+      <section className="page-heading">
+        <div>
+          <Space>
+            <h1>考试管理</h1>
+            <StatusTag tone="success">真实 API</StatusTag>
+          </Space>
+          <p>创建考试、维护班级范围、推进考试状态和进入后续配置流程。</p>
+        </div>
+        <Space wrap>
+          <Button icon={<RefreshCw size={16} />} onClick={() => void loadData()} loading={loading}>
+            刷新
+          </Button>
+          <Button type="primary" icon={<Plus size={16} />} disabled={!canWrite} onClick={() => setDrawer({ mode: "create" })}>
+            新建考试
+          </Button>
+        </Space>
+      </section>
+
+      {!hasSession ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="未检测到真实后端访问令牌"
+            description="维护考试范围、阅卷方式、发布策略和当前状态。"
+        />
+      ) : null}
+
+      <section className="workspace-section filter-panel">
+        <div className="filter-grid">
+          <Input
+            prefix={<Search size={16} />}
+            placeholder="搜索考试名称、学科、创建人"
+            value={filters.search}
+            onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
+          />
+          <Select
+            placeholder="学校"
+            allowClear
+            value={filters.schoolId || undefined}
+            options={schoolOptions}
+            onChange={(value) => setFilters((current) => ({ ...current, schoolId: value ?? "", gradeId: "" }))}
+          />
+          <Select
+            placeholder="学科"
+            allowClear
+            value={filters.subject || undefined}
+            options={subjectOptions}
+            onChange={(value) => setFilters((current) => ({ ...current, subject: value ?? "" }))}
+          />
+          <Select
+            placeholder="年级"
+            allowClear
+            value={filters.gradeId || undefined}
+            options={gradeOptions}
+            onChange={(value) => setFilters((current) => ({ ...current, gradeId: value ?? "" }))}
+          />
+          <Select
+            placeholder="状态"
+            allowClear
+            value={filters.status || undefined}
+            options={statusFlow.map((status) => ({ label: statusLabels[status], value: status }))}
+            onChange={(value) => setFilters((current) => ({ ...current, status: value ?? "" }))}
+          />
+          <Select
+            placeholder="考试类型"
+            allowClear
+            value={filters.examType || undefined}
+            options={examTypeOptions}
+            onChange={(value) => setFilters((current) => ({ ...current, examType: value ?? "" }))}
+          />
+        </div>
+      </section>
+
+      {loading ? (
+        <section className="workspace-section">
+          <LoadingState label="正在读取考试和组织数据" />
+        </section>
+      ) : error ? (
+        <ErrorState message={error} onRetry={() => void loadData()} />
+      ) : (
+        <section className="workspace-section">
+          <div className="section-head">
+            <div>
+              <h2>考试列表</h2>
+              <p>{filteredExams.length} 条真实 API 记录</p>
+            </div>
+          </div>
+          <Table<Exam>
+            rowKey="id"
+            dataSource={filteredExams}
+            columns={columns}
+            scroll={{ x: "max-content" }}
+            pagination={{ pageSize: 8, showSizeChanger: false }}
+            locale={{ emptyText: <EmptyState title="暂无考试" description="当前筛选条件下没有后端返回的考试记录。" /> }}
+            size="middle"
+          />
+        </section>
+      )}
+
+      <Drawer
+        title={drawer?.mode === "edit" ? "编辑考试" : "新建考试"}
+        open={Boolean(drawer)}
+        onClose={() => setDrawer(null)}
+        width={720}
+        destroyOnClose
+        extra={
+          <Space>
+            <Button onClick={() => form.resetFields()}>重置</Button>
+            <Button type="primary" icon={<Save size={16} />} loading={submitting} disabled={formDisabled} onClick={() => void submitForm()}>
+              保存
+            </Button>
+          </Space>
+        }
+      >
+        {formDisabled && drawer?.mode === "edit" ? (
+          <Alert type="info" showIcon message="当前考试状态不允许编辑核心配置" className="drawer-alert" />
+        ) : null}
+        <Form form={form} layout="vertical" disabled={formDisabled} preserve={false}>
+          <div className="form-grid">
+            <Form.Item label="考试名称" name="name" rules={[{ required: true, message: "请输入考试名称" }]}>
+              <Input placeholder="高二物理期末考试" />
+            </Form.Item>
+            <Form.Item label="学校" name="school_id" rules={[{ required: true, message: "请选择学校" }]}>
+              <Select options={schoolOptions} placeholder="选择学校" />
+            </Form.Item>
+            <Form.Item label="学科" name="subject" rules={[{ required: true, message: "请选择学科" }]}>
+              <Select options={subjectOptions} placeholder="选择学科" />
+            </Form.Item>
+            <Form.Item label="考试类型" name="exam_type" rules={[{ required: true, message: "请选择考试类型" }]}>
+              <Select options={examTypeOptions} placeholder="选择考试类型" />
+            </Form.Item>
+            <Form.Item label="总分" name="total_score" rules={[{ required: true, message: "请输入总分" }]}>
+              <InputNumber min={1} max={1000} precision={1} className="full-width-control" />
+            </Form.Item>
+            <Form.Item label="阅卷模式" name="grading_mode" rules={[{ required: true, message: "请选择阅卷模式" }]}>
+              <Select options={gradingModeOptions} placeholder="选择阅卷模式" />
+            </Form.Item>
+            <Form.Item label="成绩发布策略" name="publish_policy" rules={[{ required: true, message: "请选择发布策略" }]}>
+              <Select options={publishPolicyOptions} placeholder="选择发布策略" />
+            </Form.Item>
+            <Form.Item label="允许申诉" name="appeal_enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </div>
+          <Form.Item
+            label="选择班级"
+            name="class_ids"
+            rules={[
+              { required: true, message: "请选择至少一个班级" },
+              { type: "array", min: 1, message: "请选择至少一个班级" }
+            ]}
+          >
+            <Select mode="multiple" options={classOptions} placeholder="按年级选择班级" optionFilterProp="label" />
+          </Form.Item>
+        </Form>
+      </Drawer>
+
+      <Drawer title="考试详情" open={detailOpen} onClose={() => setDetailOpen(false)} width={680}>
+        {detailLoading ? (
+          <LoadingState label="正在读取考试详情" />
+        ) : detailError ? (
+          <ErrorState message={detailError} />
+        ) : detailExam ? (
+          <div className="detail-stack">
+            <Descriptions bordered column={1} size="small">
+              <Descriptions.Item label="考试名称">{detailExam.name}</Descriptions.Item>
+              <Descriptions.Item label="学校">{schoolById.get(detailExam.school_id)?.name ?? detailExam.school_id}</Descriptions.Item>
+              <Descriptions.Item label="学科">{labelFrom(subjectOptions, detailExam.subject)}</Descriptions.Item>
+              <Descriptions.Item label="考试类型">{labelFrom(examTypeOptions, detailExam.exam_type)}</Descriptions.Item>
+              <Descriptions.Item label="年级">{gradeNamesForExam(detailExam)}</Descriptions.Item>
+              <Descriptions.Item label="班级数量">{detailExam.class_ids.length}</Descriptions.Item>
+              <Descriptions.Item label="总分">{detailExam.total_score}</Descriptions.Item>
+              <Descriptions.Item label="状态">
+                <StatusTag tone={statusTone(detailExam.status)}>{statusLabels[detailExam.status] ?? detailExam.status}</StatusTag>
+              </Descriptions.Item>
+              <Descriptions.Item label="阅卷模式">{labelFrom(gradingModeOptions, detailExam.grading_mode)}</Descriptions.Item>
+              <Descriptions.Item label="允许申诉">{detailExam.appeal_enabled ? "是" : "否"}</Descriptions.Item>
+              <Descriptions.Item label="成绩发布策略">{labelFrom(publishPolicyOptions, detailExam.publish_policy)}</Descriptions.Item>
+              <Descriptions.Item label="创建人">{detailExam.created_by}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{formatTime(detailExam.created_at)}</Descriptions.Item>
+            </Descriptions>
+
+            <div className="detail-status-grid">
+              {["试卷配置状态", "答卷采集状态", "阅卷进度", "成绩发布状态"].map((item) => (
+                <div className="detail-status-item" key={item}>
+                  <span>{item}</span>
+                  <StatusTag tone="neutral">待后续 API 支持</StatusTag>
+                </div>
+              ))}
+            </div>
+
+            <Button icon={<FileClock size={16} />} onClick={() => (window.location.hash = "/audit")}>
+              审计记录入口
+            </Button>
+          </div>
+        ) : null}
+      </Drawer>
+    </div>
+  );
+}

@@ -1,0 +1,205 @@
+package paper
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"edugrade-enterprise/services/api-gateway/internal/auth"
+	"edugrade-enterprise/services/api-gateway/internal/httpx"
+	"edugrade-enterprise/services/api-gateway/internal/logger"
+)
+
+type Handler struct {
+	store Store
+	audit auth.Store
+}
+
+func NewHandler(store Store, audit auth.Store) *Handler {
+	return &Handler{store: store, audit: audit}
+}
+
+func (h *Handler) CreatePaper(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	examID := r.PathValue("examId")
+	var input CreatePaperInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.FileAssetID == "" && (input.File.OriginalName == "" || input.File.ContentType == "" || input.File.HashSHA256 == "" || input.File.StorageKey == "" || input.File.SizeBytes <= 0) {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_paper_file", "file metadata is incomplete")
+		return
+	}
+	out, err := h.store.CreatePaper(r.Context(), user.TenantID, examID, user.ID, input)
+	if err != nil {
+		if errors.Is(err, ErrInvalidInput) {
+			httpx.Error(w, r, http.StatusBadRequest, "paper_file_scope_mismatch", "file asset does not belong to this exam")
+			return
+		}
+		httpx.Error(w, r, http.StatusInternalServerError, "paper_create_failed", "failed to register paper metadata")
+		return
+	}
+	h.auditAction(r, "paper.created", "exam_paper", out.ID, "register exam paper metadata")
+	note := "file metadata registered; binary upload is handled by file upload story"
+	if input.FileAssetID != "" {
+		note = "uploaded file asset linked to exam paper"
+	}
+	httpx.JSON(w, http.StatusCreated, map[string]any{"paper": out, "note": note})
+}
+
+func (h *Handler) ListPapers(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.ListPapers(r.Context(), user.TenantID, r.PathValue("examId"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusInternalServerError, "paper_list_failed", "failed to list papers")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"papers": out})
+}
+
+func (h *Handler) CreateQuestion(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input CreateQuestionInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := validateQuestionInput(input.QuestionNo, input.QuestionType, input.Score); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_question", err.Error())
+		return
+	}
+	out, err := h.store.CreateQuestion(r.Context(), user.TenantID, r.PathValue("examId"), user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.question_created", "question", out.ID, "create question")
+	httpx.JSON(w, http.StatusCreated, map[string]any{"question": out})
+}
+
+func (h *Handler) ListQuestions(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.ListQuestions(r.Context(), user.TenantID, r.PathValue("examId"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusInternalServerError, "question_list_failed", "failed to list questions")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"questions": out})
+}
+
+func (h *Handler) UpdateQuestion(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input UpdateQuestionInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.QuestionType != nil && !IsValidQuestionType(*input.QuestionType) {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_question_type", "unsupported question_type")
+		return
+	}
+	if input.Score != nil && *input.Score <= 0 {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_score", "score must be greater than 0")
+		return
+	}
+	out, err := h.store.UpdateQuestion(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.question_updated", "question", out.ID, "update question")
+	httpx.JSON(w, http.StatusOK, map[string]any{"question": out})
+}
+
+func (h *Handler) DeleteQuestion(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	id := r.PathValue("id")
+	if err := h.store.DeleteQuestion(r.Context(), user.TenantID, id); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.question_deleted", "question", id, "delete question")
+	httpx.JSON(w, http.StatusOK, map[string]any{"status": "deleted"})
+}
+
+func (h *Handler) CreateRubric(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input RubricInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.Status != "" && !IsValidRubricStatus(input.Status) {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_rubric_status", "unsupported rubric status")
+		return
+	}
+	out, err := h.store.CreateRubric(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.rubric_created", "question", out.QuestionID, "create rubric version")
+	httpx.JSON(w, http.StatusCreated, map[string]any{"rubric": out})
+}
+
+func (h *Handler) ValidatePaperConfig(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	result, err := h.store.ValidateConfig(r.Context(), user.TenantID, r.PathValue("examId"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusInternalServerError, "paper_validation_failed", "failed to validate paper config")
+		return
+	}
+	h.auditAction(r, "paper.config_validated", "exam", r.PathValue("examId"), "validate paper config")
+	httpx.JSON(w, http.StatusOK, map[string]any{"result": result})
+}
+
+func validateQuestionInput(questionNo string, questionType string, score float64) error {
+	if questionNo == "" {
+		return errors.New("question_no is required")
+	}
+	if !IsValidQuestionType(questionType) {
+		return errors.New("unsupported question_type")
+	}
+	if score <= 0 {
+		return errors.New("score must be greater than 0")
+	}
+	return nil
+}
+
+func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		httpx.Error(w, r, http.StatusNotFound, "paper_resource_not_found", "paper resource not found")
+	case errors.Is(err, ErrRubricMismatch):
+		httpx.Error(w, r, http.StatusBadRequest, "rubric_score_mismatch", "rubric score must equal question score")
+	case errors.Is(err, ErrRubricLocked):
+		httpx.Error(w, r, http.StatusConflict, "rubric_locked", "locked rubric cannot be modified")
+	default:
+		httpx.Error(w, r, http.StatusInternalServerError, "paper_operation_failed", "paper operation failed")
+	}
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
+	if err := json.NewDecoder(r.Body).Decode(target); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "invalid json body")
+		return false
+	}
+	return true
+}
+
+func mustUser(r *http.Request) auth.User {
+	user, _ := auth.UserFromContext(r.Context())
+	return user
+}
+
+func (h *Handler) auditAction(r *http.Request, action string, targetType string, targetID string, reason string) {
+	user := mustUser(r)
+	_ = h.audit.Audit(r.Context(), auth.AuditEvent{
+		TenantID:   user.TenantID,
+		ActorID:    user.ID,
+		Action:     action,
+		TargetType: targetType,
+		TargetID:   targetID,
+		Reason:     reason,
+		IPAddress:  r.RemoteAddr,
+		UserAgent:  r.UserAgent(),
+		RequestID:  logger.RequestID(r.Context()),
+	})
+}

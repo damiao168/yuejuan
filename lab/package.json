@@ -1,0 +1,13 @@
+{
+  "name": "edugrade-grading-agent-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated Grading Agent Lab for specs, schemas, evals, guardrails, and release gates.",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "eval": "node scripts/run-eval.js --dataset synthetic --adapter mock",
+    "gate:dev": "node scripts/check-gate.js --report evals/reports/latest-report.json --level dev",
+    "gate:pilot": "node scripts/check-gate.js --report evals/reports/latest-report.json --level pilot"
+  }
+}

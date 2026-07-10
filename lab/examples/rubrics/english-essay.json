@@ -1,0 +1,16 @@
+{
+  "rubric_id": "rubric-english-essay",
+  "rubric_version": "rubric-english-essay-v1",
+  "question_type": "essay",
+  "max_score": 10,
+  "points": [
+    { "id": "topic", "description": "addresses the topic", "score": 3, "required": true, "aliases": ["environment", "protect"], "evidence_required": true },
+    { "id": "organization", "description": "clear organization", "score": 3, "required": true, "aliases": ["first", "second", "finally"], "evidence_required": true },
+    { "id": "language", "description": "accurate language", "score": 4, "required": true, "aliases": ["because", "should"], "evidence_required": true }
+  ],
+  "deductions": [],
+  "equivalent_answers": [],
+  "examples": [],
+  "scoring_notes": ["Essay outputs always require teacher review."],
+  "dimensions": ["content", "organization", "language"]
+}

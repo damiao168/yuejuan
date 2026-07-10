@@ -1,0 +1,129 @@
+import { invoke } from "@tauri-apps/api/core";
+import type { CapabilityProbe, LocalCacheSecurityStatus, LocalLogEntry, RuntimeDiagnostics } from "../types";
+
+const logKey = "edugrade.desktop.logs";
+
+export function isTauriRuntime() {
+  return typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
+}
+
+export async function getRuntimeDiagnostics(): Promise<RuntimeDiagnostics> {
+  const native = await invokeOptional<RuntimeDiagnostics>("runtime_diagnostics");
+  if (native) {
+    return native;
+  }
+  return {
+    runtime: "browser-dev",
+    platform: navigator.platform || "unknown",
+    appVersion: "0.1.0",
+    logPath: "浏览器开发模式 localStorage"
+  };
+}
+
+export async function getCapabilityStatuses(): Promise<CapabilityProbe[]> {
+  const native = await invokeOptional<CapabilityProbe[]>("capability_statuses");
+  if (native) {
+    return native;
+  }
+  return [
+    {
+      key: "secure_config",
+      name: "本地加密配置存储",
+      status: "not_configured",
+      detail: "未配置/待接入 Stronghold、Windows DPAPI 或企业安全存储。当前只保留接口。"
+    },
+    {
+      key: "local_cache",
+      name: "SQLite 本地缓存",
+      status: "not_configured",
+      detail: "未配置/待接入 SQLite schema、加密密钥和离线任务包缓存。"
+    },
+    {
+      key: "device_binding",
+      name: "设备绑定",
+      status: "not_configured",
+      detail: "未配置/待接入后端设备登记、吊销和绑定校验接口。"
+    },
+    {
+      key: "auto_update",
+      name: "自动更新",
+      status: "not_configured",
+      detail: "未配置/待接入内网更新源、签名校验和灰度策略。"
+    }
+  ];
+}
+
+export async function appendLocalLog(entry: Omit<LocalLogEntry, "id" | "at">) {
+  const next: LocalLogEntry = {
+    id: crypto.randomUUID(),
+    at: new Date().toISOString(),
+    ...entry
+  };
+  const current = readLocalLogs();
+  window.localStorage.setItem(logKey, JSON.stringify([next, ...current].slice(0, 120)));
+  await invokeOptional("append_local_log", { entry: next });
+  return next;
+}
+
+export function readLocalLogs(): LocalLogEntry[] {
+  try {
+    const raw = window.localStorage.getItem(logKey);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as LocalLogEntry[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function clearLocalLogs() {
+  window.localStorage.removeItem(logKey);
+}
+
+export function scanLocalCacheSecurity(): LocalCacheSecurityStatus {
+  const issues: LocalCacheSecurityStatus["issues"] = [];
+  let scannedKeys = 0;
+  const sensitiveKeyPattern = /(access[_-]?token|refresh[_-]?token|id[_-]?token|auth|session|password|secret|credential)/i;
+  const sensitiveValuePattern = /"(access_token|refresh_token|id_token|password|secret|credential|authorization)"\s*:/i;
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (!key || !key.startsWith("edugrade.desktop.")) {
+      continue;
+    }
+    scannedKeys += 1;
+    if (sensitiveKeyPattern.test(key)) {
+      issues.push({
+        key,
+        severity: "critical",
+        message: "本地缓存键名疑似保存认证或密钥数据，请迁移到内存或安全存储。"
+      });
+    }
+    const value = window.localStorage.getItem(key) ?? "";
+    if (sensitiveValuePattern.test(value)) {
+      issues.push({
+        key,
+        severity: "critical",
+        message: "本地缓存内容疑似包含认证或密钥字段，诊断页已隐藏具体值。"
+      });
+    }
+  }
+  return {
+    status: issues.length ? "warning" : "passed",
+    checkedAt: new Date().toISOString(),
+    scannedKeys,
+    issues
+  };
+}
+
+async function invokeOptional<T>(command: string, args?: Record<string, unknown>): Promise<T | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+  try {
+    return await invoke<T>(command, args);
+  } catch {
+    return null;
+  }
+}

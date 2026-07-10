@@ -1,0 +1,1 @@
+"""EduGrade OCR worker package."""

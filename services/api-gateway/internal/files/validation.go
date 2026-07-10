@@ -1,0 +1,175 @@
+package files
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"path"
+	"path/filepath"
+	"strings"
+	"unicode"
+)
+
+var allowedOwnerTypes = map[string]bool{
+	"generic":                    true,
+	"exam":                       true,
+	"exam_paper":                 true,
+	"submission":                 true,
+	"answer_page":                true,
+	"submission_page_original":   true,
+	"submission_page_normalized": true,
+	"report":                     true,
+	"import":                     true,
+}
+
+var allowedContentTypesByExt = map[string]map[string]bool{
+	".pdf": {
+		"application/pdf": true,
+	},
+	".png": {
+		"image/png": true,
+	},
+	".jpg": {
+		"image/jpeg": true,
+	},
+	".jpeg": {
+		"image/jpeg": true,
+	},
+	".csv": {
+		"text/csv":                  true,
+		"text/csv; charset=utf-8":   true,
+		"text/plain; charset=utf-8": true,
+		"text/plain":                true,
+		"application/vnd.ms-excel":  true,
+	},
+	".docx": {
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
+		"application/zip": true,
+	},
+}
+
+func CleanFilename(name string) (string, error) {
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = path.Base(name)
+	name = strings.TrimSpace(name)
+	name = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, name)
+	if name == "" || name == "." || name == "/" {
+		return "", ErrInvalidFile
+	}
+	if name == ".." || strings.ContainsAny(name, `:"<>|`) || reservedDeviceName(name) {
+		return "", ErrInvalidFile
+	}
+	return name, nil
+}
+
+func ValidateOwnerType(ownerType string) bool {
+	return allowedOwnerTypes[ownerType]
+}
+
+func ValidateOwnerReferences(ownerType string, ownerID string, examID string, submissionID string) bool {
+	switch ownerType {
+	case "exam":
+		return ownerID != "" && examID != "" && ownerID == examID
+	case "submission", "answer_page":
+		return ownerID != "" && submissionID != "" && ownerID == submissionID
+	case "submission_page_original", "submission_page_normalized":
+		return ownerID != "" && submissionID != ""
+	default:
+		return true
+	}
+}
+
+func ValidateFileType(filename string, declaredContentType string, sniffedContentType string, allowedExtensions []string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(filename))
+	if !extensionAllowed(ext, allowedExtensions) {
+		return "", ErrInvalidFile
+	}
+	allowedTypes, ok := allowedContentTypesByExt[ext]
+	if !ok {
+		return "", ErrInvalidFile
+	}
+	declaredContentType = strings.ToLower(strings.TrimSpace(declaredContentType))
+	sniffedContentType = strings.ToLower(strings.TrimSpace(sniffedContentType))
+	if allowedTypes[declaredContentType] {
+		return declaredContentType, nil
+	}
+	if allowedTypes[sniffedContentType] {
+		return sniffedContentType, nil
+	}
+	return "", ErrInvalidFile
+}
+
+func BuildStorageKey(tenantID string, hashSHA256 string, filename string) (string, error) {
+	random, err := randomHex(8)
+	if err != nil {
+		return "", err
+	}
+	ext := strings.ToLower(filepath.Ext(filename))
+	prefix := hashSHA256
+	if len(prefix) > 16 {
+		prefix = prefix[:16]
+	}
+	return fmt.Sprintf("tenant/%s/files/%s-%s%s", tenantID, prefix, random, ext), nil
+}
+
+func SniffContentType(sample []byte) string {
+	if len(sample) == 0 {
+		return ""
+	}
+	return http.DetectContentType(sample)
+}
+
+func extensionAllowed(ext string, allowed []string) bool {
+	for _, item := range allowed {
+		if strings.EqualFold(strings.TrimSpace(item), ext) {
+			return true
+		}
+	}
+	return false
+}
+
+func IsUUIDLike(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, r := range value {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func randomHex(bytesLen int) (string, error) {
+	buf := make([]byte, bytesLen)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func reservedDeviceName(name string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(name))
+	base := strings.TrimSuffix(upper, strings.ToUpper(filepath.Ext(upper)))
+	switch base {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	if len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) {
+		return base[3] >= '1' && base[3] <= '9'
+	}
+	return false
+}

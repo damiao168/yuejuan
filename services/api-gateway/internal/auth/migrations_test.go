@@ -1,0 +1,98 @@
+package auth_test
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestMigrationsDoNotSeedKnownDefaultPasswords(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", "migrations", "*.sql"))
+	if err != nil {
+		t.Fatalf("find migrations: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no migrations found")
+	}
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", file, err)
+		}
+		if strings.Contains(string(raw), "crypt('ChangeMe123!', gen_salt('bf'))") {
+			t.Fatalf("migration %s seeds a known default password", filepath.Base(file))
+		}
+	}
+}
+
+func TestStory047MigrationAddsTenantScopedDatabaseConstraints(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000020_story047_tenant_constraints.sql"))
+	if err != nil {
+		t.Fatalf("read story 047 migration: %v", err)
+	}
+	sqlText := compactMigrationSQL(string(raw))
+
+	for _, want := range []string{
+		"ensure_tenant_identity('app_user', 'uq_app_user_tenant_id_id')",
+		"ensure_tenant_identity('answer_segment', 'uq_answer_segment_tenant_id_id')",
+		"ensure_tenant_identity('final_grade', 'uq_final_grade_tenant_id_id')",
+		"ensure_tenant_fk('user_role', 'user_id', 'app_user', 'fk_user_role_app_user_tenant')",
+		"ensure_tenant_fk('exam', 'school_id', 'school', 'fk_exam_school_tenant')",
+		"ensure_tenant_fk('submission', 'student_id', 'student', 'fk_submission_student_tenant')",
+		"ensure_tenant_fk('submission_page', 'file_asset_id', 'file_asset', 'fk_submission_page_file_asset_tenant')",
+		"ensure_tenant_fk('ocr_result', 'submission_page_id', 'submission_page', 'fk_ocr_result_submission_page_tenant')",
+		"ensure_tenant_fk('answer_segment', 'question_id', 'question', 'fk_answer_segment_question_tenant')",
+		"ensure_tenant_fk('ai_grade', 'rubric_version_id', 'rubric_version', 'fk_ai_grade_rubric_version_tenant')",
+		"ensure_tenant_fk('review_task', 'assigned_to', 'app_user', 'fk_review_task_assigned_to_tenant')",
+		"ensure_tenant_fk('human_grade', 'reviewer_id', 'app_user', 'fk_human_grade_reviewer_tenant')",
+		"ensure_tenant_fk('double_mark_session', 'first_review_task_id', 'review_task', 'fk_double_mark_session_first_review_task_tenant')",
+		"ensure_tenant_fk('arbitration_task', 'double_mark_session_id', 'double_mark_session', 'fk_arbitration_task_double_mark_session_tenant')",
+		"ensure_tenant_fk('final_grade', 'arbitration_task_id', 'arbitration_task', 'fk_final_grade_arbitration_task_tenant')",
+		"ensure_tenant_fk('submission_grade', 'published_by', 'app_user', 'fk_submission_grade_published_by_tenant')",
+		"ensure_tenant_fk('appeal', 'submission_grade_id', 'submission_grade', 'fk_appeal_submission_grade_tenant')",
+		"ensure_tenant_fk('score_adjustment', 'adjusted_by', 'app_user', 'fk_score_adjustment_adjusted_by_tenant')",
+		"RAISE EXCEPTION 'tenant scoped foreign key violation before adding %'",
+		"FOREIGN KEY (tenant_id, %I) REFERENCES %I (tenant_id, id)",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("story 047 migration must contain %q", want)
+		}
+	}
+}
+
+func TestCompletedScopeHardeningAddsFileSubmissionIntegrity(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000024_completed_scope_integrity_hardening.sql"))
+	if err != nil {
+		t.Fatalf("read integrity hardening migration: %v", err)
+	}
+	sqlText := compactMigrationSQL(string(raw))
+	for _, want := range []string{
+		"fk_file_asset_submission_tenant",
+		"FOREIGN KEY (tenant_id, submission_id)",
+		"REFERENCES submission (tenant_id, id)",
+		"chk_file_asset_owner_reference",
+		"invalid cross-tenant submission references",
+		"inconsistent owner references",
+		"VALIDATE CONSTRAINT chk_file_asset_owner_reference",
+		"fk_quality_run_submission_tenant",
+		"fk_quality_run_page_tenant",
+		"fk_quality_run_source_file_tenant",
+		"fk_quality_run_normalized_file_tenant",
+		"fk_submission_page_latest_quality_run_tenant",
+		"FOREIGN KEY (tenant_id, submission_id, submission_page_id)",
+		"uq_file_asset_tenant_submission_id_id",
+		"uq_quality_run_tenant_submission_page_id",
+		"FOREIGN KEY (tenant_id, submission_id, source_file_asset_id)",
+		"FOREIGN KEY (tenant_id, submission_id, id, latest_quality_run_id)",
+		"invalid normalized file reference",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("integrity hardening migration must contain %q", want)
+		}
+	}
+}
+
+func compactMigrationSQL(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}

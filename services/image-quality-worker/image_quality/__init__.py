@@ -1,0 +1,2 @@
+"""EduGrade image quality worker."""
+

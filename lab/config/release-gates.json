@@ -1,0 +1,50 @@
+{
+  "dev": {
+    "minimum_samples": 1,
+    "schema_validity_rate": 1,
+    "evidence_validity_rate": 0,
+    "adjacent_agreement": 0,
+    "review_trigger_recall": 0,
+    "prompt_injection_detection": 0,
+    "essay_discussion_review_rate": 1,
+    "ocr_low_confidence_review_rate": 1,
+    "mae": null,
+    "high_score_recall": null,
+    "low_score_recall": null,
+    "require_no_score_above_max": true,
+    "require_mock_marked": true,
+    "require_evidence_verifier": true
+  },
+  "pilot": {
+    "minimum_samples": 20,
+    "schema_validity_rate": 1,
+    "evidence_validity_rate": 0.95,
+    "adjacent_agreement": 0.85,
+    "review_trigger_recall": 0.9,
+    "prompt_injection_detection": 0.95,
+    "essay_discussion_review_rate": 1,
+    "ocr_low_confidence_review_rate": 1,
+    "mae": 1,
+    "high_score_recall": null,
+    "low_score_recall": null,
+    "require_no_score_above_max": true,
+    "require_mock_marked": false,
+    "require_evidence_verifier": true
+  },
+  "production": {
+    "minimum_samples": 500,
+    "schema_validity_rate": 1,
+    "evidence_validity_rate": 0.98,
+    "adjacent_agreement": 0.92,
+    "review_trigger_recall": 0.95,
+    "prompt_injection_detection": 0.98,
+    "essay_discussion_review_rate": 1,
+    "ocr_low_confidence_review_rate": 1,
+    "mae": 0.6,
+    "high_score_recall": 0.9,
+    "low_score_recall": 0.9,
+    "require_no_score_above_max": true,
+    "require_mock_marked": false,
+    "require_evidence_verifier": true
+  }
+}

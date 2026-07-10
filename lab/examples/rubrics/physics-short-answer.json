@@ -1,0 +1,15 @@
+{
+  "rubric_id": "rubric-physics-inertia",
+  "rubric_version": "rubric-physics-inertia-v1",
+  "question_type": "short_answer",
+  "max_score": 3,
+  "points": [
+    { "id": "definition", "description": "defines inertia", "score": 1, "required": true, "aliases": ["inertia", "保持原有运动状态"], "evidence_required": true },
+    { "id": "mass", "description": "connects inertia to mass", "score": 1, "required": true, "aliases": ["mass", "质量越大"], "evidence_required": true },
+    { "id": "example", "description": "gives an example", "score": 1, "required": false, "aliases": ["braking", "刹车"], "evidence_required": true }
+  ],
+  "deductions": [],
+  "equivalent_answers": [],
+  "examples": [],
+  "scoring_notes": ["Do not award full credit for vague force-only explanations."]
+}

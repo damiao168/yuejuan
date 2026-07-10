@@ -1,0 +1,51 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Grading Agent Lab API Contract",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/grading/grade": {
+      "post": {
+        "summary": "Return a schema-validated suggested grading output",
+        "responses": {
+          "200": { "description": "GradingOutput" },
+          "400": { "description": "INVALID_INPUT or INVALID_RUBRIC" },
+          "502": { "description": "MODEL_PARSE_FAILED or ADAPTER_NOT_CONFIGURED" }
+        }
+      }
+    },
+    "/grading/verify-evidence": {
+      "post": {
+        "summary": "Verify output evidence against answer text",
+        "responses": {
+          "200": { "description": "Evidence verification result" }
+        }
+      }
+    },
+    "/grading/evaluate": {
+      "post": {
+        "summary": "Run an eval dataset through a selected adapter",
+        "responses": {
+          "200": { "description": "Eval report" }
+        }
+      }
+    },
+    "/grading/models": {
+      "get": {
+        "summary": "List configured grading model adapters",
+        "responses": {
+          "200": { "description": "Model list" }
+        }
+      }
+    },
+    "/grading/prompts": {
+      "get": {
+        "summary": "List registered grading prompts",
+        "responses": {
+          "200": { "description": "Prompt registry" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,339 @@
+package server
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"edugrade-enterprise/services/api-gateway/internal/auth"
+	"edugrade-enterprise/services/api-gateway/internal/config"
+	"edugrade-enterprise/services/api-gateway/internal/deps"
+	"edugrade-enterprise/services/api-gateway/internal/exam"
+	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/org"
+	"edugrade-enterprise/services/api-gateway/internal/paper"
+)
+
+func testConfig() config.Config {
+	return config.Config{
+		Service: config.ServiceConfig{
+			Name:             "api-gateway-test",
+			Environment:      "test",
+			Host:             "127.0.0.1",
+			Port:             0,
+			LogLevel:         "error",
+			ReadinessTimeout: 100 * time.Millisecond,
+			ShutdownTimeout:  time.Second,
+		},
+		Auth: config.AuthConfig{SessionTTL: time.Hour},
+		Security: config.SecurityConfig{
+			MaxHeaderBytes:      1 << 20,
+			MaxRequestBodyBytes: 2 * 1024 * 1024,
+			CORSAllowedOrigins:  []string{"http://127.0.0.1:5174"},
+			CORSAllowedMethods:  []string{"GET", "POST", "OPTIONS"},
+			CORSAllowedHeaders:  []string{"Authorization", "Content-Type", "X-Request-ID", "X-Trace-ID"},
+		},
+		Observability: config.ObservabilityConfig{
+			SlowRequestThreshold: time.Second,
+		},
+	}
+}
+
+func testAuthStore(t *testing.T) *auth.MemoryStore {
+	t.Helper()
+	return testAuthStoreWithPermissions(t, []string{"system:read", "org:manage", "student:import", "exam:manage"})
+}
+
+func testAuthStoreWithPermissions(t *testing.T, permissions []string) *auth.MemoryStore {
+	t.Helper()
+	hash, err := auth.HashPassword("secret123")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	store := auth.NewMemoryStore()
+	store.AddUser(auth.UserWithPassword{
+		User: auth.User{
+			ID:          "user-1",
+			TenantID:    "tenant-1",
+			TenantCode:  "demo",
+			Username:    "teacher",
+			DisplayName: "Teacher",
+			Status:      "active",
+			Roles:       []string{"teacher"},
+			Permissions: permissions,
+			DataScope:   map[string]any{"scope": "school"},
+		},
+		PasswordHash: hash,
+	})
+	return store
+}
+
+func TestHealth(t *testing.T) {
+	router := NewRouter(testConfig(), logger.New(io.Discard, "error"), nil, testAuthStore(t), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"ok"`) {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+	if rec.Header().Get("X-Request-ID") == "" {
+		t.Fatal("missing X-Request-ID header")
+	}
+	if rec.Header().Get("X-Trace-ID") == "" {
+		t.Fatal("missing X-Trace-ID header")
+	}
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("X-Frame-Options") != "DENY" {
+		t.Fatalf("missing security headers: %#v", rec.Header())
+	}
+}
+
+func TestRequestTraceHeadersAndAccessLog(t *testing.T) {
+	var logs bytes.Buffer
+	router := NewRouter(testConfig(), logger.New(&logs, "info"), nil, testAuthStore(t), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.Header.Set("X-Request-ID", "req-story-038")
+	req.Header.Set("X-Trace-ID", "trace-story-038")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("X-Request-ID"); got != "req-story-038" {
+		t.Fatalf("expected propagated request id, got %q", got)
+	}
+	if got := rec.Header().Get("X-Trace-ID"); got != "trace-story-038" {
+		t.Fatalf("expected propagated trace id, got %q", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &payload); err != nil {
+		t.Fatalf("decode access log: %v; raw=%s", err, logs.String())
+	}
+	if payload["request_id"] != "req-story-038" || payload["trace_id"] != "trace-story-038" {
+		t.Fatalf("access log missing correlation ids: %#v", payload)
+	}
+	if payload["event"] != "api_request" || payload["log_stream"] != "system" {
+		t.Fatalf("access log must identify system API request event: %#v", payload)
+	}
+}
+
+func TestSystemInfo(t *testing.T) {
+	router := NewRouter(testConfig(), logger.New(io.Discard, "error"), nil, testAuthStore(t), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
+	req.Header.Set("Authorization", "Bearer "+serverLogin(t, router))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, capability := range []string{"exam_management", "paper_metadata", "question_config", "rubric_versioning", "paper_config_validation", "file_upload", "object_storage", "private_file_download", "submission_collection", "submission_pages", "submission_quality_gate", "ocr_task_management", "ocr_result_ingestion", "answer_segmentation_metadata", "answer_segment_manual_review", "agent_orchestration_control_plane", "agent_task_management", "agent_task_retry", "agent_human_review_trigger", "answer_segment_answer_capture", "rule_based_objective_grading", "ai_grade_recording", "grading_low_confidence_review_trigger", "subjective_ai_grading_interface", "mock_llm_grading_adapter", "subjective_ai_grade_failure_recording", "rule_based_evidence_verification", "evidence_agent_job_recording", "evidence_failure_review_trigger", "human_review_task_management", "human_grade_recording", "review_assignment_workflow", "double_mark_policy_config", "double_mark_review_sessions", "arbitration_task_management", "final_grade_recording", "submission_grade_aggregation", "grade_confirmation_workflow", "grade_publish_quality_gate", "published_student_grade_lookup", "grade_csv_export_with_watermark", "student_appeal_submission", "appeal_review_workflow", "score_adjustment_audit_trail", "appeal_statistics", "student_learning_report", "exam_report_overview", "class_learning_report", "question_item_analysis", "grading_quality_report", "report_csv_export"} {
+		if !strings.Contains(body, `"`+capability+`"`) {
+			t.Fatalf("system info must disclose %s capability: %s", capability, body)
+		}
+	}
+	if !strings.Contains(body, `"not_implemented"`) || !strings.Contains(body, `"ocr_engine_inference"`) || !strings.Contains(body, `"agent_worker_runtime"`) || !strings.Contains(body, `"real_subjective_model_inference"`) {
+		t.Fatalf("system info must disclose remaining unimplemented capabilities: %s", body)
+	}
+	implementedIndex := strings.Index(body, `"implemented"`)
+	notImplementedIndex := strings.Index(body, `"not_implemented"`)
+	workerIndex := strings.Index(body, `"agent_worker_runtime"`)
+	if workerIndex < implementedIndex || workerIndex > notImplementedIndex {
+		t.Fatalf("agent_worker_runtime must be disclosed as implemented: %s", body)
+	}
+}
+
+func TestReadyHealthy(t *testing.T) {
+	router := NewRouter(testConfig(), logger.New(io.Discard, "error"), []deps.Checker{
+		deps.StaticChecker{CheckerName: "postgres"},
+		deps.StaticChecker{CheckerName: "redis"},
+	}, testAuthStore(t), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	req.Header.Set("Authorization", "Bearer "+serverLogin(t, router))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"ready"`) {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestReadyUnhealthy(t *testing.T) {
+	router := NewRouter(testConfig(), logger.New(io.Discard, "error"), []deps.Checker{
+		deps.StaticChecker{CheckerName: "postgres", Err: errors.New("down")},
+	}, testAuthStore(t), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	req.Header.Set("Authorization", "Bearer "+serverLogin(t, router))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"not_ready"`) {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestSystemStatusIncludesDependencyAndObservabilityState(t *testing.T) {
+	router := NewRouter(testConfig(), logger.New(io.Discard, "error"), []deps.Checker{
+		deps.StaticChecker{CheckerName: "postgres"},
+		deps.NotConfiguredChecker{CheckerName: "qdrant", DetailText: "EDUGRADE_QDRANT_URL 未配置/待接入"},
+		deps.StaticChecker{CheckerName: "ai_service", Err: errors.New("down")},
+	}, testAuthStore(t), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/status", nil)
+	req.Header.Set("Authorization", "Bearer "+serverLogin(t, router))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, expected := range []string{
+		`"status":"degraded"`,
+		`"name":"postgres"`,
+		`"name":"qdrant"`,
+		`"status":"not_configured"`,
+		`"name":"ai_service"`,
+		`"slow_query_log":"placeholder_not_implemented"`,
+		`"request_id_header":"X-Request-ID"`,
+		`"trace_id_header":"X-Trace-ID"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("system status missing %s: %s", expected, body)
+		}
+	}
+}
+
+func TestSystemStatusRequiresAuthenticationAndSystemRead(t *testing.T) {
+	router := NewRouter(testConfig(), logger.New(io.Discard, "error"), nil, testAuthStoreWithPermissions(t, []string{"org:manage"}), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/status", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("system status without auth expected 401, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/system/status", nil)
+	req.Header.Set("Authorization", "Bearer "+serverLogin(t, router))
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("system status without system:read expected 403, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWorkerRuntimeSeparatesReadAndExecutePermissions(t *testing.T) {
+	readOnlyRouter := NewRouter(testConfig(), logger.New(io.Discard, "error"), nil, testAuthStoreWithPermissions(t, []string{"system:read"}), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+	readOnlyToken := serverLogin(t, readOnlyRouter)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/internal/worker/metrics", nil)
+	req.Header.Set("Authorization", "Bearer "+readOnlyToken)
+	rec := httptest.NewRecorder()
+	readOnlyRouter.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("system reader should read worker metrics, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/internal/worker/tasks/claim", strings.NewReader(`{"queue_name":"ocr","worker_service":"ocr-worker","worker_instance_id":"worker-1","limit":1,"lease_seconds":60}`))
+	req.Header.Set("Authorization", "Bearer "+readOnlyToken)
+	rec = httptest.NewRecorder()
+	readOnlyRouter.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("system reader must not claim worker tasks, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	executeRouter := NewRouter(testConfig(), logger.New(io.Discard, "error"), nil, testAuthStoreWithPermissions(t, []string{"ocr:manage"}), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+	executeToken := serverLogin(t, executeRouter)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/internal/worker/tasks/claim", strings.NewReader(`{"queue_name":"ocr","worker_service":"ocr-worker","worker_instance_id":"worker-1","limit":1,"lease_seconds":60}`))
+	req.Header.Set("Authorization", "Bearer "+executeToken)
+	rec = httptest.NewRecorder()
+	executeRouter.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("OCR worker permission should claim tasks, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCORSAllowlistAndBodyLimit(t *testing.T) {
+	cfg := testConfig()
+	cfg.Security.MaxRequestBodyBytes = 16
+	router := NewRouter(cfg, logger.New(io.Discard, "error"), nil, testAuthStore(t), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/login", nil)
+	req.Header.Set("Origin", "http://evil.example")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("unknown origin expected 403 without allow header, got %d headers=%#v", rec.Code, rec.Header())
+	}
+
+	req = httptest.NewRequest(http.MethodOptions, "/api/v1/auth/login", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:5174")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "http://127.0.0.1:5174" {
+		t.Fatalf("allowed origin expected 204 with allow header, got %d headers=%#v", rec.Code, rec.Header())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"tenant_code":"demo","username":"teacher","password":"secret123","extra":"too-large"}`))
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized json expected 413, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestNotFoundUsesUnifiedError(t *testing.T) {
+	router := NewRouter(testConfig(), logger.New(io.Discard, "error"), nil, testAuthStore(t), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+	req := httptest.NewRequest(http.MethodGet, "/missing", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"error"`) || !strings.Contains(body, `"code":"not_found"`) {
+		t.Fatalf("expected unified error response, got %s", body)
+	}
+}
+
+func serverLogin(t *testing.T, router http.Handler) string {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]string{"tenant_code": "demo", "username": "teacher", "password": "secret123"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(raw))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode login: %v", err)
+	}
+	return response.AccessToken
+}

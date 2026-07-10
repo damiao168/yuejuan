@@ -1,0 +1,294 @@
+package report
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"strings"
+)
+
+type PostgresStore struct {
+	db *sql.DB
+}
+
+func NewPostgresStore(db *sql.DB) *PostgresStore {
+	return &PostgresStore{db: db}
+}
+
+func (s *PostgresStore) StudentReport(ctx context.Context, tenantID string, examID string, studentID string) (StudentReport, error) {
+	data, err := s.loadDataset(ctx, tenantID, examID)
+	if err != nil {
+		return StudentReport{}, err
+	}
+	return buildStudentReport(data, studentID), nil
+}
+
+func (s *PostgresStore) Overview(ctx context.Context, tenantID string, examID string) (OverviewReport, error) {
+	data, err := s.loadDataset(ctx, tenantID, examID)
+	if err != nil {
+		return OverviewReport{}, err
+	}
+	return buildOverview(data), nil
+}
+
+func (s *PostgresStore) ClassReports(ctx context.Context, tenantID string, examID string) ([]ClassReport, error) {
+	data, err := s.loadDataset(ctx, tenantID, examID)
+	if err != nil {
+		return nil, err
+	}
+	return buildClassReports(data), nil
+}
+
+func (s *PostgresStore) QuestionAnalysis(ctx context.Context, tenantID string, examID string) ([]QuestionAnalysis, error) {
+	data, err := s.loadDataset(ctx, tenantID, examID)
+	if err != nil {
+		return nil, err
+	}
+	return buildQuestionAnalysis(data), nil
+}
+
+func (s *PostgresStore) GradingQuality(ctx context.Context, tenantID string, examID string) (GradingQualityReport, error) {
+	data, err := s.loadDataset(ctx, tenantID, examID)
+	if err != nil {
+		return GradingQualityReport{}, err
+	}
+	return s.loadQuality(ctx, tenantID, examID, data)
+}
+
+func (s *PostgresStore) Export(ctx context.Context, tenantID string, examID string, actorID string) (ExportResult, error) {
+	data, err := s.loadDataset(ctx, tenantID, examID)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	overview := buildOverview(data)
+	classes := buildClassReports(data)
+	questions := buildQuestionAnalysis(data)
+	quality, err := s.loadQuality(ctx, tenantID, examID, data)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	result := buildExportCSV(tenantID, examID, actorID, overview, classes, questions, quality)
+	reportData, _ := json.Marshal(map[string]any{
+		"row_count":    result.RowCount,
+		"watermark":    result.Watermark,
+		"content_type": result.ContentType,
+	})
+	err = s.db.QueryRowContext(ctx, `
+INSERT INTO report (tenant_id, exam_id, report_type, scope_type, status, data, generated_by, generated_at)
+VALUES ($1, $2::uuid, 'export', 'exam', 'succeeded', $3, $4::uuid, now())
+RETURNING id::text
+`, tenantID, examID, reportData, actorID).Scan(&result.ReportID)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	return result, nil
+}
+
+func (s *PostgresStore) loadDataset(ctx context.Context, tenantID string, examID string) (dataset, error) {
+	data := dataset{ExamID: examID}
+	subRows, err := s.db.QueryContext(ctx, `
+SELECT sg.submission_id::text, COALESCE(sg.student_id::text, ''), COALESCE(st.class_id::text, ''),
+  COALESCE(sc.name, ''), sg.anonymous_code, sg.total_score::float8, sg.max_score::float8
+FROM submission_grade sg
+LEFT JOIN student st ON st.tenant_id = sg.tenant_id AND st.id = sg.student_id AND st.deleted_at IS NULL
+LEFT JOIN school_class sc ON sc.tenant_id = st.tenant_id AND sc.id = st.class_id AND sc.deleted_at IS NULL
+WHERE sg.tenant_id = $1 AND sg.exam_id::text = $2
+  AND sg.status = 'published' AND sg.locked = true AND sg.deleted_at IS NULL
+ORDER BY sg.anonymous_code
+`, tenantID, examID)
+	if err != nil {
+		return dataset{}, err
+	}
+	defer subRows.Close()
+	for subRows.Next() {
+		var sub submissionRecord
+		if err := subRows.Scan(&sub.ID, &sub.StudentID, &sub.ClassID, &sub.ClassName, &sub.AnonymousCode, &sub.TotalScore, &sub.MaxScore); err != nil {
+			return dataset{}, err
+		}
+		data.Submissions = append(data.Submissions, sub)
+	}
+	if err := subRows.Err(); err != nil {
+		return dataset{}, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT fg.submission_id::text, COALESCE(sg.student_id::text, ''), COALESCE(st.class_id::text, ''),
+  COALESCE(sc.name, ''), fg.question_id::text, fg.question_no, q.question_type, fg.answer_segment_id::text,
+  fg.score::float8, fg.max_score::float8, fg.source, q.knowledge_points,
+  COALESCE(ans.answer_payload, '{}'::jsonb),
+  ag.suggested_score::float8, ag.student_feedback, ag.missing_points, ag.risk_flags,
+  hg.score::float8, hg.student_feedback, hg.comments
+FROM final_grade fg
+JOIN submission_grade sg ON sg.tenant_id = fg.tenant_id AND sg.submission_id = fg.submission_id AND sg.deleted_at IS NULL
+LEFT JOIN student st ON st.tenant_id = sg.tenant_id AND st.id = sg.student_id AND st.deleted_at IS NULL
+LEFT JOIN school_class sc ON sc.tenant_id = st.tenant_id AND sc.id = st.class_id AND sc.deleted_at IS NULL
+JOIN question q ON q.tenant_id = fg.tenant_id AND q.id = fg.question_id AND q.deleted_at IS NULL
+LEFT JOIN LATERAL (
+  SELECT answer_payload
+  FROM answer_segment_answer
+  WHERE tenant_id = fg.tenant_id AND answer_segment_id = fg.answer_segment_id AND deleted_at IS NULL
+  ORDER BY created_at DESC
+  LIMIT 1
+) ans ON true
+LEFT JOIN LATERAL (
+  SELECT suggested_score, student_feedback, missing_points, risk_flags
+  FROM ai_grade
+  WHERE tenant_id = fg.tenant_id AND answer_segment_id = fg.answer_segment_id AND deleted_at IS NULL AND status = 'succeeded'
+  ORDER BY created_at DESC
+  LIMIT 1
+) ag ON true
+LEFT JOIN LATERAL (
+  SELECT score, student_feedback, comments
+  FROM human_grade
+  WHERE tenant_id = fg.tenant_id AND answer_segment_id = fg.answer_segment_id AND deleted_at IS NULL
+  ORDER BY created_at DESC
+  LIMIT 1
+) hg ON true
+WHERE fg.tenant_id = $1 AND fg.exam_id::text = $2 AND fg.deleted_at IS NULL
+  AND sg.status = 'published' AND sg.locked = true
+ORDER BY fg.question_no, fg.created_at DESC
+`, tenantID, examID)
+	if err != nil {
+		return dataset{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var record gradeRecord
+		var knowledgeRaw []byte
+		var payloadRaw []byte
+		var aiScore sql.NullFloat64
+		var aiFeedback sql.NullString
+		var missingRaw []byte
+		var riskRaw []byte
+		var humanScore sql.NullFloat64
+		var humanFeedback sql.NullString
+		var humanComments sql.NullString
+		if err := rows.Scan(
+			&record.SubmissionID,
+			&record.StudentID,
+			&record.ClassID,
+			&record.ClassName,
+			&record.QuestionID,
+			&record.QuestionNo,
+			&record.QuestionType,
+			&record.AnswerSegmentID,
+			&record.Score,
+			&record.MaxScore,
+			&record.Source,
+			&knowledgeRaw,
+			&payloadRaw,
+			&aiScore,
+			&aiFeedback,
+			&missingRaw,
+			&riskRaw,
+			&humanScore,
+			&humanFeedback,
+			&humanComments,
+		); err != nil {
+			return dataset{}, err
+		}
+		record.KnowledgePoints = parseStringList(knowledgeRaw)
+		record.AnswerPayload = parseJSONMap(payloadRaw)
+		if aiScore.Valid {
+			value := aiScore.Float64
+			record.AIScore = &value
+		}
+		if humanScore.Valid {
+			value := humanScore.Float64
+			record.HumanScore = &value
+		}
+		if aiFeedback.Valid && strings.TrimSpace(aiFeedback.String) != "" {
+			record.AIFeedback = append(record.AIFeedback, FeedbackItem{QuestionID: record.QuestionID, QuestionNo: record.QuestionNo, Source: "ai_grade", Text: strings.TrimSpace(aiFeedback.String)})
+		}
+		for _, item := range parseStringList(missingRaw) {
+			record.ErrorClues = append(record.ErrorClues, ErrorClue{QuestionID: record.QuestionID, QuestionNo: record.QuestionNo, Source: "ai_missing_points", Text: item})
+		}
+		for _, item := range parseStringList(riskRaw) {
+			record.ErrorClues = append(record.ErrorClues, ErrorClue{QuestionID: record.QuestionID, QuestionNo: record.QuestionNo, Source: "ai_risk_flags", Text: item})
+		}
+		if humanFeedback.Valid && strings.TrimSpace(humanFeedback.String) != "" {
+			record.TeacherFeedback = append(record.TeacherFeedback, FeedbackItem{QuestionID: record.QuestionID, QuestionNo: record.QuestionNo, Source: "human_grade", Text: strings.TrimSpace(humanFeedback.String)})
+		}
+		if humanComments.Valid && strings.TrimSpace(humanComments.String) != "" {
+			record.TeacherFeedback = append(record.TeacherFeedback, FeedbackItem{QuestionID: record.QuestionID, QuestionNo: record.QuestionNo, Source: "human_comments", Text: strings.TrimSpace(humanComments.String)})
+		}
+		data.Grades = append(data.Grades, record)
+	}
+	return data, rows.Err()
+}
+
+func (s *PostgresStore) loadQuality(ctx context.Context, tenantID string, examID string, data dataset) (GradingQualityReport, error) {
+	out := GradingQualityReport{ExamID: examID}
+	var err error
+	out.TotalSegments, err = scalarCount(ctx, s.db, `SELECT COUNT(*) FROM answer_segment seg
+JOIN submission sub ON sub.tenant_id = seg.tenant_id AND sub.id = seg.submission_id AND sub.deleted_at IS NULL
+WHERE seg.tenant_id = $1 AND sub.exam_id::text = $2 AND seg.deleted_at IS NULL`, tenantID, examID)
+	if err != nil {
+		return GradingQualityReport{}, err
+	}
+	for _, grade := range data.Grades {
+		if grade.AIScore != nil {
+			out.AIGradeCount++
+		}
+		if grade.Source == "rule_auto" {
+			out.AIAcceptedCount++
+		}
+		if grade.AIScore != nil && grade.HumanScore != nil {
+			out.HumanComparableCount++
+			if round2(*grade.AIScore) != round2(*grade.HumanScore) {
+				out.HumanModifiedCount++
+			}
+		}
+	}
+	out.AIAdoptionRate = metric(out.AIAcceptedCount, out.AIGradeCount, "no_ai_grades")
+	out.HumanModificationRate = metric(out.HumanModifiedCount, out.HumanComparableCount, "no_ai_human_comparison")
+	out.ArbitrationCount, err = scalarCount(ctx, s.db, `SELECT COUNT(*) FROM arbitration_task WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL`, tenantID, examID)
+	if err != nil {
+		return GradingQualityReport{}, err
+	}
+	out.LowConfidenceReviewCount, err = scalarCount(ctx, s.db, `SELECT COUNT(*) FROM review_task WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND source IN ('ai_low_confidence', 'ocr_low_confidence')`, tenantID, examID)
+	if err != nil {
+		return GradingQualityReport{}, err
+	}
+	out.OCRTaskCount, err = scalarCount(ctx, s.db, `SELECT COUNT(*) FROM ocr_task ot
+JOIN submission sub ON sub.tenant_id = ot.tenant_id AND sub.id = ot.submission_id AND sub.deleted_at IS NULL
+WHERE ot.tenant_id = $1 AND sub.exam_id::text = $2 AND ot.deleted_at IS NULL`, tenantID, examID)
+	if err != nil {
+		return GradingQualityReport{}, err
+	}
+	out.OCRFailedCount, err = scalarCount(ctx, s.db, `SELECT COUNT(*) FROM ocr_task ot
+JOIN submission sub ON sub.tenant_id = ot.tenant_id AND sub.id = ot.submission_id AND sub.deleted_at IS NULL
+WHERE ot.tenant_id = $1 AND sub.exam_id::text = $2 AND ot.deleted_at IS NULL AND ot.status = 'failed'`, tenantID, examID)
+	if err != nil {
+		return GradingQualityReport{}, err
+	}
+	out.OCRFailureRate = metric(out.OCRFailedCount, out.OCRTaskCount, "no_ocr_tasks")
+	var avgDiff sql.NullFloat64
+	var maxDiff sql.NullFloat64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), AVG(score_difference)::float8, MAX(score_difference)::float8 FROM double_mark_session WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND score_difference IS NOT NULL`, tenantID, examID).Scan(&out.DoubleMarkSessionCount, &avgDiff, &maxDiff); err != nil {
+		return GradingQualityReport{}, err
+	}
+	if out.DoubleMarkSessionCount == 0 {
+		out.AverageDoubleMarkDiff = Metric{Available: false, Reason: "no_double_mark_sessions"}
+		out.MaxDoubleMarkDiff = Metric{Available: false, Reason: "no_double_mark_sessions"}
+	} else {
+		out.AverageDoubleMarkDiff = Metric{Available: true, Value: round2(avgDiff.Float64), Denominator: out.DoubleMarkSessionCount}
+		out.MaxDoubleMarkDiff = Metric{Available: true, Value: round2(maxDiff.Float64), Denominator: out.DoubleMarkSessionCount}
+	}
+	return out, nil
+}
+
+type countQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func scalarCount(ctx context.Context, q countQueryer, query string, args ...any) (int, error) {
+	var count int
+	if err := q.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return count, nil
+}
