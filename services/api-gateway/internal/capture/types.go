@@ -279,6 +279,7 @@ type RegistrationCorrection struct {
 	ID                           string             `json:"id"`
 	CapturePageID                string             `json:"capture_page_id"`
 	BaseRegistrationRunID        string             `json:"base_registration_run_id"`
+	AppliedRegistrationRunID     string             `json:"applied_registration_run_id,omitempty"`
 	SourcePageRevision           int                `json:"source_page_revision"`
 	TemplateID                   string             `json:"template_id"`
 	TemplateContentHash          string             `json:"template_content_hash"`
@@ -296,12 +297,18 @@ type RegistrationCorrection struct {
 	Coverage                     float64            `json:"coverage,omitempty"`
 	ReprojectionError            float64            `json:"reprojection_error,omitempty"`
 	ValidationReport             map[string]any     `json:"validation_report"`
+	PreviousRegistrationSnapshot map[string]any     `json:"previous_registration_snapshot,omitempty"`
 	RuntimeTaskID                string             `json:"runtime_task_id,omitempty"`
 	ErrorCode                    string             `json:"error_code,omitempty"`
 	ExpiresAt                    time.Time          `json:"expires_at"`
 	AppliedAt                    *time.Time         `json:"applied_at,omitempty"`
 	UndoneAt                     *time.Time         `json:"undone_at,omitempty"`
 	CreatedAt                    time.Time          `json:"created_at"`
+}
+
+type RegistrationCorrectionDecisionInput struct {
+	Revision int    `json:"revision"`
+	Reason   string `json:"reason"`
 }
 
 type CorrectionPreviewResultInput struct {
@@ -387,6 +394,8 @@ type Store interface {
 	QueueRegistrationCorrectionPreview(ctx context.Context, tenantID, correctionID, actorID string, revision int) (RegistrationCorrection, error)
 	ApplyRegistrationCorrectionPreview(ctx context.Context, tenantID, correctionID string, input CorrectionPreviewResultInput) (RegistrationCorrection, error)
 	ApplyRegistrationCorrectionFailure(ctx context.Context, tenantID, correctionID, errorCode string, detail map[string]any) (RegistrationCorrection, error)
+	ApplyRegistrationCorrection(ctx context.Context, tenantID, correctionID, actorID string, input RegistrationCorrectionDecisionInput) (RegistrationCorrection, error)
+	UndoRegistrationCorrection(ctx context.Context, tenantID, correctionID, actorID string, input RegistrationCorrectionDecisionInput) (RegistrationCorrection, error)
 }
 
 type FileAssetSnapshot struct {

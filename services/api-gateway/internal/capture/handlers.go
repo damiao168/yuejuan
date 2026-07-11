@@ -105,6 +105,36 @@ func (h *Handler) PreviewRegistrationCorrection(w http.ResponseWriter, r *http.R
 	httpx.JSON(w, http.StatusAccepted, map[string]any{"correction": out})
 }
 
+func (h *Handler) ApplyRegistrationCorrection(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input RegistrationCorrectionDecisionInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.ApplyRegistrationCorrection(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "page.registration_correction_applied", "page_registration_correction", out.ID, input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"correction": out})
+}
+
+func (h *Handler) UndoRegistrationCorrection(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input RegistrationCorrectionDecisionInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.UndoRegistrationCorrection(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "page.registration_correction_undone", "page_registration_correction", out.ID, input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"correction": out})
+}
+
 func (h *Handler) CompleteRegistrationCorrection(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	correctionID := r.PathValue("id")

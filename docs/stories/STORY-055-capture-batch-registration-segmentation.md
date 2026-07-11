@@ -558,6 +558,16 @@ Specification review conclusion: Ready for implementation. The first implementat
 
 Remaining in STORY-055A: transactional apply with previous-evidence snapshot, deterministic undo, stale/concurrent rejection tests, and the desktop correction workspace. This slice is not yet Approved.
 
+### Manual correction apply/undo verification (2026-07-11)
+
+- Apply locks correction, capture page, and batch; requires the bound page revision and latest base run; snapshots only the affected submission page's active run/segment evidence.
+- One transaction creates an immutable `manual_four_point` registration run, promotes preview registered/crop assets, invalidates the prior run, updates page/batch gates, and writes one `registration_correction_apply` operation.
+- Undo is allowed only before any subsequent page mutation. It invalidates the manual run/crops, restores exact prior run status and segment bbox/crop hashes from the snapshot, advances page revision, and writes one `registration_correction_undo` operation.
+- Automatic registration completion/failure now advances capture-page revision, so a correction preview cannot be applied across a concurrent processing result.
+- Real correction `c5b8f054-099d-4698-822c-fa71c5889892` applied as run `84460318-e160-442c-a2dd-3ae280a043f7` and then undid successfully. The base run returned to `terminal_error`, the page returned to `needs_review`, the manual segment became `invalidated`, and apply/undo operation counts were exactly one each.
+
+Remaining in STORY-055A: explicit stale/concurrent API acceptance cases and the desktop correction workspace with Playwright. This slice is not yet Approved.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。

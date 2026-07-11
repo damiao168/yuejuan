@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const correctionColumns = `id::text,capture_page_id::text,base_registration_run_id::text,source_page_revision,template_id::text,template_content_hash,page_no,source_points,template_points,advanced_anchor_mode,status,revision,attempt_count,COALESCE(preview_registered_file_asset_id::text,''),preview_segments,source_to_template_matrix,template_to_source_matrix,COALESCE(coverage,0),COALESCE(reprojection_error,0),validation_report,COALESCE(runtime_task_id::text,''),COALESCE(error_code,''),expires_at,applied_at,undone_at,created_at`
+const correctionColumns = `id::text,capture_page_id::text,base_registration_run_id::text,COALESCE(applied_registration_run_id::text,''),source_page_revision,template_id::text,template_content_hash,page_no,source_points,template_points,advanced_anchor_mode,status,revision,attempt_count,COALESCE(preview_registered_file_asset_id::text,''),preview_segments,source_to_template_matrix,template_to_source_matrix,COALESCE(coverage,0),COALESCE(reprojection_error,0),validation_report,previous_registration_snapshot,COALESCE(runtime_task_id::text,''),COALESCE(error_code,''),expires_at,applied_at,undone_at,created_at`
 
 func (s *PostgresStore) CreateRegistrationCorrection(ctx context.Context, tenantID, runID, actorID string, input CreateRegistrationCorrectionInput) (RegistrationCorrection, error) {
 	if input.PageRevision <= 0 || validateCorrectionPoints(input.SourcePoints, input.TemplatePoints) != nil {
@@ -24,7 +24,7 @@ func (s *PostgresStore) CreateRegistrationCorrection(ctx context.Context, tenant
 	defer tx.Rollback()
 	var pageID, batchID, templateID, templateHash string
 	var pageNo, pageRevision int
-	err = tx.QueryRowContext(ctx, `SELECT pr.capture_page_id::text,cp.capture_batch_id::text,pr.template_id::text,pr.template_content_hash,pr.page_no,cp.revision FROM page_registration_run pr JOIN capture_page cp ON cp.tenant_id=pr.tenant_id AND cp.id=pr.capture_page_id WHERE pr.tenant_id=$1 AND pr.id=$2::uuid AND pr.deleted_at IS NULL AND cp.deleted_at IS NULL FOR UPDATE OF pr,cp`, tenantID, runID).Scan(&pageID, &batchID, &templateID, &templateHash, &pageNo, &pageRevision)
+	err = tx.QueryRowContext(ctx, `SELECT pr.capture_page_id::text,cp.capture_batch_id::text,pr.template_id::text,pr.template_content_hash,pr.page_no,cp.revision FROM page_registration_run pr JOIN capture_page cp ON cp.tenant_id=pr.tenant_id AND cp.id=pr.capture_page_id WHERE pr.tenant_id=$1 AND pr.id=$2::uuid AND pr.deleted_at IS NULL AND cp.deleted_at IS NULL AND pr.id=(SELECT latest.id FROM page_registration_run latest WHERE latest.tenant_id=pr.tenant_id AND latest.capture_page_id=pr.capture_page_id AND latest.deleted_at IS NULL ORDER BY latest.created_at DESC LIMIT 1) FOR UPDATE OF pr,cp`, tenantID, runID).Scan(&pageID, &batchID, &templateID, &templateHash, &pageNo, &pageRevision)
 	if err != nil {
 		return RegistrationCorrection{}, mapNotFound(err)
 	}
@@ -155,9 +155,9 @@ func (x RegistrationCorrection) ValidationReportHash() string {
 
 func scanRegistrationCorrection(row scanner) (RegistrationCorrection, error) {
 	var x RegistrationCorrection
-	var source, target, segments, forward, inverse, report []byte
+	var source, target, segments, forward, inverse, report, snapshot []byte
 	var applied, undone sql.NullTime
-	err := row.Scan(&x.ID, &x.CapturePageID, &x.BaseRegistrationRunID, &x.SourcePageRevision, &x.TemplateID, &x.TemplateContentHash, &x.PageNo, &source, &target, &x.AdvancedAnchorMode, &x.Status, &x.Revision, &x.AttemptCount, &x.PreviewRegisteredFileAssetID, &segments, &forward, &inverse, &x.Coverage, &x.ReprojectionError, &report, &x.RuntimeTaskID, &x.ErrorCode, &x.ExpiresAt, &applied, &undone, &x.CreatedAt)
+	err := row.Scan(&x.ID, &x.CapturePageID, &x.BaseRegistrationRunID, &x.AppliedRegistrationRunID, &x.SourcePageRevision, &x.TemplateID, &x.TemplateContentHash, &x.PageNo, &source, &target, &x.AdvancedAnchorMode, &x.Status, &x.Revision, &x.AttemptCount, &x.PreviewRegisteredFileAssetID, &segments, &forward, &inverse, &x.Coverage, &x.ReprojectionError, &report, &snapshot, &x.RuntimeTaskID, &x.ErrorCode, &x.ExpiresAt, &applied, &undone, &x.CreatedAt)
 	if err != nil {
 		return RegistrationCorrection{}, mapNotFound(err)
 	}
@@ -167,6 +167,7 @@ func scanRegistrationCorrection(row scanner) (RegistrationCorrection, error) {
 	_ = json.Unmarshal(forward, &x.SourceToTemplate)
 	_ = json.Unmarshal(inverse, &x.TemplateToSource)
 	_ = json.Unmarshal(report, &x.ValidationReport)
+	_ = json.Unmarshal(snapshot, &x.PreviousRegistrationSnapshot)
 	if x.PreviewSegments == nil {
 		x.PreviewSegments = []SegmentCropInput{}
 	}
@@ -178,6 +179,9 @@ func scanRegistrationCorrection(row scanner) (RegistrationCorrection, error) {
 	}
 	if x.ValidationReport == nil {
 		x.ValidationReport = map[string]any{}
+	}
+	if x.PreviousRegistrationSnapshot == nil {
+		x.PreviousRegistrationSnapshot = map[string]any{}
 	}
 	if applied.Valid {
 		value := applied.Time.UTC()

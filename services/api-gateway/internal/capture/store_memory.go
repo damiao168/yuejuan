@@ -48,6 +48,14 @@ func (s *MemoryStore) ApplyRegistrationCorrectionFailure(context.Context, string
 	return RegistrationCorrection{}, ErrInvalidTransition
 }
 
+func (s *MemoryStore) ApplyRegistrationCorrection(context.Context, string, string, string, RegistrationCorrectionDecisionInput) (RegistrationCorrection, error) {
+	return RegistrationCorrection{}, ErrInvalidTransition
+}
+
+func (s *MemoryStore) UndoRegistrationCorrection(context.Context, string, string, string, RegistrationCorrectionDecisionInput) (RegistrationCorrection, error) {
+	return RegistrationCorrection{}, ErrInvalidTransition
+}
+
 func (s *MemoryStore) GetMatchingQueue(_ context.Context, tenantID, batchID string) (MatchingQueue, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

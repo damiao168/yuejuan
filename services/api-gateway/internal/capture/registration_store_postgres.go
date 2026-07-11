@@ -210,7 +210,7 @@ ON CONFLICT (tenant_id,submission_id,question_id) DO UPDATE SET submission_page_
 	if err != nil {
 		return RegistrationRun{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE capture_page SET status=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, current.CapturePageID, pageStatus); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE capture_page SET status=$3,revision=revision+1,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, current.CapturePageID, pageStatus); err != nil {
 		return RegistrationRun{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE capture_batch b SET
@@ -244,7 +244,7 @@ func (s *PostgresStore) ApplyRegistrationFailure(ctx context.Context, tenantID, 
 	if err != nil {
 		return RegistrationRun{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE capture_page SET status=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, out.CapturePageID, pageStatus); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE capture_page SET status=$3,revision=revision+1,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, out.CapturePageID, pageStatus); err != nil {
 		return RegistrationRun{}, err
 	}
 	var batchID string
