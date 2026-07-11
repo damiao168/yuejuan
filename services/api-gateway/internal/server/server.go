@@ -365,6 +365,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/submissions/{id}/processing-summary", requireCaptureManage(captureHandler.GetProcessingSummary))
 	mux.Handle("POST /api/v1/page-registration-runs/{id}/confirm", requireCaptureManage(captureHandler.ConfirmRegistration))
 	mux.Handle("POST /api/v1/page-registration-runs/{id}/retry", requireCaptureManage(captureHandler.RetryRegistration))
+	mux.Handle("POST /api/v1/page-registration-runs/{id}/corrections", requireCaptureManage(captureHandler.CreateRegistrationCorrection))
+	mux.Handle("GET /api/v1/page-registration-corrections/{id}", requireCaptureManage(captureHandler.GetRegistrationCorrection))
+	mux.Handle("POST /api/v1/page-registration-corrections/{id}/preview", requireCaptureManage(captureHandler.PreviewRegistrationCorrection))
 
 	mux.Handle("POST /api/v1/internal/image-quality/jobs/claim", requireOCRManage(imageQualityHandler.ClaimJobs))
 	mux.Handle("POST /api/v1/internal/image-quality/runs/{runId}/normalized-assets", requireOCRManage(imageQualityHandler.CreateNormalizedAssetSlot))
@@ -381,6 +384,8 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/internal/capture/files/{fileId}/fail", requireWorkerExecute(captureHandler.FailFile))
 	mux.Handle("POST /api/v1/internal/page-registration-runs/{runId}/result", requireWorkerExecute(captureHandler.CompleteRegistration))
 	mux.Handle("POST /api/v1/internal/page-registration-runs/{runId}/fail", requireWorkerExecute(captureHandler.FailRegistration))
+	mux.Handle("POST /api/v1/internal/page-registration-corrections/{id}/result", requireWorkerExecute(captureHandler.CompleteRegistrationCorrection))
+	mux.Handle("POST /api/v1/internal/page-registration-corrections/{id}/failure", requireWorkerExecute(captureHandler.FailRegistrationCorrection))
 	mux.Handle("GET /api/v1/internal/worker/metrics", requireWorkerRead(workerRuntimeHandler.Metrics))
 
 	mux.Handle("POST /api/v1/submissions/{id}/ocr-tasks", requireOCRManage(ocrHandler.CreateTask))

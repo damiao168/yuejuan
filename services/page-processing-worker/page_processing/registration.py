@@ -107,6 +107,67 @@ def register_page(
     )
 
 
+def register_page_manual(
+    source: bytes,
+    source_content_type: str,
+    template: bytes,
+    template_content_type: str,
+    source_points: list[dict],
+    template_points: list[dict],
+    *,
+    render_dpi: int = 300,
+    template_page_index: int = 1,
+) -> RegistrationOutput:
+    source_image = _decode_first(source, source_content_type, render_dpi)
+    template_image = _decode_page(template, template_content_type, render_dpi, template_page_index)
+    source_normalized = _validated_quad(source_points)
+    template_normalized = _validated_quad(template_points)
+    if np.sign(cv2.contourArea(source_normalized, oriented=True)) != np.sign(cv2.contourArea(template_normalized, oriented=True)):
+        raise RegistrationError("manual_registration_mirrored")
+    source_height, source_width = source_image.shape[:2]
+    target_height, target_width = template_image.shape[:2]
+    source_pixels = source_normalized * np.float32([source_width - 1, source_height - 1])
+    template_pixels = template_normalized * np.float32([target_width - 1, target_height - 1])
+    matrix = cv2.getPerspectiveTransform(source_pixels.astype(np.float32), template_pixels.astype(np.float32))
+    if not np.isfinite(matrix).all() or abs(float(np.linalg.det(matrix))) < 1e-10:
+        raise RegistrationError("manual_registration_matrix_invalid")
+    condition = float(np.linalg.cond(matrix))
+    if not np.isfinite(condition) or condition > 1e8:
+        raise RegistrationError("manual_registration_matrix_unstable")
+    coverage = _coverage(matrix, source_width, source_height, target_width, target_height)
+    if coverage < 0.70 or coverage > 1.15:
+        raise RegistrationError("manual_registration_coverage_invalid")
+    registered = cv2.warpPerspective(source_image, matrix, (target_width, target_height), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
+    inverse = np.linalg.inv(matrix)
+    return RegistrationOutput(
+        registered_png=_encode_png(registered), width=target_width, height=target_height,
+        evidence=RegistrationEvidence(
+            method="manual_four_point", confidence=1.0,
+            source_to_template=matrix.tolist(), template_to_source=inverse.tolist(),
+            feature_count=0, match_count=4, inlier_count=4, inlier_ratio=1.0,
+            reprojection_error=0.0, coverage=coverage,
+        ),
+    )
+
+
+def _validated_quad(points: list[dict]) -> np.ndarray:
+    if len(points) != 4:
+        raise RegistrationError("manual_registration_points_invalid")
+    try:
+        quad = np.float32([[float(point["x"]), float(point["y"])] for point in points])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RegistrationError("manual_registration_points_invalid") from exc
+    if not np.isfinite(quad).all() or np.any(quad < 0) or np.any(quad > 1):
+        raise RegistrationError("manual_registration_points_out_of_range")
+    if len({(float(point[0]), float(point[1])) for point in quad}) != 4:
+        raise RegistrationError("manual_registration_points_duplicate")
+    if not cv2.isContourConvex(quad.reshape((-1, 1, 2))):
+        raise RegistrationError("manual_registration_points_crossed")
+    if abs(float(cv2.contourArea(quad))) < 0.05:
+        raise RegistrationError("manual_registration_area_too_small")
+    return quad
+
+
 def crop_regions(registered_png: bytes, regions: list[dict]) -> list[dict]:
     image = _decode_png(registered_png)
     height, width = image.shape[:2]

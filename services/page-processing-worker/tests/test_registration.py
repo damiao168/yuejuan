@@ -1,7 +1,8 @@
 import cv2
 import numpy as np
+import pytest
 
-from page_processing.registration import crop_regions, register_page
+from page_processing.registration import RegistrationError, crop_regions, register_page, register_page_manual
 
 
 def _png(image: np.ndarray) -> bytes:
@@ -38,3 +39,28 @@ def test_identical_page_uses_identity_registration() -> None:
     result = register_page(_png(page), "image/png", _png(page), "image/png")
     assert result.evidence.method == "pixel_identity"
     assert result.evidence.confidence == 1.0
+
+
+def test_manual_four_point_registration_produces_stable_output() -> None:
+    page = np.full((400, 300, 3), 255, np.uint8)
+    cv2.rectangle(page, (20, 20), (280, 380), (0, 0, 0), 3)
+    points = [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0}]
+
+    result = register_page_manual(_png(page), "image/png", _png(page), "image/png", points, points)
+
+    assert result.evidence.method == "manual_four_point"
+    assert result.evidence.coverage == pytest.approx(1.0, abs=0.02)
+    assert result.width == 300
+    assert result.height == 400
+
+
+@pytest.mark.parametrize("points,error", [
+    ([{"x": 0.0, "y": 0.0}] * 4, "manual_registration_points_duplicate"),
+    ([{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 1.0, "y": 0.0}, {"x": 0.0, "y": 1.0}], "manual_registration_points_crossed"),
+    ([{"x": -0.1, "y": 0.0}, {"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0}], "manual_registration_points_out_of_range"),
+])
+def test_manual_registration_rejects_invalid_geometry(points: list[dict], error: str) -> None:
+    page = np.full((100, 100, 3), 255, np.uint8)
+    target = [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0}]
+    with pytest.raises(RegistrationError, match=error):
+        register_page_manual(_png(page), "image/png", _png(page), "image/png", points, target)

@@ -262,6 +262,71 @@ type RegistrationFailureInput struct {
 type RegistrationDecisionInput struct {
 	Reason string `json:"reason"`
 }
+
+type NormalizedPoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type CreateRegistrationCorrectionInput struct {
+	PageRevision       int               `json:"page_revision"`
+	SourcePoints       []NormalizedPoint `json:"source_points"`
+	TemplatePoints     []NormalizedPoint `json:"template_points"`
+	AdvancedAnchorMode bool              `json:"advanced_anchor_mode"`
+}
+
+type RegistrationCorrection struct {
+	ID                           string             `json:"id"`
+	CapturePageID                string             `json:"capture_page_id"`
+	BaseRegistrationRunID        string             `json:"base_registration_run_id"`
+	SourcePageRevision           int                `json:"source_page_revision"`
+	TemplateID                   string             `json:"template_id"`
+	TemplateContentHash          string             `json:"template_content_hash"`
+	PageNo                       int                `json:"page_no"`
+	SourcePoints                 []NormalizedPoint  `json:"source_points"`
+	TemplatePoints               []NormalizedPoint  `json:"template_points"`
+	AdvancedAnchorMode           bool               `json:"advanced_anchor_mode"`
+	Status                       string             `json:"status"`
+	Revision                     int                `json:"revision"`
+	AttemptCount                 int                `json:"attempt_count"`
+	PreviewRegisteredFileAssetID string             `json:"preview_registered_file_asset_id,omitempty"`
+	PreviewSegments              []SegmentCropInput `json:"preview_segments"`
+	SourceToTemplate             []any              `json:"source_to_template_matrix"`
+	TemplateToSource             []any              `json:"template_to_source_matrix"`
+	Coverage                     float64            `json:"coverage,omitempty"`
+	ReprojectionError            float64            `json:"reprojection_error,omitempty"`
+	ValidationReport             map[string]any     `json:"validation_report"`
+	RuntimeTaskID                string             `json:"runtime_task_id,omitempty"`
+	ErrorCode                    string             `json:"error_code,omitempty"`
+	ExpiresAt                    time.Time          `json:"expires_at"`
+	AppliedAt                    *time.Time         `json:"applied_at,omitempty"`
+	UndoneAt                     *time.Time         `json:"undone_at,omitempty"`
+	CreatedAt                    time.Time          `json:"created_at"`
+}
+
+type CorrectionPreviewResultInput struct {
+	TaskID                       string             `json:"task_id"`
+	LeaseToken                   string             `json:"lease_token"`
+	ResultVersion                string             `json:"result_version"`
+	DurationMS                   int                `json:"duration_ms"`
+	PreviewRegisteredFileAssetID string             `json:"preview_registered_file_asset_id"`
+	PreviewRegisteredSHA256      string             `json:"preview_registered_sha256"`
+	SourceToTemplate             []any              `json:"source_to_template_matrix"`
+	TemplateToSource             []any              `json:"template_to_source_matrix"`
+	Coverage                     float64            `json:"coverage"`
+	ReprojectionError            float64            `json:"reprojection_error"`
+	ValidationReport             map[string]any     `json:"validation_report"`
+	Segments                     []SegmentCropInput `json:"segments"`
+}
+
+type CorrectionPreviewFailureInput struct {
+	TaskID      string         `json:"task_id"`
+	LeaseToken  string         `json:"lease_token"`
+	Retryable   bool           `json:"retryable"`
+	ErrorCode   string         `json:"error_code"`
+	ErrorDetail map[string]any `json:"error_detail"`
+	DurationMS  int            `json:"duration_ms"`
+}
 type ProcessingSummary struct {
 	SubmissionID string              `json:"submission_id"`
 	TotalPages   int                 `json:"total_pages"`
@@ -317,6 +382,11 @@ type Store interface {
 	ConfirmRegistration(ctx context.Context, tenantID, runID, actorID, reason string) (RegistrationRun, error)
 	PrepareRegistrationRetry(ctx context.Context, tenantID, runID string) (RegistrationRun, error)
 	GetProcessingSummary(ctx context.Context, tenantID, submissionID string) (ProcessingSummary, error)
+	CreateRegistrationCorrection(ctx context.Context, tenantID, runID, actorID string, input CreateRegistrationCorrectionInput) (RegistrationCorrection, error)
+	GetRegistrationCorrection(ctx context.Context, tenantID, correctionID string) (RegistrationCorrection, error)
+	QueueRegistrationCorrectionPreview(ctx context.Context, tenantID, correctionID, actorID string, revision int) (RegistrationCorrection, error)
+	ApplyRegistrationCorrectionPreview(ctx context.Context, tenantID, correctionID string, input CorrectionPreviewResultInput) (RegistrationCorrection, error)
+	ApplyRegistrationCorrectionFailure(ctx context.Context, tenantID, correctionID, errorCode string, detail map[string]any) (RegistrationCorrection, error)
 }
 
 type FileAssetSnapshot struct {

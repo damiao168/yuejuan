@@ -12,19 +12,20 @@ import (
 )
 
 var allowedOwnerTypes = map[string]bool{
-	"generic":                    true,
-	"exam":                       true,
-	"exam_paper":                 true,
-	"submission":                 true,
-	"answer_page":                true,
-	"submission_page_original":   true,
-	"submission_page_normalized": true,
-	"capture_batch":              true,
-	"capture_page_decoded":       true,
-	"page_registration_output":   true,
-	"answer_segment_crop":        true,
-	"report":                     true,
-	"import":                     true,
+	"generic":                              true,
+	"exam":                                 true,
+	"exam_paper":                           true,
+	"submission":                           true,
+	"answer_page":                          true,
+	"submission_page_original":             true,
+	"submission_page_normalized":           true,
+	"capture_batch":                        true,
+	"capture_page_decoded":                 true,
+	"page_registration_output":             true,
+	"answer_segment_crop":                  true,
+	"page_registration_correction_preview": true,
+	"report":                               true,
+	"import":                               true,
 }
 
 var allowedContentTypesByExt = map[string]map[string]bool{

@@ -444,6 +444,120 @@ Spec review: the contract deliberately excludes student identity and scores, so 
 - One valid unambiguous candidate assigns the page number. A controlled barcode with invalid signature/claims or conflicting valid candidates remains blocked after quality processing until manual page confirmation records an override.
 - Real signed-template verification used locked template `522e54c3-77d6-4b12-b347-89d776e19826`. Batch `895aec29-60cf-4243-93d7-6e5ff45056aa` decoded a real QR PNG as `verified` with one page-1 candidate. Tampered batch `905ef3b3-9c1f-48ae-81d3-dc72af96f6b0` persisted `signature_invalid`, produced zero candidates, and ended in `needs_review`.
 
+## STORY-055A Manual Registration Correction Specification
+
+### Product outcome
+
+A scanner operator must be able to recover a page that automatic template positioning cannot align, without understanding Homography and without allowing an unchecked preview to become grading evidence. The workflow is desktop-first and preserves every automatic and manual decision.
+
+### User workflow
+
+1. From a registration blocker, the operator opens "校正页面边界".
+2. The workspace displays the normalized source page and authoritative locked-template page side by side.
+3. Four labelled points are shown in stable order: top-left, top-right, bottom-right, bottom-left. Source points are editable; template points default to template corners and are editable only in an explicit advanced-anchor mode.
+4. Zoom, pan, fit, reset, and local magnification support pixel-accurate placement. Coordinates are normalized to each image, so browser size never changes the submitted geometry.
+5. "预览校正" creates an asynchronous isolated preview. It does not update the active registration run, capture page, answer segments, or batch gate.
+6. The preview overlays template boundaries and question regions and reports user-facing checks: boundary complete, orientation valid, question regions in bounds, and alignment quality acceptable. Technical matrix/coverage values remain available under details.
+7. Only a ready preview that passes hard geometry checks can be applied. Apply requires a reason and the same capture-page revision used to create the draft.
+8. Apply atomically creates a new immutable manual registration run, promotes the preview registered asset and crops, invalidates the previous active run/segments, updates the page/batch state, and records actor/reason/before/after evidence.
+9. The latest applied correction can be undone while the batch is writable. Undo restores the exact prior active registration/segment snapshot and invalidates the correction result; it never reruns a possibly changed algorithm.
+
+### Coordinates and validation
+
+- A point is `{x,y}` with finite values in `[0,1]`, interpreted against the exact source/template dimensions stored in the correction draft.
+- Exactly four unique source and four unique template points are required in clockwise order.
+- The polygons must be convex, non-self-intersecting, and have at least 5% of their image area.
+- The derived matrix must be finite and invertible; mirrored orientation, condition number above the configured limit, target coverage outside `[0.70,1.15]`, or any question region outside the registered image is a hard failure.
+- Preview returns normalized error codes, never OpenCV stack text. Invalid geometry is rejected before a Worker task is created when possible and rechecked in Python before processing.
+- Limits: one active draft per page/operator, at most eight preview attempts per page revision, 15-minute draft expiry, and the existing image pixel limits.
+
+### Persistence and states
+
+Add immutable `page_registration_correction` records:
+
+```text
+id, tenant_id, capture_page_id, base_registration_run_id, source_page_revision,
+template_id, template_content_hash, page_no,
+source_points, template_points, status,
+preview_registered_file_asset_id, preview_segments, source_to_template_matrix,
+template_to_source_matrix, coverage, reprojection_error, validation_report,
+runtime_task_id, created_by, applied_by, reason,
+previous_registration_snapshot, expires_at, applied_at, undone_at, created_at, updated_at
+```
+
+States are `draft -> queued -> preview_ready -> applied -> undone`; `draft/queued` may become `failed` or `expired`, and a newer applied correction marks older drafts `superseded`. State changes use optimistic revision and database transactions.
+
+Preview assets use owner type `page_registration_correction_preview`. They are protected but never returned by the segment image API as active grading evidence. Retention cleanup may remove expired, unapplied preview assets only after the configured evidence window.
+
+### API contract
+
+```text
+POST /api/v1/page-registration-runs/{id}/corrections
+GET  /api/v1/page-registration-corrections/{id}
+POST /api/v1/page-registration-corrections/{id}/preview
+POST /api/v1/internal/page-registration-corrections/{id}/result
+POST /api/v1/internal/page-registration-corrections/{id}/failure
+POST /api/v1/page-registration-corrections/{id}/apply
+POST /api/v1/page-registration-corrections/{id}/undo
+```
+
+- Create accepts page revision, source/template points, advanced-anchor flag, and no asset/template identity supplied by the client.
+- Preview is idempotent by correction revision and points hash. Duplicate requests return the existing task/result.
+- Result callbacks require Worker Runtime lease ownership and validate every uploaded asset against tenant, exam, owner, hash, and expected dimensions.
+- Apply and undo require `capture:manage`, a non-empty reason, writable batch, current page revision, and one transaction spanning run/segment/page/batch/audit changes.
+- GET returns source/template download references through authorized APIs, dimensions, points, status, validation report, and preview references; it never exposes object-store URLs.
+
+### UI and accessibility
+
+- The correction editor is a full-width operational workspace, not a nested modal. Leaving with unsaved point changes requires confirmation.
+- Point handles have colour plus shape/label distinctions, a minimum 24px visual target and 44px hit area, keyboard arrow adjustment, and an accessible point list with numeric inputs.
+- A clear source/template legend and linked point numbering prevent correspondence mistakes.
+- Errors use operational language: "页面边界交叉", "页面方向可能翻转", "校正后题区超出页面". Matrix terms appear only in expandable details.
+- Mobile permits evidence viewing and status actions but directs precision correction to desktop.
+
+### Audit, concurrency, and recovery
+
+- Create, preview request/result, apply, undo, failure, expiry, and supersede events carry request/trace IDs where available.
+- Worker/API restart resumes queued previews through Worker Runtime. Duplicate result callbacks are idempotent.
+- Rotating, deleting, restoring, splitting, merging, changing page number, or completing/reopening the batch invalidates or supersedes incompatible drafts.
+- Apply versus page mutation and apply versus batch completion serialize on the capture-batch/page rows. A stale operation returns HTTP 409 and preserves the preview for inspection.
+
+### Acceptance criteria
+
+- [ ] A low-texture or strongly perspective-distorted fixture can be corrected from four points and produces the expected registered image and real question crops.
+- [ ] Invalid, crossed, mirrored, duplicate, tiny, out-of-range, NaN, and stale points cannot create active evidence.
+- [ ] Preview never changes active registration, segments, page status, or completion counts.
+- [ ] Apply changes run/segments/page/batch exactly once and writes one business audit event.
+- [ ] Undo restores the exact previous registration and segment hashes and writes one audit event.
+- [ ] Source rotation or page revision between preview and apply returns 409 with no partial changes.
+- [ ] Completed/cancelled batches reject create, preview, apply, and undo.
+- [ ] Cross-tenant/cross-exam correction and asset access are rejected.
+- [ ] Worker restart, duplicate callback, preview failure, and retry converge without duplicate active crops.
+- [ ] Desktop Playwright completes create -> adjust -> preview -> apply -> undo; 390px shows evidence and the desktop-required message without overlap.
+
+### Specification review and fixes
+
+1. A synchronous preview API was rejected because Homography, image upload, and crop generation can exceed HTTP timeouts; preview uses Worker Runtime.
+2. Applying only a matrix was rejected because OCR needs immutable registered/crop assets tied to that exact result; preview produces isolated assets and apply promotes them transactionally.
+3. Recomputing on undo was rejected because algorithms/templates may change; apply stores an exact previous evidence snapshot for deterministic restoration.
+4. Pixel coordinates were rejected because responsive rendering and source normalization change dimensions; persisted coordinates are normalized and dimension-bound.
+5. Client-supplied template IDs/hashes were rejected; the API derives them from the base run and locked template.
+6. A canvas-only editor was rejected for accessibility; keyboard and numeric point controls are part of the required UI.
+7. Allowing previews to clear blockers was rejected; only apply may change active business state.
+
+Specification review conclusion: Ready for implementation. The first implementation slice is schema/domain validation, followed by Worker preview, transactional apply/undo, and the desktop workspace.
+
+### Manual correction implementation progress (2026-07-11)
+
+- Migration `000034_story055_manual_registration_correction.sql` adds the correction state model, active-draft uniqueness, preview limits, Worker task type, and correction audit operations.
+- Go and Python independently reject invalid, duplicate, crossed, mirrored, tiny, non-finite, and out-of-range quadrilaterals.
+- Authorized create/get/preview APIs bind the draft to the authoritative base run, locked template, page number, page revision, batch state, actor, expiry, and points hash.
+- `page-processing-worker` executes isolated `manual_four_point` previews, uploads registered/segment assets under `page_registration_correction_preview`, and returns bounded matrix/coverage validation evidence through lease-bound callbacks.
+- Callback validation checks tenant, exam, correction owner, and content hash before the correction can become `preview_ready`.
+- Real preview correction `c5b8f054-099d-4698-822c-fa71c5889892` completed with coverage `0.9999932075839946`, one registered preview and one crop. The capture page revision remained `2`, and its page/batch blockers remained unchanged.
+
+Remaining in STORY-055A: transactional apply with previous-evidence snapshot, deterministic undo, stale/concurrent rejection tests, and the desktop correction workspace. This slice is not yet Approved.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。

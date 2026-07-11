@@ -8,7 +8,7 @@ from page_processing.api import Client
 from page_processing.barcode import detect_barcodes
 from page_processing.config import Config
 from page_processing.decoder import DecodeError, decode_document
-from page_processing.registration import RegistrationError, crop_regions, register_page
+from page_processing.registration import RegistrationError, crop_regions, register_page, register_page_manual
 
 
 class Runner:
@@ -24,6 +24,8 @@ class Runner:
                     self._process_capture(task)
                 elif task.get("task_type") == "page_registration":
                     self._process_registration(task)
+                elif task.get("task_type") == "page_registration_correction_preview":
+                    self._process_correction(task)
                 else:
                     self.client.fail_task(task, "unsupported_page_processing_task", {"task_type": task.get("task_type")})
             except Exception as exc:
@@ -87,6 +89,39 @@ class Runner:
             "segments": segments,
         })
 
+    def _process_correction(self, task: dict) -> None:
+        started = time.perf_counter()
+        payload = task.get("payload") or {}
+        self.client.heartbeat(task, self.config.worker_id, self.config.lease_seconds)
+        source = self.client.download(str(payload["source_download_url"]))
+        template = self.client.download(str(payload["template_download_url"]))
+        output = register_page_manual(
+            source, str(payload.get("source_content_type") or "image/png"),
+            template, str(payload.get("template_content_type") or ""),
+            list(payload.get("source_points") or []), list(payload.get("template_points") or []),
+            render_dpi=int(payload.get("render_dpi") or 300),
+            template_page_index=int(payload.get("template_page_index") or 1),
+        )
+        correction_id = str(payload["correction_id"])
+        registered = self.client.upload_asset(task, "page_registration_correction_preview", correction_id, "registered-preview.png", output.registered_png)
+        segments = []
+        for index, crop in enumerate(crop_regions(output.registered_png, list(payload.get("question_regions") or [])), start=1):
+            asset = self.client.upload_asset(task, "page_registration_correction_preview", correction_id, f"segment-preview-{index:04d}.png", crop.pop("png"))
+            segments.append({**crop, "file_asset_id": asset["id"], "sha256": asset["hash_sha256"]})
+        evidence = output.evidence
+        result_version = "sha256:" + hashlib.sha256(json.dumps({"registered": registered["hash_sha256"], "segments": segments}, sort_keys=True).encode()).hexdigest()
+        self.client.complete_correction(correction_id, {
+            "task_id": task["id"], "lease_token": task["lease_token"], "result_version": result_version,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "preview_registered_file_asset_id": registered["id"],
+            "preview_registered_sha256": registered["hash_sha256"],
+            "source_to_template_matrix": evidence.source_to_template,
+            "template_to_source_matrix": evidence.template_to_source,
+            "coverage": evidence.coverage, "reprojection_error": evidence.reprojection_error,
+            "validation_report": {"passed": True, "orientation_valid": True, "regions_in_bounds": True, "coverage_valid": True},
+            "segments": segments,
+        })
+
     def _fail(self, task: dict, exc: Exception) -> None:
         payload = task.get("payload") or {}
         code = str(exc) if isinstance(exc, (DecodeError, RegistrationError)) else "page_processing_failed"
@@ -95,5 +130,7 @@ class Runner:
             self.client.fail(str(payload["capture_file_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": not isinstance(exc, DecodeError), "error_code": code, "error_detail": detail, "duration_ms": 0})
         elif task.get("task_type") == "page_registration" and payload.get("registration_run_id"):
             self.client.fail_registration(str(payload["registration_run_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": not isinstance(exc, RegistrationError), "error_code": code, "error_detail": detail, "duration_ms": 0})
+        elif task.get("task_type") == "page_registration_correction_preview" and payload.get("correction_id"):
+            self.client.fail_correction(str(payload["correction_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": not isinstance(exc, RegistrationError), "error_code": code, "error_detail": detail, "duration_ms": 0})
         else:
             self.client.fail_task(task, code, detail)

@@ -28,6 +28,26 @@ func (s *MemoryStore) IssueTemplateBarcodes(context.Context, string, string) (Is
 	return IssuedTemplateBarcodes{}, ErrInvalidTransition
 }
 
+func (s *MemoryStore) CreateRegistrationCorrection(context.Context, string, string, string, CreateRegistrationCorrectionInput) (RegistrationCorrection, error) {
+	return RegistrationCorrection{}, ErrInvalidTransition
+}
+
+func (s *MemoryStore) GetRegistrationCorrection(context.Context, string, string) (RegistrationCorrection, error) {
+	return RegistrationCorrection{}, ErrNotFound
+}
+
+func (s *MemoryStore) QueueRegistrationCorrectionPreview(context.Context, string, string, string, int) (RegistrationCorrection, error) {
+	return RegistrationCorrection{}, ErrInvalidTransition
+}
+
+func (s *MemoryStore) ApplyRegistrationCorrectionPreview(context.Context, string, string, CorrectionPreviewResultInput) (RegistrationCorrection, error) {
+	return RegistrationCorrection{}, ErrInvalidTransition
+}
+
+func (s *MemoryStore) ApplyRegistrationCorrectionFailure(context.Context, string, string, string, map[string]any) (RegistrationCorrection, error) {
+	return RegistrationCorrection{}, ErrInvalidTransition
+}
+
 func (s *MemoryStore) GetMatchingQueue(_ context.Context, tenantID, batchID string) (MatchingQueue, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
