@@ -110,6 +110,43 @@ func (s *MemoryStore) ConfirmPageMatch(_ context.Context, tenantID, pageID, acto
 	return x, nil
 }
 
+func (s *MemoryStore) DeletePage(_ context.Context, tenantID, pageID, actorID string, input PageLifecycleInput) (Page, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, ok := s.pages[pageID]
+	if !ok || x.TenantID != tenantID {
+		return Page{}, ErrNotFound
+	}
+	if input.Revision != x.Revision || strings.TrimSpace(input.Reason) == "" {
+		return Page{}, ErrConflict
+	}
+	x.Status = "deleted"
+	x.Revision++
+	s.pages[pageID] = x
+	return x, nil
+}
+func (s *MemoryStore) RestorePage(_ context.Context, tenantID, pageID, actorID string, input PageLifecycleInput) (Page, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, ok := s.pages[pageID]
+	if !ok || x.TenantID != tenantID {
+		return Page{}, ErrNotFound
+	}
+	if input.Revision != x.Revision || x.Status != "deleted" {
+		return Page{}, ErrConflict
+	}
+	x.Status = "needs_review"
+	x.Revision++
+	s.pages[pageID] = x
+	return x, nil
+}
+func (s *MemoryStore) SplitSubmission(context.Context, string, string, string, SplitSubmissionInput) (MatchingQueue, error) {
+	return MatchingQueue{}, ErrInvalidTransition
+}
+func (s *MemoryStore) MergeSubmissions(context.Context, string, string, string, MergeSubmissionsInput) (MatchingQueue, error) {
+	return MatchingQueue{}, ErrInvalidTransition
+}
+
 func (s *MemoryStore) QueueSubmissionPages(_ context.Context, tenantID, submissionID, actorID string) ([]RegistrationRun, error) {
 	return nil, ErrInvalidTransition
 }

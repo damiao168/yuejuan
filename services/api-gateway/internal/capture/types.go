@@ -115,6 +115,21 @@ type ConfirmPageMatchInput struct {
 	Reason   string `json:"reason"`
 }
 
+type PageLifecycleInput struct {
+	Revision int    `json:"revision"`
+	Reason   string `json:"reason"`
+}
+type SplitSubmissionInput struct {
+	SubmissionID string   `json:"submission_id"`
+	PageIDs      []string `json:"page_ids"`
+	Reason       string   `json:"reason"`
+}
+type MergeSubmissionsInput struct {
+	TargetSubmissionID string `json:"target_submission_id"`
+	SourceSubmissionID string `json:"source_submission_id"`
+	Reason             string `json:"reason"`
+}
+
 type CreateBatchInput struct {
 	Name           string `json:"name"`
 	SourceType     string `json:"source_type"`
@@ -243,6 +258,10 @@ type Store interface {
 	ConfirmStudentMatch(ctx context.Context, tenantID, submissionID, actorID string, input ConfirmStudentMatchInput) (MatchingSubmission, error)
 	MarkStudentUnknown(ctx context.Context, tenantID, submissionID, actorID string, input MarkStudentUnknownInput) (MatchingSubmission, error)
 	ConfirmPageMatch(ctx context.Context, tenantID, pageID, actorID string, input ConfirmPageMatchInput) (Page, error)
+	DeletePage(ctx context.Context, tenantID, pageID, actorID string, input PageLifecycleInput) (Page, error)
+	RestorePage(ctx context.Context, tenantID, pageID, actorID string, input PageLifecycleInput) (Page, error)
+	SplitSubmission(ctx context.Context, tenantID, batchID, actorID string, input SplitSubmissionInput) (MatchingQueue, error)
+	MergeSubmissions(ctx context.Context, tenantID, batchID, actorID string, input MergeSubmissionsInput) (MatchingQueue, error)
 	QueueBatch(ctx context.Context, tenantID, batchID, actorID string) (Batch, error)
 	ApplyFileResult(ctx context.Context, tenantID, fileID string, pages []DecodedPageInput) (File, error)
 	ApplyFileFailure(ctx context.Context, tenantID, fileID, errorCode string, retryable bool) (File, error)

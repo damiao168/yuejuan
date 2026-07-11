@@ -375,6 +375,22 @@ Real verification used batches `ef89f64a-f6fe-495f-bf3e-554f94a5c9a3` and `7c803
 
 The remaining implementation order is now: split/merge/delete/restore -> registration manual confirm/retry -> completion-gate Playwright -> implementation review -> Approved.
 
+## Reversible Page Organization Verification (2026-07-11)
+
+The page-organization slice is complete under the invariant that no physical page or historical evidence is destroyed:
+
+- Delete/restore changes a revisioned business status; original assets and database rows remain available.
+- Split moves selected active pages into a new unassigned submission and rejects moving every page out of the source.
+- Merge is restricted to submissions in the same tenant/batch/exam workflow and renumbers active pages deterministically.
+- Moving a page creates a new active `submission_page`; the historical page remains soft-deleted because immutable quality runs reference it.
+- Normalized assets are not copied across submissions. The moved page returns to unchecked quality and must regenerate normalization, registration, and crops.
+- All affected registration runs and answer segments are invalidated, and delete/restore/split/merge operations are audited with actor and reason.
+- Web controls expose familiar delete, restore, split, and merge icons in the batch workspace.
+
+Real verification on batch `7c803f65-b2f5-4f53-b84e-7778ea5367bf` produced one audit record for each operation. A two-page submission became two one-page submissions after split and returned to one two-page submission after merge.
+
+The remaining implementation order is now: registration manual confirm/retry -> completion-gate Playwright -> implementation review -> Approved.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。

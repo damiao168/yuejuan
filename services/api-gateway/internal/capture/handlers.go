@@ -137,6 +137,63 @@ func (h *Handler) ConfirmPageMatch(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"page": out})
 }
 
+func (h *Handler) DeletePage(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input PageLifecycleInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.DeletePage(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "capture.page_deleted", "capture_page", out.ID, input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"page": out})
+}
+func (h *Handler) RestorePage(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input PageLifecycleInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.RestorePage(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "capture.page_restored", "capture_page", out.ID, input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"page": out})
+}
+func (h *Handler) SplitSubmission(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input SplitSubmissionInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.SplitSubmission(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "capture.submission_split", "capture_batch", out.BatchID, input.Reason)
+	httpx.JSON(w, http.StatusOK, out)
+}
+func (h *Handler) MergeSubmissions(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input MergeSubmissionsInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.MergeSubmissions(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "capture.submissions_merged", "capture_batch", out.BatchID, input.Reason)
+	httpx.JSON(w, http.StatusOK, out)
+}
+
 func (h *Handler) RegisterFile(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	var input RegisterFileInput

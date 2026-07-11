@@ -127,3 +127,8 @@ export async function markStudentUnknown(submissionId: string, revision: number,
 export async function confirmPageMatch(pageId: string, pageNo: number, revision: number, reason = "人工核对页码") {
   return apiClient.request<{ page: CapturePage }>(`/api/v1/capture-pages/${encodeURIComponent(pageId)}/page-match/confirm`, { method: "POST", body: JSON.stringify({ page_no: pageNo, revision, reason }) });
 }
+
+export async function deleteCapturePage(pageId: string, revision: number, reason: string) { return apiClient.request<{ page: CapturePage }>(`/api/v1/capture-pages/${encodeURIComponent(pageId)}/delete`, { method: "POST", body: JSON.stringify({ revision, reason }) }); }
+export async function restoreCapturePage(pageId: string, revision: number, reason: string) { return apiClient.request<{ page: CapturePage }>(`/api/v1/capture-pages/${encodeURIComponent(pageId)}/restore`, { method: "POST", body: JSON.stringify({ revision, reason }) }); }
+export async function splitCaptureSubmission(batchId: string, submissionId: string, pageIds: string[], reason: string) { return apiClient.request<MatchingQueue>(`/api/v1/capture-batches/${encodeURIComponent(batchId)}/submissions/split`, { method: "POST", body: JSON.stringify({ submission_id: submissionId, page_ids: pageIds, reason }) }); }
+export async function mergeCaptureSubmissions(batchId: string, targetSubmissionId: string, sourceSubmissionId: string, reason: string) { return apiClient.request<MatchingQueue>(`/api/v1/capture-batches/${encodeURIComponent(batchId)}/submissions/merge`, { method: "POST", body: JSON.stringify({ target_submission_id: targetSubmissionId, source_submission_id: sourceSubmissionId, reason }) }); }
