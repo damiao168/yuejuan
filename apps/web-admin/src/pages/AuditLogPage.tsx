@@ -247,7 +247,6 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
         <div>
           <Space align="center" wrap>
             <h1>审计日志</h1>
-            <StatusTag tone="success">真实 API</StatusTag>
           </Space>
           <p>只读查看当前租户内的关键操作记录，筛选、追踪并导出带水印的审计 CSV。</p>
         </div>

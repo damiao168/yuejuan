@@ -127,7 +127,7 @@ async function loadQuestion(task: ArbitrationTask) {
   return result.questions.find((item) => item.id === task.question_id);
 }
 
-export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams, currentUser }: { canAssign: boolean; canWork: boolean; canReadAudit: boolean; canReadExams: boolean; currentUser: SessionUser }) {
+export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams, currentUser, initialExamId = "" }: { canAssign: boolean; canWork: boolean; canReadAudit: boolean; canReadExams: boolean; currentUser: SessionUser; initialExamId?: string }) {
   const { message } = App.useApp();
   const hasSession = true;
   const canSubmit = canWork && hasSession;
@@ -185,9 +185,9 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
         task.question_no.toLowerCase().includes(text) ||
         task.exam_id.toLowerCase().includes(text) ||
         examLabel.toLowerCase().includes(text);
-      return statusMatched && keywordMatched;
+      return (!initialExamId || task.exam_id === initialExamId) && statusMatched && keywordMatched;
     });
-  }, [examNames, keyword, statusFilter, tasks]);
+  }, [examNames, initialExamId, keyword, statusFilter, tasks]);
 
   const selectedTask = useMemo(() => tasks.find((task) => task.id === selectedTaskId), [selectedTaskId, tasks]);
   const maxScore = detail?.question?.score ?? detail?.question?.rubric?.max_score ?? 0;
@@ -531,7 +531,6 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
         <div>
           <Space>
             <h1>双评仲裁</h1>
-            <StatusTag tone="success">真实 API</StatusTag>
           </Space>
           <p>处理 arbitration_task，对照双评分差、答案证据和 Rubric 后提交最终分。</p>
         </div>
@@ -642,7 +641,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
               <div className="panel-head">
                 <div>
                   <h2>双评分差</h2>
-                  <p>{detail.task.difference_reason || "后端未返回分差说明"}</p>
+                  <p>{detail.task.difference_reason || "暂无分差说明"}</p>
                 </div>
                 <Gavel size={18} />
               </div>

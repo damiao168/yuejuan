@@ -10,9 +10,11 @@ import (
 type MemoryStore struct {
 	mu       sync.RWMutex
 	users    map[string]UserWithPassword
+	roles    map[string]map[string]AssignableRole
 	sessions map[string]memorySession
 	audits   []AuditRecord
 	auditSeq int
+	userSeq  int
 }
 
 type memorySession struct {
@@ -24,6 +26,7 @@ type memorySession struct {
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		users:    map[string]UserWithPassword{},
+		roles:    map[string]map[string]AssignableRole{},
 		sessions: map[string]memorySession{},
 		audits:   []AuditRecord{},
 	}
@@ -33,6 +36,23 @@ func (s *MemoryStore) AddUser(user UserWithPassword) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.users[user.TenantCode+"|"+user.Username] = user
+	if s.roles[user.TenantID] == nil {
+		s.roles[user.TenantID] = map[string]AssignableRole{}
+	}
+	for _, code := range user.Roles {
+		if _, exists := s.roles[user.TenantID][code]; !exists {
+			s.roles[user.TenantID][code] = AssignableRole{Code: code, Name: code, ScopeType: "tenant"}
+		}
+	}
+}
+
+func (s *MemoryStore) AddRole(tenantID string, role AssignableRole) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.roles[tenantID] == nil {
+		s.roles[tenantID] = map[string]AssignableRole{}
+	}
+	s.roles[tenantID][role.Code] = role
 }
 
 func (s *MemoryStore) FindUserByLogin(_ context.Context, tenantCode string, username string) (UserWithPassword, error) {
@@ -153,6 +173,59 @@ func (s *MemoryStore) ListAudits(_ context.Context, tenantID string, filter Audi
 		out = append(out, record)
 	}
 	return out, nil
+}
+
+func (s *MemoryStore) ListManagedUsers(_ context.Context, tenantID string) ([]ManagedUser, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []ManagedUser{}
+	for _, user := range s.users {
+		if user.TenantID != tenantID {
+			continue
+		}
+		out = append(out, ManagedUser{
+			ID: user.ID, Username: user.Username, DisplayName: user.DisplayName,
+			Status: user.Status, Roles: append([]string(nil), user.Roles...),
+		})
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) ListAssignableRoles(_ context.Context, tenantID string) ([]AssignableRole, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []AssignableRole{}
+	for _, role := range s.roles[tenantID] {
+		if role.Code == "platform_admin" || role.Code == "tenant_admin" {
+			continue
+		}
+		out = append(out, role)
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) CreateManagedUser(_ context.Context, tenantID string, tenantCode string, input CreateManagedUserInput, passwordHash string) (ManagedUser, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := tenantCode + "|" + input.Username
+	if existing, exists := s.users[key]; exists && existing.User.Status != "deleted" {
+		return ManagedUser{}, ErrUsernameExists
+	}
+	role, exists := s.roles[tenantID][input.RoleCode]
+	if !exists || role.Code == "platform_admin" || role.Code == "tenant_admin" {
+		return ManagedUser{}, ErrRoleNotFound
+	}
+	s.userSeq++
+	user := UserWithPassword{
+		User: User{
+			ID: fmt.Sprintf("managed-user-%d", s.userSeq), TenantID: tenantID, TenantCode: tenantCode,
+			Username: input.Username, DisplayName: input.DisplayName, Status: "active",
+			Roles: []string{input.RoleCode}, Permissions: []string{}, DataScope: map[string]any{input.RoleCode: map[string]any{"scope": "tenant"}},
+		},
+		PasswordHash: passwordHash,
+	}
+	s.users[key] = user
+	return ManagedUser{ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, Status: user.Status, Roles: user.Roles}, nil
 }
 
 func cloneAuditMap(value map[string]any) map[string]any {

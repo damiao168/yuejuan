@@ -3,6 +3,7 @@ package paper
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 var (
@@ -10,6 +11,9 @@ var (
 	ErrInvalidInput   = errors.New("invalid paper input")
 	ErrRubricMismatch = errors.New("rubric score does not equal question score")
 	ErrRubricLocked   = errors.New("locked rubric cannot be modified")
+	ErrTemplateLocked = errors.New("locked template cannot be modified")
+	ErrConflict       = errors.New("configuration revision conflict")
+	ErrNotReady       = errors.New("exam configuration is not ready")
 )
 
 type FileAssetInput struct {
@@ -127,6 +131,80 @@ type ValidationResult struct {
 	Issues []ValidationIssue `json:"issues"`
 }
 
+type LayoutRegion struct {
+	ID         string  `json:"id"`
+	QuestionID string  `json:"question_id,omitempty"`
+	Label      string  `json:"label,omitempty"`
+	X          float64 `json:"x"`
+	Y          float64 `json:"y"`
+	Width      float64 `json:"width"`
+	Height     float64 `json:"height"`
+}
+
+type TemplatePage struct {
+	PageNo            int            `json:"page_no"`
+	Width             int            `json:"width"`
+	Height            int            `json:"height"`
+	RegistrationMarks []LayoutRegion `json:"registration_marks"`
+	IdentityRegions   []LayoutRegion `json:"identity_regions"`
+	QuestionRegions   []LayoutRegion `json:"question_regions"`
+}
+
+type TemplateLayout struct {
+	Pages []TemplatePage `json:"pages"`
+}
+
+type AnswerSheetTemplate struct {
+	ID          string         `json:"id"`
+	TenantID    string         `json:"tenant_id"`
+	ExamID      string         `json:"exam_id"`
+	ExamPaperID string         `json:"exam_paper_id"`
+	VersionNo   int            `json:"version_no"`
+	Revision    int            `json:"revision"`
+	Name        string         `json:"name"`
+	Status      string         `json:"status"`
+	PageCount   int            `json:"page_count"`
+	Layout      TemplateLayout `json:"layout"`
+	ContentHash string         `json:"content_hash"`
+	CreatedBy   string         `json:"created_by"`
+	LockedBy    string         `json:"locked_by,omitempty"`
+	LockedAt    *time.Time     `json:"locked_at,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+}
+
+type CreateTemplateInput struct {
+	ExamPaperID string         `json:"exam_paper_id"`
+	Name        string         `json:"name"`
+	PageCount   int            `json:"page_count"`
+	Layout      TemplateLayout `json:"layout"`
+}
+
+type UpdateTemplateInput struct {
+	Name             string         `json:"name"`
+	PageCount        int            `json:"page_count"`
+	Layout           TemplateLayout `json:"layout"`
+	ExpectedRevision int            `json:"expected_revision"`
+}
+
+type ReadinessCheck struct {
+	Code     string `json:"code"`
+	Label    string `json:"label"`
+	Passed   bool   `json:"passed"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+	Section  string `json:"section"`
+}
+
+type ReadinessResult struct {
+	Ready             bool             `json:"ready"`
+	Confirmed         bool             `json:"confirmed"`
+	ConfigurationHash string           `json:"configuration_hash"`
+	Checks            []ReadinessCheck `json:"checks"`
+	ConfirmedAt       *time.Time       `json:"confirmed_at,omitempty"`
+	ConfirmedBy       string           `json:"confirmed_by,omitempty"`
+}
+
 type Store interface {
 	CreatePaper(ctx context.Context, tenantID string, examID string, userID string, input CreatePaperInput) (Paper, error)
 	ListPapers(ctx context.Context, tenantID string, examID string) ([]Paper, error)
@@ -136,4 +214,12 @@ type Store interface {
 	DeleteQuestion(ctx context.Context, tenantID string, id string) error
 	CreateRubric(ctx context.Context, tenantID string, questionID string, userID string, input RubricInput) (Rubric, error)
 	ValidateConfig(ctx context.Context, tenantID string, examID string) (ValidationResult, error)
+	ListTemplates(ctx context.Context, tenantID string, examID string) ([]AnswerSheetTemplate, error)
+	CreateTemplate(ctx context.Context, tenantID string, examID string, userID string, input CreateTemplateInput) (AnswerSheetTemplate, error)
+	UpdateTemplate(ctx context.Context, tenantID string, id string, input UpdateTemplateInput) (AnswerSheetTemplate, error)
+	LockTemplate(ctx context.Context, tenantID string, id string, userID string) (AnswerSheetTemplate, error)
+	CloneTemplate(ctx context.Context, tenantID string, id string, userID string) (AnswerSheetTemplate, error)
+	Readiness(ctx context.Context, tenantID string, examID string) (ReadinessResult, error)
+	ConfirmReadiness(ctx context.Context, tenantID string, examID string, userID string) (ReadinessResult, error)
+	StartCollection(ctx context.Context, tenantID string, examID string, userID string) (ReadinessResult, error)
 }

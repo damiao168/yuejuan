@@ -303,6 +303,32 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  page-processing-worker:
+    build:
+      context: ../..
+      dockerfile: services/page-processing-worker/Dockerfile
+      args:
+        PAGE_PROCESSING_PYTHON_IMAGE: ${EDUGRADE_PAGE_PROCESSING_PYTHON_IMAGE:-python:3.11-slim}
+    image: edugrade/page-processing-worker:${EDUGRADE_IMAGE_TAG:-local}
+    container_name: edugrade-page-processing-worker
+    profiles: ["processing"]
+    environment:
+      EDUGRADE_API_BASE_URL: http://api-gateway:8080
+      EDUGRADE_PAGE_PROCESSING_TENANT_CODE: ${EDUGRADE_PAGE_PROCESSING_TENANT_CODE}
+      EDUGRADE_PAGE_PROCESSING_USERNAME: ${EDUGRADE_PAGE_PROCESSING_USERNAME}
+      EDUGRADE_PAGE_PROCESSING_PASSWORD: ${EDUGRADE_PAGE_PROCESSING_PASSWORD}
+      EDUGRADE_PAGE_PROCESSING_BATCH_SIZE: ${EDUGRADE_PAGE_PROCESSING_BATCH_SIZE:-2}
+      EDUGRADE_PAGE_PROCESSING_LEASE_SECONDS: ${EDUGRADE_PAGE_PROCESSING_LEASE_SECONDS:-600}
+      EDUGRADE_PAGE_PROCESSING_POLL_INTERVAL: ${EDUGRADE_PAGE_PROCESSING_POLL_INTERVAL:-4}
+      EDUGRADE_PAGE_PROCESSING_MAX_PAGES: ${EDUGRADE_PAGE_PROCESSING_MAX_PAGES:-500}
+      EDUGRADE_PAGE_PROCESSING_MAX_PAGE_PIXELS: ${EDUGRADE_PAGE_PROCESSING_MAX_PAGE_PIXELS:-50000000}
+      EDUGRADE_PAGE_PROCESSING_MAX_TOTAL_PIXELS: ${EDUGRADE_PAGE_PROCESSING_MAX_TOTAL_PIXELS:-1000000000}
+      EDUGRADE_PAGE_PROCESSING_WORKER_ID: ${EDUGRADE_PAGE_PROCESSING_WORKER_ID:-compose-page-processing-1}
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
   nginx:
     image: nginx:1.29-alpine
     container_name: edugrade-nginx

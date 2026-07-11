@@ -22,6 +22,7 @@ export function AppLayout({
   onLogout: () => void;
 }) {
   const permittedRoutes = visibleRoutes().filter((route) => hasRouteAccess(user, route));
+  const selectedPath = currentRoute.key === "examWorkspace" ? "/exams" : currentRoute.path;
   const menuItems = routeGroups()
     .map((group) => {
       const children = permittedRoutes
@@ -59,16 +60,16 @@ export function AppLayout({
     >
       <Layout className="app-frame">
         <Sider width={244} className="sidebar" breakpoint="lg" collapsedWidth={72}>
-          <div className="brand-block">
+          <button className="brand-block brand-button" onClick={() => onNavigate("/dashboard")} aria-label="返回工作台">
             <div className="brand-mark">E</div>
             <div className="brand-copy">
               <strong>EduGrade</strong>
               <span>Enterprise</span>
             </div>
-          </div>
+          </button>
           <Menu
             mode="inline"
-            selectedKeys={[currentRoute.path]}
+            selectedKeys={[selectedPath]}
             items={menuItems}
             onClick={(item) => onNavigate(item.key)}
             className="side-menu"

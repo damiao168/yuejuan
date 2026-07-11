@@ -138,13 +138,21 @@ function pointTotal(points: RubricPoint[]) {
   return points.reduce((sum, point) => sum + (Number(point.score) || 0), 0);
 }
 
-export function PaperRubricPage({ canManage }: { canManage: boolean }) {
+export function PaperRubricPage({
+  canManage,
+  initialExamId = "",
+  onExamChanged
+}: {
+  canManage: boolean;
+  initialExamId?: string;
+  onExamChanged?: () => void;
+}) {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<QuestionFormValues>();
   const hasSession = true;
   const canWrite = canManage && hasSession;
   const [exams, setExams] = useState<Exam[]>([]);
-  const [selectedExamId, setSelectedExamId] = useState("");
+  const [selectedExamId, setSelectedExamId] = useState(initialExamId);
   const [papers, setPapers] = useState<PaperVersion[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(null);
@@ -355,6 +363,7 @@ export function PaperRubricPage({ canManage }: { canManage: boolean }) {
       await registerPaperFromFile(selectedExam.id, upload.file.id);
       message.success("试卷文件已上传并登记");
       await loadConfig(selectedExam.id);
+      onExamChanged?.();
     } catch (currentError) {
       message.error(formatError(currentError));
     } finally {
@@ -402,6 +411,7 @@ export function PaperRubricPage({ canManage }: { canManage: boolean }) {
         message.success("题目已创建");
       }
       await loadConfig(selectedExam.id);
+      onExamChanged?.();
     } catch (currentError) {
       message.error(formatError(currentError));
     } finally {
@@ -425,6 +435,7 @@ export function PaperRubricPage({ canManage }: { canManage: boolean }) {
         setEditorMode("create");
         setSelectedQuestionId(null);
         await loadConfig(selectedExam.id);
+        onExamChanged?.();
       }
     });
   }
@@ -459,6 +470,7 @@ export function PaperRubricPage({ canManage }: { canManage: boolean }) {
       });
       message.success(rubricStatus === "locked" ? "Rubric 已锁定" : "Rubric 新版本已提交");
       await loadConfig(selectedExam.id);
+      onExamChanged?.();
     } catch (currentError) {
       message.error(formatError(currentError));
     } finally {
@@ -489,7 +501,6 @@ export function PaperRubricPage({ canManage }: { canManage: boolean }) {
         <div>
           <Space>
             <h1>试卷管理</h1>
-            <StatusTag tone="success">真实 API</StatusTag>
           </Space>
           <p>上传试卷、配置题目、维护标准答案和 Rubric。</p>
         </div>

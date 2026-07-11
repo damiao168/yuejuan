@@ -201,7 +201,7 @@ func normalizeFileConfig(cfg config.FileConfig) config.FileConfig {
 		cfg.MaxUploadBytes = 100 * 1024 * 1024
 	}
 	if len(cfg.AllowedExtensions) == 0 {
-		cfg.AllowedExtensions = []string{".pdf", ".png", ".jpg", ".jpeg", ".csv", ".docx"}
+		cfg.AllowedExtensions = []string{".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".csv", ".docx"}
 	}
 	return cfg
 }

@@ -277,10 +277,12 @@ async function buildSubmissionView(submission: Submission): Promise<SubmissionVi
 
 export function SubmissionCapturePage({
   canManage,
-  canReadStudentNames
+  canReadStudentNames,
+  initialExamId = ""
 }: {
   canManage: boolean;
   canReadStudentNames: boolean;
+  initialExamId?: string;
 }) {
   const { message } = App.useApp();
   const hasSession = true;
@@ -288,7 +290,7 @@ export function SubmissionCapturePage({
   const [filters, setFilters] = useState<Filters>({ search: "", quality: "all" });
   const [expectedPages, setExpectedPages] = useState(1);
   const [exams, setExams] = useState<Exam[]>([]);
-  const [selectedExamId, setSelectedExamId] = useState("");
+  const [selectedExamId, setSelectedExamId] = useState(initialExamId);
   const [rows, setRows] = useState<SubmissionView[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [studentLookupError, setStudentLookupError] = useState<string | null>(null);
@@ -476,7 +478,7 @@ export function SubmissionCapturePage({
     if (!canReadStudentNames) {
       return "无姓名权限";
     }
-    return studentById.get(submission.student_id)?.name ?? "后端未返回";
+    return studentById.get(submission.student_id)?.name ?? "暂未关联";
   };
 
   const runAction = async (key: string, action: () => Promise<void>, successText: string) => {
@@ -552,8 +554,8 @@ export function SubmissionCapturePage({
       width: 210,
       render: (_, row) => (
         <div className="capture-identity-cell">
-          <strong>{row.submission.candidate_no || "后端未返回"}</strong>
-          <span>anonymous_code 独立字段未返回</span>
+          <strong>{row.submission.candidate_no || "暂未生成"}</strong>
+          <span>采集后自动关联考生身份</span>
         </div>
       )
     },
@@ -763,7 +765,6 @@ export function SubmissionCapturePage({
         <div>
           <Space>
             <h1>答卷采集</h1>
-            <StatusTag tone="success">真实 API</StatusTag>
           </Space>
           <p>按考试管理答卷上传、质量门禁、OCR 任务和答案切分入口。</p>
         </div>
@@ -914,7 +915,7 @@ export function SubmissionCapturePage({
         {pageDrawer ? (
           <div className="detail-stack">
             <Descriptions bordered size="small" column={2}>
-              <Descriptions.Item label="匿名码/准考证">{pageDrawer.submission.candidate_no || "后端未返回"}</Descriptions.Item>
+              <Descriptions.Item label="匿名码/准考证">{pageDrawer.submission.candidate_no || "暂未生成"}</Descriptions.Item>
               <Descriptions.Item label="学生姓名">{studentName(pageDrawer.submission)}</Descriptions.Item>
               <Descriptions.Item label="采集状态">{submissionStatusLabels[pageDrawer.submission.status] ?? pageDrawer.submission.status}</Descriptions.Item>
               <Descriptions.Item label="质量状态">{qualityStatusLabels[pageDrawer.submission.quality_status] ?? pageDrawer.submission.quality_status}</Descriptions.Item>
@@ -960,7 +961,7 @@ export function SubmissionCapturePage({
         ) : ocrDrawer ? (
           <div className="detail-stack">
             <Descriptions bordered size="small" column={2}>
-              <Descriptions.Item label="匿名码/准考证">{ocrDrawer.row.submission.candidate_no || "后端未返回"}</Descriptions.Item>
+              <Descriptions.Item label="匿名码/准考证">{ocrDrawer.row.submission.candidate_no || "暂未生成"}</Descriptions.Item>
               <Descriptions.Item label="OCR 状态">{ocrLabel(ocrDrawer.row.ocrTasks)}</Descriptions.Item>
             </Descriptions>
             <Table<OcrTask>

@@ -13,6 +13,16 @@ type MemoryStore struct {
 	papers     map[string]Paper
 	questions  map[string]Question
 	rubrics    map[string][]Rubric
+	templates  map[string]AnswerSheetTemplate
+	readiness  map[string]ReadinessResult
+	examState  map[string]memoryExamState
+}
+
+type memoryExamState struct {
+	Total        float64
+	ClassCount   int
+	StudentCount int
+	Status       string
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -22,6 +32,9 @@ func NewMemoryStore() *MemoryStore {
 		papers:     map[string]Paper{},
 		questions:  map[string]Question{},
 		rubrics:    map[string][]Rubric{},
+		templates:  map[string]AnswerSheetTemplate{},
+		readiness:  map[string]ReadinessResult{},
+		examState:  map[string]memoryExamState{},
 	}
 }
 
@@ -29,6 +42,25 @@ func (s *MemoryStore) SetExamTotal(examID string, total float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.examTotals[examID] = total
+	state := s.examState[examID]
+	state.Total = total
+	if state.Status == "" {
+		state.Status = "configured"
+	}
+	s.examState[examID] = state
+}
+
+func (s *MemoryStore) SetReadinessContext(examID string, total float64, classCount int, studentCount int, status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.examTotals[examID] = total
+	s.examState[examID] = memoryExamState{Total: total, ClassCount: classCount, StudentCount: studentCount, Status: status}
+}
+
+func (s *MemoryStore) ExamStatus(examID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.examState[examID].Status
 }
 
 func (s *MemoryStore) CreatePaper(_ context.Context, tenantID string, examID string, _ string, input CreatePaperInput) (Paper, error) {

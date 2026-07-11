@@ -3,6 +3,7 @@ package exam
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 var (
@@ -13,19 +14,21 @@ var (
 )
 
 type Exam struct {
-	ID            string   `json:"id"`
-	TenantID      string   `json:"tenant_id"`
-	SchoolID      string   `json:"school_id"`
-	Name          string   `json:"name"`
-	Subject       string   `json:"subject"`
-	ExamType      string   `json:"exam_type"`
-	TotalScore    float64  `json:"total_score"`
-	Status        string   `json:"status"`
-	GradingMode   string   `json:"grading_mode"`
-	AppealEnabled bool     `json:"appeal_enabled"`
-	PublishPolicy string   `json:"publish_policy"`
-	CreatedBy     string   `json:"created_by"`
-	ClassIDs      []string `json:"class_ids"`
+	ID            string    `json:"id"`
+	TenantID      string    `json:"tenant_id"`
+	SchoolID      string    `json:"school_id"`
+	Name          string    `json:"name"`
+	Subject       string    `json:"subject"`
+	ExamType      string    `json:"exam_type"`
+	TotalScore    float64   `json:"total_score"`
+	Status        string    `json:"status"`
+	GradingMode   string    `json:"grading_mode"`
+	AppealEnabled bool      `json:"appeal_enabled"`
+	PublishPolicy string    `json:"publish_policy"`
+	CreatedBy     string    `json:"created_by"`
+	ClassIDs      []string  `json:"class_ids"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type CreateInput struct {

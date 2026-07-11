@@ -290,6 +290,98 @@ LIMIT $10
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) ListManagedUsers(ctx context.Context, tenantID string) ([]ManagedUser, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT u.id::text, u.username, u.display_name, u.status,
+       COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}'),
+       u.created_at
+FROM app_user u
+LEFT JOIN user_role ur ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id AND ur.deleted_at IS NULL
+LEFT JOIN role r ON r.tenant_id = u.tenant_id AND r.id = ur.role_id AND r.deleted_at IS NULL
+WHERE u.tenant_id = $1::uuid AND u.deleted_at IS NULL
+GROUP BY u.id
+ORDER BY u.created_at, u.username
+`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ManagedUser{}
+	for rows.Next() {
+		var user ManagedUser
+		if err := rows.Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, pqArray(&user.Roles), &user.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, user)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) ListAssignableRoles(ctx context.Context, tenantID string) ([]AssignableRole, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT code, name, scope_type, COALESCE(description, '')
+FROM role
+WHERE tenant_id = $1::uuid AND deleted_at IS NULL AND code NOT IN ('platform_admin', 'tenant_admin')
+ORDER BY name, code
+`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AssignableRole{}
+	for rows.Next() {
+		var role AssignableRole
+		if err := rows.Scan(&role.Code, &role.Name, &role.ScopeType, &role.Description); err != nil {
+			return nil, err
+		}
+		out = append(out, role)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) CreateManagedUser(ctx context.Context, tenantID string, tenantCode string, input CreateManagedUserInput, passwordHash string) (ManagedUser, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ManagedUser{}, err
+	}
+	defer tx.Rollback()
+
+	var roleID string
+	if err := tx.QueryRowContext(ctx, `
+SELECT id::text FROM role
+WHERE tenant_id = $1::uuid AND code = $2 AND code NOT IN ('platform_admin', 'tenant_admin') AND deleted_at IS NULL
+`, tenantID, input.RoleCode).Scan(&roleID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ManagedUser{}, ErrRoleNotFound
+		}
+		return ManagedUser{}, err
+	}
+
+	var user ManagedUser
+	err = tx.QueryRowContext(ctx, `
+INSERT INTO app_user (tenant_id, username, display_name, password_hash, status)
+VALUES ($1::uuid, $2, $3, $4, 'active')
+RETURNING id::text, username, display_name, status, created_at
+`, tenantID, input.Username, input.DisplayName, passwordHash).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, &user.CreatedAt)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") || strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return ManagedUser{}, ErrUsernameExists
+		}
+		return ManagedUser{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO user_role (tenant_id, user_id, role_id, data_scope)
+VALUES ($1::uuid, $2::uuid, $3::uuid, jsonb_build_object('scope', 'tenant'))
+`, tenantID, user.ID, roleID); err != nil {
+		return ManagedUser{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ManagedUser{}, err
+	}
+	user.Roles = []string{input.RoleCode}
+	return user, nil
+}
+
 func auditJSON(value map[string]any) any {
 	if len(value) == 0 {
 		return nil

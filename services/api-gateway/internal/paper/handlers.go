@@ -3,6 +3,7 @@ package paper
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
@@ -171,17 +172,35 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusBadRequest, "rubric_score_mismatch", "rubric score must equal question score")
 	case errors.Is(err, ErrRubricLocked):
 		httpx.Error(w, r, http.StatusConflict, "rubric_locked", "locked rubric cannot be modified")
+	case errors.Is(err, ErrTemplateLocked):
+		httpx.Error(w, r, http.StatusConflict, "template_locked", "locked template cannot be modified; clone a new version")
+	case errors.Is(err, ErrConflict):
+		httpx.Error(w, r, http.StatusConflict, "configuration_conflict", "configuration changed; refresh before saving")
+	case errors.Is(err, ErrInvalidInput):
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_configuration", "configuration references an invalid exam resource")
 	default:
 		httpx.Error(w, r, http.StatusInternalServerError, "paper_operation_failed", "paper operation failed")
 	}
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
-	if err := json.NewDecoder(r.Body).Decode(target); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "invalid json body")
 		return false
 	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "request body must contain one json object")
+		return false
+	}
 	return true
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) { httpx.JSON(w, status, payload) }
+
+func writeConfigurationError(w http.ResponseWriter, r *http.Request, status int, code string, message string) {
+	httpx.Error(w, r, status, code, message)
 }
 
 func mustUser(r *http.Request) auth.User {

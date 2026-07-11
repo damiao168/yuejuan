@@ -161,6 +161,99 @@ func TestPaperPermissionDenied(t *testing.T) {
 	}
 }
 
+func TestAnswerTemplateReadinessGateAndInvalidation(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
+	paperStore := paper.NewMemoryStore()
+	paperStore.SetReadinessContext("exam-1", 10, 1, 30, "configured")
+	router := testRouter(authStore, paperStore)
+	token := login(t, router)
+	paperVersion := createPaper(t, router, token, "exam-1")
+	question := createQuestion(t, router, token, "exam-1", 10)
+	createRubric(t, router, token, question.ID, "locked", 10)
+
+	readinessReq := authedRequest(http.MethodGet, "/api/v1/exams/exam-1/readiness", nil, token)
+	readinessRec := httptest.NewRecorder()
+	router.ServeHTTP(readinessRec, readinessReq)
+	if readinessRec.Code != http.StatusOK || !strings.Contains(readinessRec.Body.String(), `"ready":false`) || !strings.Contains(readinessRec.Body.String(), `"locked_template"`) {
+		t.Fatalf("readiness must block without template, got %d %s", readinessRec.Code, readinessRec.Body.String())
+	}
+
+	payload := map[string]any{
+		"exam_paper_id": paperVersion.ID,
+		"name":          "A 卷答题模板",
+		"page_count":    1,
+		"layout": map[string]any{"pages": []any{map[string]any{
+			"page_no": 1, "width": 2480, "height": 3508,
+			"registration_marks": []any{}, "identity_regions": []any{},
+			"question_regions": []any{map[string]any{"id": "q1", "question_id": question.ID, "label": "Q1", "x": 0.1, "y": 0.2, "width": 0.7, "height": 0.2}},
+		}}},
+	}
+	raw, _ := json.Marshal(payload)
+	createReq := authedRequest(http.MethodPost, "/api/v1/exams/exam-1/answer-sheet-templates", bytes.NewBuffer(raw), token)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create template expected 201, got %d %s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		Template paper.AnswerSheetTemplate `json:"template"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode template: %v", err)
+	}
+
+	lockReq := authedRequest(http.MethodPost, "/api/v1/answer-sheet-templates/"+created.Template.ID+"/lock", nil, token)
+	lockRec := httptest.NewRecorder()
+	router.ServeHTTP(lockRec, lockReq)
+	if lockRec.Code != http.StatusOK {
+		t.Fatalf("lock template expected 200, got %d %s", lockRec.Code, lockRec.Body.String())
+	}
+
+	confirmReq := authedRequest(http.MethodPost, "/api/v1/exams/exam-1/readiness/confirm", nil, token)
+	confirmRec := httptest.NewRecorder()
+	router.ServeHTTP(confirmRec, confirmReq)
+	if confirmRec.Code != http.StatusOK || !strings.Contains(confirmRec.Body.String(), `"confirmed":true`) || paperStore.ExamStatus("exam-1") != "ready" {
+		t.Fatalf("confirm expected ready exam, got %d %s status=%s", confirmRec.Code, confirmRec.Body.String(), paperStore.ExamStatus("exam-1"))
+	}
+
+	cloneReq := authedRequest(http.MethodPost, "/api/v1/answer-sheet-templates/"+created.Template.ID+"/clone", nil, token)
+	cloneRec := httptest.NewRecorder()
+	router.ServeHTTP(cloneRec, cloneReq)
+	if cloneRec.Code != http.StatusCreated || paperStore.ExamStatus("exam-1") != "configured" {
+		t.Fatalf("clone must invalidate readiness, got %d %s status=%s", cloneRec.Code, cloneRec.Body.String(), paperStore.ExamStatus("exam-1"))
+	}
+
+	startReq := authedRequest(http.MethodPost, "/api/v1/exams/exam-1/start-collection", nil, token)
+	startRec := httptest.NewRecorder()
+	router.ServeHTTP(startRec, startReq)
+	if startRec.Code != http.StatusConflict || !strings.Contains(startRec.Body.String(), `"readiness_confirmation_required"`) {
+		t.Fatalf("invalidated readiness must block collection, got %d %s", startRec.Code, startRec.Body.String())
+	}
+}
+
+func TestAnswerTemplateRejectsUnknownFieldsAndCrossExamPaper(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
+	paperStore := paper.NewMemoryStore()
+	router := testRouter(authStore, paperStore)
+	token := login(t, router)
+	otherPaper := createPaper(t, router, token, "exam-2")
+
+	base := `{"exam_paper_id":"` + otherPaper.ID + `","name":"模板","page_count":1,"layout":{"pages":[{"page_no":1,"width":1000,"height":1400,"registration_marks":[],"identity_regions":[],"question_regions":[]}]}`
+	unknownReq := authedRequest(http.MethodPost, "/api/v1/exams/exam-1/answer-sheet-templates", bytes.NewBufferString(base+`,"tenant_id":"tenant-other"}`), token)
+	unknownRec := httptest.NewRecorder()
+	router.ServeHTTP(unknownRec, unknownReq)
+	if unknownRec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown tenant field expected 400, got %d %s", unknownRec.Code, unknownRec.Body.String())
+	}
+
+	crossReq := authedRequest(http.MethodPost, "/api/v1/exams/exam-1/answer-sheet-templates", bytes.NewBufferString(base+`}`), token)
+	crossRec := httptest.NewRecorder()
+	router.ServeHTTP(crossRec, crossReq)
+	if crossRec.Code != http.StatusBadRequest || !strings.Contains(crossRec.Body.String(), `"invalid_configuration"`) {
+		t.Fatalf("cross exam paper expected 400, got %d %s", crossRec.Code, crossRec.Body.String())
+	}
+}
+
 func testRouter(authStore *auth.MemoryStore, paperStore *paper.MemoryStore) http.Handler {
 	cfg := config.Config{
 		Service: config.ServiceConfig{Name: "test", Environment: "test", ReadinessTimeout: time.Millisecond},

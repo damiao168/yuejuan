@@ -60,6 +60,27 @@ func newTestRouterWithConfig(store *auth.MemoryStore, cfg config.Config) http.Ha
 	return server.NewRouter(cfg, logger.New(io.Discard, "error"), nil, store, org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
 }
 
+func newOrganizationAdminStore(t *testing.T) *auth.MemoryStore {
+	t.Helper()
+	hash, err := auth.HashPassword("AdminStart123!")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	store := auth.NewMemoryStore()
+	store.AddRole("t-1", auth.AssignableRole{Code: "teacher", Name: "教师", ScopeType: "school"})
+	store.AddRole("t-1", auth.AssignableRole{Code: "tenant_admin", Name: "租户管理员", ScopeType: "tenant"})
+	store.AddRole("t-2", auth.AssignableRole{Code: "grader", Name: "阅卷员", ScopeType: "exam_task"})
+	store.AddUser(auth.UserWithPassword{
+		User: auth.User{
+			ID: "admin-1", TenantID: "t-1", TenantCode: "demo", Username: "admin",
+			DisplayName: "Organization Admin", Status: "active", Roles: []string{"tenant_admin"},
+			Permissions: []string{"org:manage"}, DataScope: map[string]any{"scope": "tenant"},
+		},
+		PasswordHash: hash,
+	})
+	return store
+}
+
 func TestLoginMeLogout(t *testing.T) {
 	store := newTestStore(t)
 	router := newTestRouter(store)
@@ -88,6 +109,103 @@ func TestLoginMeLogout(t *testing.T) {
 	router.ServeHTTP(afterLogoutRec, afterLogout)
 	if afterLogoutRec.Code != http.StatusUnauthorized {
 		t.Fatalf("me after logout expected 401, got %d", afterLogoutRec.Code)
+	}
+}
+
+func TestOrganizationAdminCreatesAndListsTenantUser(t *testing.T) {
+	store := newOrganizationAdminStore(t)
+	router := newTestRouter(store)
+	token := login(t, router, "demo", "admin", "AdminStart123!")
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{
+		"username":"teacher01","display_name":"张老师","password":"TeacherStart123!","role_code":"teacher"
+	}`))
+	createReq.Header.Set("Authorization", "Bearer "+token)
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create user expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+	if strings.Contains(createRec.Body.String(), "password") || strings.Contains(createRec.Body.String(), "hash") {
+		t.Fatalf("create user response leaked password material: %s", createRec.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	listReq.Header.Set("Authorization", "Bearer "+token)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), "teacher01") {
+		t.Fatalf("list users expected created user, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+
+	rolesReq := httptest.NewRequest(http.MethodGet, "/api/v1/roles", nil)
+	rolesReq.Header.Set("Authorization", "Bearer "+token)
+	rolesRec := httptest.NewRecorder()
+	router.ServeHTTP(rolesRec, rolesReq)
+	if rolesRec.Code != http.StatusOK || !strings.Contains(rolesRec.Body.String(), `"code":"teacher"`) || strings.Contains(rolesRec.Body.String(), `"code":"grader"`) {
+		t.Fatalf("roles must stay in current tenant, got %d: %s", rolesRec.Code, rolesRec.Body.String())
+	}
+
+	foundAudit := false
+	for _, event := range store.Audits() {
+		if event.Action == "auth.user_created" && event.TargetType == "user" {
+			foundAudit = true
+			if strings.Contains(event.Reason, "TeacherStart123!") {
+				t.Fatal("user creation audit leaked password")
+			}
+		}
+	}
+	if !foundAudit {
+		t.Fatal("expected auth.user_created audit")
+	}
+}
+
+func TestOrganizationUserCreationRejectsDuplicateCrossTenantRoleAndTenantField(t *testing.T) {
+	store := newOrganizationAdminStore(t)
+	router := newTestRouter(store)
+	token := login(t, router, "demo", "admin", "AdminStart123!")
+	request := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	first := request(`{"username":"teacher01","display_name":"Teacher","password":"TeacherStart123!","role_code":"teacher"}`)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first create expected 201, got %d: %s", first.Code, first.Body.String())
+	}
+	duplicate := request(`{"username":"teacher01","display_name":"Teacher 2","password":"TeacherStart123!","role_code":"teacher"}`)
+	if duplicate.Code != http.StatusConflict {
+		t.Fatalf("duplicate expected 409, got %d: %s", duplicate.Code, duplicate.Body.String())
+	}
+	crossTenantRole := request(`{"username":"grader01","display_name":"Grader","password":"GraderStart123!","role_code":"grader"}`)
+	if crossTenantRole.Code != http.StatusBadRequest {
+		t.Fatalf("cross tenant role expected 400, got %d: %s", crossTenantRole.Code, crossTenantRole.Body.String())
+	}
+	privilegedRole := request(`{"username":"admin02","display_name":"Admin","password":"AdminStart123!","role_code":"tenant_admin"}`)
+	if privilegedRole.Code != http.StatusBadRequest {
+		t.Fatalf("privileged role expected 400, got %d: %s", privilegedRole.Code, privilegedRole.Body.String())
+	}
+	forgedTenant := request(`{"tenant_id":"t-2","username":"teacher02","display_name":"Teacher","password":"TeacherStart123!","role_code":"teacher"}`)
+	if forgedTenant.Code != http.StatusBadRequest {
+		t.Fatalf("tenant_id field expected 400, got %d: %s", forgedTenant.Code, forgedTenant.Body.String())
+	}
+}
+
+func TestOrganizationUserManagementRequiresPermission(t *testing.T) {
+	store := newTestStore(t)
+	router := newTestRouter(store)
+	token := login(t, router, "demo", "teacher", "ChangeMe123!")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("user list without org:manage expected 403, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

@@ -4,6 +4,7 @@ export interface SessionUser {
   id: string;
   name: string;
   role: string;
+  roles: string[];
   tenant: string;
   school: string;
   currentExam: string;
@@ -27,14 +28,15 @@ export function sessionFromAuthUser(user: AuthUser): SessionUser {
     id: user.id,
     name: user.display_name || user.username,
     role,
+    roles: user.roles,
     tenant: user.tenant_code,
-    school: schoolLabelFromScope(user.data_scope),
+    school: schoolLabelFromScope(user.data_scope, user.tenant_code),
     currentExam: "未选择考试",
     permissions: user.permissions
   };
 }
 
-function schoolLabelFromScope(scope: Record<string, unknown>): string {
+function schoolLabelFromScope(scope: Record<string, unknown>, tenantCode: string): string {
   const direct = scope["school_name"];
   if (typeof direct === "string" && direct.trim()) {
     return direct;
@@ -49,5 +51,5 @@ function schoolLabelFromScope(scope: Record<string, unknown>): string {
       return nestedSchool;
     }
   }
-  return "当前租户";
+  return tenantCode || "当前机构";
 }

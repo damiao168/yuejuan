@@ -5,6 +5,7 @@ import (
 
 	"edugrade-enterprise/services/api-gateway/internal/appeal"
 	"edugrade-enterprise/services/api-gateway/internal/auth"
+	"edugrade-enterprise/services/api-gateway/internal/capture"
 	"edugrade-enterprise/services/api-gateway/internal/config"
 	"edugrade-enterprise/services/api-gateway/internal/db"
 	"edugrade-enterprise/services/api-gateway/internal/deps"
@@ -60,6 +61,7 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 	scoreStore := score.NewPostgresStore(postgresDB)
 	appealStore := appeal.NewPostgresStore(postgresDB)
 	reportStore := report.NewPostgresStore(postgresDB)
+	captureStore := capture.NewPostgresStore(postgresDB)
 	postgresChecker := deps.NewPostgresChecker(postgresDB)
 	checkers = append(checkers, postgresChecker)
 	cleanups = append(cleanups, closePostgres)
@@ -80,7 +82,7 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 		return nil, nil, err
 	}
 
-	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, scoreStore, appealStore, reportStore)
+	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, scoreStore, appealStore, reportStore, captureStore)
 	cleanup := func() {
 		for _, closeFn := range cleanups {
 			_ = closeFn()
@@ -126,6 +128,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	var scoreStore score.Store = score.NewMemoryStore()
 	var appealStore appeal.Store = appeal.NewMemoryStore()
 	var reportStore report.Store = report.NewMemoryStore()
+	var captureStore capture.Store = capture.NewMemoryStore()
 	for _, optionalStore := range optionalStores {
 		switch store := optionalStore.(type) {
 		case imagequality.Store:
@@ -168,12 +171,17 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 			if store != nil {
 				reportStore = store
 			}
+		case capture.Store:
+			if store != nil {
+				captureStore = store
+			}
 		}
 	}
 	orchestratorHandler := orchestrator.NewHandler(orchestratorStore, authStore)
 	ocrHandler := ocrpkg.NewHandler(ocrStore, ocrQueue, submissionStore, authStore, workerRuntimeStore)
 	imageQualityHandler := imagequality.NewHandler(imageQualityStore, submissionStore, fileStore, authStore, workerRuntimeStore)
 	workerRuntimeHandler := workerruntime.NewHandler(workerRuntimeStore, authStore)
+	captureHandler := capture.NewHandler(captureStore, fileStore, examStore, workerRuntimeStore, authStore)
 	gradingHandler := grading.NewHandler(gradingStore, grading.NewEngine(), authStore)
 	subjectiveHandler := subjective.NewHandler(subjectiveStore, subjective.NewMockLLMAdapter(), authStore)
 	evidenceHandler := evidence.NewHandler(evidenceStore, evidence.NewEngine(), authStore)
@@ -199,6 +207,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	}
 	requireSubmissionManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("submission:manage")(handler))
+	}
+	requireCaptureManage := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequirePermission("capture:manage")(handler))
 	}
 	requireOCRManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("ocr:manage")(handler))
@@ -271,6 +282,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.HandleFunc("POST /api/v1/auth/login", authHandler.Login)
 	mux.Handle("POST /api/v1/auth/logout", requireAuth(http.HandlerFunc(authHandler.Logout)))
 	mux.Handle("GET /api/v1/auth/me", requireAuth(http.HandlerFunc(authHandler.Me)))
+	mux.Handle("GET /api/v1/users", requireOrgManage(authHandler.ListManagedUsers))
+	mux.Handle("POST /api/v1/users", requireOrgManage(authHandler.CreateManagedUser))
+	mux.Handle("GET /api/v1/roles", requireOrgManage(authHandler.ListAssignableRoles))
 	mux.Handle("GET /api/v1/audit-logs", requireAuditRead(authHandler.ListAudits))
 	mux.Handle("POST /api/v1/audit-logs/export", requireAuditExport(authHandler.ExportAudits))
 
@@ -295,6 +309,14 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("PATCH /api/v1/exams/{id}", requireExamManage(examHandler.UpdateExam))
 	mux.Handle("POST /api/v1/exams/{id}/archive", requireExamManage(examHandler.Archive))
 	mux.Handle("POST /api/v1/exams/{id}/status", requireExamManage(examHandler.UpdateStatus))
+	mux.Handle("GET /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(paperHandler.ListTemplates))
+	mux.Handle("POST /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(paperHandler.CreateTemplate))
+	mux.Handle("PATCH /api/v1/answer-sheet-templates/{id}", requireExamManage(paperHandler.UpdateTemplate))
+	mux.Handle("POST /api/v1/answer-sheet-templates/{id}/lock", requireExamManage(paperHandler.LockTemplate))
+	mux.Handle("POST /api/v1/answer-sheet-templates/{id}/clone", requireExamManage(paperHandler.CloneTemplate))
+	mux.Handle("GET /api/v1/exams/{examId}/readiness", requireExamManage(paperHandler.GetReadiness))
+	mux.Handle("POST /api/v1/exams/{examId}/readiness/confirm", requireExamManage(paperHandler.ConfirmReadiness))
+	mux.Handle("POST /api/v1/exams/{examId}/start-collection", requireExamManage(paperHandler.StartCollection))
 
 	mux.Handle("POST /api/v1/exams/{examId}/papers", requireExamManage(paperHandler.CreatePaper))
 	mux.Handle("GET /api/v1/exams/{examId}/papers", requireExamManage(paperHandler.ListPapers))
@@ -319,6 +341,18 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/submissions/{id}/quality-check", requireSubmissionManage(submissionHandler.QualityCheck))
 	mux.Handle("POST /api/v1/submissions/{id}/run-quality-check", requireSubmissionManage(imageQualityHandler.RunQualityCheck))
 	mux.Handle("POST /api/v1/submissions/{id}/status", requireSubmissionManage(submissionHandler.UpdateStatus))
+	mux.Handle("POST /api/v1/exams/{examId}/capture-batches", requireCaptureManage(captureHandler.CreateBatch))
+	mux.Handle("GET /api/v1/exams/{examId}/capture-batches", requireCaptureManage(captureHandler.ListBatches))
+	mux.Handle("GET /api/v1/capture-batches/{id}", requireCaptureManage(captureHandler.GetBatch))
+	mux.Handle("POST /api/v1/capture-batches/{id}/files", requireCaptureManage(captureHandler.RegisterFile))
+	mux.Handle("POST /api/v1/capture-batches/{id}/process", requireCaptureManage(captureHandler.ProcessBatch))
+	mux.Handle("GET /api/v1/capture-batches/{id}/pages", requireCaptureManage(captureHandler.ListPages))
+	mux.Handle("PATCH /api/v1/capture-pages/{id}", requireCaptureManage(captureHandler.UpdatePage))
+	mux.Handle("POST /api/v1/capture-batches/{id}/cancel", requireCaptureManage(captureHandler.CancelBatch))
+	mux.Handle("POST /api/v1/capture-batches/{id}/reopen", requireCaptureManage(captureHandler.ReopenBatch))
+	mux.Handle("POST /api/v1/capture-batches/{id}/complete", requireCaptureManage(captureHandler.CompleteBatch))
+	mux.Handle("POST /api/v1/submissions/{id}/process-pages", requireCaptureManage(captureHandler.ProcessSubmissionPages))
+	mux.Handle("GET /api/v1/submission-pages/{id}/registration-runs", requireCaptureManage(captureHandler.ListRegistrationRuns))
 
 	mux.Handle("POST /api/v1/internal/image-quality/jobs/claim", requireOCRManage(imageQualityHandler.ClaimJobs))
 	mux.Handle("POST /api/v1/internal/image-quality/runs/{runId}/normalized-assets", requireOCRManage(imageQualityHandler.CreateNormalizedAssetSlot))
@@ -331,6 +365,10 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/fail", requireWorkerExecute(workerRuntimeHandler.Fail))
 	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/cancel", requireWorkerExecute(workerRuntimeHandler.Cancel))
 	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/requeue", requireWorkerExecute(workerRuntimeHandler.Requeue))
+	mux.Handle("POST /api/v1/internal/capture/files/{fileId}/result", requireWorkerExecute(captureHandler.CompleteFile))
+	mux.Handle("POST /api/v1/internal/capture/files/{fileId}/fail", requireWorkerExecute(captureHandler.FailFile))
+	mux.Handle("POST /api/v1/internal/page-registration-runs/{runId}/result", requireWorkerExecute(captureHandler.CompleteRegistration))
+	mux.Handle("POST /api/v1/internal/page-registration-runs/{runId}/fail", requireWorkerExecute(captureHandler.FailRegistration))
 	mux.Handle("GET /api/v1/internal/worker/metrics", requireWorkerRead(workerRuntimeHandler.Metrics))
 
 	mux.Handle("POST /api/v1/submissions/{id}/ocr-tasks", requireOCRManage(ocrHandler.CreateTask))

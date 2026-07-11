@@ -87,5 +87,8 @@
 | STORY-050 | 答卷图像质量检测与页面标准化 | Approved |
 | STORY-051 | Agent Worker Runtime | Approved |
 | STORY-052 | 生产部署 Runbook 与预生产验收 | Approved |
+| STORY-053 | 产品外壳、角色首页、机构启用和考试工作区 | Approved |
+| STORY-054 | 考试配置、试卷模板、题目、Rubric 和开考准备 | Approved |
+| STORY-055 | 采集批次、扫描导入、页面处理、模板配准和自动切题 | Implementation In Progress |
 
-后续 Story 按生产化路线图继续拆分，不提前实现。
+STORY-053～061 按 V1.0 正式产品交付总控任务继续推进，不提前宣称 Production Ready。

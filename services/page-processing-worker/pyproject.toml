@@ -1,0 +1,22 @@
+[project]
+name = "edugrade-page-processing-worker"
+version = "0.1.0"
+description = "EduGrade capture file decoder and page preparation worker"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "opencv-python-headless>=4.9",
+  "pillow>=10.0",
+  "pypdfium2>=4.30",
+  "zxing-cpp>=2.3",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["page_processing*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -13,7 +13,9 @@ export type ViewKey =
   | "desktop"
   | "system"
   | "systemStatus"
-  | "audit";
+  | "audit"
+  | "organization"
+  | "examWorkspace";
 
 export type StatusTone = "success" | "warning" | "danger" | "info" | "processing" | "neutral";
 

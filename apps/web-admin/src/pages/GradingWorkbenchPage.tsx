@@ -254,7 +254,7 @@ function createInitialDraft(ctx: WorkbenchContext | null): ScoreDraft {
   };
 }
 
-export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, canReturn }: { canWork: boolean; canGrade: boolean; canVerifyEvidence: boolean; canReturn: boolean }) {
+export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, canReturn, initialExamId = "" }: { canWork: boolean; canGrade: boolean; canVerifyEvidence: boolean; canReturn: boolean; initialExamId?: string }) {
   const { message } = App.useApp();
   const hasSession = true;
   const canSubmit = canWork && hasSession;
@@ -283,15 +283,16 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
     const text = keyword.trim().toLowerCase();
     return tasks.filter((task) => {
       const statusMatched = taskFilter === "active" ? ["assigned", "in_progress", "returned"].includes(task.status) : task.status === taskFilter;
+      const examMatched = !initialExamId || task.exam_id === initialExamId;
       const keywordMatched =
         !text ||
         task.id.toLowerCase().includes(text) ||
         task.anonymous_code.toLowerCase().includes(text) ||
         task.question_no.toLowerCase().includes(text) ||
         task.source.toLowerCase().includes(text);
-      return statusMatched && keywordMatched;
+      return examMatched && statusMatched && keywordMatched;
     });
-  }, [keyword, taskFilter, tasks]);
+  }, [initialExamId, keyword, taskFilter, tasks]);
 
   const selectedIndex = useMemo(() => filteredTasks.findIndex((task) => task.id === selectedTaskId), [filteredTasks, selectedTaskId]);
   const selectedGrade = useMemo(() => latestGrade(ctx?.aiGrades ?? []), [ctx?.aiGrades]);
@@ -691,7 +692,6 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
         <div>
           <Space>
             <h1>阅卷工作台</h1>
-            <StatusTag tone="success">真实 API</StatusTag>
           </Space>
           <p>处理 review_task，核对原图、OCR、AI 建议和 Rubric 后提交人工分。</p>
         </div>

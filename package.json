@@ -14,6 +14,7 @@
     "check:story050": "node scripts/check-story050-image-quality.mjs",
     "check:story051": "node scripts/check-story051-agent-worker-runtime.mjs",
     "check:story052": "node scripts/check-story052-production-deployment.mjs",
+    "check:story053": "node scripts/check-story053-product-shell.mjs",
     "typecheck": "npm --workspaces --if-present run typecheck",
     "preview": "npm --workspace apps/web-admin run preview"
   }

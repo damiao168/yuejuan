@@ -1,0 +1,334 @@
+package paper
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+)
+
+func (s *PostgresStore) ListTemplates(ctx context.Context, tenantID string, examID string) ([]AnswerSheetTemplate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id::text, tenant_id::text, exam_id::text, exam_paper_id::text, version_no, revision,
+       name, status, page_count, layout, content_hash, created_by::text,
+       COALESCE(locked_by::text, ''), locked_at, created_at, updated_at
+FROM answer_sheet_template
+WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND deleted_at IS NULL
+ORDER BY version_no DESC
+`, tenantID, examID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AnswerSheetTemplate{}
+	for rows.Next() {
+		var item AnswerSheetTemplate
+		if err := scanTemplate(rows, &item); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) CreateTemplate(ctx context.Context, tenantID string, examID string, userID string, input CreateTemplateInput) (AnswerSheetTemplate, error) {
+	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
+		return AnswerSheetTemplate{}, ErrInvalidInput
+	}
+	layout, _ := json.Marshal(input.Layout)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, examID); err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	row := tx.QueryRowContext(ctx, `
+INSERT INTO answer_sheet_template (tenant_id, exam_id, exam_paper_id, version_no, name, page_count, layout, content_hash, created_by)
+SELECT $1::uuid, $2::uuid, p.id,
+       COALESCE((SELECT MAX(version_no) + 1 FROM answer_sheet_template WHERE tenant_id = $1::uuid AND exam_id = $2::uuid), 1),
+       $4, $5, $6::jsonb, $7, $8::uuid
+FROM exam_paper p
+WHERE p.tenant_id = $1::uuid AND p.exam_id = $2::uuid AND p.id = $3::uuid AND p.deleted_at IS NULL
+RETURNING id::text, tenant_id::text, exam_id::text, exam_paper_id::text, version_no, revision,
+          name, status, page_count, layout, content_hash, created_by::text,
+          COALESCE(locked_by::text, ''), locked_at, created_at, updated_at
+`, tenantID, examID, input.ExamPaperID, input.Name, input.PageCount, layout, stableContentHash(input.Layout), userID)
+	var item AnswerSheetTemplate
+	if err := scanTemplate(row, &item); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AnswerSheetTemplate{}, ErrInvalidInput
+		}
+		return AnswerSheetTemplate{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	return item, nil
+}
+
+func (s *PostgresStore) UpdateTemplate(ctx context.Context, tenantID string, id string, input UpdateTemplateInput) (AnswerSheetTemplate, error) {
+	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
+		return AnswerSheetTemplate{}, ErrInvalidInput
+	}
+	layout, _ := json.Marshal(input.Layout)
+	row := s.db.QueryRowContext(ctx, `
+UPDATE answer_sheet_template
+SET name = $3, page_count = $4, layout = $5::jsonb, content_hash = $6, revision = revision + 1, updated_at = now()
+WHERE tenant_id = $1::uuid AND id = $2::uuid AND deleted_at IS NULL AND status = 'draft' AND revision = $7
+RETURNING id::text, tenant_id::text, exam_id::text, exam_paper_id::text, version_no, revision,
+          name, status, page_count, layout, content_hash, created_by::text,
+          COALESCE(locked_by::text, ''), locked_at, created_at, updated_at
+`, tenantID, id, input.Name, input.PageCount, layout, stableContentHash(input.Layout), input.ExpectedRevision)
+	var item AnswerSheetTemplate
+	if err := scanTemplate(row, &item); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AnswerSheetTemplate{}, s.templateWriteError(ctx, tenantID, id, input.ExpectedRevision)
+		}
+		return AnswerSheetTemplate{}, err
+	}
+	return item, nil
+}
+
+func (s *PostgresStore) LockTemplate(ctx context.Context, tenantID string, id string, userID string) (AnswerSheetTemplate, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	defer tx.Rollback()
+	row := tx.QueryRowContext(ctx, `
+UPDATE answer_sheet_template
+SET status = 'locked', locked_by = $3::uuid, locked_at = now(), revision = revision + 1, updated_at = now()
+WHERE tenant_id = $1::uuid AND id = $2::uuid AND deleted_at IS NULL AND status = 'draft'
+RETURNING id::text, tenant_id::text, exam_id::text, exam_paper_id::text, version_no, revision,
+          name, status, page_count, layout, content_hash, created_by::text,
+          COALESCE(locked_by::text, ''), locked_at, created_at, updated_at
+`, tenantID, id, userID)
+	var item AnswerSheetTemplate
+	if err := scanTemplate(row, &item); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AnswerSheetTemplate{}, s.templateWriteError(ctx, tenantID, id, 0)
+		}
+		return AnswerSheetTemplate{}, err
+	}
+	for _, page := range item.Layout.Pages {
+		for _, region := range page.QuestionRegions {
+			result, err := tx.ExecContext(ctx, `
+UPDATE question
+SET answer_area = jsonb_build_object(
+  'page', $4::int,
+  'x', $5::float8,
+  'y', $6::float8,
+  'width', $7::float8,
+  'height', $8::float8
+), updated_at = now()
+WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND id = $3::uuid AND deleted_at IS NULL AND status <> 'deleted'
+`, tenantID, item.ExamID, region.QuestionID, page.PageNo, region.X, region.Y, region.Width, region.Height)
+			if err != nil {
+				return AnswerSheetTemplate{}, err
+			}
+			count, _ := result.RowsAffected()
+			if count != 1 {
+				return AnswerSheetTemplate{}, ErrInvalidInput
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	return item, nil
+}
+
+func (s *PostgresStore) CloneTemplate(ctx context.Context, tenantID string, id string, userID string) (AnswerSheetTemplate, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id::text, tenant_id::text, exam_id::text, exam_paper_id::text, version_no, revision,
+       name, status, page_count, layout, content_hash, created_by::text,
+       COALESCE(locked_by::text, ''), locked_at, created_at, updated_at
+FROM answer_sheet_template
+WHERE tenant_id = $1::uuid AND id = $2::uuid AND deleted_at IS NULL
+`, tenantID, id)
+	var source AnswerSheetTemplate
+	if err := scanTemplate(row, &source); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AnswerSheetTemplate{}, ErrNotFound
+		}
+		return AnswerSheetTemplate{}, err
+	}
+	return s.CreateTemplate(ctx, tenantID, source.ExamID, userID, CreateTemplateInput{ExamPaperID: source.ExamPaperID, Name: source.Name + " 副本", PageCount: source.PageCount, Layout: source.Layout})
+}
+
+func (s *PostgresStore) Readiness(ctx context.Context, tenantID string, examID string) (ReadinessResult, error) {
+	result, status, err := s.calculateReadiness(ctx, tenantID, examID)
+	if err != nil {
+		return ReadinessResult{}, err
+	}
+	var confirmedAt time.Time
+	var confirmedBy string
+	err = s.db.QueryRowContext(ctx, `
+SELECT confirmed_at, confirmed_by::text
+FROM exam_readiness_snapshot
+WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND status = 'passed' AND configuration_hash = $3
+ORDER BY confirmed_at DESC LIMIT 1
+`, tenantID, examID, result.ConfigurationHash).Scan(&confirmedAt, &confirmedBy)
+	if err == nil {
+		result.Confirmed, result.ConfirmedAt, result.ConfirmedBy = status == "ready" || status == "collecting", &confirmedAt, confirmedBy
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return ReadinessResult{}, err
+	}
+	return result, nil
+}
+
+func (s *PostgresStore) ConfirmReadiness(ctx context.Context, tenantID string, examID string, userID string) (ReadinessResult, error) {
+	result, status, err := s.calculateReadiness(ctx, tenantID, examID)
+	if err != nil {
+		return ReadinessResult{}, err
+	}
+	if !result.Ready || (status != "draft" && status != "configured" && status != "ready") {
+		return result, ErrNotReady
+	}
+	checks, _ := json.Marshal(result.Checks)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ReadinessResult{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, examID); err != nil {
+		return ReadinessResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE exam_readiness_snapshot SET status = 'invalidated', invalidated_at = now(), invalidation_reason = 'superseded by new confirmation'
+WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND status = 'passed'
+`, tenantID, examID); err != nil {
+		return ReadinessResult{}, err
+	}
+	now := time.Now().UTC()
+	if err := tx.QueryRowContext(ctx, `
+INSERT INTO exam_readiness_snapshot (tenant_id, exam_id, configuration_hash, status, checks, confirmed_by, confirmed_at)
+VALUES ($1::uuid, $2::uuid, $3, 'passed', $4::jsonb, $5::uuid, $6)
+RETURNING confirmed_at
+`, tenantID, examID, result.ConfigurationHash, checks, userID, now).Scan(&now); err != nil {
+		return ReadinessResult{}, err
+	}
+	updated, err := tx.ExecContext(ctx, `UPDATE exam SET status = 'ready', updated_at = now() WHERE tenant_id = $1::uuid AND id = $2::uuid AND status IN ('draft', 'configured', 'ready')`, tenantID, examID)
+	if err != nil {
+		return ReadinessResult{}, err
+	}
+	count, _ := updated.RowsAffected()
+	if count != 1 {
+		return result, ErrNotReady
+	}
+	if err := tx.Commit(); err != nil {
+		return ReadinessResult{}, err
+	}
+	result.Confirmed, result.ConfirmedAt, result.ConfirmedBy = true, &now, userID
+	return result, nil
+}
+
+func (s *PostgresStore) StartCollection(ctx context.Context, tenantID string, examID string, _ string) (ReadinessResult, error) {
+	result, status, err := s.calculateReadiness(ctx, tenantID, examID)
+	if err != nil {
+		return ReadinessResult{}, err
+	}
+	if !result.Ready || status != "ready" {
+		return result, ErrNotReady
+	}
+	var confirmedAt time.Time
+	var confirmedBy string
+	if err := s.db.QueryRowContext(ctx, `
+SELECT confirmed_at, confirmed_by::text FROM exam_readiness_snapshot
+WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND status = 'passed' AND configuration_hash = $3
+ORDER BY confirmed_at DESC LIMIT 1
+`, tenantID, examID, result.ConfigurationHash).Scan(&confirmedAt, &confirmedBy); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return result, ErrNotReady
+		}
+		return ReadinessResult{}, err
+	}
+	updated, err := s.db.ExecContext(ctx, `UPDATE exam SET status = 'collecting', updated_at = now() WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'ready'`, tenantID, examID)
+	if err != nil {
+		return ReadinessResult{}, err
+	}
+	count, _ := updated.RowsAffected()
+	if count != 1 {
+		return result, ErrNotReady
+	}
+	result.Confirmed, result.ConfirmedAt, result.ConfirmedBy = true, &confirmedAt, confirmedBy
+	return result, nil
+}
+
+func (s *PostgresStore) calculateReadiness(ctx context.Context, tenantID string, examID string) (ReadinessResult, string, error) {
+	var total float64
+	var status string
+	var classCount, studentCount int
+	err := s.db.QueryRowContext(ctx, `
+SELECT e.total_score::float8, e.status,
+       COUNT(DISTINCT ec.class_id)::int,
+       COUNT(DISTINCT st.id) FILTER (WHERE st.status = 'active' AND st.deleted_at IS NULL)::int
+FROM exam e
+LEFT JOIN exam_class ec ON ec.tenant_id = e.tenant_id AND ec.exam_id = e.id AND ec.deleted_at IS NULL
+LEFT JOIN student st ON st.tenant_id = e.tenant_id AND st.class_id = ec.class_id
+WHERE e.tenant_id = $1::uuid AND e.id = $2::uuid AND e.deleted_at IS NULL
+GROUP BY e.id
+`, tenantID, examID).Scan(&total, &status, &classCount, &studentCount)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ReadinessResult{}, "", ErrNotFound
+		}
+		return ReadinessResult{}, "", err
+	}
+	papers, err := s.ListPapers(ctx, tenantID, examID)
+	if err != nil {
+		return ReadinessResult{}, "", err
+	}
+	questions, err := s.ListQuestions(ctx, tenantID, examID)
+	if err != nil {
+		return ReadinessResult{}, "", err
+	}
+	templates, err := s.ListTemplates(ctx, tenantID, examID)
+	if err != nil {
+		return ReadinessResult{}, "", err
+	}
+	return buildReadiness(total, classCount, studentCount, papers, questions, templates), status, nil
+}
+
+func (s *PostgresStore) templateWriteError(ctx context.Context, tenantID string, id string, expectedRevision int) error {
+	var status string
+	var revision int
+	err := s.db.QueryRowContext(ctx, `SELECT status, revision FROM answer_sheet_template WHERE tenant_id = $1::uuid AND id = $2::uuid AND deleted_at IS NULL`, tenantID, id).Scan(&status, &revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if status != "draft" {
+		return ErrTemplateLocked
+	}
+	if expectedRevision != 0 && revision != expectedRevision {
+		return ErrConflict
+	}
+	return ErrConflict
+}
+
+type templateScanner interface{ Scan(dest ...any) error }
+
+func scanTemplate(row templateScanner, item *AnswerSheetTemplate) error {
+	var layout []byte
+	var lockedAt sql.NullTime
+	err := row.Scan(&item.ID, &item.TenantID, &item.ExamID, &item.ExamPaperID, &item.VersionNo, &item.Revision,
+		&item.Name, &item.Status, &item.PageCount, &layout, &item.ContentHash, &item.CreatedBy,
+		&item.LockedBy, &lockedAt, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(layout, &item.Layout); err != nil {
+		return fmt.Errorf("decode template layout: %w", err)
+	}
+	if lockedAt.Valid {
+		item.LockedAt = &lockedAt.Time
+	}
+	return nil
+}

@@ -1,0 +1,120 @@
+package paper
+
+import (
+	"errors"
+	"net/http"
+)
+
+func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	items, err := h.store.ListTemplates(r.Context(), user.TenantID, r.PathValue("examId"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"templates": items})
+}
+
+func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input CreateTemplateInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
+		writeConfigurationError(w, r, http.StatusBadRequest, "invalid_template_layout", err.Error())
+		return
+	}
+	item, err := h.store.CreateTemplate(r.Context(), user.TenantID, r.PathValue("examId"), user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.template_created", "answer_sheet_template", item.ID, "create answer sheet template version")
+	writeJSON(w, http.StatusCreated, map[string]any{"template": item})
+}
+
+func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input UpdateTemplateInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.ExpectedRevision < 1 {
+		writeConfigurationError(w, r, http.StatusBadRequest, "expected_revision_required", "expected_revision must be greater than 0")
+		return
+	}
+	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
+		writeConfigurationError(w, r, http.StatusBadRequest, "invalid_template_layout", err.Error())
+		return
+	}
+	item, err := h.store.UpdateTemplate(r.Context(), user.TenantID, r.PathValue("id"), input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.template_updated", "answer_sheet_template", item.ID, "update answer sheet template draft")
+	writeJSON(w, http.StatusOK, map[string]any{"template": item})
+}
+
+func (h *Handler) LockTemplate(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	item, err := h.store.LockTemplate(r.Context(), user.TenantID, r.PathValue("id"), user.ID)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.template_locked", "answer_sheet_template", item.ID, "lock answer sheet template")
+	writeJSON(w, http.StatusOK, map[string]any{"template": item})
+}
+
+func (h *Handler) CloneTemplate(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	item, err := h.store.CloneTemplate(r.Context(), user.TenantID, r.PathValue("id"), user.ID)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.template_cloned", "answer_sheet_template", item.ID, "clone answer sheet template version")
+	writeJSON(w, http.StatusCreated, map[string]any{"template": item})
+}
+
+func (h *Handler) GetReadiness(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	result, err := h.store.Readiness(r.Context(), user.TenantID, r.PathValue("examId"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"readiness": result})
+}
+
+func (h *Handler) ConfirmReadiness(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	result, err := h.store.ConfirmReadiness(r.Context(), user.TenantID, r.PathValue("examId"), user.ID)
+	if err != nil {
+		if errors.Is(err, ErrNotReady) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{"code": "exam_not_ready", "message": "考试配置尚未满足开考条件"}, "readiness": result})
+			return
+		}
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "exam.readiness_confirmed", "exam", r.PathValue("examId"), "confirm exam configuration readiness")
+	writeJSON(w, http.StatusOK, map[string]any{"readiness": result})
+}
+
+func (h *Handler) StartCollection(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	result, err := h.store.StartCollection(r.Context(), user.TenantID, r.PathValue("examId"), user.ID)
+	if err != nil {
+		if errors.Is(err, ErrNotReady) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{"code": "readiness_confirmation_required", "message": "准备确认已失效，请重新检查并确认"}, "readiness": result})
+			return
+		}
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "exam.collection_started", "exam", r.PathValue("examId"), "start answer collection after readiness gate")
+	writeJSON(w, http.StatusOK, map[string]any{"readiness": result, "status": "collecting"})
+}

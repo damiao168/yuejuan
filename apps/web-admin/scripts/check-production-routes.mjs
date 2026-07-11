@@ -28,8 +28,13 @@ assert(
 );
 
 assert(
-  /listExams/.test(dashboard) && /listAuditLogs/.test(dashboard) && /getSystemStatus/.test(dashboard),
-  "DashboardPage must read production data from exams, audit logs, and system status APIs."
+  /listExams/.test(dashboard) && /listReviewTasks/.test(dashboard) && /listSubmissions/.test(dashboard),
+  "DashboardPage must read business work from exams, review tasks, and submissions APIs."
+);
+
+assert(
+  /user\.roles\.includes\("platform_admin"\)[\s\S]*getSystemStatus/.test(dashboard) || /isOperations[\s\S]*getSystemStatus/.test(dashboard),
+  "System status must be restricted to the operations home variant."
 );
 
 assert(
@@ -43,8 +48,8 @@ for (const key of ["review", "quality", "permissions", "settings"]) {
 }
 
 assert(
-  /routeFromPath[\s\S]*visibleRoutes\(\)/.test(routes),
-  "routeFromPath must resolve only environment-visible routes."
+  /routeFromPath[\s\S]*routes\.filter\(isRouteVisible\)/.test(routes),
+  "routeFromPath must resolve only environment-visible routes, including hidden workspace routes."
 );
 
 assert(

@@ -165,17 +165,19 @@ async function loadIdentities(canReadStudentNames: boolean): Promise<IdentityMap
 export function ScoreManagementPage({
   canManage,
   canReadStudentNames,
-  canReadAudit
+  canReadAudit,
+  initialExamId = ""
 }: {
   canManage: boolean;
   canReadStudentNames: boolean;
   canReadAudit: boolean;
+  initialExamId?: string;
 }) {
   const { message, modal } = App.useApp();
   const hasSession = true;
   const canWrite = canManage && hasSession;
   const [exams, setExams] = useState<Exam[]>([]);
-  const [selectedExamId, setSelectedExamId] = useState("");
+  const [selectedExamId, setSelectedExamId] = useState(initialExamId);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [grades, setGrades] = useState<SubmissionGrade[]>([]);
   const [quality, setQuality] = useState<QualityCheckResult | null>(null);
@@ -527,7 +529,6 @@ export function ScoreManagementPage({
         <div>
           <Space>
             <h1>成绩管理</h1>
-            <StatusTag tone="success">真实 API</StatusTag>
           </Space>
           <p>汇总最终分，执行发布前质量检查，确认、发布并导出带水印的成绩 CSV。</p>
         </div>

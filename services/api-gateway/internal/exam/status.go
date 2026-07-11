@@ -3,6 +3,7 @@ package exam
 var validStatuses = map[string]bool{
 	"draft":      true,
 	"configured": true,
+	"ready":      true,
 	"collecting": true,
 	"grading":    true,
 	"reviewing":  true,
@@ -25,7 +26,10 @@ var allowedTransitions = map[string]map[string]bool{
 		"archived":   true,
 	},
 	"configured": {
-		"collecting": true,
+		"archived": true,
+	},
+	"ready": {
+		"configured": true,
 		"archived":   true,
 	},
 	"collecting": {

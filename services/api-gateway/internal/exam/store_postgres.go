@@ -31,7 +31,7 @@ INSERT INTO exam (tenant_id, school_id, name, subject, exam_type, total_score, s
 SELECT $1, school.id, $3, $4, $5, $6, 'draft', $7, $8, $9, $10
 FROM school
 WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
-RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text
+RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text, created_at, updated_at
 `, tenantID, input.SchoolID, input.Name, input.Subject, input.ExamType, input.TotalScore, input.GradingMode, appealEnabled, input.PublishPolicy, createdBy)
 	var out Exam
 	if err := scanExam(row, &out); err != nil {
@@ -52,7 +52,7 @@ RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, 
 
 func (s *PostgresStore) ListExams(ctx context.Context, tenantID string, filter ListFilter) ([]Exam, error) {
 	query := `
-SELECT id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text
+SELECT id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text, created_at, updated_at
 FROM exam
 WHERE tenant_id = $1 AND deleted_at IS NULL`
 	args := []any{tenantID}
@@ -84,7 +84,7 @@ WHERE tenant_id = $1 AND deleted_at IS NULL`
 
 func (s *PostgresStore) GetExam(ctx context.Context, tenantID string, id string) (Exam, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text
+SELECT id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text, created_at, updated_at
 FROM exam
 WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
 `, tenantID, id)
@@ -145,7 +145,7 @@ func (s *PostgresStore) UpdateExam(ctx context.Context, tenantID string, id stri
 UPDATE exam
 SET school_id = $3, name = $4, subject = $5, exam_type = $6, total_score = $7, grading_mode = $8, appeal_enabled = $9, publish_policy = $10, updated_at = now()
 WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
-RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text
+RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text, created_at, updated_at
 `, tenantID, id, merged.SchoolID, merged.Name, merged.Subject, merged.ExamType, merged.TotalScore, merged.GradingMode, merged.AppealEnabled, merged.PublishPolicy)
 	var out Exam
 	if err := scanExam(row, &out); err != nil {
@@ -177,7 +177,7 @@ func (s *PostgresStore) UpdateStatus(ctx context.Context, tenantID string, id st
 UPDATE exam
 SET status = $3, updated_at = now()
 WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
-RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text
+RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text, created_at, updated_at
 `, tenantID, id, status)
 	var out Exam
 	if err := scanExam(row, &out); err != nil {
@@ -250,5 +250,5 @@ type scanner interface {
 }
 
 func scanExam(row scanner, out *Exam) error {
-	return row.Scan(&out.ID, &out.TenantID, &out.SchoolID, &out.Name, &out.Subject, &out.ExamType, &out.TotalScore, &out.Status, &out.GradingMode, &out.AppealEnabled, &out.PublishPolicy, &out.CreatedBy)
+	return row.Scan(&out.ID, &out.TenantID, &out.SchoolID, &out.Name, &out.Subject, &out.ExamType, &out.TotalScore, &out.Status, &out.GradingMode, &out.AppealEnabled, &out.PublishPolicy, &out.CreatedBy, &out.CreatedAt, &out.UpdatedAt)
 }

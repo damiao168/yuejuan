@@ -35,6 +35,7 @@ import { StatusTag } from "../components/StatusTag";
 interface LearningReportsPageProps {
   canRead: boolean;
   canExport: boolean;
+  initialExamId?: string;
 }
 
 interface KnowledgeRow {
@@ -206,11 +207,11 @@ function ChartPanel({
   );
 }
 
-export function LearningReportsPage({ canRead, canExport }: LearningReportsPageProps) {
+export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: LearningReportsPageProps) {
   const { message, modal } = App.useApp();
   const hasSession = true;
   const [exams, setExams] = useState<Exam[]>([]);
-  const [selectedExamId, setSelectedExamId] = useState("");
+  const [selectedExamId, setSelectedExamId] = useState(initialExamId);
   const [overview, setOverview] = useState<OverviewReport | null>(null);
   const [classReports, setClassReports] = useState<ClassReport[]>([]);
   const [questions, setQuestions] = useState<QuestionAnalysis[]>([]);
@@ -443,7 +444,6 @@ export function LearningReportsPage({ canRead, canExport }: LearningReportsPageP
         <div>
           <Space align="center" wrap>
             <h1>学情报告</h1>
-            <StatusTag tone="success">真实 API</StatusTag>
           </Space>
           <p>查看已发布成绩形成的考试质量、班级、题目和阅卷质量分析。</p>
         </div>

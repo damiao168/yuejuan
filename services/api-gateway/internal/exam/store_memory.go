@@ -127,6 +127,18 @@ func (s *MemoryStore) UpdateStatus(_ context.Context, tenantID string, id string
 	return item, nil
 }
 
+func (s *MemoryStore) SetStatusForTest(tenantID string, id string, status string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.items[id]
+	if !ok || item.TenantID != tenantID {
+		return ErrNotFound
+	}
+	item.Status = status
+	s.items[id] = item
+	return nil
+}
+
 func (s *MemoryStore) id() string {
 	id := fmt.Sprintf("exam-%d", s.next)
 	s.next++

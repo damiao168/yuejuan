@@ -15,8 +15,9 @@ import {
   type SelectProps,
   type TableColumnsType
 } from "antd";
-import { Archive, Eye, FileClock, Pencil, Plus, RefreshCw, Save, Search } from "lucide-react";
+import { Archive, Eye, FileClock, LayoutDashboard, Pencil, Plus, RefreshCw, Save, Search } from "lucide-react";
 import { ApiClientError } from "../api/client";
+import type { SessionUser } from "../auth/session";
 import {
   archiveExam,
   createExam,
@@ -32,11 +33,12 @@ import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
 
-const statusFlow = ["draft", "configured", "collecting", "grading", "reviewing", "finalized", "published", "archived"];
+const statusFlow = ["draft", "configured", "ready", "collecting", "grading", "reviewing", "finalized", "published", "archived"];
 
 const statusLabels: Record<string, string> = {
   draft: "草稿",
-  configured: "已配置",
+  configured: "配置中",
+  ready: "准备完成",
   collecting: "采集中",
   grading: "阅卷中",
   reviewing: "复核中",
@@ -121,6 +123,9 @@ function statusTone(status: string): StatusTone {
 }
 
 function nextStatus(status: string) {
+  if (status === "configured" || status === "ready") {
+    return null;
+  }
   const index = statusFlow.indexOf(status);
   return index >= 0 && index < statusFlow.length - 1 ? statusFlow[index + 1] : null;
 }
@@ -141,13 +146,13 @@ function formatError(error: unknown) {
 
 function formatTime(value?: string) {
   if (!value) {
-    return "后端未返回";
+    return "暂无记录";
   }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("zh-CN", { hour12: false });
 }
 
-export function ExamManagementPage({ canManage }: { canManage: boolean }) {
+export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: { canManage: boolean; currentUser: SessionUser; onOpenWorkspace: (examId: string) => void }) {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<ExamFormValues>();
   const watchedSchoolId = Form.useWatch("school_id", form);
@@ -390,22 +395,25 @@ export function ExamManagementPage({ canManage }: { canManage: boolean }) {
     { title: "总分", dataIndex: "total_score", width: 90 },
     { title: "状态", dataIndex: "status", width: 110, render: (value: string) => <StatusTag tone={statusTone(value)}>{statusLabels[value] ?? value}</StatusTag> },
     { title: "阅卷模式", dataIndex: "grading_mode", width: 160, render: (value: string) => labelFrom(gradingModeOptions, value) },
-    { title: "创建人", dataIndex: "created_by", width: 130 },
+    { title: "创建人", dataIndex: "created_by", width: 130, render: (value: string) => value === currentUser.id ? currentUser.name : "已授权人员" },
     {
       title: "创建时间",
       dataIndex: "created_at",
       width: 150,
-      render: (value?: string) => (value ? formatTime(value) : <StatusTag tone="neutral">后端未返回</StatusTag>)
+      render: (value?: string) => (value ? formatTime(value) : <StatusTag tone="neutral">暂无记录</StatusTag>)
     },
     {
       title: "操作",
       fixed: "right",
-      width: 300,
+      width: 360,
       render: (_, exam) => {
         const next = nextStatus(exam.status);
         const locked = isLocked(exam.status);
         return (
           <Space className="table-actions" wrap>
+            <Button size="small" type="primary" ghost icon={<LayoutDashboard size={14} />} onClick={() => onOpenWorkspace(exam.id)}>
+              工作区
+            </Button>
             <Button size="small" icon={<Eye size={14} />} onClick={() => void openDetail(exam)}>
               详情
             </Button>
@@ -439,10 +447,7 @@ export function ExamManagementPage({ canManage }: { canManage: boolean }) {
     <div className="page-stack">
       <section className="page-heading">
         <div>
-          <Space>
-            <h1>考试管理</h1>
-            <StatusTag tone="success">真实 API</StatusTag>
-          </Space>
+          <h1>考试管理</h1>
           <p>创建考试、维护班级范围、推进考试状态和进入后续配置流程。</p>
         </div>
         <Space wrap>
@@ -521,7 +526,7 @@ export function ExamManagementPage({ canManage }: { canManage: boolean }) {
           <div className="section-head">
             <div>
               <h2>考试列表</h2>
-              <p>{filteredExams.length} 条真实 API 记录</p>
+              <p>{filteredExams.length} 条考试记录</p>
             </div>
           </div>
           <Table<Exam>

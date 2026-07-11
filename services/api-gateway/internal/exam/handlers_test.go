@@ -64,17 +64,13 @@ func TestInvalidStatusTransitionRejected(t *testing.T) {
 
 func TestPublishedExamCannotBeModified(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
-	router := testRouter(authStore, exam.NewMemoryStore())
+	store := exam.NewMemoryStore()
+	router := testRouter(authStore, store)
 	token := login(t, router)
 	created := createExam(t, router, token)
 
-	for _, status := range []string{"configured", "collecting", "grading", "reviewing", "finalized", "published"} {
-		req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/status", bytes.NewBufferString(`{"status":"`+status+`"}`), token)
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("transition to %s expected 200, got %d %s", status, rec.Code, rec.Body.String())
-		}
+	if err := store.SetStatusForTest("tenant-exam", created.ID, "published"); err != nil {
+		t.Fatalf("seed published exam: %v", err)
 	}
 
 	req := authedRequest(http.MethodPatch, "/api/v1/exams/"+created.ID, bytes.NewBufferString(`{"name":"不应修改"}`), token)
@@ -82,6 +78,25 @@ func TestPublishedExamCannotBeModified(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected published exam update to be rejected, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCollectionCannotBypassReadinessGate(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
+	router := testRouter(authStore, exam.NewMemoryStore())
+	token := login(t, router)
+	created := createExam(t, router, token)
+
+	for _, status := range []string{"configured", "collecting"} {
+		req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/status", bytes.NewBufferString(`{"status":"`+status+`"}`), token)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if status == "configured" && rec.Code != http.StatusOK {
+			t.Fatalf("draft to configured expected 200, got %d %s", rec.Code, rec.Body.String())
+		}
+		if status == "collecting" && rec.Code != http.StatusConflict {
+			t.Fatalf("configured to collecting must require readiness gate, got %d %s", rec.Code, rec.Body.String())
+		}
 	}
 }
 

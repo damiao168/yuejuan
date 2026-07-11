@@ -153,7 +153,6 @@ ORDER BY sort_order, question_no
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := []Question{}
 	for rows.Next() {
 		var item Question
@@ -162,7 +161,26 @@ ORDER BY sort_order, question_no
 		}
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for index := range out {
+		if key, ok, err := s.latestAnswerKey(ctx, tenantID, out[index].ID); err != nil {
+			return nil, err
+		} else if ok {
+			out[index].AnswerKey = &key
+		}
+		if rubric, ok, err := s.latestRubric(ctx, tenantID, out[index].ID); err != nil {
+			return nil, err
+		} else if ok {
+			out[index].Rubric = &rubric
+		}
+	}
+	return out, nil
 }
 
 func (s *PostgresStore) UpdateQuestion(ctx context.Context, tenantID string, id string, userID string, input UpdateQuestionInput) (Question, error) {
@@ -393,6 +411,28 @@ LIMIT 1
 	_ = json.Unmarshal(points, &out.Points)
 	_ = json.Unmarshal(deductions, &out.Deductions)
 	_ = json.Unmarshal(examples, &out.Examples)
+	return out, true, nil
+}
+
+func (s *PostgresStore) latestAnswerKey(ctx context.Context, tenantID string, questionID string) (AnswerKey, bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id::text, question_id::text, answer_version, standard_answer, equivalent_answers, tolerance
+FROM question_answer_key
+WHERE tenant_id = $1 AND question_id = $2 AND deleted_at IS NULL
+ORDER BY created_at DESC
+LIMIT 1
+`, tenantID, questionID)
+	var out AnswerKey
+	var standard, equivalent, tolerance []byte
+	if err := row.Scan(&out.ID, &out.QuestionID, &out.AnswerVersion, &standard, &equivalent, &tolerance); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AnswerKey{}, false, nil
+		}
+		return AnswerKey{}, false, err
+	}
+	_ = json.Unmarshal(standard, &out.StandardAnswer)
+	_ = json.Unmarshal(equivalent, &out.EquivalentAnswers)
+	_ = json.Unmarshal(tolerance, &out.Tolerance)
 	return out, true, nil
 }
 

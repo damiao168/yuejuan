@@ -217,6 +217,7 @@ func (s *PostgresStore) Complete(ctx context.Context, tenantID string, taskID st
 UPDATE agent_worker_task
 SET status = 'succeeded', result = $3, result_schema_version = $4,
   result_payload_hash = $5, duration_ms = $6, completed_at = now(), updated_at = now()
+  , error_code = NULL, error_detail = '{}'
 WHERE tenant_id = $1 AND id = $2::uuid
 RETURNING `+taskColumns, tenantID, taskID, result, input.ResultSchemaVersion, hash, input.DurationMS)
 	task, err = scanTask(row)
@@ -225,7 +226,7 @@ RETURNING `+taskColumns, tenantID, taskID, result, input.ResultSchemaVersion, ha
 	}
 	_, err = tx.ExecContext(ctx, `
 UPDATE agent_worker_task_attempt
-SET status = 'succeeded', duration_ms = $4, completed_at = now()
+SET status = 'succeeded', duration_ms = $4, completed_at = now(), error_code = NULL, error_detail = '{}'
 WHERE tenant_id = $1 AND task_id = $2::uuid AND attempt_no = $3
 `, tenantID, taskID, task.AttemptCount, input.DurationMS)
 	if err != nil {

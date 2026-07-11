@@ -176,6 +176,8 @@ func (s *MemoryStore) Complete(_ context.Context, tenantID string, taskID string
 	task.ResultSchemaVersion = input.ResultSchemaVersion
 	task.ResultPayloadHash = hash
 	task.DurationMS = input.DurationMS
+	task.ErrorCode = ""
+	task.ErrorDetail = map[string]any{}
 	task.CompletedAt = &now
 	task.UpdatedAt = now
 	s.finishAttempt(&task, StatusSucceeded, input.DurationMS, "", map[string]any{})

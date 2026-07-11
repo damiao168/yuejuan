@@ -19,6 +19,10 @@ var allowedOwnerTypes = map[string]bool{
 	"answer_page":                true,
 	"submission_page_original":   true,
 	"submission_page_normalized": true,
+	"capture_batch":              true,
+	"capture_page_decoded":       true,
+	"page_registration_output":   true,
+	"answer_segment_crop":        true,
 	"report":                     true,
 	"import":                     true,
 }
@@ -35,6 +39,12 @@ var allowedContentTypesByExt = map[string]map[string]bool{
 	},
 	".jpeg": {
 		"image/jpeg": true,
+	},
+	".tif": {
+		"image/tiff": true,
+	},
+	".tiff": {
+		"image/tiff": true,
 	},
 	".csv": {
 		"text/csv":                  true,
@@ -80,6 +90,10 @@ func ValidateOwnerReferences(ownerType string, ownerID string, examID string, su
 		return ownerID != "" && submissionID != "" && ownerID == submissionID
 	case "submission_page_original", "submission_page_normalized":
 		return ownerID != "" && submissionID != ""
+	case "capture_batch":
+		return ownerID != "" && examID != ""
+	case "capture_page_decoded":
+		return ownerID != "" && examID != ""
 	default:
 		return true
 	}

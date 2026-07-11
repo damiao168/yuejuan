@@ -1,6 +1,6 @@
 import { apiClient } from "./client";
 
-export type ExamStatus = "draft" | "configured" | "collecting" | "grading" | "reviewing" | "finalized" | "published" | "archived";
+export type ExamStatus = "draft" | "configured" | "ready" | "collecting" | "grading" | "reviewing" | "finalized" | "published" | "archived";
 
 export type GradingMode = "auto_objective_only" | "ai_assisted" | "human_review_required" | "double_mark" | "blind_double_mark";
 

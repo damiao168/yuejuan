@@ -10,6 +10,8 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrUnauthenticated    = errors.New("unauthenticated")
 	ErrForbidden          = errors.New("forbidden")
+	ErrUsernameExists     = errors.New("username already exists")
+	ErrRoleNotFound       = errors.New("role not found")
 )
 
 const PlatformTenantID = "00000000-0000-0000-0000-000000000001"
@@ -29,6 +31,29 @@ type User struct {
 type UserWithPassword struct {
 	User
 	PasswordHash string
+}
+
+type ManagedUser struct {
+	ID          string    `json:"id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"display_name"`
+	Status      string    `json:"status"`
+	Roles       []string  `json:"roles"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
+}
+
+type AssignableRole struct {
+	Code        string `json:"code"`
+	Name        string `json:"name"`
+	ScopeType   string `json:"scope_type"`
+	Description string `json:"description,omitempty"`
+}
+
+type CreateManagedUserInput struct {
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	Password    string `json:"password"`
+	RoleCode    string `json:"role_code"`
 }
 
 type Session struct {
@@ -87,4 +112,7 @@ type Store interface {
 	DeleteSession(ctx context.Context, tokenHash string) error
 	Audit(ctx context.Context, event AuditEvent) error
 	ListAudits(ctx context.Context, tenantID string, filter AuditFilter) ([]AuditRecord, error)
+	ListManagedUsers(ctx context.Context, tenantID string) ([]ManagedUser, error)
+	ListAssignableRoles(ctx context.Context, tenantID string) ([]AssignableRole, error)
+	CreateManagedUser(ctx context.Context, tenantID string, tenantCode string, input CreateManagedUserInput, passwordHash string) (ManagedUser, error)
 }

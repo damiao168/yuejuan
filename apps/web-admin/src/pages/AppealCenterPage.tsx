@@ -27,6 +27,7 @@ interface AppealCenterPageProps {
   canReadIdentities: boolean;
   canReadExams: boolean;
   currentUser: SessionUser;
+  initialExamId?: string;
 }
 
 interface IdentityMaps {
@@ -151,7 +152,7 @@ function JsonBlock({ title, value, empty }: { title: string; value?: unknown; em
   );
 }
 
-export function AppealCenterPage({ canRead, canManage, canReadAudit, canReadIdentities, canReadExams, currentUser }: AppealCenterPageProps) {
+export function AppealCenterPage({ canRead, canManage, canReadAudit, canReadIdentities, canReadExams, currentUser, initialExamId = "" }: AppealCenterPageProps) {
   const { message, modal } = App.useApp();
   const hasSession = true;
   const [appeals, setAppeals] = useState<Appeal[]>([]);
@@ -160,7 +161,7 @@ export function AppealCenterPage({ canRead, canManage, canReadAudit, canReadIden
   const [statistics, setStatistics] = useState<AppealStatistics | null>(null);
   const [identities, setIdentities] = useState<IdentityMaps>({ students: {}, classes: {}, exams: {} });
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [examFilter, setExamFilter] = useState<string>("all");
+  const [examFilter, setExamFilter] = useState<string>(initialExamId || "all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [keyword, setKeyword] = useState("");
   const [reviewStatus, setReviewStatus] = useState("under_review");
@@ -552,7 +553,6 @@ export function AppealCenterPage({ canRead, canManage, canReadAudit, canReadIden
         <div>
           <Space align="center" wrap>
             <h1>申诉中心</h1>
-            <StatusTag tone="success">真实 API</StatusTag>
           </Space>
           <p>处理已发布成绩的学生申诉，复核证据、调整分数并保留审计链路。</p>
         </div>
