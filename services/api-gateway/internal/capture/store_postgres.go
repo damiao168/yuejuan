@@ -210,7 +210,7 @@ func (s *PostgresStore) ApplyFileResult(ctx context.Context, tenantID, fileID st
 		return File{}, ErrInvalidInput
 	}
 	for i, p := range pages {
-		if p.SourceIndex != i+1 || p.FileAssetID == "" || p.SHA256 == "" || p.Width <= 0 || p.Height <= 0 {
+		if p.SourceIndex != i+1 || p.FileAssetID == "" || p.SHA256 == "" || p.Width <= 0 || p.Height <= 0 || !validBarcodeObservations(p.Barcodes) {
 			return File{}, ErrInvalidInput
 		}
 	}
@@ -292,6 +292,23 @@ VALUES ($1,'image_quality','image-quality','image_quality_run',$2::uuid,70,$3,'i
 		return File{}, err
 	}
 	return item, tx.Commit()
+}
+
+func validBarcodeObservations(items []BarcodeObservation) bool {
+	if len(items) > 8 {
+		return false
+	}
+	for _, item := range items {
+		if item.Format == "" || item.Text == "" || len(item.Text) > 2048 || len(item.Polygon) != 4 {
+			return false
+		}
+		for _, point := range item.Polygon {
+			if point["x"] < 0 || point["y"] < 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *PostgresStore) ApplyQualityOutcome(ctx context.Context, tenantID, submissionPageID, qualityStatus string) error {

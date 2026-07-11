@@ -419,6 +419,22 @@ Implementation review remains open. Completion must not be marked Approved until
 - The Web workspace keeps evidence preview available but disables import, processing, page organization, matching, and registration actions for completed/cancelled batches.
 - Direct API bypass verification against completed batch `ef89f64a-f6fe-495f-bf3e-554f94a5c9a3` returned HTTP 409 for page rotation, deleted-page restore, and student identity mutation. Batch/page revisions and completed status remained unchanged.
 
+## Controlled Barcode Contract
+
+The barcode is evidence for page/template identity, not authority by itself. ZXing only reports what pixels contain; the API makes every trust decision.
+
+- Wire format: `EG1.<base64url(canonical-json)>.<base64url(hmac-sha256)>`.
+- Required claims: `v=1`, `kid`, `tenant_id`, `exam_id`, `template_id`, `template_content_hash`, `page_no`, and a random `nonce`.
+- Canonical JSON uses UTF-8, sorted keys, no insignificant whitespace, and integer page numbers. Unknown claims are retained in raw evidence but do not change validation semantics.
+- Keys are selected by `kid`, supplied from deployment secrets, and never sent to Workers or browsers. Rotation accepts configured active/verification keys; new issuance uses only the active key.
+- The API validates signature in constant time, version, required claims, UUIDs, positive page number, tenant/exam ownership, locked template identity, and exact template content hash.
+- Worker observations contain symbology, raw text, polygon, orientation, and decode error only. Raw values are bounded in count and length before persistence.
+- A valid observation produces an explainable `controlled_barcode` page candidate. Invalid observations persist only a normalized rejection code such as `signature_invalid`, `exam_mismatch`, or `template_hash_mismatch`; secrets and raw stack errors are never exposed.
+- One valid unambiguous candidate may assign the page number. Multiple conflicting valid barcodes, any claim mismatch, or page-number disagreement enters `needs_review`; it must never silently choose the first result.
+- Barcode evidence is additive. Registration still verifies the locked template and produces independent Homography evidence before segments are accepted.
+
+Spec review: the contract deliberately excludes student identity and scores, so copied blank sheets cannot bind a submission to a student or alter grading. It also avoids public-key complexity until offline third-party printing is a real requirement; deployment-managed HMAC with `kid` rotation is sufficient for the current server-issued template workflow.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。

@@ -5,6 +5,7 @@ import json
 import time
 
 from page_processing.api import Client
+from page_processing.barcode import detect_barcodes
 from page_processing.config import Config
 from page_processing.decoder import DecodeError, decode_document
 from page_processing.registration import RegistrationError, crop_regions, register_page
@@ -50,7 +51,7 @@ class Runner:
         page_results = []
         for page in pages:
             uploaded = self.client.upload_page(task, page.index, page.png)
-            page_results.append({"source_index": page.index, "file_asset_id": uploaded["id"], "sha256": uploaded["hash_sha256"], "width": page.width, "height": page.height})
+            page_results.append({"source_index": page.index, "file_asset_id": uploaded["id"], "sha256": uploaded["hash_sha256"], "width": page.width, "height": page.height, "barcodes": detect_barcodes(page.png)})
         result_version = "sha256:" + hashlib.sha256(json.dumps(page_results, sort_keys=True).encode("utf-8")).hexdigest()
         self.client.complete(str(payload["capture_file_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "result_version": result_version, "duration_ms": int((time.perf_counter() - started) * 1000), "decoder_profile": "pdfium-pillow-v1", "pages": page_results, "original_page_count": len(pages), "detected_content_type": detected_type})
 

@@ -149,11 +149,19 @@ type UpdatePageInput struct {
 }
 
 type DecodedPageInput struct {
-	SourceIndex int    `json:"source_index"`
-	FileAssetID string `json:"file_asset_id"`
-	SHA256      string `json:"sha256"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
+	SourceIndex int                  `json:"source_index"`
+	FileAssetID string               `json:"file_asset_id"`
+	SHA256      string               `json:"sha256"`
+	Width       int                  `json:"width"`
+	Height      int                  `json:"height"`
+	Barcodes    []BarcodeObservation `json:"barcodes,omitempty"`
+}
+
+type BarcodeObservation struct {
+	Format      string           `json:"format"`
+	Text        string           `json:"text"`
+	Polygon     []map[string]int `json:"polygon"`
+	Orientation int              `json:"orientation"`
 }
 
 type FileResultInput struct {
