@@ -37,6 +37,7 @@ import {
   confirmPageMatch,
   confirmRegistration,
   confirmStudentMatch,
+  completeCaptureBatch,
   createCaptureBatch,
   deleteCapturePage,
   getCaptureBatch,
@@ -315,7 +316,7 @@ export function CaptureBatchPage({
   examId: string;
   canManage: boolean;
 }) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [form] = Form.useForm<{
     name: string;
     source_type: CaptureBatch["source_type"];
@@ -478,6 +479,29 @@ export function CaptureBatchPage({
     } finally {
       setActioning(false);
     }
+  }
+
+  function completeBatch() {
+    if (!detail) return;
+    modal.confirm({
+      title: "确认完成批次",
+      content: "完成后该批次将进入只读状态，请确认活动页面均已处理并完成学生匹配。",
+      okText: "完成批次",
+      cancelText: "返回检查",
+      onOk: async () => {
+        setActioning(true);
+        try {
+          await completeCaptureBatch(detail.batch.id, "所有活动页面处理完成并已人工确认");
+          await Promise.all([loadBatches(), loadDetail(detail.batch.id)]);
+          message.success("批次已完成");
+        } catch (currentError) {
+          message.error(formatError(currentError));
+          throw currentError;
+        } finally {
+          setActioning(false);
+        }
+      },
+    });
   }
 
   async function startPageProcessing(submissionId: string) {
@@ -850,6 +874,17 @@ export function CaptureBatchPage({
                     >
                       开始处理
                     </Button>
+                    {detail.batch.status === "ready" && (
+                      <Button
+                        type="primary"
+                        icon={<Check size={16} />}
+                        onClick={completeBatch}
+                        loading={actioning}
+                        disabled={!canManage}
+                      >
+                        完成批次
+                      </Button>
+                    )}
                   </Space>
                 </header>
                 <div className="capture-summary-strip">
