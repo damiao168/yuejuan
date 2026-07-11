@@ -368,6 +368,8 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/page-registration-runs/{id}/corrections", requireCaptureManage(captureHandler.CreateRegistrationCorrection))
 	mux.Handle("GET /api/v1/page-registration-corrections/{id}", requireCaptureManage(captureHandler.GetRegistrationCorrection))
 	mux.Handle("POST /api/v1/page-registration-corrections/{id}/preview", requireCaptureManage(captureHandler.PreviewRegistrationCorrection))
+	mux.Handle("POST /api/v1/page-registration-corrections/{id}/apply", requireCaptureManage(captureHandler.ApplyRegistrationCorrection))
+	mux.Handle("POST /api/v1/page-registration-corrections/{id}/undo", requireCaptureManage(captureHandler.UndoRegistrationCorrection))
 
 	mux.Handle("POST /api/v1/internal/image-quality/jobs/claim", requireOCRManage(imageQualityHandler.ClaimJobs))
 	mux.Handle("POST /api/v1/internal/image-quality/runs/{runId}/normalized-assets", requireOCRManage(imageQualityHandler.CreateNormalizedAssetSlot))
