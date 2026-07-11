@@ -23,9 +23,12 @@ func (s *PostgresStore) QueueSubmissionPages(ctx context.Context, tenantID, subm
 		return nil, err
 	}
 	defer tx.Rollback()
-	var examID string
-	if err = tx.QueryRowContext(ctx, `SELECT exam_id::text FROM submission WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL`, tenantID, submissionID).Scan(&examID); err != nil {
+	var examID, batchID string
+	if err = tx.QueryRowContext(ctx, `SELECT s.exam_id::text,cp.capture_batch_id::text FROM submission s JOIN capture_page cp ON cp.tenant_id=s.tenant_id AND cp.submission_id=s.id AND cp.deleted_at IS NULL WHERE s.tenant_id=$1 AND s.id=$2::uuid AND s.deleted_at IS NULL LIMIT 1`, tenantID, submissionID).Scan(&examID, &batchID); err != nil {
 		return nil, mapNotFound(err)
+	}
+	if err = ensureBatchWritableTx(ctx, tx, tenantID, batchID); err != nil {
+		return nil, err
 	}
 	var templateID, templateHash, templateAssetID, templateContentType string
 	var layoutRaw []byte

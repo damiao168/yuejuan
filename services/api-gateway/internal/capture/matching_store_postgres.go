@@ -111,6 +111,9 @@ func (s *PostgresStore) applyStudentIdentity(ctx context.Context, tenantID, subm
 	if err != nil {
 		return MatchingSubmission{}, mapNotFound(err)
 	}
+	if err = ensureBatchWritableTx(ctx, tx, tenantID, batchID); err != nil {
+		return MatchingSubmission{}, err
+	}
 	if currentRevision != revision {
 		return MatchingSubmission{}, ErrConflict
 	}
@@ -159,6 +162,9 @@ func (s *PostgresStore) ConfirmPageMatch(ctx context.Context, tenantID, pageID, 
 	defer tx.Rollback()
 	current, err := scanPage(tx.QueryRowContext(ctx, `SELECT `+pageColumns+` FROM capture_page WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, tenantID, pageID))
 	if err != nil {
+		return Page{}, err
+	}
+	if err = ensureBatchWritableTx(ctx, tx, tenantID, current.CaptureBatchID); err != nil {
 		return Page{}, err
 	}
 	if current.Revision != input.Revision {

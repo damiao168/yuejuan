@@ -18,6 +18,13 @@ func (s *PostgresStore) ConfirmRegistration(ctx context.Context, tenantID, runID
 	if err != nil {
 		return RegistrationRun{}, err
 	}
+	var batchID string
+	if err = tx.QueryRowContext(ctx, `SELECT capture_batch_id::text FROM capture_page WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, current.CapturePageID).Scan(&batchID); err != nil {
+		return RegistrationRun{}, err
+	}
+	if err = ensureBatchWritableTx(ctx, tx, tenantID, batchID); err != nil {
+		return RegistrationRun{}, err
+	}
 	if current.ProcessingStatus != "completed" || current.MatchStatus != "needs_review" || current.RegisteredFileAssetID == "" {
 		return RegistrationRun{}, ErrInvalidTransition
 	}
@@ -29,18 +36,29 @@ func (s *PostgresStore) ConfirmRegistration(ctx context.Context, tenantID, runID
 	if err != nil {
 		return RegistrationRun{}, err
 	}
-	var batchID string
-	if err = tx.QueryRowContext(ctx, `SELECT capture_batch_id::text FROM capture_page WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, current.CapturePageID).Scan(&batchID); err != nil {
-		return RegistrationRun{}, err
-	}
 	if err = s.aggregateBatchTx(ctx, tx, tenantID, batchID); err != nil {
 		return RegistrationRun{}, err
 	}
 	return out, tx.Commit()
 }
 func (s *PostgresStore) PrepareRegistrationRetry(ctx context.Context, tenantID, runID string) (RegistrationRun, error) {
-	row := s.db.QueryRowContext(ctx, `UPDATE page_registration_run SET processing_status='processing',match_status=NULL,error_code=NULL,error_detail='{}',started_at=now(),completed_at=NULL,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND processing_status IN('terminal_error','retryable_error') RETURNING `+registrationColumns, tenantID, runID)
-	return scanRegistrationRun(row)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RegistrationRun{}, err
+	}
+	defer tx.Rollback()
+	var batchID string
+	if err = tx.QueryRowContext(ctx, `SELECT cp.capture_batch_id::text FROM page_registration_run pr JOIN capture_page cp ON cp.tenant_id=pr.tenant_id AND cp.id=pr.capture_page_id WHERE pr.tenant_id=$1 AND pr.id=$2::uuid FOR UPDATE OF pr`, tenantID, runID).Scan(&batchID); err != nil {
+		return RegistrationRun{}, mapNotFound(err)
+	}
+	if err = ensureBatchWritableTx(ctx, tx, tenantID, batchID); err != nil {
+		return RegistrationRun{}, err
+	}
+	out, err := scanRegistrationRun(tx.QueryRowContext(ctx, `UPDATE page_registration_run SET processing_status='processing',match_status=NULL,error_code=NULL,error_detail='{}',started_at=now(),completed_at=NULL,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND processing_status IN('terminal_error','retryable_error') RETURNING `+registrationColumns, tenantID, runID))
+	if err != nil {
+		return RegistrationRun{}, err
+	}
+	return out, tx.Commit()
 }
 func (s *PostgresStore) GetProcessingSummary(ctx context.Context, tenantID, submissionID string) (ProcessingSummary, error) {
 	out := ProcessingSummary{SubmissionID: submissionID, Blockers: []ProcessingBlocker{}}

@@ -71,6 +71,9 @@ func (s *PostgresStore) RegisterFile(ctx context.Context, tenantID, batchID, act
 		return File{}, err
 	}
 	defer tx.Rollback()
+	if err = ensureBatchWritableTx(ctx, tx, tenantID, batchID); err != nil {
+		return File{}, err
+	}
 	var examID, status string
 	if err := tx.QueryRowContext(ctx, `SELECT exam_id::text, status FROM capture_batch WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, tenantID, batchID).Scan(&examID, &status); err != nil {
 		return File{}, mapNotFound(err)
@@ -152,6 +155,9 @@ func (s *PostgresStore) QueueBatch(ctx context.Context, tenantID, batchID, actor
 		return Batch{}, err
 	}
 	defer tx.Rollback()
+	if err = ensureBatchWritableTx(ctx, tx, tenantID, batchID); err != nil {
+		return Batch{}, err
+	}
 	var current, examID string
 	if err := tx.QueryRowContext(ctx, `SELECT status, exam_id::text FROM capture_batch WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, tenantID, batchID).Scan(&current, &examID); err != nil {
 		return Batch{}, mapNotFound(err)
@@ -341,6 +347,9 @@ func (s *PostgresStore) UpdatePage(ctx context.Context, tenantID, pageID, actorI
 	if err != nil {
 		return Page{}, err
 	}
+	if err = ensureBatchWritableTx(ctx, tx, tenantID, current.CaptureBatchID); err != nil {
+		return Page{}, err
+	}
 	if current.Revision != input.Revision {
 		return Page{}, ErrConflict
 	}
@@ -428,6 +437,17 @@ status=CASE
  ELSE 'matching' END,
 revision=revision+1,updated_at=now() WHERE b.tenant_id=$1 AND b.id=$2::uuid`, tenantID, batchID)
 	return err
+}
+
+func ensureBatchWritableTx(ctx context.Context, tx *sql.Tx, tenantID, batchID string) error {
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM capture_batch WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, tenantID, batchID).Scan(&status); err != nil {
+		return mapNotFound(err)
+	}
+	if status == "completed" || status == "cancelled" {
+		return ErrInvalidTransition
+	}
+	return nil
 }
 
 type scanner interface{ Scan(...any) error }

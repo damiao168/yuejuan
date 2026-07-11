@@ -411,6 +411,14 @@ The remaining implementation order is now: completion-gate Playwright -> impleme
 
 Implementation review remains open. Completion must not be marked Approved until the remaining gaps listed below are closed and re-reviewed.
 
+## Completed Batch Read-Only Verification (2026-07-11)
+
+- PostgreSQL write paths now lock and validate the authoritative capture batch inside the same transaction before file registration/queueing, page mutation, delete/restore, split/merge, student/page matching, registration queueing, confirmation, or retry.
+- `completed` and `cancelled` reject writes with the existing invalid-transition contract; a completed batch can be changed only after an explicit audited reopen transition.
+- The in-memory store follows the same rule for file registration, queueing, and page updates, with regression coverage.
+- The Web workspace keeps evidence preview available but disables import, processing, page organization, matching, and registration actions for completed/cancelled batches.
+- Direct API bypass verification against completed batch `ef89f64a-f6fe-495f-bf3e-554f94a5c9a3` returned HTTP 409 for page rotation, deleted-page restore, and student identity mutation. Batch/page revisions and completed status remained unchanged.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。
@@ -452,10 +460,9 @@ Implementation review remains open. Completion must not be marked Approved until
 
 ### 尚未完成，禁止标记 Approved
 
-- 批次完成后只读目前只有状态和界面语义，导入、旋转、删除/恢复、拆分/合并、学生/页码匹配和配准重试等写入口仍需统一的服务端完成态门禁，并同步禁用前端操作。
 - 条码受控 schema、签名/校验契约及不可伪造的页码候选证据尚未实现。
 - 低置信配准已能人工确认算法结果，但人工四角/锚点校正与重跑 Homography 的完整接口和 UI 尚未实现。
 - 专用 segment image API 尚未补齐；当前 crop 资产已真实生成，但消费方仍需通过通用文件接口读取。
 - TIFF、损坏文件、低纹理、强透视、缺页、重复页、断点恢复和跨租户场景仍需扩展为 Compose + Playwright 端到端矩阵；现有 Python 单元测试只覆盖其中的解码与合成算法路径。
 
-下一实现顺序：完成态服务端只读门禁 -> 受控条码契约 -> 人工四角校正 -> segment image API -> 异常样本 E2E 矩阵 -> 实现审阅复核 -> Approved。
+下一实现顺序：受控条码契约 -> 人工四角校正 -> segment image API -> 异常样本 E2E 矩阵 -> 实现审阅复核 -> Approved。

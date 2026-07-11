@@ -335,6 +335,7 @@ export function CaptureBatchPage({
   const [matching, setMatching] = useState<MatchingQueue>();
   const [matchingLoading, setMatchingLoading] = useState(false);
   const [processingSummaries, setProcessingSummaries] = useState<Record<string, ProcessingSummary>>({});
+  const batchCanManage = canManage && !["completed", "cancelled"].includes(detail?.batch.status ?? "");
 
   const loadBatches = useCallback(async () => {
     setLoading(true);
@@ -707,7 +708,7 @@ export function CaptureBatchPage({
             size="small"
             icon={<RotateCw size={14} />}
             onClick={() => void rotatePage(item)}
-            disabled={!canManage || item.status === "deleted"}
+            disabled={!batchCanManage || item.status === "deleted"}
             aria-label="顺时针旋转"
           />
           <Button
@@ -721,7 +722,7 @@ export function CaptureBatchPage({
               )
             }
             onClick={() => void changePageLifecycle(item)}
-            disabled={!canManage}
+            disabled={!batchCanManage}
             aria-label={item.status === "deleted" ? "恢复页面" : "删除页面"}
           />
         </Space>
@@ -802,7 +803,7 @@ export function CaptureBatchPage({
       </section>
       {batches.length === 0 ? (
         <Empty description="尚未创建采集批次">
-          <Button type="primary" onClick={() => setModalOpen(true)}>
+          <Button type="primary" onClick={() => setModalOpen(true)} disabled={!canManage}>
             创建第一个批次
           </Button>
         </Empty>
@@ -857,7 +858,7 @@ export function CaptureBatchPage({
                       <Button
                         icon={<FileUp size={16} />}
                         loading={uploading}
-                        disabled={!canManage}
+                        disabled={!batchCanManage}
                       >
                         导入文件
                       </Button>
@@ -868,7 +869,7 @@ export function CaptureBatchPage({
                       onClick={() => void startProcessing()}
                       loading={actioning}
                       disabled={
-                        !canManage ||
+                        !batchCanManage ||
                         !detail.files.some((item) => item.status === "uploaded")
                       }
                     >
@@ -880,7 +881,7 @@ export function CaptureBatchPage({
                         icon={<Check size={16} />}
                         onClick={completeBatch}
                         loading={actioning}
-                        disabled={!canManage}
+                        disabled={!batchCanManage}
                       >
                         完成批次
                       </Button>
@@ -949,8 +950,8 @@ export function CaptureBatchPage({
                                   </span>
                                 </div>
                                 <Space wrap>
-                                  {summary?.blockers.filter((item) => item.registration_run_id && ["confirm_registration", "retry_registration"].includes(item.action)).map((item) => <Button key={item.page_id} type={item.action === "confirm_registration" ? "primary" : "default"} loading={actioning} onClick={() => void resolveRegistration(item.registration_run_id!, item.action === "confirm_registration" ? "confirm" : "retry")}>{item.action === "confirm_registration" ? `确认第 ${item.page_no} 页` : `重试第 ${item.page_no} 页`}</Button>)}
-                                  <Button icon={<Workflow size={16} />} loading={actioning} disabled={!canManage || complete} onClick={() => void startPageProcessing(submissionId)}>{complete ? "处理完成" : "配准并切题"}</Button>
+                                  {summary?.blockers.filter((item) => item.registration_run_id && ["confirm_registration", "retry_registration"].includes(item.action)).map((item) => <Button key={item.page_id} type={item.action === "confirm_registration" ? "primary" : "default"} loading={actioning} disabled={!batchCanManage} onClick={() => void resolveRegistration(item.registration_run_id!, item.action === "confirm_registration" ? "confirm" : "retry")}>{item.action === "confirm_registration" ? `确认第 ${item.page_no} 页` : `重试第 ${item.page_no} 页`}</Button>)}
+                                  <Button icon={<Workflow size={16} />} loading={actioning} disabled={!batchCanManage || complete} onClick={() => void startPageProcessing(submissionId)}>{complete ? "处理完成" : "配准并切题"}</Button>
                                 </Space>
                               </div>
                             );
@@ -971,7 +972,7 @@ export function CaptureBatchPage({
                       ) : matching ? (
                         <MatchingWorkspace
                           queue={matching}
-                          canManage={canManage}
+                          canManage={batchCanManage}
                           actioning={actioning}
                           onPreview={showPage}
                           onConfirmStudent={matchStudent}

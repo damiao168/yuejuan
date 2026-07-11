@@ -68,3 +68,27 @@ func TestCaptureRejectsStalePageRevisionAndCrossTenant(t *testing.T) {
 		t.Fatalf("expected tenant isolation, got %v", err)
 	}
 }
+
+func TestCompletedBatchRejectsFurtherWrites(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	batch, _ := store.CreateBatch(ctx, "tenant-1", "exam-1", "user-1", CreateBatchInput{Name: "locked", SourceType: "web_upload"})
+	file, _ := store.RegisterFile(ctx, "tenant-1", batch.ID, "user-1", RegisterFileInput{FileAssetID: "asset", IdempotencyKey: "file"}, FileAssetSnapshot{ID: "asset", SizeBytes: 10, SHA256: "sha256:a"})
+	_, _ = store.QueueBatch(ctx, "tenant-1", batch.ID, "user-1")
+	_, _ = store.ApplyFileResult(ctx, "tenant-1", file.ID, []DecodedPageInput{{SourceIndex: 1, FileAssetID: "page", SHA256: "sha256:p", Width: 100, Height: 200}})
+	pages, _ := store.ListPages(ctx, "tenant-1", batch.ID)
+	batch = store.batches[batch.ID]
+	batch.Status = "completed"
+	store.batches[batch.ID] = batch
+
+	rotation := 90
+	if _, err := store.UpdatePage(ctx, "tenant-1", pages[0].ID, "user-1", UpdatePageInput{Revision: pages[0].Revision, RotationDegrees: &rotation}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("completed batch page update should be rejected, got %v", err)
+	}
+	if _, err := store.RegisterFile(ctx, "tenant-1", batch.ID, "user-1", RegisterFileInput{FileAssetID: "asset-2", IdempotencyKey: "file-2"}, FileAssetSnapshot{ID: "asset-2", SizeBytes: 10, SHA256: "sha256:b"}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("completed batch file registration should be rejected, got %v", err)
+	}
+	if _, err := store.QueueBatch(ctx, "tenant-1", batch.ID, "user-1"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("completed batch queue should be rejected, got %v", err)
+	}
+}

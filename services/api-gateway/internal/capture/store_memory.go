@@ -351,6 +351,9 @@ func (s *MemoryStore) QueueBatch(_ context.Context, tenantID, batchID, actorID s
 	if !ok || batch.TenantID != tenantID {
 		return Batch{}, ErrNotFound
 	}
+	if batch.Status == "completed" || batch.Status == "cancelled" {
+		return Batch{}, ErrInvalidTransition
+	}
 	count := 0
 	for id, x := range s.files {
 		if x.TenantID == tenantID && x.CaptureBatchID == batchID && x.Status == "uploaded" {
@@ -457,6 +460,10 @@ func (s *MemoryStore) UpdatePage(_ context.Context, tenantID, pageID, actorID st
 	x, ok := s.pages[pageID]
 	if !ok || x.TenantID != tenantID {
 		return Page{}, ErrNotFound
+	}
+	batch := s.batches[x.CaptureBatchID]
+	if batch.Status == "completed" || batch.Status == "cancelled" {
+		return Page{}, ErrInvalidTransition
 	}
 	if input.Revision != x.Revision {
 		return Page{}, ErrConflict

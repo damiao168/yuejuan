@@ -26,6 +26,9 @@ func (s *PostgresStore) setPageDeleted(ctx context.Context, tenantID, pageID, ac
 	if err != nil {
 		return Page{}, err
 	}
+	if err = ensureBatchWritableTx(ctx, tx, tenantID, current.CaptureBatchID); err != nil {
+		return Page{}, err
+	}
 	if current.Revision != input.Revision {
 		return Page{}, ErrConflict
 	}
@@ -67,6 +70,9 @@ func (s *PostgresStore) SplitSubmission(ctx context.Context, tenantID, batchID, 
 		return MatchingQueue{}, err
 	}
 	defer tx.Rollback()
+	if err = ensureBatchWritableTx(ctx, tx, tenantID, batchID); err != nil {
+		return MatchingQueue{}, err
+	}
 	var examID, sourceType, collectedBy string
 	var total int
 	err = tx.QueryRowContext(ctx, `SELECT s.exam_id::text,s.source_type,s.collected_by::text,count(cp.id) FROM submission s JOIN capture_page cp ON cp.tenant_id=s.tenant_id AND cp.submission_id=s.id AND cp.capture_batch_id=$3::uuid AND cp.status<>'deleted' WHERE s.tenant_id=$1 AND s.id=$2::uuid AND s.deleted_at IS NULL GROUP BY s.id`, tenantID, input.SubmissionID, batchID).Scan(&examID, &sourceType, &collectedBy, &total)
@@ -105,6 +111,9 @@ func (s *PostgresStore) MergeSubmissions(ctx context.Context, tenantID, batchID,
 		return MatchingQueue{}, err
 	}
 	defer tx.Rollback()
+	if err = ensureBatchWritableTx(ctx, tx, tenantID, batchID); err != nil {
+		return MatchingQueue{}, err
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT id::text FROM capture_page WHERE tenant_id=$1 AND capture_batch_id=$2::uuid AND submission_id=$3::uuid AND status<>'deleted' AND deleted_at IS NULL ORDER BY sequence_no FOR UPDATE`, tenantID, batchID, input.SourceSubmissionID)
 	if err != nil {
 		return MatchingQueue{}, err
