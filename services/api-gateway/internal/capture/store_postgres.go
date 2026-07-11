@@ -250,8 +250,30 @@ VALUES ($1,$2::uuid,$3::uuid,$4,'uploaded','unchecked','{}','[]') RETURNING id::
 			return File{}, err
 		}
 		identity, _ := json.Marshal(map[string]any{"decoder": "page-processing", "width": p.Width, "height": p.Height, "sha256": p.SHA256})
-		_, err = tx.ExecContext(ctx, `INSERT INTO capture_page (tenant_id,capture_batch_id,capture_file_id,source_index,submission_id,submission_page_id,assigned_page_no,sequence_no,decoded_file_asset_id,status,page_identity)
-VALUES ($1,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$4,$7,$8::uuid,'grouped',$9)`, tenantID, item.CaptureBatchID, item.ID, p.SourceIndex, submissionID, submissionPageID, sequenceBase+i+1, p.FileAssetID, identity)
+		var capturePageID string
+		err = tx.QueryRowContext(ctx, `INSERT INTO capture_page (tenant_id,capture_batch_id,capture_file_id,source_index,submission_id,submission_page_id,assigned_page_no,sequence_no,decoded_file_asset_id,status,page_identity)
+VALUES ($1,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$4,$7,$8::uuid,'quality_checking',$9) RETURNING id::text`, tenantID, item.CaptureBatchID, item.ID, p.SourceIndex, submissionID, submissionPageID, sequenceBase+i+1, p.FileAssetID, identity).Scan(&capturePageID)
+		if err != nil {
+			return File{}, err
+		}
+		var qualityRunID string
+		err = tx.QueryRowContext(ctx, `INSERT INTO submission_page_quality_run (
+tenant_id,submission_id,submission_page_id,source_file_asset_id,source_sha256,processing_status,
+profile_name,profile_version,profile_config_hash,metric_schema_version,report_schema_version)
+VALUES ($1,$2::uuid,$3::uuid,$4::uuid,$5,'pending','opencv-default','v1','sha256:opencv-default-v1','image-quality-metrics-v1','image-quality-report-v1') RETURNING id::text`, tenantID, submissionID, submissionPageID, p.FileAssetID, p.SHA256).Scan(&qualityRunID)
+		if err != nil {
+			return File{}, err
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"run_id": qualityRunID, "submission_id": submissionID, "submission_page_id": submissionPageID,
+			"capture_page_id": capturePageID, "page_no": p.SourceIndex, "source_file_asset_id": p.FileAssetID,
+			"source_sha256": p.SHA256, "download_url": "/api/v1/files/" + p.FileAssetID + "/download",
+			"profile_name": "opencv-default", "profile_version": "v1", "profile_config_hash": "sha256:opencv-default-v1",
+			"metric_schema_version": "image-quality-metrics-v1", "report_schema_version": "image-quality-report-v1",
+		})
+		key := "capture-quality:" + capturePageID + ":" + p.SHA256
+		_, err = tx.ExecContext(ctx, `INSERT INTO agent_worker_task (tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)
+VALUES ($1,'image_quality','image-quality','image_quality_run',$2::uuid,70,$3,'image-quality.v1',$4,$4,3,30,$5::uuid)`, tenantID, qualityRunID, payload, key, item.UploadedBy)
 		if err != nil {
 			return File{}, err
 		}
@@ -264,6 +286,32 @@ VALUES ($1,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$4,$7,$8::uuid,'grouped',$9)`,
 		return File{}, err
 	}
 	return item, tx.Commit()
+}
+
+func (s *PostgresStore) ApplyQualityOutcome(ctx context.Context, tenantID, submissionPageID, qualityStatus string) error {
+	pageStatus := "quality_rejected"
+	if qualityStatus == "passed" {
+		pageStatus = "normalized"
+	} else if qualityStatus == "review" {
+		pageStatus = "needs_review"
+	} else if qualityStatus != "failed" {
+		return ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var batchID string
+	err = tx.QueryRowContext(ctx, `UPDATE capture_page SET status=$3,revision=revision+1,updated_at=now()
+WHERE tenant_id=$1 AND submission_page_id=$2::uuid AND deleted_at IS NULL RETURNING capture_batch_id::text`, tenantID, submissionPageID, pageStatus).Scan(&batchID)
+	if err != nil {
+		return mapNotFound(err)
+	}
+	if err = s.aggregateBatchTx(ctx, tx, tenantID, batchID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *PostgresStore) ApplyFileFailure(ctx context.Context, tenantID, fileID, errorCode string, retryable bool) (File, error) {

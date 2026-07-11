@@ -243,7 +243,7 @@ func (s *MemoryStore) ApplyFileResult(_ context.Context, tenantID, fileID string
 		if input.SourceIndex != i+1 || input.FileAssetID == "" {
 			return File{}, ErrInvalidInput
 		}
-		page := Page{ID: uuid.NewString(), TenantID: tenantID, CaptureBatchID: file.CaptureBatchID, CaptureFileID: file.ID, SourceIndex: input.SourceIndex, SubmissionID: submissionID, SubmissionPageID: uuid.NewString(), AssignedPageNo: input.SourceIndex, SequenceNo: base + i + 1, DecodedFileAssetID: input.FileAssetID, Status: "grouped", Revision: 1, PageIdentity: map[string]any{"width": input.Width, "height": input.Height, "sha256": input.SHA256}, MatchCandidates: []any{}, ManualOverride: map[string]any{}, CreatedAt: time.Now().UTC()}
+		page := Page{ID: uuid.NewString(), TenantID: tenantID, CaptureBatchID: file.CaptureBatchID, CaptureFileID: file.ID, SourceIndex: input.SourceIndex, SubmissionID: submissionID, SubmissionPageID: uuid.NewString(), AssignedPageNo: input.SourceIndex, SequenceNo: base + i + 1, DecodedFileAssetID: input.FileAssetID, Status: "quality_checking", Revision: 1, PageIdentity: map[string]any{"width": input.Width, "height": input.Height, "sha256": input.SHA256}, MatchCandidates: []any{}, ManualOverride: map[string]any{}, CreatedAt: time.Now().UTC()}
 		s.pages[page.ID] = page
 	}
 	file.Status = "completed"
@@ -273,6 +273,28 @@ func (s *MemoryStore) ApplyFileFailure(_ context.Context, tenantID, fileID, erro
 	x.ErrorCode = errorCode
 	s.files[fileID] = x
 	return x, nil
+}
+
+func (s *MemoryStore) ApplyQualityOutcome(_ context.Context, tenantID, submissionPageID, qualityStatus string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status := "quality_rejected"
+	if qualityStatus == "passed" {
+		status = "normalized"
+	} else if qualityStatus == "review" {
+		status = "needs_review"
+	} else if qualityStatus != "failed" {
+		return ErrInvalidInput
+	}
+	for id, page := range s.pages {
+		if page.TenantID == tenantID && page.SubmissionPageID == submissionPageID {
+			page.Status = status
+			page.Revision++
+			s.pages[id] = page
+			return nil
+		}
+	}
+	return ErrNotFound
 }
 
 func (s *MemoryStore) UpdatePage(_ context.Context, tenantID, pageID, actorID string, input UpdatePageInput) (Page, error) {

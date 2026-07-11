@@ -36,6 +36,16 @@ func TestCaptureBatchDecodeFlow(t *testing.T) {
 	if err != nil || len(pages) != 2 || pages[0].SubmissionID == "" || pages[0].SubmissionID != pages[1].SubmissionID {
 		t.Fatalf("pages returned %#v, %v", pages, err)
 	}
+	if pages[0].Status != "quality_checking" {
+		t.Fatalf("decoded page should wait for quality processing, got %q", pages[0].Status)
+	}
+	if err := store.ApplyQualityOutcome(ctx, "tenant-1", pages[0].SubmissionPageID, "passed"); err != nil {
+		t.Fatal(err)
+	}
+	pages, _ = store.ListPages(ctx, "tenant-1", batch.ID)
+	if pages[0].Status != "normalized" {
+		t.Fatalf("passed page should expose normalized state, got %q", pages[0].Status)
+	}
 }
 
 func TestCaptureRejectsStalePageRevisionAndCrossTenant(t *testing.T) {

@@ -114,6 +114,7 @@ type ClaimInput struct {
 
 type ClaimedJob struct {
 	RuntimeTaskID     string    `json:"runtime_task_id,omitempty"`
+	ExamID            string    `json:"exam_id"`
 	RunID             string    `json:"run_id"`
 	SubmissionID      string    `json:"submission_id"`
 	SubmissionPageID  string    `json:"submission_page_id"`

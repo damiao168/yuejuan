@@ -179,7 +179,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	}
 	orchestratorHandler := orchestrator.NewHandler(orchestratorStore, authStore)
 	ocrHandler := ocrpkg.NewHandler(ocrStore, ocrQueue, submissionStore, authStore, workerRuntimeStore)
-	imageQualityHandler := imagequality.NewHandler(imageQualityStore, submissionStore, fileStore, authStore, workerRuntimeStore)
+	imageQualityHandler := imagequality.NewHandler(imageQualityStore, submissionStore, fileStore, authStore, workerRuntimeStore).WithCaptureStore(captureStore)
 	workerRuntimeHandler := workerruntime.NewHandler(workerRuntimeStore, authStore)
 	captureHandler := capture.NewHandler(captureStore, fileStore, examStore, workerRuntimeStore, authStore)
 	gradingHandler := grading.NewHandler(gradingStore, grading.NewEngine(), authStore)

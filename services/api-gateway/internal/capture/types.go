@@ -200,6 +200,7 @@ type Store interface {
 	QueueBatch(ctx context.Context, tenantID, batchID, actorID string) (Batch, error)
 	ApplyFileResult(ctx context.Context, tenantID, fileID string, pages []DecodedPageInput) (File, error)
 	ApplyFileFailure(ctx context.Context, tenantID, fileID, errorCode string, retryable bool) (File, error)
+	ApplyQualityOutcome(ctx context.Context, tenantID, submissionPageID, qualityStatus string) error
 	UpdatePage(ctx context.Context, tenantID, pageID, actorID string, input UpdatePageInput) (Page, error)
 	SetBatchStatus(ctx context.Context, tenantID, batchID, actorID, status, reason string) (Batch, error)
 	QueueSubmissionPages(ctx context.Context, tenantID, submissionID, actorID string) ([]RegistrationRun, error)

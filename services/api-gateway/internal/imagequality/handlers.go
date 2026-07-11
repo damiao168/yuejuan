@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
+	"edugrade-enterprise/services/api-gateway/internal/capture"
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
@@ -21,6 +22,7 @@ type Handler struct {
 	files       files.Store
 	audit       auth.Store
 	runtime     workerruntime.Store
+	captures    capture.Store
 }
 
 func NewHandler(store Store, submissions submission.Store, fileStore files.Store, audit auth.Store, runtimes ...workerruntime.Store) *Handler {
@@ -30,6 +32,8 @@ func NewHandler(store Store, submissions submission.Store, fileStore files.Store
 	}
 	return handler
 }
+
+func (h *Handler) WithCaptureStore(store capture.Store) *Handler { h.captures = store; return h }
 
 func (h *Handler) RunQualityCheck(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
@@ -126,6 +130,13 @@ func (h *Handler) ClaimJobs(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
+		submissionItem, submissionErr := h.submissions.Get(r.Context(), user.TenantID, run.SubmissionID)
+		if submissionErr != nil {
+			_, _ = h.runtime.Fail(r.Context(), user.TenantID, task.ID, workerruntime.FailInput{
+				LeaseToken: task.LeaseToken, Retryable: false, ErrorCode: "quality_submission_not_found",
+			})
+			continue
+		}
 		_, heartbeatErr := h.runtime.Heartbeat(r.Context(), user.TenantID, task.ID, workerruntime.HeartbeatInput{
 			LeaseToken: task.LeaseToken, WorkerService: "image-quality-worker", WorkerInstanceID: input.WorkerInstanceID, State: workerruntime.StatusRunning,
 		})
@@ -134,7 +145,7 @@ func (h *Handler) ClaimJobs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jobs = append(jobs, ClaimedJob{
-			RuntimeTaskID: task.ID, RunID: run.ID, SubmissionID: run.SubmissionID, SubmissionPageID: run.SubmissionPageID,
+			RuntimeTaskID: task.ID, ExamID: submissionItem.ExamID, RunID: run.ID, SubmissionID: run.SubmissionID, SubmissionPageID: run.SubmissionPageID,
 			PageNo: run.PageNo, SourceFileAssetID: run.SourceFileAssetID, SourceSHA256: run.SourceSHA256,
 			DownloadURL: "/api/v1/files/" + run.SourceFileAssetID + "/download", LeaseToken: task.LeaseToken,
 			LeaseExpiresAt: *task.LeaseExpiresAt, AttemptNo: task.AttemptCount,
@@ -219,6 +230,21 @@ func (h *Handler) SubmitResult(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, r, err)
 			return
 		}
+		if h.captures != nil {
+			captureLinked := true
+			if err = h.captures.ApplyQualityOutcome(r.Context(), user.TenantID, run.SubmissionPageID, run.QualityStatus); errors.Is(err, capture.ErrNotFound) {
+				captureLinked = false
+			} else if err != nil {
+				writeStoreError(w, r, err)
+				return
+			}
+			if captureLinked && run.QualityStatus == QualityPassed {
+				if _, err = h.captures.QueueSubmissionPages(r.Context(), user.TenantID, run.SubmissionID, user.ID); err != nil && !errors.Is(err, capture.ErrInvalidTransition) {
+					writeStoreError(w, r, err)
+					return
+				}
+			}
+		}
 	}
 	if h.runtime != nil {
 		task, taskErr := h.runtime.GetBySource(r.Context(), user.TenantID, "image_quality_run", run.ID)
@@ -271,9 +297,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, ErrNotFound), errors.Is(err, submission.ErrNotFound), errors.Is(err, files.ErrNotFound):
+	case errors.Is(err, ErrNotFound), errors.Is(err, submission.ErrNotFound), errors.Is(err, files.ErrNotFound), errors.Is(err, capture.ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, "image_quality_run_not_found", "image quality run not found")
-	case errors.Is(err, ErrInvalidInput), errors.Is(err, submission.ErrInvalidInput):
+	case errors.Is(err, ErrInvalidInput), errors.Is(err, submission.ErrInvalidInput), errors.Is(err, capture.ErrInvalidInput):
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_image_quality_input", "image quality input is invalid")
 	case errors.Is(err, ErrLeaseExpired):
 		httpx.Error(w, r, http.StatusConflict, "image_quality_lease_expired", "image quality lease expired")

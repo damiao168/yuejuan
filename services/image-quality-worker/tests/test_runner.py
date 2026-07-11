@@ -53,6 +53,7 @@ class FakeClient:
                 "run_id": "quality-run-1",
                 "runtime_task_id": "runtime-task-1",
                 "submission_id": "submission-1",
+                "exam_id": "exam-1",
                 "submission_page_id": "page-1",
                 "source_file_asset_id": "file-original-1",
                 "source_sha256": "source-hash-1",

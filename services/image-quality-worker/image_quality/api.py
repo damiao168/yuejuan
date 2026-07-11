@@ -66,6 +66,7 @@ class EduGradeImageQualityClient:
             "owner_type": "submission_page_normalized",
             "owner_id": str(job["submission_page_id"]),
             "submission_id": str(job["submission_id"]),
+            "exam_id": str(job["exam_id"]),
         }
         body = _multipart_body(boundary, fields, "file", "normalized-page.png", "image/png", normalized_png)
         req = self._build_request("POST", upload_url, None)

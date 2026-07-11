@@ -340,6 +340,25 @@ Fixtures: normal, skewed, blurred, missing, duplicate, wrong page, invalid barco
 
 修订结论：Spec Ready，可以进入实现。
 
+## Quality Auto-Chaining Verification (2026-07-11)
+
+The first implementation blocker is closed and was verified through the public capture APIs and real Compose workers:
+
+- File decode now creates one image-quality run and one Worker Runtime task per capture page in the same database transaction.
+- Capture pages enter `quality_checking`; `passed` moves to `normalized`, while `review`/`failed` blocks registration and enters the issue path.
+- Registration selects `submission_page.normalized_file_asset_id` only. It cannot fall back to `capture_page.decoded_file_asset_id`.
+- Normalized uploads carry the submission exam ID, and registration continues to enforce tenant, exam, asset hash, and file ownership checks.
+- Migration `000030_story055_capture_quality_source_asset.sql` permits tenant-scoped decoded-asset reuse before submission assignment while retaining cross-tenant protection.
+- Image-quality Worker Docker layers now cache OpenCV, NumPy, and Pillow independently from application source changes.
+
+Real acceptance batch: `ef89f64a-f6fe-495f-bf3e-554f94a5c9a3`.
+
+- Page 1: quality `passed`, registration `completed/matched`, confidence `1.0`, registration source equals normalized asset, and one real segment crop was materialized.
+- Page 2: quality `review`, capture page `needs_review`, and no registration run was created.
+- API Gateway, image-quality Worker, and page-processing Worker remained healthy after rebuilding and restarting.
+
+The remaining implementation order is now: student/page matching -> split/merge/delete/restore -> registration manual confirm/retry -> completion-gate Playwright -> implementation review -> Approved.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。

@@ -42,9 +42,13 @@ ORDER BY ast.version_no DESC LIMIT 1`, tenantID, examID).Scan(&templateID, &temp
 	if json.Unmarshal(layoutRaw, &layout) != nil || len(layout.Pages) == 0 {
 		return nil, ErrInvalidInput
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT cp.id::text,cp.submission_page_id::text,cp.decoded_file_asset_id::text,cp.assigned_page_no,cp.revision,fa.hash_sha256
-FROM capture_page cp JOIN file_asset fa ON fa.tenant_id=cp.tenant_id AND fa.id=cp.decoded_file_asset_id
-WHERE cp.tenant_id=$1 AND cp.submission_id=$2::uuid AND cp.deleted_at IS NULL ORDER BY cp.sequence_no FOR UPDATE`, tenantID, submissionID)
+	rows, err := tx.QueryContext(ctx, `SELECT cp.id::text,cp.submission_page_id::text,sp.normalized_file_asset_id::text,cp.assigned_page_no,cp.revision,fa.hash_sha256
+	FROM capture_page cp
+	JOIN submission_page sp ON sp.tenant_id=cp.tenant_id AND sp.id=cp.submission_page_id
+	JOIN file_asset fa ON fa.tenant_id=sp.tenant_id AND fa.id=sp.normalized_file_asset_id
+	WHERE cp.tenant_id=$1 AND cp.submission_id=$2::uuid AND cp.status='normalized'
+	  AND sp.quality_status='passed' AND sp.normalized_file_asset_id IS NOT NULL
+	  AND cp.deleted_at IS NULL ORDER BY cp.sequence_no FOR UPDATE`, tenantID, submissionID)
 	if err != nil {
 		return nil, err
 	}
