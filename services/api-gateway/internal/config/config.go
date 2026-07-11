@@ -20,6 +20,7 @@ type Config struct {
 	AIService     AIServiceConfig
 	Files         FileConfig
 	Observability ObservabilityConfig
+	Barcode       BarcodeConfig
 }
 
 type ServiceConfig struct {
@@ -86,6 +87,11 @@ type FileConfig struct {
 
 type ObservabilityConfig struct {
 	SlowRequestThreshold time.Duration
+}
+
+type BarcodeConfig struct {
+	ActiveKeyID string
+	HMACKeys    map[string][]byte
 }
 
 func Load(envFile string) (Config, error) {
@@ -156,11 +162,26 @@ func Load(envFile string) (Config, error) {
 		Observability: ObservabilityConfig{
 			SlowRequestThreshold: getEnvDuration("EDUGRADE_SLOW_REQUEST_THRESHOLD", 2*time.Second),
 		},
+		Barcode: BarcodeConfig{
+			ActiveKeyID: getEnv("EDUGRADE_BARCODE_ACTIVE_KEY_ID", "local-v1"),
+			HMACKeys:    parseBarcodeKeys(getEnv("EDUGRADE_BARCODE_HMAC_KEYS", "")),
+		},
 	}
 	if err := validateProductionConfig(cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func parseBarcodeKeys(raw string) map[string][]byte {
+	keys := map[string][]byte{}
+	for _, item := range strings.Split(raw, ",") {
+		parts := strings.SplitN(strings.TrimSpace(item), ":", 2)
+		if len(parts) == 2 && parts[0] != "" && len(parts[1]) >= 32 {
+			keys[parts[0]] = []byte(parts[1])
+		}
+	}
+	return keys
 }
 
 func validateProductionConfig(cfg Config) error {
@@ -176,6 +197,9 @@ func validateProductionConfig(cfg Config) error {
 	}
 	if cfg.MinIO.AccessKey == "edugrade" || cfg.MinIO.SecretKey == "edugrade_dev_secret" {
 		problems = append(problems, "MinIO development credentials must be replaced")
+	}
+	if len(cfg.Barcode.HMACKeys[cfg.Barcode.ActiveKeyID]) < 32 {
+		problems = append(problems, "EDUGRADE_BARCODE_HMAC_KEYS must contain the active key with at least 32 characters")
 	}
 	for _, origin := range cfg.Security.CORSAllowedOrigins {
 		if strings.Contains(origin, "localhost") || strings.Contains(origin, "127.0.0.1") {

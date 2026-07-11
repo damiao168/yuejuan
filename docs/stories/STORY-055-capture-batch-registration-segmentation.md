@@ -435,6 +435,15 @@ The barcode is evidence for page/template identity, not authority by itself. ZXi
 
 Spec review: the contract deliberately excludes student identity and scores, so copied blank sheets cannot bind a submission to a student or alter grading. It also avoids public-key complexity until offline third-party printing is a real requirement; deployment-managed HMAC with `kid` rotation is sufficient for the current server-issued template workflow.
 
+## Controlled Barcode Verification (2026-07-11)
+
+- The API loads an active signing key and rotation-compatible verification keyring from dedicated deployment secrets. Production startup rejects a missing/short active key.
+- `POST /api/v1/answer-sheet-templates/{id}/page-barcodes` accepts no client claims and issues one independently nonced barcode per page from the authoritative locked template layout.
+- Page-processing Worker uses ZXing-C++ to return bounded text, symbology, polygon, and orientation observations. The API revalidates callback bounds before entering the transaction.
+- `ApplyFileResult` verifies HMAC and tenant/exam/template/hash/page ownership, persists only hashed raw values plus normalized evidence, and creates explainable `controlled_barcode` candidates.
+- One valid unambiguous candidate assigns the page number. A controlled barcode with invalid signature/claims or conflicting valid candidates remains blocked after quality processing until manual page confirmation records an override.
+- Real signed-template verification used locked template `522e54c3-77d6-4b12-b347-89d776e19826`. Batch `895aec29-60cf-4243-93d7-6e5ff45056aa` decoded a real QR PNG as `verified` with one page-1 candidate. Tampered batch `905ef3b3-9c1f-48ae-81d3-dc72af96f6b0` persisted `signature_invalid`, produced zero candidates, and ended in `needs_review`.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。
@@ -476,9 +485,8 @@ Spec review: the contract deliberately excludes student identity and scores, so 
 
 ### 尚未完成，禁止标记 Approved
 
-- 条码受控 schema、签名/校验契约及不可伪造的页码候选证据尚未实现。
 - 低置信配准已能人工确认算法结果，但人工四角/锚点校正与重跑 Homography 的完整接口和 UI 尚未实现。
 - 专用 segment image API 尚未补齐；当前 crop 资产已真实生成，但消费方仍需通过通用文件接口读取。
 - TIFF、损坏文件、低纹理、强透视、缺页、重复页、断点恢复和跨租户场景仍需扩展为 Compose + Playwright 端到端矩阵；现有 Python 单元测试只覆盖其中的解码与合成算法路径。
 
-下一实现顺序：受控条码契约 -> 人工四角校正 -> segment image API -> 异常样本 E2E 矩阵 -> 实现审阅复核 -> Approved。
+下一实现顺序：人工四角校正 -> segment image API -> 异常样本 E2E 矩阵 -> 实现审阅复核 -> Approved。

@@ -170,7 +170,7 @@ func (s *PostgresStore) ConfirmPageMatch(ctx context.Context, tenantID, pageID, 
 	if current.Revision != input.Revision {
 		return Page{}, ErrConflict
 	}
-	out, err := scanPage(tx.QueryRowContext(ctx, `UPDATE capture_page SET assigned_page_no=$3::int,revision=revision+1,manual_override=jsonb_build_object('page_no',$3::int,'actor_id',$4::text,'reason',$5::text),status=CASE WHEN status='needs_review' THEN 'normalized' ELSE status END,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid RETURNING `+pageColumns, tenantID, pageID, input.PageNo, actorID, strings.TrimSpace(input.Reason)))
+	out, err := scanPage(tx.QueryRowContext(ctx, `UPDATE capture_page SET assigned_page_no=$3::int,revision=revision+1,manual_override=jsonb_build_object('page_no',$3::int,'actor_id',$4::text,'reason',$5::text),page_identity=page_identity||jsonb_build_object('barcode_status','manual_override'),status=CASE WHEN status='needs_review' THEN 'normalized' ELSE status END,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid RETURNING `+pageColumns, tenantID, pageID, input.PageNo, actorID, strings.TrimSpace(input.Reason)))
 	if err != nil {
 		return Page{}, err
 	}

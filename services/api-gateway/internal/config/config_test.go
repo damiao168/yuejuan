@@ -36,6 +36,18 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadParsesRotatableBarcodeKeys(t *testing.T) {
+	t.Setenv("EDUGRADE_BARCODE_ACTIVE_KEY_ID", "v2")
+	t.Setenv("EDUGRADE_BARCODE_HMAC_KEYS", "v1:11111111111111111111111111111111,v2:22222222222222222222222222222222")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Barcode.ActiveKeyID != "v2" || len(cfg.Barcode.HMACKeys) != 2 || len(cfg.Barcode.HMACKeys["v1"]) != 32 {
+		t.Fatalf("unexpected barcode key configuration: active=%q keys=%d", cfg.Barcode.ActiveKeyID, len(cfg.Barcode.HMACKeys))
+	}
+}
+
 func TestLoadDefaultsSessionCookieSecureForProduction(t *testing.T) {
 	t.Setenv("EDUGRADE_ENV", "production")
 	t.Setenv("EDUGRADE_SESSION_COOKIE_SECURE", "")
@@ -78,4 +90,6 @@ func setSecureProductionEnvironment(t *testing.T) {
 	t.Setenv("EDUGRADE_MINIO_ACCESS_KEY", "production-access")
 	t.Setenv("EDUGRADE_MINIO_SECRET_KEY", "production-secret")
 	t.Setenv("EDUGRADE_CORS_ALLOWED_ORIGINS", "https://grading.example.edu")
+	t.Setenv("EDUGRADE_BARCODE_ACTIVE_KEY_ID", "production-v1")
+	t.Setenv("EDUGRADE_BARCODE_HMAC_KEYS", "production-v1:0123456789abcdef0123456789abcdef")
 }

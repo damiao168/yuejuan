@@ -52,6 +52,17 @@ func (h *Handler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, map[string]any{"batch": out})
 }
 
+func (h *Handler) IssueTemplateBarcodes(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.IssueTemplateBarcodes(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "answer_sheet_template.barcodes_issued", "answer_sheet_template", out.TemplateID, "issue controlled page barcodes")
+	httpx.JSON(w, http.StatusOK, map[string]any{"barcodes": out})
+}
+
 func (h *Handler) ListBatches(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	items, err := h.store.ListBatches(r.Context(), user.TenantID, r.PathValue("examId"))

@@ -24,6 +24,10 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{batches: map[string]Batch{}, batchKeys: map[string]string{}, files: map[string]File{}, pages: map[string]Page{}, registrations: map[string]RegistrationRun{}, identities: map[string]MatchingSubmission{}}
 }
 
+func (s *MemoryStore) IssueTemplateBarcodes(context.Context, string, string) (IssuedTemplateBarcodes, error) {
+	return IssuedTemplateBarcodes{}, ErrInvalidTransition
+}
+
 func (s *MemoryStore) GetMatchingQueue(_ context.Context, tenantID, batchID string) (MatchingQueue, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

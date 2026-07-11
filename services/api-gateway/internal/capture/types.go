@@ -164,6 +164,18 @@ type BarcodeObservation struct {
 	Orientation int              `json:"orientation"`
 }
 
+type IssuedPageBarcode struct {
+	PageNo int    `json:"page_no"`
+	Value  string `json:"value"`
+}
+
+type IssuedTemplateBarcodes struct {
+	TemplateID          string              `json:"template_id"`
+	TemplateContentHash string              `json:"template_content_hash"`
+	KeyID               string              `json:"kid"`
+	Pages               []IssuedPageBarcode `json:"pages"`
+}
+
 type FileResultInput struct {
 	TaskID              string             `json:"task_id"`
 	LeaseToken          string             `json:"lease_token"`
@@ -275,6 +287,7 @@ type BatchDetail struct {
 }
 
 type Store interface {
+	IssueTemplateBarcodes(ctx context.Context, tenantID, templateID string) (IssuedTemplateBarcodes, error)
 	CreateBatch(ctx context.Context, tenantID, examID, actorID string, input CreateBatchInput) (Batch, error)
 	ListBatches(ctx context.Context, tenantID, examID string) ([]Batch, error)
 	GetBatch(ctx context.Context, tenantID, batchID string) (Batch, error)

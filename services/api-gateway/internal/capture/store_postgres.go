@@ -8,9 +8,16 @@ import (
 	"strings"
 )
 
-type PostgresStore struct{ db *sql.DB }
+type PostgresStore struct {
+	db             *sql.DB
+	barcodeKeyring BarcodeKeyring
+}
 
 func NewPostgresStore(db *sql.DB) *PostgresStore { return &PostgresStore{db: db} }
+
+func NewPostgresStoreWithBarcodeKeyring(db *sql.DB, keyring BarcodeKeyring) *PostgresStore {
+	return &PostgresStore{db: db, barcodeKeyring: keyring}
+}
 
 const batchColumns = `id::text, tenant_id::text, exam_id::text, name, source_type, status, revision,
 operator_id::text, COALESCE(scanner_device, ''), file_count, page_count, submission_count,
@@ -210,7 +217,7 @@ func (s *PostgresStore) ApplyFileResult(ctx context.Context, tenantID, fileID st
 		return File{}, ErrInvalidInput
 	}
 	for i, p := range pages {
-		if p.SourceIndex != i+1 || p.FileAssetID == "" || p.SHA256 == "" || p.Width <= 0 || p.Height <= 0 || !validBarcodeObservations(p.Barcodes) {
+		if p.SourceIndex != i+1 || p.FileAssetID == "" || p.SHA256 == "" || p.Width <= 0 || p.Height <= 0 || !validBarcodeObservations(p.Barcodes, p.Width, p.Height) {
 			return File{}, ErrInvalidInput
 		}
 	}
@@ -250,15 +257,27 @@ VALUES ($1,$2::uuid,$3,'pages_uploaded',$4,$4,'unchecked','[]',$5::uuid) RETURNI
 		return File{}, err
 	}
 	for i, p := range pages {
+		barcode := s.evaluateBarcodesTx(ctx, tx, tenantID, examID, p.Barcodes)
+		assignedPageNo := p.SourceIndex
+		if barcode.AssignedPageNo > 0 {
+			assignedPageNo = barcode.AssignedPageNo
+		}
 		var submissionPageID string
 		if err = tx.QueryRowContext(ctx, `INSERT INTO submission_page (tenant_id,submission_id,file_asset_id,page_no,status,quality_status,quality_override,quality_issues)
-VALUES ($1,$2::uuid,$3::uuid,$4,'uploaded','unchecked','{}','[]') RETURNING id::text`, tenantID, submissionID, p.FileAssetID, p.SourceIndex).Scan(&submissionPageID); err != nil {
+VALUES ($1,$2::uuid,$3::uuid,$4,'uploaded','unchecked','{}','[]') RETURNING id::text`, tenantID, submissionID, p.FileAssetID, assignedPageNo).Scan(&submissionPageID); err != nil {
 			return File{}, err
 		}
-		identity, _ := json.Marshal(map[string]any{"decoder": "page-processing", "width": p.Width, "height": p.Height, "sha256": p.SHA256})
+		barcodeStatus := "none"
+		if len(barcode.Candidates) == 1 && !barcode.NeedsReview {
+			barcodeStatus = "verified"
+		} else if barcode.NeedsReview {
+			barcodeStatus = "needs_review"
+		}
+		identity, _ := json.Marshal(map[string]any{"decoder": "page-processing", "width": p.Width, "height": p.Height, "sha256": p.SHA256, "barcode_status": barcodeStatus, "barcode_observations": barcode.Evidence})
+		candidates, _ := json.Marshal(barcode.Candidates)
 		var capturePageID string
-		err = tx.QueryRowContext(ctx, `INSERT INTO capture_page (tenant_id,capture_batch_id,capture_file_id,source_index,submission_id,submission_page_id,assigned_page_no,sequence_no,decoded_file_asset_id,status,page_identity)
-VALUES ($1,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$4,$7,$8::uuid,'quality_checking',$9) RETURNING id::text`, tenantID, item.CaptureBatchID, item.ID, p.SourceIndex, submissionID, submissionPageID, sequenceBase+i+1, p.FileAssetID, identity).Scan(&capturePageID)
+		err = tx.QueryRowContext(ctx, `INSERT INTO capture_page (tenant_id,capture_batch_id,capture_file_id,source_index,submission_id,submission_page_id,assigned_page_no,sequence_no,decoded_file_asset_id,status,page_identity,match_candidates)
+VALUES ($1,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7,$8,$9::uuid,'quality_checking',$10,$11) RETURNING id::text`, tenantID, item.CaptureBatchID, item.ID, p.SourceIndex, submissionID, submissionPageID, assignedPageNo, sequenceBase+i+1, p.FileAssetID, identity, candidates).Scan(&capturePageID)
 		if err != nil {
 			return File{}, err
 		}
@@ -294,7 +313,7 @@ VALUES ($1,'image_quality','image-quality','image_quality_run',$2::uuid,70,$3,'i
 	return item, tx.Commit()
 }
 
-func validBarcodeObservations(items []BarcodeObservation) bool {
+func validBarcodeObservations(items []BarcodeObservation, width, height int) bool {
 	if len(items) > 8 {
 		return false
 	}
@@ -303,7 +322,7 @@ func validBarcodeObservations(items []BarcodeObservation) bool {
 			return false
 		}
 		for _, point := range item.Polygon {
-			if point["x"] < 0 || point["y"] < 0 {
+			if point["x"] < 0 || point["y"] < 0 || point["x"] >= width || point["y"] >= height {
 				return false
 			}
 		}
@@ -326,7 +345,7 @@ func (s *PostgresStore) ApplyQualityOutcome(ctx context.Context, tenantID, submi
 	}
 	defer tx.Rollback()
 	var batchID string
-	err = tx.QueryRowContext(ctx, `UPDATE capture_page SET status=$3,revision=revision+1,updated_at=now()
+	err = tx.QueryRowContext(ctx, `UPDATE capture_page SET status=CASE WHEN $3='normalized' AND page_identity->>'barcode_status'='needs_review' THEN 'needs_review' ELSE $3 END,revision=revision+1,updated_at=now()
 WHERE tenant_id=$1 AND submission_page_id=$2::uuid AND deleted_at IS NULL RETURNING capture_batch_id::text`, tenantID, submissionPageID, pageStatus).Scan(&batchID)
 	if err != nil {
 		return mapNotFound(err)
