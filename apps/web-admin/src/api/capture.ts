@@ -83,6 +83,8 @@ export interface MatchingSubmission {
 export interface MatchingQueue {
   batch_id: string; exam_id: string; submissions: MatchingSubmission[]; candidates: StudentCandidate[];
 }
+export interface ProcessingBlocker { page_id: string; page_no: number; registration_run_id?: string; stage: string; code: string; action: string; }
+export interface ProcessingSummary { submission_id: string; total_pages: number; ready_pages: number; blocked_pages: number; pending_pages: number; can_complete: boolean; blockers: ProcessingBlocker[]; }
 
 export async function createCaptureBatch(examId: string, payload: { name: string; source_type: CaptureBatch["source_type"]; scanner_device?: string; idempotency_key: string }) {
   return apiClient.request<{ batch: CaptureBatch }>(`/api/v1/exams/${encodeURIComponent(examId)}/capture-batches`, { method: "POST", body: JSON.stringify(payload) });
@@ -132,3 +134,6 @@ export async function deleteCapturePage(pageId: string, revision: number, reason
 export async function restoreCapturePage(pageId: string, revision: number, reason: string) { return apiClient.request<{ page: CapturePage }>(`/api/v1/capture-pages/${encodeURIComponent(pageId)}/restore`, { method: "POST", body: JSON.stringify({ revision, reason }) }); }
 export async function splitCaptureSubmission(batchId: string, submissionId: string, pageIds: string[], reason: string) { return apiClient.request<MatchingQueue>(`/api/v1/capture-batches/${encodeURIComponent(batchId)}/submissions/split`, { method: "POST", body: JSON.stringify({ submission_id: submissionId, page_ids: pageIds, reason }) }); }
 export async function mergeCaptureSubmissions(batchId: string, targetSubmissionId: string, sourceSubmissionId: string, reason: string) { return apiClient.request<MatchingQueue>(`/api/v1/capture-batches/${encodeURIComponent(batchId)}/submissions/merge`, { method: "POST", body: JSON.stringify({ target_submission_id: targetSubmissionId, source_submission_id: sourceSubmissionId, reason }) }); }
+export async function getProcessingSummary(submissionId: string) { return apiClient.request<ProcessingSummary>(`/api/v1/submissions/${encodeURIComponent(submissionId)}/processing-summary`); }
+export async function confirmRegistration(runId: string, reason: string) { return apiClient.request<{ run: RegistrationRun }>(`/api/v1/page-registration-runs/${encodeURIComponent(runId)}/confirm`, { method: "POST", body: JSON.stringify({ reason }) }); }
+export async function retryRegistration(runId: string) { return apiClient.request<{ run: RegistrationRun }>(`/api/v1/page-registration-runs/${encodeURIComponent(runId)}/retry`, { method: "POST" }); }

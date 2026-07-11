@@ -146,6 +146,35 @@ func (s *MemoryStore) SplitSubmission(context.Context, string, string, string, S
 func (s *MemoryStore) MergeSubmissions(context.Context, string, string, string, MergeSubmissionsInput) (MatchingQueue, error) {
 	return MatchingQueue{}, ErrInvalidTransition
 }
+func (s *MemoryStore) ConfirmRegistration(_ context.Context, tenantID, runID, actorID, reason string) (RegistrationRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, ok := s.registrations[runID]
+	if !ok {
+		return RegistrationRun{}, ErrNotFound
+	}
+	if x.MatchStatus != "needs_review" || strings.TrimSpace(reason) == "" {
+		return RegistrationRun{}, ErrInvalidTransition
+	}
+	x.MatchStatus = "matched"
+	s.registrations[runID] = x
+	return x, nil
+}
+func (s *MemoryStore) PrepareRegistrationRetry(_ context.Context, tenantID, runID string) (RegistrationRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, ok := s.registrations[runID]
+	if !ok {
+		return RegistrationRun{}, ErrNotFound
+	}
+	x.ProcessingStatus = "processing"
+	x.ErrorCode = ""
+	s.registrations[runID] = x
+	return x, nil
+}
+func (s *MemoryStore) GetProcessingSummary(_ context.Context, tenantID, submissionID string) (ProcessingSummary, error) {
+	return ProcessingSummary{SubmissionID: submissionID, Blockers: []ProcessingBlocker{}}, nil
+}
 
 func (s *MemoryStore) QueueSubmissionPages(_ context.Context, tenantID, submissionID, actorID string) ([]RegistrationRun, error) {
 	return nil, ErrInvalidTransition

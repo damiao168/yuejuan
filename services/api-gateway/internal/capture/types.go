@@ -239,6 +239,26 @@ type RegistrationFailureInput struct {
 	ErrorDetail map[string]any `json:"error_detail"`
 	DurationMS  int            `json:"duration_ms"`
 }
+type RegistrationDecisionInput struct {
+	Reason string `json:"reason"`
+}
+type ProcessingSummary struct {
+	SubmissionID string              `json:"submission_id"`
+	TotalPages   int                 `json:"total_pages"`
+	ReadyPages   int                 `json:"ready_pages"`
+	BlockedPages int                 `json:"blocked_pages"`
+	PendingPages int                 `json:"pending_pages"`
+	CanComplete  bool                `json:"can_complete"`
+	Blockers     []ProcessingBlocker `json:"blockers"`
+}
+type ProcessingBlocker struct {
+	PageID            string `json:"page_id"`
+	PageNo            int    `json:"page_no"`
+	RegistrationRunID string `json:"registration_run_id,omitempty"`
+	Stage             string `json:"stage"`
+	Code              string `json:"code"`
+	Action            string `json:"action"`
+}
 
 type BatchDetail struct {
 	Batch Batch  `json:"batch"`
@@ -273,6 +293,9 @@ type Store interface {
 	ListRegistrationRuns(ctx context.Context, tenantID, submissionPageID string) ([]RegistrationRun, error)
 	ApplyRegistrationResult(ctx context.Context, tenantID, runID string, input RegistrationResultInput) (RegistrationRun, error)
 	ApplyRegistrationFailure(ctx context.Context, tenantID, runID, errorCode string, errorDetail map[string]any, retryable bool) (RegistrationRun, error)
+	ConfirmRegistration(ctx context.Context, tenantID, runID, actorID, reason string) (RegistrationRun, error)
+	PrepareRegistrationRetry(ctx context.Context, tenantID, runID string) (RegistrationRun, error)
+	GetProcessingSummary(ctx context.Context, tenantID, submissionID string) (ProcessingSummary, error)
 }
 
 type FileAssetSnapshot struct {

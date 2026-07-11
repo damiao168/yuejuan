@@ -391,6 +391,16 @@ Real verification on batch `7c803f65-b2f5-4f53-b84e-7778ea5367bf` produced one a
 
 The remaining implementation order is now: registration manual confirm/retry -> completion-gate Playwright -> implementation review -> Approved.
 
+## Registration Review and Retry Verification (2026-07-11)
+
+- Processing summary reports ready, blocked, and pending pages with one explicit next action per blocker.
+- Human confirmation is allowed only for completed low-confidence runs with a registered asset; it preserves algorithm confidence and records actor, time, and reason.
+- Failed/dead-letter registration can be requeued through Worker Runtime; the same immutable run receives a new runtime attempt instead of overwriting history.
+- The Web processing tab displays server-derived counts and offers confirm/retry only when a blocker has a valid registration run.
+- Real retry verification used run `ad9d2910-8e60-431d-9996-0d924b00ebb3`: the summary returned `retry_registration`, and runtime attempt count advanced from 3 to 4 before the intrinsically invalid fixture returned to dead letter.
+
+The remaining implementation order is now: completion-gate Playwright -> implementation review -> Approved.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。

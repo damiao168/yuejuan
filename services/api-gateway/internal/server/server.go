@@ -361,6 +361,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/capture-batches/{id}/complete", requireCaptureManage(captureHandler.CompleteBatch))
 	mux.Handle("POST /api/v1/submissions/{id}/process-pages", requireCaptureManage(captureHandler.ProcessSubmissionPages))
 	mux.Handle("GET /api/v1/submission-pages/{id}/registration-runs", requireCaptureManage(captureHandler.ListRegistrationRuns))
+	mux.Handle("GET /api/v1/submissions/{id}/processing-summary", requireCaptureManage(captureHandler.GetProcessingSummary))
+	mux.Handle("POST /api/v1/page-registration-runs/{id}/confirm", requireCaptureManage(captureHandler.ConfirmRegistration))
+	mux.Handle("POST /api/v1/page-registration-runs/{id}/retry", requireCaptureManage(captureHandler.RetryRegistration))
 
 	mux.Handle("POST /api/v1/internal/image-quality/jobs/claim", requireOCRManage(imageQualityHandler.ClaimJobs))
 	mux.Handle("POST /api/v1/internal/image-quality/runs/{runId}/normalized-assets", requireOCRManage(imageQualityHandler.CreateNormalizedAssetSlot))

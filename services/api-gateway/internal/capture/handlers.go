@@ -346,6 +346,53 @@ func (h *Handler) ListRegistrationRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"runs": runs})
 }
+func (h *Handler) GetProcessingSummary(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.GetProcessingSummary(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+func (h *Handler) ConfirmRegistration(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input RegistrationDecisionInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.ConfirmRegistration(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input.Reason)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "page.registration_confirmed", "page_registration_run", out.ID, input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"run": out})
+}
+func (h *Handler) RetryRegistration(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	run, err := h.store.GetRegistrationRun(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	task, err := h.runtime.Get(r.Context(), user.TenantID, run.RuntimeTaskID)
+	if err != nil {
+		writeRuntimeError(w, r, err)
+		return
+	}
+	if _, err = h.runtime.Requeue(r.Context(), user.TenantID, task.ID); err != nil {
+		writeRuntimeError(w, r, err)
+		return
+	}
+	out, err := h.store.PrepareRegistrationRetry(r.Context(), user.TenantID, run.ID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "page.registration_retried", "page_registration_run", out.ID, "manual retry")
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"run": out})
+}
 
 func (h *Handler) CompleteRegistration(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)

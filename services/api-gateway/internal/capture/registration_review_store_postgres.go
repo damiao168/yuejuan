@@ -1,0 +1,101 @@
+package capture
+
+import (
+	"context"
+	"strings"
+)
+
+func (s *PostgresStore) ConfirmRegistration(ctx context.Context, tenantID, runID, actorID, reason string) (RegistrationRun, error) {
+	if strings.TrimSpace(reason) == "" {
+		return RegistrationRun{}, ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RegistrationRun{}, err
+	}
+	defer tx.Rollback()
+	current, err := scanRegistrationRun(tx.QueryRowContext(ctx, `SELECT `+registrationColumns+` FROM page_registration_run WHERE tenant_id=$1 AND id=$2::uuid FOR UPDATE`, tenantID, runID))
+	if err != nil {
+		return RegistrationRun{}, err
+	}
+	if current.ProcessingStatus != "completed" || current.MatchStatus != "needs_review" || current.RegisteredFileAssetID == "" {
+		return RegistrationRun{}, ErrInvalidTransition
+	}
+	out, err := scanRegistrationRun(tx.QueryRowContext(ctx, `UPDATE page_registration_run SET match_status='matched',confirmed_by=$3::uuid,confirmed_at=now(),confirmation_reason=$4,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid RETURNING `+registrationColumns, tenantID, runID, actorID, strings.TrimSpace(reason)))
+	if err != nil {
+		return RegistrationRun{}, err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE capture_page SET status='ready',revision=revision+1,manual_override=manual_override||jsonb_build_object('registration_confirmed_by',$3::text,'registration_reason',$4::text),updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, current.CapturePageID, actorID, reason)
+	if err != nil {
+		return RegistrationRun{}, err
+	}
+	var batchID string
+	if err = tx.QueryRowContext(ctx, `SELECT capture_batch_id::text FROM capture_page WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, current.CapturePageID).Scan(&batchID); err != nil {
+		return RegistrationRun{}, err
+	}
+	if err = s.aggregateBatchTx(ctx, tx, tenantID, batchID); err != nil {
+		return RegistrationRun{}, err
+	}
+	return out, tx.Commit()
+}
+func (s *PostgresStore) PrepareRegistrationRetry(ctx context.Context, tenantID, runID string) (RegistrationRun, error) {
+	row := s.db.QueryRowContext(ctx, `UPDATE page_registration_run SET processing_status='processing',match_status=NULL,error_code=NULL,error_detail='{}',started_at=now(),completed_at=NULL,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND processing_status IN('terminal_error','retryable_error') RETURNING `+registrationColumns, tenantID, runID)
+	return scanRegistrationRun(row)
+}
+func (s *PostgresStore) GetProcessingSummary(ctx context.Context, tenantID, submissionID string) (ProcessingSummary, error) {
+	out := ProcessingSummary{SubmissionID: submissionID, Blockers: []ProcessingBlocker{}}
+	rows, err := s.db.QueryContext(ctx, `SELECT cp.id::text,cp.assigned_page_no,cp.status,sp.quality_status,COALESCE(pr.id::text,''),COALESCE(pr.processing_status,''),COALESCE(pr.match_status,''),(SELECT count(*) FROM answer_segment a WHERE a.registration_run_id=pr.id AND a.processing_status='completed') FROM capture_page cp JOIN submission_page sp ON sp.tenant_id=cp.tenant_id AND sp.id=cp.submission_page_id LEFT JOIN LATERAL(SELECT * FROM page_registration_run r WHERE r.tenant_id=cp.tenant_id AND r.capture_page_id=cp.id ORDER BY r.created_at DESC LIMIT 1)pr ON true WHERE cp.tenant_id=$1 AND cp.submission_id=$2::uuid AND cp.status<>'deleted' AND cp.deleted_at IS NULL ORDER BY cp.sequence_no`, tenantID, submissionID)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, status, quality, runID, processing, match string
+		var pageNo, segments int
+		if err = rows.Scan(&id, &pageNo, &status, &quality, &runID, &processing, &match, &segments); err != nil {
+			return out, err
+		}
+		out.TotalPages++
+		if status == "ready" {
+			out.ReadyPages++
+			continue
+		}
+		b := ProcessingBlocker{PageID: id, PageNo: pageNo, RegistrationRunID: runID}
+		switch {
+		case quality == "review" || quality == "failed":
+			b.Stage = "quality"
+			b.Code = "quality_" + quality
+			b.Action = "review_quality"
+			out.BlockedPages++
+		case processing == "terminal_error":
+			b.Stage = "registration"
+			b.Code = "registration_failed"
+			b.Action = "retry_registration"
+			out.BlockedPages++
+		case match == "needs_review":
+			b.Stage = "registration"
+			b.Code = "low_confidence"
+			b.Action = "confirm_registration"
+			out.BlockedPages++
+		case segments == 0 && processing == "completed":
+			b.Stage = "segmentation"
+			b.Code = "segments_missing"
+			b.Action = "retry_registration"
+			out.BlockedPages++
+		default:
+			b.Stage = "processing"
+			b.Code = "pending"
+			b.Action = "wait"
+			out.PendingPages++
+		}
+		out.Blockers = append(out.Blockers, b)
+	}
+	if err = rows.Err(); err != nil {
+		return out, err
+	}
+	if out.TotalPages == 0 {
+		return out, ErrNotFound
+	}
+	out.CanComplete = out.ReadyPages == out.TotalPages
+	return out, nil
+}

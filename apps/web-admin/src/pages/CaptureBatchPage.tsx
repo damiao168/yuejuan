@@ -35,11 +35,13 @@ import {
 import { ApiClientError } from "../api/client";
 import {
   confirmPageMatch,
+  confirmRegistration,
   confirmStudentMatch,
   createCaptureBatch,
   deleteCapturePage,
   getCaptureBatch,
   getMatchingQueue,
+  getProcessingSummary,
   listCaptureBatches,
   markStudentUnknown,
   mergeCaptureSubmissions,
@@ -47,6 +49,7 @@ import {
   processSubmissionPages,
   registerCaptureFile,
   restoreCapturePage,
+  retryRegistration,
   splitCaptureSubmission,
   updateCapturePage,
   type CaptureBatch,
@@ -54,6 +57,7 @@ import {
   type CaptureFile,
   type CapturePage,
   type MatchingQueue,
+  type ProcessingSummary,
 } from "../api/capture";
 import { downloadFileBlob, uploadFile } from "../api/files";
 import { ErrorState, LoadingState } from "../components/PageState";
@@ -329,6 +333,7 @@ export function CaptureBatchPage({
   const [preview, setPreview] = useState<{ url: string; page: CapturePage }>();
   const [matching, setMatching] = useState<MatchingQueue>();
   const [matchingLoading, setMatchingLoading] = useState(false);
+  const [processingSummaries, setProcessingSummaries] = useState<Record<string, ProcessingSummary>>({});
 
   const loadBatches = useCallback(async () => {
     setLoading(true);
@@ -735,6 +740,9 @@ export function CaptureBatchPage({
         : [],
     [detail],
   );
+  useEffect(() => { void Promise.all(submissions.map(async (id) => [id, await getProcessingSummary(id)] as const)).then((items) => setProcessingSummaries(Object.fromEntries(items))).catch(() => setProcessingSummaries({})); }, [submissions]);
+
+  async function resolveRegistration(runId: string, action: "confirm" | "retry") { setActioning(true); try { if (action === "confirm") await confirmRegistration(runId, "人工核对配准边界与题区正确"); else await retryRegistration(runId); const items = await Promise.all(submissions.map(async (id) => [id, await getProcessingSummary(id)] as const)); setProcessingSummaries(Object.fromEntries(items)); await loadDetail(selectedId, true); message.success(action === "confirm" ? "配准已确认" : "配准已重新排队"); } catch (currentError) { message.error(formatError(currentError)); } finally { setActioning(false); } }
 
   if (loading) return <LoadingState label="正在加载采集批次" />;
   if (error)
@@ -890,6 +898,7 @@ export function CaptureBatchPage({
                             const complete = pages.every(
                               (item) => item.status === "ready",
                             );
+                            const summary = processingSummaries[submissionId];
                             return (
                               <div
                                 key={submissionId}
@@ -901,19 +910,13 @@ export function CaptureBatchPage({
                                     {pages.length} 页 ·{" "}
                                     {complete
                                       ? "已完成配准与切题"
-                                      : "等待配准或人工确认"}
+                                      : summary ? `就绪 ${summary.ready_pages} · 阻断 ${summary.blocked_pages} · 处理中 ${summary.pending_pages}` : "等待配准或人工确认"}
                                   </span>
                                 </div>
-                                <Button
-                                  icon={<Workflow size={16} />}
-                                  loading={actioning}
-                                  disabled={!canManage || complete}
-                                  onClick={() =>
-                                    void startPageProcessing(submissionId)
-                                  }
-                                >
-                                  {complete ? "处理完成" : "配准并切题"}
-                                </Button>
+                                <Space wrap>
+                                  {summary?.blockers.filter((item) => item.registration_run_id && ["confirm_registration", "retry_registration"].includes(item.action)).map((item) => <Button key={item.page_id} type={item.action === "confirm_registration" ? "primary" : "default"} loading={actioning} onClick={() => void resolveRegistration(item.registration_run_id!, item.action === "confirm_registration" ? "confirm" : "retry")}>{item.action === "confirm_registration" ? `确认第 ${item.page_no} 页` : `重试第 ${item.page_no} 页`}</Button>)}
+                                  <Button icon={<Workflow size={16} />} loading={actioning} disabled={!canManage || complete} onClick={() => void startPageProcessing(submissionId)}>{complete ? "处理完成" : "配准并切题"}</Button>
+                                </Space>
                               </div>
                             );
                           })}
