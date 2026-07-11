@@ -401,6 +401,16 @@ The remaining implementation order is now: registration manual confirm/retry -> 
 
 The remaining implementation order is now: completion-gate Playwright -> implementation review -> Approved.
 
+## Completion Gate Verification (2026-07-11)
+
+- Batch aggregation now counts only active pages. A logically deleted historical page remains visible and restorable but no longer inflates page/submission counts or blocks readiness.
+- A batch becomes `ready` only when it has at least one active page, every active page is `ready`, and every active submission has a matched student identity.
+- The Web workspace exposes an explicit, confirmed "完成批次" command only in `ready`; the API still enforces the authoritative `ready -> completed` transition.
+- Migration `000033_story055_capture_complete_operation.sql` adds the missing `complete` operation to the transactional capture audit constraint.
+- Real Playwright verification used batch `ef89f64a-f6fe-495f-bf3e-554f94a5c9a3`: deleting its blocked second page changed active pages from 2 to 1 and review count from 1 to 0, exposed the completion command, and completion persisted with exactly one `complete` operation record.
+
+Implementation review remains open. Completion must not be marked Approved until the remaining gaps listed below are closed and re-reviewed.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。
@@ -442,11 +452,10 @@ The remaining implementation order is now: completion-gate Playwright -> impleme
 
 ### 尚未完成，禁止标记 Approved
 
-- STORY-050 图像质量 worker 尚未自动串联到每个 capture page，registration 仍直接使用 decoded page；必须改为质量通过后的 normalized asset。
-- 学生候选、人工确认、unknown/conflict 状态与三栏匹配工作区尚未实现。
-- 页面追加、删除/恢复、split/merge submission 的完整 API 与 UI 尚未实现；当前仅有旋转和顺序 revision 基础。
-- 条码受控 schema/校验接口、页码候选与低置信人工四角确认尚未实现。
-- registration confirm/retry、processing summary、专用 segment image API 和批次完成 UI 尚未补齐。
-- TIFF、损坏文件、低纹理、透视、缺页、重复页与跨租户场景还需扩展端到端自动化矩阵；当前 Python 单元测试已覆盖 PDF/TIFF 解码、重复资产与合成透视 Homography。
+- 批次完成后只读目前只有状态和界面语义，导入、旋转、删除/恢复、拆分/合并、学生/页码匹配和配准重试等写入口仍需统一的服务端完成态门禁，并同步禁用前端操作。
+- 条码受控 schema、签名/校验契约及不可伪造的页码候选证据尚未实现。
+- 低置信配准已能人工确认算法结果，但人工四角/锚点校正与重跑 Homography 的完整接口和 UI 尚未实现。
+- 专用 segment image API 尚未补齐；当前 crop 资产已真实生成，但消费方仍需通过通用文件接口读取。
+- TIFF、损坏文件、低纹理、强透视、缺页、重复页、断点恢复和跨租户场景仍需扩展为 Compose + Playwright 端到端矩阵；现有 Python 单元测试只覆盖其中的解码与合成算法路径。
 
-下一实现顺序：质量自动串联 -> 学生/页码匹配 -> 页面 split/merge/delete/restore -> registration 人工确认与重试 -> 完成门禁全流程 Playwright -> 实现审阅复核 -> Approved。
+下一实现顺序：完成态服务端只读门禁 -> 受控条码契约 -> 人工四角校正 -> segment image API -> 异常样本 E2E 矩阵 -> 实现审阅复核 -> Approved。
