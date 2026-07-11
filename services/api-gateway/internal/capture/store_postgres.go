@@ -409,7 +409,21 @@ func (s *PostgresStore) SetBatchStatus(ctx context.Context, tenantID, batchID, a
 }
 
 func (s *PostgresStore) aggregateBatchTx(ctx context.Context, tx *sql.Tx, tenantID, batchID string) error {
-	_, err := tx.ExecContext(ctx, `UPDATE capture_batch b SET file_count=(SELECT count(*) FROM capture_file f WHERE f.tenant_id=b.tenant_id AND f.capture_batch_id=b.id AND f.deleted_at IS NULL),page_count=(SELECT count(*) FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.deleted_at IS NULL),submission_count=(SELECT count(DISTINCT p.submission_id) FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.deleted_at IS NULL),normal_count=(SELECT count(*) FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status='ready' AND p.deleted_at IS NULL),failed_count=(SELECT count(*) FROM capture_file f WHERE f.tenant_id=b.tenant_id AND f.capture_batch_id=b.id AND f.status='failed' AND f.deleted_at IS NULL),review_count=(SELECT count(*) FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status IN ('needs_review','quality_rejected','failed') AND p.deleted_at IS NULL),status=CASE WHEN EXISTS(SELECT 1 FROM capture_file f WHERE f.tenant_id=b.tenant_id AND f.capture_batch_id=b.id AND f.status IN ('uploaded','queued','processing') AND f.deleted_at IS NULL) THEN 'processing' WHEN EXISTS(SELECT 1 FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status IN ('needs_review','quality_rejected','failed') AND p.deleted_at IS NULL) THEN 'needs_review' WHEN EXISTS(SELECT 1 FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.deleted_at IS NULL) AND NOT EXISTS(SELECT 1 FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status<>'ready' AND p.deleted_at IS NULL) THEN 'ready' ELSE 'matching' END,revision=revision+1,updated_at=now() WHERE b.tenant_id=$1 AND b.id=$2::uuid`, tenantID, batchID)
+	_, err := tx.ExecContext(ctx, `UPDATE capture_batch b SET
+file_count=(SELECT count(*) FROM capture_file f WHERE f.tenant_id=b.tenant_id AND f.capture_batch_id=b.id AND f.deleted_at IS NULL),
+page_count=(SELECT count(*) FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.deleted_at IS NULL),
+submission_count=(SELECT count(DISTINCT p.submission_id) FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.deleted_at IS NULL),
+normal_count=(SELECT count(*) FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status='ready' AND p.deleted_at IS NULL),
+failed_count=(SELECT count(*) FROM capture_file f WHERE f.tenant_id=b.tenant_id AND f.capture_batch_id=b.id AND f.status='failed' AND f.deleted_at IS NULL),
+review_count=(SELECT count(*) FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status IN ('needs_review','quality_rejected','failed') AND p.deleted_at IS NULL),
+status=CASE
+ WHEN EXISTS(SELECT 1 FROM capture_file f WHERE f.tenant_id=b.tenant_id AND f.capture_batch_id=b.id AND f.status IN ('uploaded','queued','processing') AND f.deleted_at IS NULL) THEN 'processing'
+ WHEN EXISTS(SELECT 1 FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status IN ('needs_review','quality_rejected','failed') AND p.deleted_at IS NULL) THEN 'needs_review'
+ WHEN EXISTS(SELECT 1 FROM capture_page p JOIN submission s ON s.tenant_id=p.tenant_id AND s.id=p.submission_id WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND s.identity_status IN ('unknown','conflict') AND p.deleted_at IS NULL) THEN 'needs_review'
+ WHEN EXISTS(SELECT 1 FROM capture_page p JOIN submission s ON s.tenant_id=p.tenant_id AND s.id=p.submission_id WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND s.identity_status<>'matched' AND p.deleted_at IS NULL) THEN 'matching'
+ WHEN EXISTS(SELECT 1 FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.deleted_at IS NULL) AND NOT EXISTS(SELECT 1 FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status<>'ready' AND p.deleted_at IS NULL) THEN 'ready'
+ ELSE 'matching' END,
+revision=revision+1,updated_at=now() WHERE b.tenant_id=$1 AND b.id=$2::uuid`, tenantID, batchID)
 	return err
 }
 

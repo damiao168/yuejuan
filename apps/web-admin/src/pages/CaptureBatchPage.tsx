@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { App, Button, Empty, Form, Input, Modal, Progress, Select, Space, Table, Tabs, Upload, type TableColumnsType, type UploadProps } from "antd";
-import { FileUp, FolderOpen, Plus, RefreshCw, RotateCw, ScanLine, Workflow } from "lucide-react";
+import { App, Button, Empty, Form, Input, InputNumber, Modal, Progress, Select, Space, Table, Tabs, Upload, type TableColumnsType, type UploadProps } from "antd";
+import { Check, FileQuestion, FileUp, FolderOpen, Plus, RefreshCw, RotateCw, ScanLine, UserCheck, Workflow } from "lucide-react";
 import { ApiClientError } from "../api/client";
-import { createCaptureBatch, getCaptureBatch, listCaptureBatches, processCaptureBatch, processSubmissionPages, registerCaptureFile, updateCapturePage, type CaptureBatch, type CaptureBatchDetail, type CaptureFile, type CapturePage } from "../api/capture";
+import { confirmPageMatch, confirmStudentMatch, createCaptureBatch, getCaptureBatch, getMatchingQueue, listCaptureBatches, markStudentUnknown, processCaptureBatch, processSubmissionPages, registerCaptureFile, updateCapturePage, type CaptureBatch, type CaptureBatchDetail, type CaptureFile, type CapturePage, type MatchingQueue } from "../api/capture";
 import { downloadFileBlob, uploadFile } from "../api/files";
 import { ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
@@ -29,6 +29,27 @@ function batchProgress(batch: CaptureBatch) {
   return batch.status === "processing" ? Math.min(85, Math.round((processed / batch.file_count) * 70)) : batch.page_count > 0 ? 70 : 25;
 }
 
+function MatchingWorkspace({ queue, canManage, actioning, onPreview, onConfirmStudent, onUnknown, onConfirmPage }: {
+  queue: MatchingQueue; canManage: boolean; actioning: boolean;
+  onPreview: (page: CapturePage) => Promise<void>;
+  onConfirmStudent: (submissionId: string, studentId: string, revision: number) => Promise<void>;
+  onUnknown: (submissionId: string, revision: number) => Promise<void>;
+  onConfirmPage: (page: CapturePage, pageNo: number) => Promise<void>;
+}) {
+  const [selectedId, setSelectedId] = useState(queue.submissions[0]?.id ?? "");
+  const [candidateId, setCandidateId] = useState("");
+  const selected = queue.submissions.find((item) => item.id === selectedId) ?? queue.submissions[0];
+  useEffect(() => { setCandidateId(selected?.student_id ?? ""); }, [selected?.id, selected?.student_id]);
+  const used = new Set(queue.submissions.filter((item) => item.id !== selected?.id && item.identity_status === "matched").map((item) => item.student_id));
+  const candidates = queue.candidates.filter((item) => !used.has(item.id) || item.id === selected?.student_id);
+  if (!selected) return <Empty description="暂无待匹配答卷" />;
+  return <div className="matching-workspace">
+    <aside className="matching-submissions"><div className="capture-pane-title"><strong>答卷</strong><span>{queue.submissions.length}</span></div>{queue.submissions.map((item, index) => <button key={item.id} className={item.id === selected.id ? "capture-batch-row active" : "capture-batch-row"} onClick={() => { setSelectedId(item.id); setCandidateId(item.student_id ?? ""); }}><span><strong>答卷 {index + 1}</strong><small>{item.pages.length} 页</small></span><StatusTag tone={item.identity_status === "matched" ? "success" : item.identity_status === "unknown" ? "danger" : "warning"}>{item.identity_status === "matched" ? "已匹配" : item.identity_status === "unknown" ? "未知" : "待确认"}</StatusTag></button>)}</aside>
+    <section className="matching-evidence"><h3>答卷页面</h3>{selected.pages.map((page) => <div className="matching-page-row" key={page.id}><Button icon={<FolderOpen size={15} />} onClick={() => void onPreview(page)}>第 {page.sequence_no} 页</Button><InputNumber min={1} value={page.assigned_page_no} onChange={(value) => value && void onConfirmPage(page, value)} disabled={!canManage || actioning} aria-label="确认答卷页码" /><StatusTag tone={page.status === "ready" ? "success" : "warning"}>{page.status}</StatusTag></div>)}<div className="matching-evidence-note"><ScanLine size={17} /><span>姓名、学号或条码仅作为候选证据；人工确认后才写入正式身份。</span></div></section>
+    <section className="matching-candidates"><h3>本次考试名册</h3><Select showSearch value={candidateId || undefined} onChange={setCandidateId} placeholder="按姓名或学号查找" optionFilterProp="label" options={candidates.map((item) => ({ value: item.id, label: `${item.name} · ${item.student_no} · ${item.class_name}` }))} /><Space wrap><Button type="primary" icon={<UserCheck size={16} />} loading={actioning} disabled={!canManage || !candidateId} onClick={() => void onConfirmStudent(selected.id, candidateId, selected.identity_revision)}>确认学生</Button><Button danger icon={<FileQuestion size={16} />} loading={actioning} disabled={!canManage} onClick={() => void onUnknown(selected.id, selected.identity_revision)}>标记未知</Button></Space>{selected.identity_status === "matched" ? <div className="matching-confirmed"><Check size={17} />已确认，仍可重新选择并更正</div> : null}</section>
+  </div>;
+}
+
 export function CaptureBatchPage({ examId, canManage }: { examId: string; canManage: boolean }) {
   const { message } = App.useApp();
   const [form] = Form.useForm<{ name: string; source_type: CaptureBatch["source_type"] }>();
@@ -43,6 +64,8 @@ export function CaptureBatchPage({ examId, canManage }: { examId: string; canMan
   const [uploading, setUploading] = useState(false);
   const [actioning, setActioning] = useState(false);
   const [preview, setPreview] = useState<{ url: string; page: CapturePage }>();
+  const [matching, setMatching] = useState<MatchingQueue>();
+  const [matchingLoading, setMatchingLoading] = useState(false);
 
   const loadBatches = useCallback(async () => {
     setLoading(true); setError(undefined);
@@ -65,8 +88,17 @@ export function CaptureBatchPage({ examId, canManage }: { examId: string; canMan
     finally { if (!quiet) setDetailLoading(false); }
   }, [message]);
 
+  const loadMatching = useCallback(async (batchId: string) => {
+    if (!batchId) return;
+    setMatchingLoading(true);
+    try { setMatching(await getMatchingQueue(batchId)); }
+    catch (currentError) { message.error(formatError(currentError)); }
+    finally { setMatchingLoading(false); }
+  }, [message]);
+
   useEffect(() => { void loadBatches(); }, [loadBatches]);
   useEffect(() => { void loadDetail(selectedId); }, [loadDetail, selectedId]);
+  useEffect(() => { void loadMatching(selectedId); }, [loadMatching, selectedId]);
   useEffect(() => {
     if (!detail || !["uploading", "processing"].includes(detail.batch.status)) return;
     const timer = window.setInterval(() => void loadDetail(detail.batch.id, true), 3000);
@@ -133,6 +165,27 @@ export function CaptureBatchPage({ examId, canManage }: { examId: string; canMan
     } catch (currentError) { message.error(formatError(currentError)); }
   }
 
+  async function matchStudent(submissionId: string, studentId: string, revision: number) {
+    setActioning(true);
+    try { await confirmStudentMatch(submissionId, studentId, revision); await Promise.all([loadMatching(selectedId), loadDetail(selectedId, true)]); message.success("学生匹配已确认"); }
+    catch (currentError) { message.error(formatError(currentError)); }
+    finally { setActioning(false); }
+  }
+
+  async function markUnknown(submissionId: string, revision: number) {
+    setActioning(true);
+    try { await markStudentUnknown(submissionId, revision, "答卷上无法可靠识别学生身份"); await Promise.all([loadMatching(selectedId), loadDetail(selectedId, true)]); message.warning("已标记为未知答卷"); }
+    catch (currentError) { message.error(formatError(currentError)); }
+    finally { setActioning(false); }
+  }
+
+  async function matchPage(page: CapturePage, pageNo: number) {
+    setActioning(true);
+    try { await confirmPageMatch(page.id, pageNo, page.revision); await Promise.all([loadMatching(selectedId), loadDetail(selectedId, true)]); message.success("页码已确认"); }
+    catch (currentError) { message.error(formatError(currentError)); }
+    finally { setActioning(false); }
+  }
+
   const fileColumns: TableColumnsType<CaptureFile> = [
     { title: "文件", dataIndex: "original_name", ellipsis: true },
     { title: "类型", dataIndex: "content_type", width: 150 },
@@ -162,7 +215,7 @@ export function CaptureBatchPage({ examId, canManage }: { examId: string; canMan
       <main className="capture-batch-workspace">{detailLoading || !detail ? <LoadingState label="正在读取批次" /> : <>
         <header className="capture-batch-header"><div><Space><ScanLine size={20} /><h2>{detail.batch.name}</h2><StatusTag tone={statusTone(detail.batch.status)}>{statusLabels[detail.batch.status]}</StatusTag></Space><Progress percent={batchProgress(detail.batch)} size="small" /></div><Space wrap><Upload {...uploadProps}><Button icon={<FileUp size={16} />} loading={uploading} disabled={!canManage}>导入文件</Button></Upload><Button type="primary" icon={<Workflow size={16} />} onClick={() => void startProcessing()} loading={actioning} disabled={!canManage || !detail.files.some((item) => item.status === "uploaded")}>开始处理</Button></Space></header>
         <div className="capture-summary-strip">{summary.map((item) => <div key={item.label}><span>{item.label}</span><strong>{item.value}</strong></div>)}</div>
-        <Tabs items={[{ key: "files", label: `文件与页面 (${detail.files.length})`, children: <div className="capture-detail-stack"><Table rowKey="id" columns={fileColumns} dataSource={detail.files} pagination={false} size="small" scroll={{ x: 720 }} /><Table rowKey="id" columns={pageColumns} dataSource={detail.pages} pagination={{ pageSize: 20 }} size="small" scroll={{ x: 700 }} /></div> }, { key: "processing", label: `页面处理 (${submissions.length})`, children: submissions.length ? <div className="capture-processing-list">{submissions.map((submissionId, index) => { const pages = detail.pages.filter((item) => item.submission_id === submissionId); const complete = pages.every((item) => item.status === "ready"); return <div key={submissionId} className="capture-processing-row"><div><strong>答卷 {index + 1}</strong><span>{pages.length} 页 · {complete ? "已完成配准与切题" : "等待配准或人工确认"}</span></div><Button icon={<Workflow size={16} />} loading={actioning} disabled={!canManage || complete} onClick={() => void startPageProcessing(submissionId)}>{complete ? "处理完成" : "配准并切题"}</Button></div>; })}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="拆页完成后可执行页面配准与切题" /> }, { key: "matching", label: "学生匹配", children: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={detail.pages.length ? "学生匹配证据与候选确认将在本批次内完成" : "页面处理完成后可进行匹配"} /> }, { key: "issues", label: `处理问题 (${issuePages.length + detail.batch.failed_count})`, children: issuePages.length ? <Table rowKey="id" columns={pageColumns} dataSource={issuePages} pagination={false} size="small" scroll={{ x: 700 }} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有需要人工处理的页面" /> }]} />
+        <Tabs items={[{ key: "files", label: `文件与页面 (${detail.files.length})`, children: <div className="capture-detail-stack"><Table rowKey="id" columns={fileColumns} dataSource={detail.files} pagination={false} size="small" scroll={{ x: 720 }} /><Table rowKey="id" columns={pageColumns} dataSource={detail.pages} pagination={{ pageSize: 20 }} size="small" scroll={{ x: 700 }} /></div> }, { key: "processing", label: `页面处理 (${submissions.length})`, children: submissions.length ? <div className="capture-processing-list">{submissions.map((submissionId, index) => { const pages = detail.pages.filter((item) => item.submission_id === submissionId); const complete = pages.every((item) => item.status === "ready"); return <div key={submissionId} className="capture-processing-row"><div><strong>答卷 {index + 1}</strong><span>{pages.length} 页 · {complete ? "已完成配准与切题" : "等待配准或人工确认"}</span></div><Button icon={<Workflow size={16} />} loading={actioning} disabled={!canManage || complete} onClick={() => void startPageProcessing(submissionId)}>{complete ? "处理完成" : "配准并切题"}</Button></div>; })}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="拆页完成后可执行页面配准与切题" /> }, { key: "matching", label: `学生匹配 (${matching?.submissions.filter((item) => item.identity_status !== "matched").length ?? 0})`, children: matchingLoading ? <LoadingState label="正在加载考试名册" /> : matching ? <MatchingWorkspace queue={matching} canManage={canManage} actioning={actioning} onPreview={showPage} onConfirmStudent={matchStudent} onUnknown={markUnknown} onConfirmPage={matchPage} /> : <Empty description="暂无匹配数据" /> }, { key: "issues", label: `处理问题 (${issuePages.length + detail.batch.failed_count})`, children: issuePages.length ? <Table rowKey="id" columns={pageColumns} dataSource={issuePages} pagination={false} size="small" scroll={{ x: 700 }} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有需要人工处理的页面" /> }]} />
       </>}</main>
     </div>}
     <Modal title="新建采集批次" open={modalOpen} onCancel={() => setModalOpen(false)} onOk={() => void submitBatch()} confirmLoading={creating} okText="创建批次"><Form form={form} layout="vertical" initialValues={{ source_type: "web_upload" }}><Form.Item name="name" label="批次名称" rules={[{ required: true, message: "请输入批次名称" }, { max: 120 }]}><Input placeholder="例如：期末考试第一扫描批次" /></Form.Item><Form.Item name="source_type" label="采集方式" rules={[{ required: true }]}><Select options={[{ value: "web_upload", label: "网页文件导入" }, { value: "scanner_upload", label: "扫描工作站" }, { value: "folder_import", label: "文件夹导入" }, { value: "desktop_sync", label: "离线工作站同步" }]} /></Form.Item></Form></Modal>

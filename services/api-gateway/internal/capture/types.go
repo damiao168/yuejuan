@@ -73,6 +73,48 @@ type Page struct {
 	CreatedAt          time.Time      `json:"created_at"`
 }
 
+type StudentCandidate struct {
+	ID        string `json:"id"`
+	StudentNo string `json:"student_no"`
+	Name      string `json:"name"`
+	ClassID   string `json:"class_id"`
+	ClassName string `json:"class_name"`
+}
+
+type MatchingSubmission struct {
+	ID               string         `json:"id"`
+	StudentID        string         `json:"student_id,omitempty"`
+	CandidateNo      string         `json:"candidate_no,omitempty"`
+	IdentityStatus   string         `json:"identity_status"`
+	IdentityRevision int            `json:"identity_revision"`
+	IdentityEvidence map[string]any `json:"identity_evidence"`
+	Pages            []Page         `json:"pages"`
+}
+
+type MatchingQueue struct {
+	BatchID     string               `json:"batch_id"`
+	ExamID      string               `json:"exam_id"`
+	Submissions []MatchingSubmission `json:"submissions"`
+	Candidates  []StudentCandidate   `json:"candidates"`
+}
+
+type ConfirmStudentMatchInput struct {
+	StudentID string `json:"student_id"`
+	Revision  int    `json:"revision"`
+	Reason    string `json:"reason"`
+}
+
+type MarkStudentUnknownInput struct {
+	Revision int    `json:"revision"`
+	Reason   string `json:"reason"`
+}
+
+type ConfirmPageMatchInput struct {
+	Revision int    `json:"revision"`
+	PageNo   int    `json:"page_no"`
+	Reason   string `json:"reason"`
+}
+
 type CreateBatchInput struct {
 	Name           string `json:"name"`
 	SourceType     string `json:"source_type"`
@@ -197,6 +239,10 @@ type Store interface {
 	GetFile(ctx context.Context, tenantID, fileID string) (File, error)
 	ListFiles(ctx context.Context, tenantID, batchID string) ([]File, error)
 	ListPages(ctx context.Context, tenantID, batchID string) ([]Page, error)
+	GetMatchingQueue(ctx context.Context, tenantID, batchID string) (MatchingQueue, error)
+	ConfirmStudentMatch(ctx context.Context, tenantID, submissionID, actorID string, input ConfirmStudentMatchInput) (MatchingSubmission, error)
+	MarkStudentUnknown(ctx context.Context, tenantID, submissionID, actorID string, input MarkStudentUnknownInput) (MatchingSubmission, error)
+	ConfirmPageMatch(ctx context.Context, tenantID, pageID, actorID string, input ConfirmPageMatchInput) (Page, error)
 	QueueBatch(ctx context.Context, tenantID, batchID, actorID string) (Batch, error)
 	ApplyFileResult(ctx context.Context, tenantID, fileID string, pages []DecodedPageInput) (File, error)
 	ApplyFileFailure(ctx context.Context, tenantID, fileID, errorCode string, retryable bool) (File, error)

@@ -3,6 +3,7 @@ package capture
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,10 +17,97 @@ type MemoryStore struct {
 	files         map[string]File
 	pages         map[string]Page
 	registrations map[string]RegistrationRun
+	identities    map[string]MatchingSubmission
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{batches: map[string]Batch{}, batchKeys: map[string]string{}, files: map[string]File{}, pages: map[string]Page{}, registrations: map[string]RegistrationRun{}}
+	return &MemoryStore{batches: map[string]Batch{}, batchKeys: map[string]string{}, files: map[string]File{}, pages: map[string]Page{}, registrations: map[string]RegistrationRun{}, identities: map[string]MatchingSubmission{}}
+}
+
+func (s *MemoryStore) GetMatchingQueue(_ context.Context, tenantID, batchID string) (MatchingQueue, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	batch, ok := s.batches[batchID]
+	if !ok || batch.TenantID != tenantID {
+		return MatchingQueue{}, ErrNotFound
+	}
+	queue := MatchingQueue{BatchID: batchID, ExamID: batch.ExamID, Candidates: []StudentCandidate{}, Submissions: []MatchingSubmission{}}
+	for _, identity := range s.identities {
+		pages := []Page{}
+		for _, page := range s.pages {
+			if page.TenantID == tenantID && page.CaptureBatchID == batchID && page.SubmissionID == identity.ID {
+				pages = append(pages, page)
+			}
+		}
+		if len(pages) > 0 {
+			identity.Pages = pages
+			queue.Submissions = append(queue.Submissions, identity)
+		}
+	}
+	return queue, nil
+}
+
+func (s *MemoryStore) ConfirmStudentMatch(_ context.Context, tenantID, submissionID, actorID string, input ConfirmStudentMatchInput) (MatchingSubmission, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if input.Revision <= 0 || input.StudentID == "" {
+		return MatchingSubmission{}, ErrInvalidInput
+	}
+	x, ok := s.identities[submissionID]
+	if !ok {
+		x = MatchingSubmission{ID: submissionID, IdentityStatus: "unassigned", IdentityRevision: 1, IdentityEvidence: map[string]any{}}
+	}
+	if x.IdentityRevision != input.Revision {
+		return MatchingSubmission{}, ErrConflict
+	}
+	x.StudentID = input.StudentID
+	x.IdentityStatus = "matched"
+	x.IdentityRevision++
+	x.IdentityEvidence = map[string]any{"method": "manual_confirmation", "actor_id": actorID, "reason": input.Reason}
+	s.identities[submissionID] = x
+	return x, nil
+}
+
+func (s *MemoryStore) MarkStudentUnknown(_ context.Context, tenantID, submissionID, actorID string, input MarkStudentUnknownInput) (MatchingSubmission, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if input.Revision <= 0 || strings.TrimSpace(input.Reason) == "" {
+		return MatchingSubmission{}, ErrInvalidInput
+	}
+	x, ok := s.identities[submissionID]
+	if !ok {
+		x = MatchingSubmission{ID: submissionID, IdentityStatus: "unassigned", IdentityRevision: 1}
+	}
+	if x.IdentityRevision != input.Revision {
+		return MatchingSubmission{}, ErrConflict
+	}
+	x.StudentID = ""
+	x.CandidateNo = ""
+	x.IdentityStatus = "unknown"
+	x.IdentityRevision++
+	x.IdentityEvidence = map[string]any{"method": "manual_unknown", "actor_id": actorID, "reason": input.Reason}
+	s.identities[submissionID] = x
+	return x, nil
+}
+
+func (s *MemoryStore) ConfirmPageMatch(_ context.Context, tenantID, pageID, actorID string, input ConfirmPageMatchInput) (Page, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, ok := s.pages[pageID]
+	if !ok || x.TenantID != tenantID {
+		return Page{}, ErrNotFound
+	}
+	if input.Revision <= 0 || input.PageNo <= 0 {
+		return Page{}, ErrInvalidInput
+	}
+	if x.Revision != input.Revision {
+		return Page{}, ErrConflict
+	}
+	x.AssignedPageNo = input.PageNo
+	x.Revision++
+	x.ManualOverride = map[string]any{"page_no": input.PageNo, "actor_id": actorID, "reason": input.Reason}
+	s.pages[pageID] = x
+	return x, nil
 }
 
 func (s *MemoryStore) QueueSubmissionPages(_ context.Context, tenantID, submissionID, actorID string) ([]RegistrationRun, error) {

@@ -3430,3 +3430,35 @@ select {
     padding: 20px;
   }
 }
+.matching-workspace {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(260px, 1fr) minmax(300px, 1.2fr);
+  min-height: 420px;
+  border: 1px solid #e5e7eb;
+}
+
+.matching-submissions,
+.matching-evidence,
+.matching-candidates {
+  min-width: 0;
+  padding: 16px;
+}
+
+.matching-submissions,
+.matching-evidence { border-right: 1px solid #e5e7eb; }
+.matching-submissions { padding: 0; }
+.matching-submissions .capture-batch-row { border-radius: 0; }
+.matching-evidence h3,
+.matching-candidates h3 { margin: 0 0 16px; font-size: 16px; }
+.matching-page-row { display: grid; grid-template-columns: 1fr 80px auto; gap: 8px; align-items: center; margin-bottom: 10px; }
+.matching-evidence-note,
+.matching-confirmed { display: flex; gap: 8px; align-items: flex-start; margin-top: 18px; color: #475569; line-height: 1.5; }
+.matching-candidates { display: flex; flex-direction: column; gap: 16px; }
+.matching-confirmed { color: #15803d; }
+
+@media (max-width: 900px) {
+  .matching-workspace { grid-template-columns: 1fr; }
+  .matching-submissions,
+  .matching-evidence { border-right: 0; border-bottom: 1px solid #e5e7eb; }
+  .matching-submissions { max-height: 240px; overflow: auto; }
+}

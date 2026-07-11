@@ -71,6 +71,19 @@ export interface RegistrationRun {
   error_code?: string;
 }
 
+export interface StudentCandidate {
+  id: string; student_no: string; name: string; class_id: string; class_name: string;
+}
+
+export interface MatchingSubmission {
+  id: string; student_id?: string; candidate_no?: string; identity_status: "unassigned" | "matched" | "unknown" | "conflict";
+  identity_revision: number; identity_evidence: Record<string, unknown>; pages: CapturePage[];
+}
+
+export interface MatchingQueue {
+  batch_id: string; exam_id: string; submissions: MatchingSubmission[]; candidates: StudentCandidate[];
+}
+
 export async function createCaptureBatch(examId: string, payload: { name: string; source_type: CaptureBatch["source_type"]; scanner_device?: string; idempotency_key: string }) {
   return apiClient.request<{ batch: CaptureBatch }>(`/api/v1/exams/${encodeURIComponent(examId)}/capture-batches`, { method: "POST", body: JSON.stringify(payload) });
 }
@@ -97,4 +110,20 @@ export async function updateCapturePage(pageId: string, payload: { revision: num
 
 export async function processSubmissionPages(submissionId: string) {
   return apiClient.request<{ runs: RegistrationRun[] }>(`/api/v1/submissions/${encodeURIComponent(submissionId)}/process-pages`, { method: "POST" });
+}
+
+export async function getMatchingQueue(batchId: string) {
+  return apiClient.request<MatchingQueue>(`/api/v1/capture-batches/${encodeURIComponent(batchId)}/matching-queue`);
+}
+
+export async function confirmStudentMatch(submissionId: string, studentId: string, revision: number, reason = "人工核对答卷信息") {
+  return apiClient.request<{ submission: MatchingSubmission }>(`/api/v1/submissions/${encodeURIComponent(submissionId)}/student-match/confirm`, { method: "POST", body: JSON.stringify({ student_id: studentId, revision, reason }) });
+}
+
+export async function markStudentUnknown(submissionId: string, revision: number, reason: string) {
+  return apiClient.request<{ submission: MatchingSubmission }>(`/api/v1/submissions/${encodeURIComponent(submissionId)}/student-match/unknown`, { method: "POST", body: JSON.stringify({ revision, reason }) });
+}
+
+export async function confirmPageMatch(pageId: string, pageNo: number, revision: number, reason = "人工核对页码") {
+  return apiClient.request<{ page: CapturePage }>(`/api/v1/capture-pages/${encodeURIComponent(pageId)}/page-match/confirm`, { method: "POST", body: JSON.stringify({ page_no: pageNo, revision, reason }) });
 }

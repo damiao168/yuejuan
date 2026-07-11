@@ -359,6 +359,22 @@ Real acceptance batch: `ef89f64a-f6fe-495f-bf3e-554f94a5c9a3`.
 
 The remaining implementation order is now: student/page matching -> split/merge/delete/restore -> registration manual confirm/retry -> completion-gate Playwright -> implementation review -> Approved.
 
+## Candidate and Page Matching Verification (2026-07-11)
+
+This slice follows the first-principles rule that a physical answer script must be bound to exactly one eligible student and one page number through explainable, reversible decisions:
+
+- The candidate set is derived only from `exam_class -> active student`; tenant-wide student search is not accepted as an exam roster.
+- Migration `000031_story055_candidate_page_matching.sql` adds explicit identity status, optimistic revision, evidence, and one-active-submission-per-exam/student constraints.
+- Manual confirmation submits only a roster student ID. The server resolves the authoritative name and student number and records actor/reason evidence.
+- Unknown answer scripts are a first-class blocking state. Duplicate student/candidate bindings and stale revisions return HTTP 409.
+- Manual page-number confirmation is revisioned and invalidates previous registration and segment results.
+- Batch aggregation keeps unassigned identities in `matching`, unknown/conflict identities in `needs_review`, and allows `ready` only after identity and page gates pass.
+- The Web batch workspace now provides a three-column answer-script, page-evidence, and exam-roster workflow with desktop and 390px responsive layouts.
+
+Real verification used batches `ef89f64a-f6fe-495f-bf3e-554f94a5c9a3` and `7c803f65-b2f5-4f53-b84e-7778ea5367bf`: one roster candidate was returned, the first script was matched, a cross-batch duplicate returned HTTP 409, another script was marked unknown, and page confirmation advanced its revision from 2 to 3.
+
+The remaining implementation order is now: split/merge/delete/restore -> registration manual confirm/retry -> completion-gate Playwright -> implementation review -> Approved.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。

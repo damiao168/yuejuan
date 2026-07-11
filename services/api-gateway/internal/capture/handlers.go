@@ -82,6 +82,61 @@ func (h *Handler) GetBatch(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, BatchDetail{Batch: batch, Files: fileItems, Pages: pages})
 }
 
+func (h *Handler) GetMatchingQueue(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	queue, err := h.store.GetMatchingQueue(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, queue)
+}
+
+func (h *Handler) ConfirmStudentMatch(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input ConfirmStudentMatchInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.ConfirmStudentMatch(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "capture.student_match_confirmed", "submission", out.ID, input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"submission": out})
+}
+
+func (h *Handler) MarkStudentUnknown(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input MarkStudentUnknownInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.MarkStudentUnknown(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "capture.student_marked_unknown", "submission", out.ID, input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"submission": out})
+}
+
+func (h *Handler) ConfirmPageMatch(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input ConfirmPageMatchInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.ConfirmPageMatch(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "capture.page_match_confirmed", "capture_page", out.ID, input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"page": out})
+}
+
 func (h *Handler) RegisterFile(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	var input RegisterFileInput
