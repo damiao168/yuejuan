@@ -340,6 +340,8 @@ export function CaptureBatchPage({
   const [processingSummaries, setProcessingSummaries] = useState<Record<string, ProcessingSummary>>({});
   const [correctionRunId, setCorrectionRunId] = useState<string>();
   const [activeTab, setActiveTab] = useState("files");
+  const [reopenOpen, setReopenOpen] = useState(false);
+  const [reopenReason, setReopenReason] = useState("");
   const batchCanManage = canManage && !["completed", "cancelled"].includes(detail?.batch.status ?? "");
 
   const loadBatches = useCallback(async () => {
@@ -511,28 +513,23 @@ export function CaptureBatchPage({
   }
 
   function reopenBatch() {
-    if (!detail) return;
-    let reason = "";
-    modal.confirm({
-      title: "重开采集批次",
-      content: <Input.TextArea rows={3} maxLength={300} placeholder="填写重开原因" onChange={(event) => { reason = event.target.value; }} />,
-      okText: "确认重开",
-      cancelText: "取消",
-      onOk: async () => {
-        if (!reason.trim()) {
-          message.error("请填写重开原因");
-          return Promise.reject();
-        }
-        setActioning(true);
-        try {
-          await reopenCaptureBatch(detail.batch.id, reason.trim());
-          await Promise.all([loadBatches(), loadDetail(detail.batch.id)]);
-          message.success("批次已重开");
-        } finally {
-          setActioning(false);
-        }
-      },
-    });
+    setReopenReason("");
+    setReopenOpen(true);
+  }
+
+  async function confirmReopen() {
+    if (!detail || !reopenReason.trim()) return;
+    setActioning(true);
+    try {
+      await reopenCaptureBatch(detail.batch.id, reopenReason.trim());
+      setReopenOpen(false);
+      await Promise.all([loadBatches(), loadDetail(detail.batch.id)]);
+      message.success("批次已重开");
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setActioning(false);
+    }
   }
 
   async function startPageProcessing(submissionId: string) {
@@ -1086,6 +1083,18 @@ export function CaptureBatchPage({
           </main>
         </div>
       )}
+      <Modal
+        title="重开采集批次"
+        open={reopenOpen}
+        okText="确认重开"
+        cancelText="取消"
+        confirmLoading={actioning}
+        okButtonProps={{ disabled: !reopenReason.trim() }}
+        onCancel={() => setReopenOpen(false)}
+        onOk={() => void confirmReopen()}
+      >
+        <Input.TextArea value={reopenReason} rows={3} maxLength={300} placeholder="填写重开原因" onChange={(event) => setReopenReason(event.target.value)} />
+      </Modal>
       <Modal
         title="新建采集批次"
         open={modalOpen}
