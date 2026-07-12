@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"strings"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
+	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
@@ -19,10 +22,12 @@ type Handler struct {
 	papers      paper.Store
 	submissions submissionpkg.Store
 	audit       auth.Store
+	fileStore   files.Store
+	objects     files.ObjectStorage
 }
 
-func NewHandler(store Store, papers paper.Store, submissions submissionpkg.Store, audit auth.Store) *Handler {
-	return &Handler{store: store, papers: papers, submissions: submissions, audit: audit}
+func NewHandler(store Store, papers paper.Store, submissions submissionpkg.Store, audit auth.Store, fileStore files.Store, objects files.ObjectStorage) *Handler {
+	return &Handler{store: store, papers: papers, submissions: submissions, audit: audit, fileStore: fileStore, objects: objects}
 }
 
 func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +133,67 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"segment": out})
 }
 
+func (h *Handler) GetEvidence(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	evidence, err := h.store.GetEvidence(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	if evidence.ProcessingStatus != "completed" || evidence.RegistrationStatus != "completed" || evidence.CropFileAssetID == "" || evidence.CropSHA256 == "" {
+		writeStoreError(w, r, ErrEvidenceUnavailable)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"evidence": evidence})
+}
+
+func (h *Handler) GetImage(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	evidence, err := h.store.GetEvidence(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	if evidence.ProcessingStatus != "completed" || evidence.RegistrationStatus != "completed" || evidence.CropFileAssetID == "" || evidence.CropSHA256 == "" {
+		writeStoreError(w, r, ErrEvidenceUnavailable)
+		return
+	}
+	asset, err := h.fileStore.Get(r.Context(), user.TenantID, evidence.CropFileAssetID)
+	if err != nil || asset.ExamID != evidence.ExamID || asset.HashSHA256 != evidence.CropSHA256 || asset.DeletedAt != nil || !strings.HasPrefix(asset.ContentType, "image/") || asset.SizeBytes <= 0 {
+		writeStoreError(w, r, ErrEvidenceUnavailable)
+		return
+	}
+	validOwner := (asset.OwnerType == "answer_segment_crop" && asset.OwnerID == evidence.RegistrationRunID) || (asset.OwnerType == "page_registration_correction_preview" && evidence.CorrectionID != "" && asset.OwnerID == evidence.CorrectionID)
+	if !validOwner {
+		writeStoreError(w, r, ErrEvidenceUnavailable)
+		return
+	}
+	etag := `"sha256:` + evidence.CropSHA256 + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", asset.ContentType)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", asset.SizeBytes))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": "segment-" + evidence.SegmentID + ".png"}))
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	body, err := h.objects.Get(r.Context(), asset.StorageBucket, asset.StorageKey)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadGateway, "object_storage_failed", "failed to read segment image")
+		return
+	}
+	defer body.Close()
+	h.auditAction(r, "segment.image_viewed", "answer_segment", evidence.SegmentID, "view active answer segment image")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, body)
+}
+
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 	if err := json.NewDecoder(r.Body).Decode(target); err != nil {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "invalid json body")
@@ -144,6 +210,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, "submission_not_ready_for_segmentation", "submission must be ready_for_ocr before segmentation")
 	case errors.Is(err, ErrInvalidInput):
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_answer_segment", "answer segment input is invalid")
+	case errors.Is(err, ErrEvidenceUnavailable):
+		httpx.Error(w, r, http.StatusConflict, "answer_segment_evidence_unavailable", "answer segment image is not active grading evidence")
 	default:
 		httpx.Error(w, r, http.StatusInternalServerError, "answer_segment_operation_failed", "answer segment operation failed")
 	}

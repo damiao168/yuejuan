@@ -126,6 +126,21 @@ WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 	return item, nil
 }
 
+func (s *PostgresStore) GetEvidence(ctx context.Context, tenantID string, id string) (SegmentEvidence, error) {
+	var out SegmentEvidence
+	var normalized, pixels []byte
+	err := s.db.QueryRowContext(ctx, `SELECT s.id::text,s.submission_id::text,s.submission_page_id::text,sub.exam_id::text,s.question_id::text,s.question_no,COALESCE(s.template_id::text,''),COALESCE(s.template_content_hash,''),COALESCE(s.registration_run_id::text,''),COALESCE(r.method,''),COALESCE(r.confidence,0),COALESCE(s.normalized_bbox,'{}'),COALESCE(s.pixel_bbox,'{}'),COALESCE(s.crop_file_asset_id::text,''),COALESCE(c.id::text,''),COALESCE(s.crop_sha256,''),COALESCE(s.question_version,1),s.processing_status,COALESCE(r.processing_status,''),COALESCE(s.confidence,0) FROM answer_segment s JOIN submission sub ON sub.tenant_id=s.tenant_id AND sub.id=s.submission_id LEFT JOIN page_registration_run r ON r.tenant_id=s.tenant_id AND r.id=s.registration_run_id LEFT JOIN page_registration_correction c ON c.tenant_id=s.tenant_id AND c.applied_registration_run_id=s.registration_run_id AND c.status='applied' AND c.deleted_at IS NULL WHERE s.tenant_id=$1 AND s.id=$2::uuid AND s.deleted_at IS NULL`, tenantID, id).Scan(&out.SegmentID, &out.SubmissionID, &out.SubmissionPageID, &out.ExamID, &out.QuestionID, &out.QuestionNo, &out.TemplateID, &out.TemplateContentHash, &out.RegistrationRunID, &out.RegistrationMethod, &out.RegistrationConfidence, &normalized, &pixels, &out.CropFileAssetID, &out.CorrectionID, &out.CropSHA256, &out.QuestionVersion, &out.ProcessingStatus, &out.RegistrationStatus, &out.Confidence)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SegmentEvidence{}, ErrNotFound
+		}
+		return SegmentEvidence{}, err
+	}
+	_ = json.Unmarshal(normalized, &out.NormalizedBBox)
+	_ = json.Unmarshal(pixels, &out.PixelBBox)
+	return out, nil
+}
+
 type segmentScanner interface {
 	Scan(dest ...any) error
 }

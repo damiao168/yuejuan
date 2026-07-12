@@ -117,7 +117,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	paperHandler := paper.NewHandler(paperStore, authStore)
 	fileHandler := files.NewHandler(fileStore, objectStore, authStore, cfg.Files)
 	submissionHandler := submission.NewHandler(submissionStore, fileStore, authStore)
-	segmentHandler := segment.NewHandler(segmentStore, paperStore, submissionStore, authStore)
+	segmentHandler := segment.NewHandler(segmentStore, paperStore, submissionStore, authStore, fileStore, objectStore)
 	var imageQualityStore imagequality.Store = imagequality.NewMemoryStore()
 	var workerRuntimeStore workerruntime.Store = workerruntime.NewMemoryStore()
 	var orchestratorStore orchestrator.Store = orchestrator.NewMemoryStore()
@@ -216,6 +216,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	}
 	requireSegmentManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("segment:manage")(handler))
+	}
+	requireSegmentEvidenceRead := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequireAnyPermission("segment:manage", "ocr:manage", "grading:manage", "evidence:manage", "review:manage", "review:work", "arbitration:manage", "arbitration:work")(handler))
 	}
 	requireOrchestratorManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("orchestrator:manage")(handler))
@@ -403,6 +406,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/submissions/{id}/segment-answers", requireSegmentManage(segmentHandler.Generate))
 	mux.Handle("GET /api/v1/submissions/{id}/answer-segments", requireSegmentManage(segmentHandler.ListBySubmission))
 	mux.Handle("PATCH /api/v1/answer-segments/{id}", requireSegmentManage(segmentHandler.Update))
+	mux.Handle("GET /api/v1/answer-segments/{id}/evidence", requireSegmentEvidenceRead(segmentHandler.GetEvidence))
+	mux.Handle("GET /api/v1/answer-segments/{id}/image", requireSegmentEvidenceRead(segmentHandler.GetImage))
+	mux.Handle("HEAD /api/v1/answer-segments/{id}/image", requireSegmentEvidenceRead(segmentHandler.GetImage))
 
 	mux.Handle("POST /api/v1/orchestrations", requireOrchestratorManage(orchestratorHandler.CreateRun))
 	mux.Handle("GET /api/v1/orchestrations/{id}", requireOrchestratorManage(orchestratorHandler.GetRun))

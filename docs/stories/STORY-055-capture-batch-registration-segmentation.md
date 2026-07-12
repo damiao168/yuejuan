@@ -581,6 +581,29 @@ Remaining in STORY-055A: explicit stale/concurrent API acceptance cases and the 
 
 STORY-055A is complete. STORY-055 remains open: proceed with 055B Segment Image/Evidence API, 055C TIFF and malformed-input production matrix, 055D continuous issue-handling UX, then 055E cross-layer E2E/performance/review before Approved.
 
+## STORY-055B Segment Image/Evidence API (2026-07-12)
+
+### Specification and review
+
+- Consumers address an answer segment, never a general file asset or MinIO key: `GET|HEAD /api/v1/answer-segments/{id}/image` and `GET /api/v1/answer-segments/{id}/evidence`.
+- The API resolves tenant, submission/exam, question/template version, registration run, bbox, crop hash, and file asset server-side. No object-store URL or crop asset ID is exposed.
+- An image is readable only when both segment and registration run have `processing_status=completed`. Invalidated, missing, legacy-without-crop, or deleted evidence returns HTTP 409; unknown/cross-tenant IDs return 404.
+- File metadata must match the evidence exam and SHA-256, have positive size and `image/*` content type, and have an exact allowed owner: automatic crops bind to the registration run; manual crops bind to the currently applied correction.
+- Read permissions are available to segment, OCR, grading, evidence, review, and arbitration workers/operators. Mutation permissions are unchanged.
+- The image response is streamed by the API from private object storage with `nosniff`, inline disposition, immutable private cache policy, a SHA-256 ETag, HEAD support, and conditional 304. GET image access is audited; HEAD/304 do not create high-volume view audits.
+
+Rejected alternatives: exposing signed MinIO URLs would duplicate authorization and complicate revocation; redirecting through `/files/{id}` would expose implementation IDs and allow callers to bypass active-evidence checks; embedding image bytes in evidence JSON would increase memory and network overhead.
+
+### Implementation and acceptance
+
+- Added `SegmentEvidence` and a tenant-bound PostgreSQL evidence projection joining submission, active segment, registration run, and applied manual correction.
+- Added server-side active-evidence validation and streaming handlers without buffering the crop in API memory.
+- Real automatic segment `bbcceaf2-c997-4e3f-a292-0553befa5f3b` returned evidence 200 and a 79,124-byte `image/png`; its ETag matched the persisted crop SHA-256, conditional GET returned 304, and HEAD returned 200 with the same length.
+- Real undone manual segment `1ec955e5-ea44-493b-b8e4-9a08fd37a9cb` returned HTTP 409 `answer_segment_evidence_unavailable` and no image bytes.
+- API `go test ./...` and `go vet ./...` passed before deployment. Compose API/nginx health and authenticated browser API acceptance passed.
+
+STORY-055B is complete. Next: STORY-055C TIFF and malformed-input production matrix.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。
