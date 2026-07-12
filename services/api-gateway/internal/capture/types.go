@@ -311,6 +311,19 @@ type RegistrationCorrectionDecisionInput struct {
 	Reason   string `json:"reason"`
 }
 
+type RegistrationCorrectionContext struct {
+	RegistrationRunID   string `json:"registration_run_id"`
+	CapturePageID       string `json:"capture_page_id"`
+	ExamID              string `json:"exam_id"`
+	PageRevision        int    `json:"page_revision"`
+	PageNo              int    `json:"page_no"`
+	SourceFileAssetID   string `json:"source_file_asset_id"`
+	TemplateFileAssetID string `json:"template_file_asset_id"`
+	TemplateContentType string `json:"template_content_type"`
+	TemplateWidth       int    `json:"template_width"`
+	TemplateHeight      int    `json:"template_height"`
+}
+
 type CorrectionPreviewResultInput struct {
 	TaskID                       string             `json:"task_id"`
 	LeaseToken                   string             `json:"lease_token"`
@@ -396,6 +409,7 @@ type Store interface {
 	ApplyRegistrationCorrectionFailure(ctx context.Context, tenantID, correctionID, errorCode string, detail map[string]any) (RegistrationCorrection, error)
 	ApplyRegistrationCorrection(ctx context.Context, tenantID, correctionID, actorID string, input RegistrationCorrectionDecisionInput) (RegistrationCorrection, error)
 	UndoRegistrationCorrection(ctx context.Context, tenantID, correctionID, actorID string, input RegistrationCorrectionDecisionInput) (RegistrationCorrection, error)
+	GetRegistrationCorrectionContext(ctx context.Context, tenantID, runID string) (RegistrationCorrectionContext, error)
 }
 
 type FileAssetSnapshot struct {

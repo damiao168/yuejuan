@@ -366,6 +366,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/page-registration-runs/{id}/confirm", requireCaptureManage(captureHandler.ConfirmRegistration))
 	mux.Handle("POST /api/v1/page-registration-runs/{id}/retry", requireCaptureManage(captureHandler.RetryRegistration))
 	mux.Handle("POST /api/v1/page-registration-runs/{id}/corrections", requireCaptureManage(captureHandler.CreateRegistrationCorrection))
+	mux.Handle("GET /api/v1/page-registration-runs/{id}/correction-context", requireCaptureManage(captureHandler.GetRegistrationCorrectionContext))
 	mux.Handle("GET /api/v1/page-registration-corrections/{id}", requireCaptureManage(captureHandler.GetRegistrationCorrection))
 	mux.Handle("POST /api/v1/page-registration-corrections/{id}/preview", requireCaptureManage(captureHandler.PreviewRegistrationCorrection))
 	mux.Handle("POST /api/v1/page-registration-corrections/{id}/apply", requireCaptureManage(captureHandler.ApplyRegistrationCorrection))

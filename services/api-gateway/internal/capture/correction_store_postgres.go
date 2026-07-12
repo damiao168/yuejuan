@@ -10,6 +10,29 @@ import (
 
 const correctionColumns = `id::text,capture_page_id::text,base_registration_run_id::text,COALESCE(applied_registration_run_id::text,''),source_page_revision,template_id::text,template_content_hash,page_no,source_points,template_points,advanced_anchor_mode,status,revision,attempt_count,COALESCE(preview_registered_file_asset_id::text,''),preview_segments,source_to_template_matrix,template_to_source_matrix,COALESCE(coverage,0),COALESCE(reprojection_error,0),validation_report,previous_registration_snapshot,COALESCE(runtime_task_id::text,''),COALESCE(error_code,''),expires_at,applied_at,undone_at,created_at`
 
+func (s *PostgresStore) GetRegistrationCorrectionContext(ctx context.Context, tenantID, runID string) (RegistrationCorrectionContext, error) {
+	var out RegistrationCorrectionContext
+	var layoutRaw []byte
+	err := s.db.QueryRowContext(ctx, `SELECT pr.id::text,pr.capture_page_id::text,ep.exam_id::text,cp.revision,pr.page_no,pr.source_file_asset_id::text,ep.file_asset_id::text,fa.content_type,ast.layout FROM page_registration_run pr JOIN capture_page cp ON cp.tenant_id=pr.tenant_id AND cp.id=pr.capture_page_id JOIN answer_sheet_template ast ON ast.tenant_id=pr.tenant_id AND ast.id=pr.template_id JOIN exam_paper ep ON ep.tenant_id=ast.tenant_id AND ep.id=ast.exam_paper_id JOIN file_asset fa ON fa.tenant_id=ep.tenant_id AND fa.id=ep.file_asset_id WHERE pr.tenant_id=$1 AND pr.id=$2::uuid AND pr.deleted_at IS NULL AND cp.deleted_at IS NULL AND pr.id=(SELECT latest.id FROM page_registration_run latest WHERE latest.tenant_id=pr.tenant_id AND latest.capture_page_id=pr.capture_page_id AND latest.processing_status<>'invalidated' AND latest.deleted_at IS NULL ORDER BY latest.created_at DESC LIMIT 1)`, tenantID, runID).Scan(&out.RegistrationRunID, &out.CapturePageID, &out.ExamID, &out.PageRevision, &out.PageNo, &out.SourceFileAssetID, &out.TemplateFileAssetID, &out.TemplateContentType, &layoutRaw)
+	if err != nil {
+		return RegistrationCorrectionContext{}, mapNotFound(err)
+	}
+	var layout templateLayout
+	if json.Unmarshal(layoutRaw, &layout) != nil {
+		return RegistrationCorrectionContext{}, ErrInvalidInput
+	}
+	for _, page := range layout.Pages {
+		if page.PageNo == out.PageNo {
+			out.TemplateWidth, out.TemplateHeight = page.Width, page.Height
+			break
+		}
+	}
+	if out.TemplateWidth <= 0 || out.TemplateHeight <= 0 {
+		return RegistrationCorrectionContext{}, ErrInvalidInput
+	}
+	return out, nil
+}
+
 func (s *PostgresStore) CreateRegistrationCorrection(ctx context.Context, tenantID, runID, actorID string, input CreateRegistrationCorrectionInput) (RegistrationCorrection, error) {
 	if input.PageRevision <= 0 || validateCorrectionPoints(input.SourcePoints, input.TemplatePoints) != nil {
 		return RegistrationCorrection{}, ErrInvalidInput
@@ -24,7 +47,7 @@ func (s *PostgresStore) CreateRegistrationCorrection(ctx context.Context, tenant
 	defer tx.Rollback()
 	var pageID, batchID, templateID, templateHash string
 	var pageNo, pageRevision int
-	err = tx.QueryRowContext(ctx, `SELECT pr.capture_page_id::text,cp.capture_batch_id::text,pr.template_id::text,pr.template_content_hash,pr.page_no,cp.revision FROM page_registration_run pr JOIN capture_page cp ON cp.tenant_id=pr.tenant_id AND cp.id=pr.capture_page_id WHERE pr.tenant_id=$1 AND pr.id=$2::uuid AND pr.deleted_at IS NULL AND cp.deleted_at IS NULL AND pr.id=(SELECT latest.id FROM page_registration_run latest WHERE latest.tenant_id=pr.tenant_id AND latest.capture_page_id=pr.capture_page_id AND latest.deleted_at IS NULL ORDER BY latest.created_at DESC LIMIT 1) FOR UPDATE OF pr,cp`, tenantID, runID).Scan(&pageID, &batchID, &templateID, &templateHash, &pageNo, &pageRevision)
+	err = tx.QueryRowContext(ctx, `SELECT pr.capture_page_id::text,cp.capture_batch_id::text,pr.template_id::text,pr.template_content_hash,pr.page_no,cp.revision FROM page_registration_run pr JOIN capture_page cp ON cp.tenant_id=pr.tenant_id AND cp.id=pr.capture_page_id WHERE pr.tenant_id=$1 AND pr.id=$2::uuid AND pr.deleted_at IS NULL AND cp.deleted_at IS NULL AND pr.id=(SELECT latest.id FROM page_registration_run latest WHERE latest.tenant_id=pr.tenant_id AND latest.capture_page_id=pr.capture_page_id AND latest.processing_status<>'invalidated' AND latest.deleted_at IS NULL ORDER BY latest.created_at DESC LIMIT 1) FOR UPDATE OF pr,cp`, tenantID, runID).Scan(&pageID, &batchID, &templateID, &templateHash, &pageNo, &pageRevision)
 	if err != nil {
 		return RegistrationCorrection{}, mapNotFound(err)
 	}

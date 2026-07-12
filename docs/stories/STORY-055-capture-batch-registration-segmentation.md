@@ -568,6 +568,19 @@ Remaining in STORY-055A: transactional apply with previous-evidence snapshot, de
 
 Remaining in STORY-055A: explicit stale/concurrent API acceptance cases and the desktop correction workspace with Playwright. This slice is not yet Approved.
 
+### STORY-055A final acceptance (2026-07-12)
+
+- Added an authorized correction-context API that derives the normalized source, locked template page, exact dimensions, and authoritative exam ownership from the active registration run. Legacy normalized assets without a denormalized `exam_id` remain usable because ownership is verified through the tenant-bound run/template/exam relationship; preview assets still require exact exam, owner, correction ID, and SHA-256 matches.
+- Added the full-width desktop correction workspace: source/template side-by-side rendering, four labelled draggable points, keyboard arrows, numeric coordinates, zoom, reset, opt-in template anchors, asynchronous preview, validation status, apply, and undo.
+- Registration actions and the correction entry are independent. Any active registration blocker with a run ID keeps the correction entry, including after an apply/undo cycle.
+- All latest-run lookups used by processing summary, correction context, and correction creation now select the latest non-deleted, non-`invalidated` run. An undone manual run can no longer hide the restored base blocker.
+- Apply clears the reason before undo so rollback requires a separate operator reason. Applied point controls are read-only. At 390px, canvases, point controls, reason input, reset, and mutation commands are hidden; the operator sees status/preview plus a desktop-required notice.
+- Real Playwright acceptance used base run `ad9d2910-8e60-431d-9996-0d924b00ebb3`. Preview reached `preview_ready` with 100% coverage and a real registered image/crop. Correction `5da94e2b-a5ae-4f0e-b243-884006955adf` applied as run `10c49429-9610-446d-8cc5-57676162eee4`, then undid through the UI.
+- Database acceptance confirmed one apply audit and one undo audit, page revision advancement, base-run restoration to `terminal_error`, manual run and crop evidence at `processing_status=invalidated`, and processing-summary restoration to one registration blocker referencing the base run.
+- Go `go test ./...` and `go vet ./...`, Web typecheck/build, Compose health checks, desktop Playwright, and 390px Playwright passed. Optimistic correction/page revisions and transactional batch/page locks cover stale apply, concurrent page mutation, and completion races with HTTP 409 and no partial state.
+
+STORY-055A is complete. STORY-055 remains open: proceed with 055B Segment Image/Evidence API, 055C TIFF and malformed-input production matrix, 055D continuous issue-handling UX, then 055E cross-layer E2E/performance/review before Approved.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。

@@ -78,6 +78,16 @@ func (h *Handler) CreateRegistrationCorrection(w http.ResponseWriter, r *http.Re
 	httpx.JSON(w, http.StatusCreated, map[string]any{"correction": out})
 }
 
+func (h *Handler) GetRegistrationCorrectionContext(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.GetRegistrationCorrectionContext(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"context": out})
+}
+
 func (h *Handler) GetRegistrationCorrection(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	out, err := h.store.GetRegistrationCorrection(r.Context(), user.TenantID, r.PathValue("id"))
@@ -157,19 +167,24 @@ func (h *Handler) CompleteRegistrationCorrection(w http.ResponseWriter, r *http.
 		writeError(w, r, err)
 		return
 	}
+	context, err := h.store.GetRegistrationCorrectionContext(r.Context(), user.TenantID, correction.BaseRegistrationRunID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
 	source, err := h.files.Get(r.Context(), user.TenantID, baseRun.SourceFileAssetID)
-	if err != nil || source.ExamID == "" {
+	if err != nil || (source.ExamID != "" && source.ExamID != context.ExamID) {
 		httpx.Error(w, r, http.StatusConflict, "correction_source_invalid", "correction source asset is missing")
 		return
 	}
 	registered, err := h.files.Get(r.Context(), user.TenantID, input.PreviewRegisteredFileAssetID)
-	if err != nil || registered.ExamID != source.ExamID || registered.OwnerType != "page_registration_correction_preview" || registered.OwnerID != correctionID || registered.HashSHA256 != input.PreviewRegisteredSHA256 {
+	if err != nil || registered.ExamID != context.ExamID || registered.OwnerType != "page_registration_correction_preview" || registered.OwnerID != correctionID || registered.HashSHA256 != input.PreviewRegisteredSHA256 {
 		httpx.Error(w, r, http.StatusBadRequest, "correction_preview_asset_invalid", "preview asset has an invalid owner or exam")
 		return
 	}
 	for _, segment := range input.Segments {
 		asset, assetErr := h.files.Get(r.Context(), user.TenantID, segment.FileAssetID)
-		if assetErr != nil || asset.ExamID != source.ExamID || asset.OwnerType != "page_registration_correction_preview" || asset.OwnerID != correctionID || asset.HashSHA256 != segment.SHA256 {
+		if assetErr != nil || asset.ExamID != context.ExamID || asset.OwnerType != "page_registration_correction_preview" || asset.OwnerID != correctionID || asset.HashSHA256 != segment.SHA256 {
 			httpx.Error(w, r, http.StatusBadRequest, "correction_segment_asset_invalid", "preview segment has an invalid owner, hash, or exam")
 			return
 		}

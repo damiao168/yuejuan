@@ -27,6 +27,7 @@ import {
   RotateCw,
   ScanLine,
   Scissors,
+  SlidersHorizontal,
   Trash2,
   Undo2,
   UserCheck,
@@ -63,6 +64,7 @@ import {
 import { downloadFileBlob, uploadFile } from "../api/files";
 import { ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
+import { RegistrationCorrectionWorkspace } from "../components/RegistrationCorrectionWorkspace";
 
 const statusLabels: Record<string, string> = {
   draft: "等待上传",
@@ -335,6 +337,7 @@ export function CaptureBatchPage({
   const [matching, setMatching] = useState<MatchingQueue>();
   const [matchingLoading, setMatchingLoading] = useState(false);
   const [processingSummaries, setProcessingSummaries] = useState<Record<string, ProcessingSummary>>({});
+  const [correctionRunId, setCorrectionRunId] = useState<string>();
   const batchCanManage = canManage && !["completed", "cancelled"].includes(detail?.batch.status ?? "");
 
   const loadBatches = useCallback(async () => {
@@ -777,6 +780,7 @@ export function CaptureBatchPage({
         onRetry={() => void loadBatches()}
       />
     );
+  if (correctionRunId) return <RegistrationCorrectionWorkspace runId={correctionRunId} canManage={batchCanManage} onClose={() => setCorrectionRunId(undefined)} onChanged={async () => { await loadDetail(selectedId, true); }} />;
   return (
     <div className="capture-batch-page">
       <section className="page-heading">
@@ -950,7 +954,36 @@ export function CaptureBatchPage({
                                   </span>
                                 </div>
                                 <Space wrap>
-                                  {summary?.blockers.filter((item) => item.registration_run_id && ["confirm_registration", "retry_registration"].includes(item.action)).map((item) => <Button key={item.page_id} type={item.action === "confirm_registration" ? "primary" : "default"} loading={actioning} disabled={!batchCanManage} onClick={() => void resolveRegistration(item.registration_run_id!, item.action === "confirm_registration" ? "confirm" : "retry")}>{item.action === "confirm_registration" ? `确认第 ${item.page_no} 页` : `重试第 ${item.page_no} 页`}</Button>)}
+                                  {summary?.blockers
+                                    .filter((item) => item.registration_run_id && item.stage === "registration")
+                                    .map((item) => (
+                                      <Space key={item.page_id} wrap>
+                                        {["confirm_registration", "retry_registration"].includes(item.action) && (
+                                          <Button
+                                            type={item.action === "confirm_registration" ? "primary" : "default"}
+                                            loading={actioning}
+                                            disabled={!batchCanManage}
+                                            onClick={() =>
+                                              void resolveRegistration(
+                                                item.registration_run_id!,
+                                                item.action === "confirm_registration" ? "confirm" : "retry",
+                                              )
+                                            }
+                                          >
+                                            {item.action === "confirm_registration"
+                                              ? `确认第 ${item.page_no} 页`
+                                              : `重试第 ${item.page_no} 页`}
+                                          </Button>
+                                        )}
+                                        <Button
+                                          icon={<SlidersHorizontal size={15} />}
+                                          disabled={!batchCanManage}
+                                          onClick={() => setCorrectionRunId(item.registration_run_id)}
+                                        >
+                                          校正第 {item.page_no} 页边界
+                                        </Button>
+                                      </Space>
+                                    ))}
                                   <Button icon={<Workflow size={16} />} loading={actioning} disabled={!batchCanManage || complete} onClick={() => void startPageProcessing(submissionId)}>{complete ? "处理完成" : "配准并切题"}</Button>
                                 </Space>
                               </div>
