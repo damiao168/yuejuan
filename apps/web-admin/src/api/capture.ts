@@ -113,6 +113,10 @@ export async function completeCaptureBatch(batchId: string, reason: string) {
   return apiClient.request<{ batch: CaptureBatch }>(`/api/v1/capture-batches/${encodeURIComponent(batchId)}/complete`, { method: "POST", body: JSON.stringify({ reason }) });
 }
 
+export async function reopenCaptureBatch(batchId: string, reason: string) {
+  return apiClient.request<{ batch: CaptureBatch }>(`/api/v1/capture-batches/${encodeURIComponent(batchId)}/reopen`, { method: "POST", body: JSON.stringify({ reason }) });
+}
+
 export async function updateCapturePage(pageId: string, payload: { revision: number; rotation_degrees?: number; sequence_no?: number }) {
   return apiClient.request<{ page: CapturePage }>(`/api/v1/capture-pages/${encodeURIComponent(pageId)}`, { method: "PATCH", body: JSON.stringify(payload) });
 }

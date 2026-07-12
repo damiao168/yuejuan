@@ -49,6 +49,7 @@ import {
   mergeCaptureSubmissions,
   processCaptureBatch,
   processSubmissionPages,
+  reopenCaptureBatch,
   registerCaptureFile,
   restoreCapturePage,
   retryRegistration,
@@ -338,6 +339,7 @@ export function CaptureBatchPage({
   const [matchingLoading, setMatchingLoading] = useState(false);
   const [processingSummaries, setProcessingSummaries] = useState<Record<string, ProcessingSummary>>({});
   const [correctionRunId, setCorrectionRunId] = useState<string>();
+  const [activeTab, setActiveTab] = useState("files");
   const batchCanManage = canManage && !["completed", "cancelled"].includes(detail?.batch.status ?? "");
 
   const loadBatches = useCallback(async () => {
@@ -501,6 +503,31 @@ export function CaptureBatchPage({
         } catch (currentError) {
           message.error(formatError(currentError));
           throw currentError;
+        } finally {
+          setActioning(false);
+        }
+      },
+    });
+  }
+
+  function reopenBatch() {
+    if (!detail) return;
+    let reason = "";
+    modal.confirm({
+      title: "重开采集批次",
+      content: <Input.TextArea rows={3} maxLength={300} placeholder="填写重开原因" onChange={(event) => { reason = event.target.value; }} />,
+      okText: "确认重开",
+      cancelText: "取消",
+      onOk: async () => {
+        if (!reason.trim()) {
+          message.error("请填写重开原因");
+          return Promise.reject();
+        }
+        setActioning(true);
+        try {
+          await reopenCaptureBatch(detail.batch.id, reason.trim());
+          await Promise.all([loadBatches(), loadDetail(detail.batch.id)]);
+          message.success("批次已重开");
         } finally {
           setActioning(false);
         }
@@ -890,6 +917,11 @@ export function CaptureBatchPage({
                         完成批次
                       </Button>
                     )}
+                    {detail.batch.status === "completed" && canManage && (
+                      <Button icon={<Undo2 size={16} />} onClick={reopenBatch} loading={actioning}>
+                        重开批次
+                      </Button>
+                    )}
                   </Space>
                 </header>
                 <div className="capture-summary-strip">
@@ -901,6 +933,8 @@ export function CaptureBatchPage({
                   ))}
                 </div>
                 <Tabs
+                  activeKey={activeTab}
+                  onChange={setActiveTab}
                   items={[
                     {
                       key: "files",
@@ -1021,15 +1055,23 @@ export function CaptureBatchPage({
                     {
                       key: "issues",
                       label: `处理问题 (${issuePages.length + detail.batch.failed_count})`,
-                      children: issuePages.length ? (
-                        <Table
-                          rowKey="id"
-                          columns={pageColumns}
-                          dataSource={issuePages}
-                          pagination={false}
-                          size="small"
-                          scroll={{ x: 700 }}
-                        />
+                      children: issuePages.length || detail.batch.failed_count > 0 ? (
+                        <div className="capture-issue-queue">
+                          {detail.files.filter((file) => file.status === "failed").map((file) => (
+                            <div className="capture-file-issue" key={file.id}>
+                              <div><strong>{file.original_name}</strong><span>文件处理失败 · {file.error_code || "未知错误"}</span></div>
+                              <Button icon={<FileUp size={15} />} disabled={!batchCanManage} onClick={() => setActiveTab("files")}>替换源文件</Button>
+                            </div>
+                          ))}
+                          {issuePages.length > 0 && <Table
+                            rowKey="id"
+                            columns={pageColumns}
+                            dataSource={issuePages}
+                            pagination={false}
+                            size="small"
+                            scroll={{ x: 700 }}
+                          />}
+                        </div>
                       ) : (
                         <Empty
                           image={Empty.PRESENTED_IMAGE_SIMPLE}

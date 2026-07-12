@@ -624,6 +624,27 @@ STORY-055B is complete. Next: STORY-055C TIFF and malformed-input production mat
 
 STORY-055C is complete. Next: STORY-055D continuous issue handling, completion, and reopen UX.
 
+## STORY-055D Continuous Issue Handling and Lifecycle UX (2026-07-12)
+
+### Specification and review
+
+- The issue count and issue content must be derived from the same sources. Failed files and review/quality/failed pages are both first-class queue items; an operator must never see “1 issue” with an empty panel.
+- File failures show the source filename and stable error code. The primary recovery command returns the operator to the file area to upload a replacement while preserving the failed record for audit.
+- Page issues reuse the existing evidence preview, rotation/delete, matching, registration retry/confirm, and manual correction commands. Resolving an issue refreshes authoritative batch/processing summaries rather than mutating counters locally.
+- Batch completion is offered only in authoritative `ready` state and makes every mutation path read-only. A completed batch exposes a dedicated reopen command only to managers.
+- Reopen requires a new non-empty operator reason and uses the audited backend transition. It is not combined with refresh or edit controls, and an empty reason never calls the API.
+
+### Implementation and acceptance
+
+- Added a controlled capture-workspace tab state so issue actions can take the operator directly to the relevant file workflow.
+- Added failed-file issue rows with source name, normalized error code, and replacement action; page issue tables remain in the same queue below file failures.
+- Added the completed-batch reopen command and reason modal, plus a typed Web API client for the existing audited endpoint.
+- Real Playwright verification on terminal-failure batch `317fdc68-79f5-4a31-8bc0-0bb1f6b0516b` showed one issue containing `truncated.tiff`, `invalid_tiff`, and the replacement command instead of an empty panel.
+- Real completed batch `ef89f64a-f6fe-495f-bf3e-554f94a5c9a3` remained read-only, displayed “重开批次”, and retained the modal when confirmation was attempted without a reason.
+- Web typecheck and production build passed; deployed Web/API/Worker/nginx remained healthy.
+
+STORY-055D is complete. Next: STORY-055E cross-layer risk E2E, performance smoke, implementation review, and final fixes.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。
