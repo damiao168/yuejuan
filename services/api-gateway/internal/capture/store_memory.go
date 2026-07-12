@@ -465,6 +465,21 @@ func (s *MemoryStore) ApplyFileFailure(_ context.Context, tenantID, fileID, erro
 	}
 	x.ErrorCode = errorCode
 	s.files[fileID] = x
+	if batch, exists := s.batches[x.CaptureBatchID]; exists {
+		batch.Revision++
+		if retryable {
+			batch.Status = "processing"
+		} else {
+			batch.Status = "needs_review"
+			batch.FailedCount = 0
+			for _, file := range s.files {
+				if file.CaptureBatchID == batch.ID && file.Status == "failed" {
+					batch.FailedCount++
+				}
+			}
+		}
+		s.batches[batch.ID] = batch
+	}
 	return x, nil
 }
 

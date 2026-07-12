@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import warnings
 from dataclasses import dataclass
 
 import pypdfium2 as pdfium
@@ -30,11 +31,11 @@ def decode_document(
 ) -> tuple[list[DecodedPage], str]:
     if not data:
         raise DecodeError("empty_document")
-    if data.startswith(b"%PDF-") or content_type == "application/pdf":
+    if data.startswith(b"%PDF-"):
         images = _decode_pdf(data, render_dpi, max_pages)
         detected = "application/pdf"
     else:
-        images, detected = _decode_image(data, max_pages)
+        images, detected = _decode_image(data, content_type, max_pages, max_page_pixels, max_total_pixels)
     pages: list[DecodedPage] = []
     total_pixels = 0
     for index, image in enumerate(images, start=1):
@@ -77,17 +78,45 @@ def _decode_pdf(data: bytes, render_dpi: int, max_pages: int) -> list[Image.Imag
         document.close()
 
 
-def _decode_image(data: bytes, max_pages: int) -> tuple[list[Image.Image], str]:
+def _decode_image(
+    data: bytes,
+    content_type: str,
+    max_pages: int,
+    max_page_pixels: int,
+    max_total_pixels: int,
+) -> tuple[list[Image.Image], str]:
+    tiff_expected = content_type in {"image/tiff", "image/tif"} or data.startswith((b"II*\x00", b"MM\x00*"))
     try:
-        source = Image.open(io.BytesIO(data))
-    except (UnidentifiedImageError, OSError) as exc:
-        raise DecodeError("unsupported_or_invalid_image") from exc
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            source = Image.open(io.BytesIO(data))
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError, UserWarning) as exc:
+        raise DecodeError("invalid_tiff" if tiff_expected else "unsupported_or_invalid_image") from exc
     try:
         frame_count = getattr(source, "n_frames", 1)
         if frame_count <= 0 or frame_count > max_pages:
             raise DecodeError("image_frame_limit_exceeded")
-        images = [frame.copy() for frame in ImageSequence.Iterator(source)]
-        detected = "image/tiff" if (source.format or "").upper() == "TIFF" else Image.MIME.get(source.format or "", "image/unknown")
+        is_tiff = (source.format or "").upper() == "TIFF"
+        images: list[Image.Image] = []
+        total_pixels = 0
+        try:
+            for frame in ImageSequence.Iterator(source):
+                pixels = frame.width * frame.height
+                total_pixels += pixels
+                if pixels <= 0 or pixels > max_page_pixels:
+                    raise DecodeError("page_pixel_limit_exceeded")
+                if total_pixels > max_total_pixels:
+                    raise DecodeError("document_pixel_limit_exceeded")
+                images.append(frame.copy())
+        except DecodeError:
+            for image in images:
+                image.close()
+            raise
+        except (OSError, ValueError, Image.DecompressionBombError) as exc:
+            for image in images:
+                image.close()
+            raise DecodeError("invalid_tiff" if is_tiff or tiff_expected else "unsupported_or_invalid_image") from exc
+        detected = "image/tiff" if is_tiff else Image.MIME.get(source.format or "", "image/unknown")
         return images, detected
     finally:
         source.close()

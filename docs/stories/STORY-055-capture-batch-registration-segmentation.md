@@ -604,6 +604,26 @@ Rejected alternatives: exposing signed MinIO URLs would duplicate authorization 
 
 STORY-055B is complete. Next: STORY-055C TIFF and malformed-input production matrix.
 
+## STORY-055C TIFF and Malformed Input Matrix (2026-07-12)
+
+### Specification and review
+
+- Binary signature detection takes precedence over declared MIME. A TIFF uploaded as `application/pdf` is decoded as TIFF; declared TIFF with invalid bytes receives `invalid_tiff`.
+- TIFF frames are validated before copying/materialization. Per-page pixels, cumulative document pixels, and frame count are bounded independently; a limit failure closes already copied frames and creates no capture pages.
+- Supported production classes are bilevel Group 4, grayscale LZW, RGB Deflate, and mixed multi-frame TIFF. Every accepted frame is normalized to RGB PNG before quality, identity, registration, and segmentation.
+- Corrupt/truncated TIFF warnings and decoder exceptions are converted to stable domain errors. Pillow/OpenCV traces and parser warnings are not exposed to operators.
+- A terminal file failure must atomically update the file and aggregate the batch to `needs_review`; retryable failures keep the batch in `processing`. No terminal failure may leave a batch indefinitely processing.
+
+### Implementation and acceptance
+
+- Refactored `decoder.py` to sniff PDF by magic, otherwise inspect images with Pillow, validate TIFF frames before materialization, close partial results on failure, and normalize TIFF failures to `invalid_tiff`.
+- Expanded the Worker suite to 18 passing tests covering Group 4/LZW/Deflate, 1-bit/L/RGB, multi-frame order, MIME mismatch, frame/page/total limits, truncated TIFF, invalid image, PDF, JPEG, and PNG normalization.
+- Real Compose batch `f416283d-118a-4157-85f7-ab7cc530d80f` uploaded a 52,912-byte two-page LZW TIFF. The file completed with `page_count=2`; pages 1 and 2 materialized as independent PNG assets of 10,715 and 10,773 bytes. The later `needs_review` state came from page identity/template workflow, not decoding.
+- Real terminal-failure batch `317fdc68-79f5-4a31-8bc0-0bb1f6b0516b` uploaded a 64-byte truncated TIFF. It converged to `batch=needs_review`, `failed_count=1`, `file=failed`, `error_code=invalid_tiff`, and zero pages.
+- Go capture/server tests and vet plus all 18 Python tests passed. API and Worker images were rebuilt and verified healthy in Compose.
+
+STORY-055C is complete. Next: STORY-055D continuous issue handling, completion, and reopen UX.
+
 ## Out of Scope
 
 - OCR 结果编辑和客观题评分，归 STORY-056。

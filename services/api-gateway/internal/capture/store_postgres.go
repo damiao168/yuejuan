@@ -361,7 +361,23 @@ func (s *PostgresStore) ApplyFileFailure(ctx context.Context, tenantID, fileID, 
 	if retryable {
 		status = "queued"
 	}
-	return scanFile(s.db.QueryRowContext(ctx, `UPDATE capture_file SET status=$3,error_code=$4,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL RETURNING `+fileColumns, tenantID, fileID, status, strings.TrimSpace(errorCode)))
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return File{}, err
+	}
+	defer tx.Rollback()
+	var batchID string
+	if err = tx.QueryRowContext(ctx, `SELECT capture_batch_id::text FROM capture_file WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, tenantID, fileID).Scan(&batchID); err != nil {
+		return File{}, mapNotFound(err)
+	}
+	out, err := scanFile(tx.QueryRowContext(ctx, `UPDATE capture_file SET status=$3,error_code=$4,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL RETURNING `+fileColumns, tenantID, fileID, status, strings.TrimSpace(errorCode)))
+	if err != nil {
+		return File{}, err
+	}
+	if err = s.aggregateBatchTx(ctx, tx, tenantID, batchID); err != nil {
+		return File{}, err
+	}
+	return out, tx.Commit()
 }
 
 func (s *PostgresStore) UpdatePage(ctx context.Context, tenantID, pageID, actorID string, input UpdatePageInput) (Page, error) {
@@ -466,6 +482,7 @@ failed_count=(SELECT count(*) FROM capture_file f WHERE f.tenant_id=b.tenant_id 
 review_count=(SELECT count(*) FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status IN ('needs_review','quality_rejected','failed') AND p.deleted_at IS NULL),
 status=CASE
  WHEN EXISTS(SELECT 1 FROM capture_file f WHERE f.tenant_id=b.tenant_id AND f.capture_batch_id=b.id AND f.status IN ('uploaded','queued','processing') AND f.deleted_at IS NULL) THEN 'processing'
+ WHEN EXISTS(SELECT 1 FROM capture_file f WHERE f.tenant_id=b.tenant_id AND f.capture_batch_id=b.id AND f.status='failed' AND f.deleted_at IS NULL) THEN 'needs_review'
  WHEN EXISTS(SELECT 1 FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status IN ('needs_review','quality_rejected','failed') AND p.deleted_at IS NULL) THEN 'needs_review'
  WHEN EXISTS(SELECT 1 FROM capture_page p JOIN submission s ON s.tenant_id=p.tenant_id AND s.id=p.submission_id WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status<>'deleted' AND s.identity_status IN ('unknown','conflict') AND p.deleted_at IS NULL) THEN 'needs_review'
  WHEN EXISTS(SELECT 1 FROM capture_page p JOIN submission s ON s.tenant_id=p.tenant_id AND s.id=p.submission_id WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status<>'deleted' AND s.identity_status<>'matched' AND p.deleted_at IS NULL) THEN 'matching'
