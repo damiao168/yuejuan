@@ -20,12 +20,21 @@ func (s *MemoryStore) ListTemplates(_ context.Context, tenantID string, examID s
 }
 
 func (s *MemoryStore) CreateTemplate(_ context.Context, tenantID string, examID string, userID string, input CreateTemplateInput) (AnswerSheetTemplate, error) {
+	input.Layout = NormalizeTemplateLayout(input.Layout)
 	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
 		return AnswerSheetTemplate{}, ErrInvalidInput
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.paperBelongsToExam(tenantID, examID, input.ExamPaperID) {
+		return AnswerSheetTemplate{}, ErrInvalidInput
+	}
+	var err error
+	input.Layout, err = s.materializeTemplateOMRReferenceLocked(tenantID, examID, input.ExamPaperID, input.Layout)
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
 		return AnswerSheetTemplate{}, ErrInvalidInput
 	}
 	version := 1
@@ -42,6 +51,7 @@ func (s *MemoryStore) CreateTemplate(_ context.Context, tenantID string, examID 
 }
 
 func (s *MemoryStore) UpdateTemplate(_ context.Context, tenantID string, id string, input UpdateTemplateInput) (AnswerSheetTemplate, error) {
+	input.Layout = NormalizeTemplateLayout(input.Layout)
 	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
 		return AnswerSheetTemplate{}, ErrInvalidInput
 	}
@@ -56,6 +66,14 @@ func (s *MemoryStore) UpdateTemplate(_ context.Context, tenantID string, id stri
 	}
 	if input.ExpectedRevision != item.Revision {
 		return AnswerSheetTemplate{}, ErrConflict
+	}
+	var err error
+	input.Layout, err = s.materializeTemplateOMRReferenceLocked(tenantID, item.ExamID, item.ExamPaperID, input.Layout)
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
+		return AnswerSheetTemplate{}, ErrInvalidInput
 	}
 	item.Name, item.PageCount, item.Layout = input.Name, input.PageCount, input.Layout
 	item.Revision++
@@ -76,9 +94,19 @@ func (s *MemoryStore) LockTemplate(_ context.Context, tenantID string, id string
 	if item.Status != "draft" {
 		return AnswerSheetTemplate{}, ErrTemplateLocked
 	}
+	item.Layout = NormalizeTemplateLayout(item.Layout)
+	var err error
+	item.Layout, err = s.materializeTemplateOMRReferenceLocked(tenantID, item.ExamID, item.ExamPaperID, item.Layout)
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	if err := ValidateTemplateInput(item.Name, item.PageCount, item.Layout); err != nil {
+		return AnswerSheetTemplate{}, ErrInvalidInput
+	}
 	now := time.Now().UTC()
 	item.Status, item.LockedBy, item.LockedAt, item.UpdatedAt = "locked", userID, &now, now
 	item.Revision++
+	item.ContentHash = stableContentHash(item.Layout)
 	s.templates[id] = item
 	s.invalidateReadiness(item.ExamID)
 	return item, nil
@@ -102,6 +130,12 @@ func (s *MemoryStore) CloneTemplate(_ context.Context, tenantID string, id strin
 	clone.ID, clone.VersionNo, clone.Revision = s.id("template"), version, 1
 	clone.Name, clone.Status, clone.CreatedBy = source.Name+" 副本", "draft", userID
 	clone.LockedBy, clone.LockedAt, clone.CreatedAt, clone.UpdatedAt = "", nil, now, now
+	var err error
+	clone.Layout, err = s.materializeTemplateOMRReferenceLocked(tenantID, clone.ExamID, clone.ExamPaperID, clone.Layout)
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	clone.ContentHash = stableContentHash(clone.Layout)
 	s.templates[clone.ID] = clone
 	s.invalidateReadiness(clone.ExamID)
 	return clone, nil
@@ -187,4 +221,24 @@ func (s *MemoryStore) invalidateReadiness(examID string) {
 		state.Status = "configured"
 		s.examState[examID] = state
 	}
+}
+
+func (s *MemoryStore) materializeTemplateOMRReferenceLocked(tenantID, examID, examPaperID string, layout TemplateLayout) (TemplateLayout, error) {
+	if layout.OMRProfile.Mode != OMRProfileModeTemplateDifference {
+		return BindTemplateOMRReference(layout, TemplateOMRReference{}), nil
+	}
+	paper, ok := s.papers[examPaperID]
+	if !ok || paper.TenantID != tenantID || paper.ExamID != examID {
+		return TemplateLayout{}, ErrInvalidInput
+	}
+	reference := TemplateOMRReference{
+		Source:      OMRReferenceSourceExamPaper,
+		FileAssetID: paper.FileAssetID,
+		HashSHA256:  paper.File.HashSHA256,
+		ContentType: paper.File.ContentType,
+	}
+	if err := ValidateTemplateOMRReference(reference); err != nil {
+		return TemplateLayout{}, ErrInvalidInput
+	}
+	return BindTemplateOMRReference(layout, reference), nil
 }

@@ -54,7 +54,7 @@ SELECT
   COALESCE(ak.id::text, ''), COALESCE(ak.answer_version, ''),
   COALESCE(ak.standard_answer, 'null'::jsonb),
   COALESCE(ak.equivalent_answers, '[]'::jsonb),
-  COALESCE(ak.tolerance, '{}'::jsonb),
+  COALESCE(sr.config, ak.tolerance, '{}'::jsonb),
   COALESCE(ans.id::text, ''), COALESCE(ans.answer_text, ''),
   COALESCE(ans.answer_payload, '{}'::jsonb), COALESCE(ans.source, ''),
   ans.confidence::float8, COALESCE(ans.recorded_by::text, ''), ans.created_at
@@ -67,6 +67,13 @@ LEFT JOIN LATERAL (
   ORDER BY created_at DESC
   LIMIT 1
 ) ak ON true
+LEFT JOIN LATERAL (
+  SELECT config
+  FROM scoring_rule
+  WHERE tenant_id = q.tenant_id AND question_id = q.id AND status = 'published' AND deleted_at IS NULL
+  ORDER BY version DESC
+  LIMIT 1
+) sr ON true
 LEFT JOIN LATERAL (
   SELECT id, answer_text, answer_payload, source, confidence, recorded_by, created_at
   FROM answer_segment_answer

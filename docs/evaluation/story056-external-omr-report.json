@@ -1,0 +1,83 @@
+{
+  "generated_at": "2026-07-15T03:24:40.781711+00:00",
+  "suite": "story056-tamaulipas-external-omr-v1",
+  "dataset": {
+    "title": "Tamaulipas Multiple-Choice-Question Exam Image Dataset for Optical Mark Recognition Research",
+    "doi": "10.17632/djmynjwjpy.2",
+    "license": "CC BY 4.0",
+    "upstream_image_count": 5721,
+    "local_answer_sheet_count": 20,
+    "local_item_count": 1800,
+    "local_subset_rate": 0.0034958923265163435,
+    "manifest_sha256": "e2a2a66a8e499527d932e932cfbfd5d40b8df98e8b70ccc3f380121d2d8dab34",
+    "contains_direct_names": false,
+    "contains_pseudonymous_answer_ids": true
+  },
+  "method": {
+    "registration": "largest dark answer-frame crop resized to 1960x3340",
+    "reference": "two-fold median template; evaluated sheets excluded from their reference fold",
+    "labels_used_for_registration_or_reference": false,
+    "profile": {
+      "version": "opencv-template-difference-bubble-v1",
+      "marked_threshold": 0.18,
+      "ambiguous_threshold": 0.1,
+      "minimum_margin": 0.06,
+      "reference_mask_dilation_pixels": 1
+    },
+    "auto_confirm_minimum_confidence": 0.98
+  },
+  "decision_counts": {
+    "selected": 413,
+    "blank": 348,
+    "multiple": 52,
+    "ambiguous": 987
+  },
+  "raw_extractor": {
+    "clear_label_count": 1776,
+    "correct_selected_count": 412,
+    "wrong_selected_count": 0,
+    "clear_routed_to_review_count": 1364,
+    "unsafe_label_count": 24,
+    "unsafe_routed_to_review_count": 23,
+    "unsafe_selected_count": 1,
+    "selected_precision": 0.9975786924939467,
+    "clear_selected_coverage": 0.23198198198198197,
+    "unsafe_review_recall": 0.9583333333333334
+  },
+  "production_gate": {
+    "automatic_count": 4,
+    "correct_automatic_count": 4,
+    "wrong_automatic_count": 0,
+    "manual_review_count": 1796,
+    "unsafe_automatic_count": 0,
+    "unsafe_routed_to_review_count": 24,
+    "silent_unsafe_zero_count": 0,
+    "automatic_precision": 1.0,
+    "automatic_coverage": 0.0022222222222222222,
+    "clear_automatic_coverage": 0.0022522522522522522,
+    "manual_routing_rate": 0.9977777777777778,
+    "unsafe_review_recall": 1.0
+  },
+  "throughput": {
+    "scope": "per-question extraction after registration and reference generation",
+    "average_duration_ms": 8.21,
+    "p95_duration_ms": 11.726,
+    "sequential_items_per_second": 121.8
+  },
+  "selected_confidence": {
+    "p50": 0.787,
+    "p95": 0.906,
+    "maximum": 1.0
+  },
+  "verdict": {
+    "auto_confirmation_profile_approved": false,
+    "required_mode": "manual_only",
+    "reason": "The safety gate eliminated observed false automatic decisions, but clear-answer automatic coverage is too low and the governed local subset is not representative of the full dataset."
+  },
+  "limitations": [
+    "The local subset contains 20 of 5,721 upstream answer sheets from one school/grade path.",
+    "The evaluation uses a harness-only frame registration step; production still requires a locked template and approved calibration evidence.",
+    "X and M are treated as unsafe human-observed labels, not as automatically scorable zero answers.",
+    "Aggregate results do not authorize use of raw images for training or redistribution."
+  ]
+}

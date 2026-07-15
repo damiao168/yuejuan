@@ -184,15 +184,26 @@ DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at, metadata = EXCLUDED.metadata
 }
 
 func (s *PostgresStore) Complete(ctx context.Context, tenantID string, taskID string, input CompleteInput) (Task, error) {
-	if input.LeaseToken == "" || input.ResultSchemaVersion == "" || input.DurationMS < 0 {
-		return Task{}, ErrInvalidInput
-	}
-	hash := payloadHash(input.ResultSchemaVersion, input.Result)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Task{}, err
 	}
 	defer tx.Rollback()
+	task, err := CompleteTaskInTx(ctx, tx, tenantID, taskID, input)
+	if err != nil {
+		return Task{}, err
+	}
+	return task, tx.Commit()
+}
+
+// CompleteTaskInTx validates and completes a Worker Runtime task inside the
+// caller's PostgreSQL transaction. Source adapters use it when the task result
+// and source-domain facts must commit together.
+func CompleteTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, taskID string, input CompleteInput) (Task, error) {
+	if input.LeaseToken == "" || input.ResultSchemaVersion == "" || input.DurationMS < 0 {
+		return Task{}, ErrInvalidInput
+	}
+	hash := payloadHash(input.ResultSchemaVersion, input.Result)
 	task, err := getTaskForUpdate(ctx, tx, tenantID, taskID)
 	if err != nil {
 		return Task{}, err
@@ -204,7 +215,7 @@ func (s *PostgresStore) Complete(ctx context.Context, tenantID string, taskID st
 		if task.ResultPayloadHash != hash {
 			return Task{}, ErrConflict
 		}
-		return task, tx.Commit()
+		return task, nil
 	}
 	if err := validateTaskLease(task, input.LeaseToken); err != nil {
 		return Task{}, err
@@ -232,7 +243,7 @@ WHERE tenant_id = $1 AND task_id = $2::uuid AND attempt_no = $3
 	if err != nil {
 		return Task{}, err
 	}
-	return task, tx.Commit()
+	return task, nil
 }
 
 func (s *PostgresStore) Fail(ctx context.Context, tenantID string, taskID string, input FailInput) (Task, error) {

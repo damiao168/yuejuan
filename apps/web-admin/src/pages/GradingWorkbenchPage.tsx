@@ -9,21 +9,24 @@ import {
   Input,
   InputNumber,
   List,
+  Modal,
+  Popconfirm,
   Progress,
   Segmented,
   Select,
   Space,
+  Table,
   Tabs,
   Tooltip
 } from "antd";
 import {
   BadgeCheck,
   CheckCircle2,
+  CircleStop,
   Eye,
-  FileText,
   Flag,
+  LogOut,
   Maximize2,
-  MessageSquareText,
   Minus,
   Play,
   RefreshCw,
@@ -35,28 +38,36 @@ import {
   ZoomOut
 } from "lucide-react";
 import { ApiClientError } from "../api/client";
+import { loadReviewDraftFallback, removeReviewDraftFallback, saveReviewDraftFallback } from "../auth/reviewDraftFallback";
 import { downloadFileBlob } from "../api/files";
-import { listQuestions, type Question, type RubricPoint } from "../api/papers";
+import { type Question, type RubricPoint } from "../api/papers";
 import {
-  createRuleGrade,
-  createSubjectiveAiGrade,
+  claimNextReviewTask,
+  cancelScoringRun,
+  getScoringRun,
   getReviewTask,
+  getReviewWorkspace,
+  getReviewDraft,
+  downloadReviewWorkspaceImage,
+  getScoringSummary,
   listAiGrades,
   listReviewTasks,
-  recordSegmentAnswer,
   returnReviewTask,
+  renewReviewTask,
+  releaseReviewTask,
+  retryFailedScoringRun,
+  saveReviewDraft,
   submitHumanGrade,
+  startScoringRun,
   verifyEvidence,
   type AiGrade,
   type EvidenceJob,
   type ReviewTask,
-  type RubricSelection
+  type RubricSelection,
+  type ScoringRunDetail,
+  type ScoringSummary
 } from "../api/review";
 import {
-  getOcrTask,
-  listAnswerSegments,
-  listOcrTasks,
-  listSubmissionPages,
   type AnswerSegment,
   type OcrResult,
   type OcrTask,
@@ -67,7 +78,8 @@ import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
 
 type TaskFilter = "active" | "pending" | "assigned" | "in_progress" | "returned" | "submitted";
-type ViewerMode = "original" | "ocr";
+type ViewerMode = "segment" | "original" | "ocr";
+type DraftSaveStatus = "idle" | "saving" | "saved" | "offline" | "conflict" | "error";
 
 interface WorkbenchContext {
   task: ReviewTask;
@@ -80,6 +92,9 @@ interface WorkbenchContext {
   aiGrades: AiGrade[];
   evidenceJob?: EvidenceJob;
   warnings: string[];
+  ocrText: string;
+  segmentImageUrl: string;
+  originalImageUrl?: string;
 }
 
 interface PreviewState {
@@ -99,6 +114,16 @@ interface ScoreDraft {
   answerText: string;
 }
 
+interface DraftFallbackSnapshot {
+  draft: ScoreDraft;
+  viewer: {
+    mode: ViewerMode;
+    scale: number;
+    rotation: number;
+    offset: { x: number; y: number };
+  };
+}
+
 const taskFilterOptions: { label: string; value: TaskFilter }[] = [
   { label: "可处理", value: "active" },
   { label: "待分配", value: "pending" },
@@ -115,7 +140,10 @@ const sourceLabels: Record<string, string> = {
   evidence_verification_failed: "证据校验失败",
   double_mark_required: "双评任务",
   score_anomaly: "分数异常",
-  manual_sample: "人工抽检"
+  manual_sample: "人工抽检",
+  omr_ambiguous: "涂卡结果待确认",
+  rule_review_required: "规则评分待确认",
+  grading_failure: "评分处理失败"
 };
 
 const taskStatusLabels: Record<string, string> = {
@@ -125,6 +153,26 @@ const taskStatusLabels: Record<string, string> = {
   returned: "退回",
   submitted: "已提交",
   completed: "已完成"
+};
+
+const scoringRunStatusLabels: Record<string, string> = {
+  queued: "等待处理",
+  processing: "处理中",
+  needs_review: "等待人工",
+  failed: "处理失败",
+  cancelling: "正在取消",
+  cancelled: "已取消",
+  completed: "已完成"
+};
+
+const scoringItemStateLabels: Record<string, string> = {
+  pending: "等待处理",
+  processing: "处理中",
+  review: "等待人工",
+  confirmed: "已确认",
+  failed: "失败",
+  cancelling: "正在取消",
+  cancelled: "已取消"
 };
 
 const commentPresets = ["答案完整，逻辑清晰", "关键步骤缺失", "结论正确但过程不充分", "请补充必要说明"];
@@ -196,48 +244,16 @@ function gradeMockLabel(grade?: AiGrade) {
 }
 
 async function loadTaskContext(task: ReviewTask): Promise<WorkbenchContext> {
-  const [segmentResult, pagesResult, ocrTaskResult, questionResult, gradeResult] = await Promise.allSettled([
-    listAnswerSegments(task.submission_id),
-    listSubmissionPages(task.submission_id),
-    listOcrTasks(task.submission_id),
-    listQuestions(task.exam_id),
-    listAiGrades(task.answer_segment_id)
-  ]);
-  const warnings = [segmentResult, pagesResult, ocrTaskResult, questionResult, gradeResult]
-    .filter((item): item is PromiseRejectedResult => item.status === "rejected")
-    .map((item) => formatError(item.reason));
-
-  const segments = segmentResult.status === "fulfilled" ? segmentResult.value.segments : [];
-  const pages = pagesResult.status === "fulfilled" ? pagesResult.value.pages : [];
-  const taskList = ocrTaskResult.status === "fulfilled" ? ocrTaskResult.value.tasks : [];
-  const ocrTasks = (
-    await Promise.allSettled(taskList.map((item) => getOcrTask(item.id).then((result) => result.task)))
-  )
-    .filter((item): item is PromiseFulfilledResult<OcrTask> => item.status === "fulfilled")
-    .map((item) => item.value);
-  const questions = questionResult.status === "fulfilled" ? questionResult.value.questions : [];
-  const segment = segments.find((item) => item.id === task.answer_segment_id);
-  const question = questions.find((item) => item.id === task.question_id);
-  const page = segment ? pages.find((item) => item.id === segment.submission_page_id) : undefined;
-  const ocrResults = ocrTasks.flatMap((ocrTask) => ocrTask.results ?? []).filter((result) => !segment || result.submission_page_id === segment.submission_page_id);
-  const aiGrades = gradeResult.status === "fulfilled" ? gradeResult.value.grades : [];
-
-  if (!segment) {
-    warnings.push("未能通过 submission_id 找到当前 answer_segment。");
-  }
-  if (!question) {
-    warnings.push("未能通过 exam_id/question_id 找到题目与 Rubric。");
-  }
-  if (!page) {
-    warnings.push("未能定位当前 answer_segment 对应的页面文件。");
-  }
-
-  return { task, segment, question, pages, page, ocrTasks, ocrResults, aiGrades, warnings };
+  const [workspaceResult, gradeResult] = await Promise.all([getReviewWorkspace(task.id), listAiGrades(task.answer_segment_id)]);
+  const workspace = workspaceResult.workspace;
+  const question = { ...workspace.context.question, rubric: workspace.context.rubric ?? workspace.context.question.rubric };
+  const segment = { id: task.answer_segment_id, tenant_id: task.tenant_id, submission_id: task.submission_id, submission_page_id: "", question_id: task.question_id, question_no: task.question_no, bbox: [], source: "workspace", status: workspace.segment_status, created_at: task.created_at, confidence: workspace.segment_confidence } as AnswerSegment;
+  return { task: workspace.task, segment, question, pages: [], ocrTasks: [], ocrResults: [], aiGrades: gradeResult.grades, warnings: [], ocrText: workspace.context.ocr_text, segmentImageUrl: workspace.segment_image_url, originalImageUrl: workspace.original_image_url };
 }
 
 function createInitialDraft(ctx: WorkbenchContext | null): ScoreDraft {
   const grade = latestGrade(ctx?.aiGrades ?? []);
-  const ocrText = ctx?.ocrResults.map((item) => item.text).filter(Boolean).join("\n") ?? "";
+  const ocrText = ctx?.ocrText || ctx?.ocrResults.map((item) => item.text).filter(Boolean).join("\n") || "";
   const selections: Record<string, number> = {};
   for (const point of ctx?.question?.rubric?.points ?? []) {
     selections[point.id] = 0;
@@ -247,17 +263,58 @@ function createInitialDraft(ctx: WorkbenchContext | null): ScoreDraft {
     comments: "",
     privateNote: "",
     studentFeedback: grade?.student_feedback ?? "",
-    reason: "manual review completed",
+    reason: "教师复核完成",
     disputeReason: "",
     rubricSelections: selections,
     answerText: ocrText
   };
 }
 
-export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, canReturn, initialExamId = "" }: { canWork: boolean; canGrade: boolean; canVerifyEvidence: boolean; canReturn: boolean; initialExamId?: string }) {
+function createDraftSnapshot(draft: ScoreDraft, mode: ViewerMode, scale: number, rotation: number, offset: { x: number; y: number }): DraftFallbackSnapshot {
+  return { draft, viewer: { mode, scale, rotation, offset } };
+}
+
+function fallbackSnapshot(value: unknown, initial: ScoreDraft): DraftFallbackSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const root = value as { draft?: unknown; viewer?: unknown };
+  if (!root.draft || typeof root.draft !== "object" || !root.viewer || typeof root.viewer !== "object") return null;
+  const cachedDraft = root.draft as Partial<ScoreDraft>;
+  const cachedViewer = root.viewer as { mode?: unknown; scale?: unknown; rotation?: unknown; offset?: unknown };
+  const selections = cachedDraft.rubricSelections && typeof cachedDraft.rubricSelections === "object" && !Array.isArray(cachedDraft.rubricSelections)
+    ? Object.fromEntries(Object.entries(cachedDraft.rubricSelections).flatMap(([key, value]) => typeof value === "number" && Number.isFinite(value) ? [[key, value]] : []))
+    : initial.rubricSelections;
+  const rawOffset = cachedViewer.offset && typeof cachedViewer.offset === "object" ? cachedViewer.offset as { x?: unknown; y?: unknown } : {};
+  const score = typeof cachedDraft.score === "number" && Number.isFinite(cachedDraft.score) ? cachedDraft.score : null;
+  const mode = cachedViewer.mode === "original" || cachedViewer.mode === "ocr" || cachedViewer.mode === "segment" ? cachedViewer.mode : "segment";
+  const scale = typeof cachedViewer.scale === "number" && Number.isFinite(cachedViewer.scale) ? Math.min(4, Math.max(0.25, cachedViewer.scale)) : 1;
+  const rotation = typeof cachedViewer.rotation === "number" && Number.isFinite(cachedViewer.rotation) ? cachedViewer.rotation : 0;
+  return {
+    draft: {
+      ...initial,
+      score,
+      comments: typeof cachedDraft.comments === "string" ? cachedDraft.comments : initial.comments,
+      privateNote: typeof cachedDraft.privateNote === "string" ? cachedDraft.privateNote : initial.privateNote,
+      studentFeedback: typeof cachedDraft.studentFeedback === "string" ? cachedDraft.studentFeedback : initial.studentFeedback,
+      reason: typeof cachedDraft.reason === "string" ? cachedDraft.reason : initial.reason,
+      disputeReason: typeof cachedDraft.disputeReason === "string" ? cachedDraft.disputeReason : initial.disputeReason,
+      rubricSelections: selections,
+      answerText: typeof cachedDraft.answerText === "string" ? cachedDraft.answerText : initial.answerText
+    },
+    viewer: {
+      mode,
+      scale,
+      rotation,
+      offset: {
+        x: typeof rawOffset.x === "number" && Number.isFinite(rawOffset.x) ? rawOffset.x : 0,
+        y: typeof rawOffset.y === "number" && Number.isFinite(rawOffset.y) ? rawOffset.y : 0
+      }
+    }
+  };
+}
+
+export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, canReturn, currentUserId, initialExamId = "" }: { canWork: boolean; canGrade: boolean; canVerifyEvidence: boolean; canReturn: boolean; currentUserId: string; initialExamId?: string }) {
   const { message } = App.useApp();
   const hasSession = true;
-  const canSubmit = canWork && hasSession;
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("active");
   const [keyword, setKeyword] = useState("");
   const [tasks, setTasks] = useState<ReviewTask[]>([]);
@@ -270,14 +327,23 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
   const [draft, setDraft] = useState<ScoreDraft>(() => createInitialDraft(null));
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [viewerMode, setViewerMode] = useState<ViewerMode>("original");
+  const [viewerMode, setViewerMode] = useState<ViewerMode>("segment");
   const [scale, setScale] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [actioning, setActioning] = useState<string | null>(null);
+  const [scoringSummary, setScoringSummary] = useState<ScoringSummary | null>(null);
+  const [scoringLoading, setScoringLoading] = useState(false);
+  const [scoringRunDetail, setScoringRunDetail] = useState<ScoringRunDetail | null>(null);
+  const [scoringDetailOpen, setScoringDetailOpen] = useState(false);
+  const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [draftRevision, setDraftRevision] = useState(0);
+  const [draftSaveStatus, setDraftSaveStatus] = useState<DraftSaveStatus>("idle");
+  const [draftHydrated, setDraftHydrated] = useState(false);
+  const lastSavedDraft = useRef("");
 
   const filteredTasks = useMemo(() => {
     const text = keyword.trim().toLowerCase();
@@ -294,11 +360,20 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
     });
   }, [initialExamId, keyword, taskFilter, tasks]);
 
+  useEffect(() => {
+    if (loadingTasks || filteredTasks.some((task) => task.id === selectedTaskId)) {
+      return;
+    }
+    setSelectedTaskId(filteredTasks[0]?.id ?? "");
+  }, [filteredTasks, loadingTasks, selectedTaskId]);
+
   const selectedIndex = useMemo(() => filteredTasks.findIndex((task) => task.id === selectedTaskId), [filteredTasks, selectedTaskId]);
   const selectedGrade = useMemo(() => latestGrade(ctx?.aiGrades ?? []), [ctx?.aiGrades]);
   const maxScore = ctx?.question?.score ?? selectedGrade?.max_score ?? 0;
   const rubricPoints = ctx?.question?.rubric?.points ?? [];
   const rubricTotal = useMemo(() => Object.values(draft.rubricSelections).reduce((sum, value) => sum + (Number(value) || 0), 0), [draft.rubricSelections]);
+  const ownsSelectedTask = Boolean(ctx?.task.assigned_to && ctx.task.assigned_to === currentUserId);
+  const canSubmit = canWork && hasSession && ownsSelectedTask && Boolean(ctx && ["assigned", "in_progress", "returned"].includes(ctx.task.status));
 
   const loadTasks = useCallback(async () => {
     setLoadingTasks(true);
@@ -313,7 +388,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
     try {
       const result = await listReviewTasks();
       setTasks(result.tasks);
-      setSelectedTaskId((current) => current || result.tasks[0]?.id || "");
+      setSelectedTaskId((current) => current || result.tasks.find((task) => ["assigned", "in_progress", "returned"].includes(task.status))?.id || "");
     } catch (currentError) {
       setTaskError(formatError(currentError));
     } finally {
@@ -321,13 +396,91 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
     }
   }, [hasSession]);
 
+  const loadScoringSummary = useCallback(async () => {
+    if (!initialExamId || !canGrade) return;
+    setScoringLoading(true);
+    try {
+      const result = await getScoringSummary(initialExamId);
+      setScoringSummary(result.scoring_summary);
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setScoringLoading(false);
+    }
+  }, [canGrade, initialExamId, message]);
+
+  const startExamScoring = useCallback(async () => {
+    if (!initialExamId || !canGrade) return;
+    setActioning("start-scoring");
+    try {
+      await startScoringRun(initialExamId, `web-${crypto.randomUUID()}`);
+      message.success("评分任务已生成");
+      await Promise.all([loadScoringSummary(), loadTasks()]);
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setActioning(null);
+    }
+  }, [canGrade, initialExamId, loadScoringSummary, loadTasks, message]);
+
+  const showScoringRunDetail = useCallback(async () => {
+    const runId = scoringSummary?.run?.id;
+    if (!runId) return;
+    setActioning("scoring-detail");
+    try {
+      const detail = await getScoringRun(runId);
+      setScoringRunDetail(detail);
+      setScoringDetailOpen(true);
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setActioning(null);
+    }
+  }, [message, scoringSummary?.run?.id]);
+
+  const retryFailedScoring = useCallback(async () => {
+    const runId = scoringSummary?.run?.id;
+    if (!runId) return;
+    setActioning("retry-scoring");
+    try {
+      const result = await retryFailedScoringRun(runId);
+      if (result.requeued > 0) {
+        message.success(`已重新安排 ${result.requeued} 个失败项`);
+      } else {
+        message.info("当前没有可重新处理的失败项");
+      }
+      await Promise.all([loadScoringSummary(), loadTasks()]);
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setActioning(null);
+    }
+  }, [loadScoringSummary, loadTasks, message, scoringSummary?.run?.id]);
+
+  const cancelCurrentScoringRun = useCallback(async () => {
+    const runId = scoringSummary?.run?.id;
+    if (!runId) return;
+    setActioning("cancel-scoring");
+    try {
+      await cancelScoringRun(runId);
+      message.success("本次评分已取消，未完成任务不会继续写入结果");
+      await Promise.all([loadScoringSummary(), loadTasks()]);
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setActioning(null);
+    }
+  }, [loadScoringSummary, loadTasks, message, scoringSummary?.run?.id]);
+
   const loadContext = useCallback(async (taskId: string) => {
     if (!taskId || !hasSession) {
       setCtx(null);
+      setDraftHydrated(false);
       return;
     }
     setContextLoading(true);
     setContextError(null);
+    setDraftHydrated(false);
     setPreview(null);
     setScale(1);
     setRotation(0);
@@ -336,21 +489,120 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
       const detail = await getReviewTask(taskId);
       const next = await loadTaskContext(detail.task);
       setCtx(next);
-      setDraft(createInitialDraft(next));
+      const initial = createInitialDraft(next);
+      const draftResult = await getReviewDraft(taskId);
+      let restored = initial;
+      let revision = 0;
+      let restoredViewer: DraftFallbackSnapshot["viewer"] = { mode: "segment", scale: 1, rotation: 0, offset: { x: 0, y: 0 } };
+      let serverUpdatedAt = 0;
+      if (draftResult.draft) {
+        restored = {
+          ...initial,
+          score: draftResult.draft.score ?? null,
+          comments: draftResult.draft.comments,
+          privateNote: draftResult.draft.private_note,
+          studentFeedback: draftResult.draft.student_feedback,
+          rubricSelections: Object.fromEntries(draftResult.draft.rubric_selections.map((item) => [item.point_id, item.score]))
+        };
+        revision = draftResult.draft.revision;
+        const viewer = draftResult.draft.viewer_state;
+        const mode = ["segment", "original", "ocr"].includes(String(viewer.mode)) ? viewer.mode as ViewerMode : "segment";
+        const scale = Number(viewer.scale ?? 1);
+        const rotation = Number(viewer.rotation ?? 0);
+        const savedOffset = viewer.offset as { x?: number; y?: number } | undefined;
+        restoredViewer = { mode, scale, rotation, offset: { x: Number(savedOffset?.x ?? 0), y: Number(savedOffset?.y ?? 0) } };
+        serverUpdatedAt = Date.parse(draftResult.draft.updated_at) || 0;
+      }
+      const serverSnapshot = createDraftSnapshot(restored, restoredViewer.mode, restoredViewer.scale, restoredViewer.rotation, restoredViewer.offset);
+      const localDraft = loadReviewDraftFallback<unknown>(currentUserId, taskId);
+      const localSnapshot = localDraft ? fallbackSnapshot(localDraft.snapshot, initial) : null;
+      const useLocalDraft = Boolean(localDraft && localSnapshot && localDraft.updatedAt > serverUpdatedAt);
+      if (useLocalDraft && localSnapshot) {
+        restored = localSnapshot.draft;
+        restoredViewer = localSnapshot.viewer;
+        setDraftSaveStatus("offline");
+      } else {
+        if (localDraft) removeReviewDraftFallback(currentUserId, taskId);
+        setDraftSaveStatus(draftResult.draft ? "saved" : "idle");
+      }
+      setDraft(restored);
+      setDraftRevision(revision);
+      setViewerMode(restoredViewer.mode);
+      setScale(restoredViewer.scale);
+      setRotation(restoredViewer.rotation);
+      setOffset(restoredViewer.offset);
+      lastSavedDraft.current = JSON.stringify(serverSnapshot);
+      setDraftHydrated(true);
     } catch (currentError) {
       setContextError(formatError(currentError));
     } finally {
       setContextLoading(false);
     }
-  }, [hasSession]);
+  }, [currentUserId, hasSession]);
+
+  useEffect(() => {
+    const updateOnlineState = () => setOnline(navigator.onLine);
+    window.addEventListener("online", updateOnlineState);
+    window.addEventListener("offline", updateOnlineState);
+    return () => {
+      window.removeEventListener("online", updateOnlineState);
+      window.removeEventListener("offline", updateOnlineState);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!draftHydrated || !ctx || ctx.task.status === "submitted") return;
+    const snapshotValue = createDraftSnapshot(draft, viewerMode, scale, rotation, offset);
+    const snapshot = JSON.stringify(snapshotValue);
+    if (snapshot === lastSavedDraft.current) return;
+    saveReviewDraftFallback(currentUserId, ctx.task.id, snapshotValue);
+    if (draftSaveStatus === "conflict") return;
+    const timer = window.setTimeout(async () => {
+      if (!online) {
+        setDraftSaveStatus("offline");
+        return;
+      }
+      setDraftSaveStatus("saving");
+      try {
+        const selections = Object.entries(draft.rubricSelections).filter(([, value]) => Number(value) > 0).map(([point_id, value]) => ({ point_id, score: Number(value) }));
+        const result = await saveReviewDraft(ctx.task.id, {
+          score: draft.score,
+          rubric_selections: selections,
+          comments: draft.comments,
+          private_note: draft.privateNote,
+          student_feedback: draft.studentFeedback,
+          viewer_state: { mode: viewerMode, scale, rotation, offset },
+          expected_revision: draftRevision
+        });
+        setDraftRevision(result.draft.revision);
+        lastSavedDraft.current = snapshot;
+        removeReviewDraftFallback(currentUserId, ctx.task.id);
+        setDraftSaveStatus("saved");
+      } catch (currentError) {
+        setDraftSaveStatus(currentError instanceof ApiClientError && currentError.status === 409 ? "conflict" : (!navigator.onLine ? "offline" : "error"));
+      }
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [ctx, currentUserId, draft, draftHydrated, draftRevision, offset, online, rotation, scale, viewerMode]);
 
   useEffect(() => {
     void loadTasks();
   }, [loadTasks]);
 
   useEffect(() => {
+    void loadScoringSummary();
+  }, [loadScoringSummary]);
+
+  useEffect(() => {
     void loadContext(selectedTaskId);
   }, [loadContext, selectedTaskId]);
+
+  useEffect(() => {
+    if (!selectedTaskId || !ctx || !["assigned", "in_progress", "returned"].includes(ctx.task.status)) return;
+    const renew = () => void renewReviewTask(selectedTaskId).catch(() => setDraftSaveStatus("error"));
+    const timer = window.setInterval(renew, 5 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [ctx, selectedTaskId]);
 
   useEffect(() => {
     return () => {
@@ -361,12 +613,16 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
   }, [preview?.url]);
 
   const loadPreview = useCallback(async () => {
-    if (!ctx?.page) {
+    if (!ctx || viewerMode === "ocr" || (viewerMode === "original" && !ctx.originalImageUrl) || (viewerMode === "segment" && !ctx.segmentImageUrl)) {
       return;
     }
     setPreviewLoading(true);
+    setPreview((current) => {
+      if (current?.url) URL.revokeObjectURL(current.url);
+      return null;
+    });
     try {
-      const file = await downloadFileBlob(ctx.page.file_asset_id);
+      const file = await downloadReviewWorkspaceImage(viewerMode === "segment" ? ctx.segmentImageUrl : ctx.originalImageUrl!);
       setPreview((current) => {
         if (current?.url) {
           URL.revokeObjectURL(current.url);
@@ -378,13 +634,13 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
     } finally {
       setPreviewLoading(false);
     }
-  }, [ctx?.page, message]);
+  }, [ctx, message, viewerMode]);
 
   useEffect(() => {
-    if (ctx?.page) {
+    if (ctx && viewerMode !== "ocr") {
       void loadPreview();
     }
-  }, [ctx?.page, loadPreview]);
+  }, [ctx, loadPreview, viewerMode]);
 
   const refreshCurrent = async () => {
     if (selectedTaskId) {
@@ -405,14 +661,40 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
     }
   };
 
-  const goNext = () => {
+  const goNext = async () => {
     const next = filteredTasks.slice(selectedIndex + 1).find((task) => task.status !== "submitted" && task.status !== "completed");
     if (next) {
       setSelectedTaskId(next.id);
       return;
     }
     const fallback = filteredTasks.find((task) => task.status !== "submitted" && task.status !== "completed");
-    setSelectedTaskId(fallback?.id ?? "");
+    if (fallback) {
+      setSelectedTaskId(fallback.id);
+      return;
+    }
+    try {
+      const result = await claimNextReviewTask(initialExamId);
+      setTasks((current) => current.some((item) => item.id === result.task.id)
+        ? current.map((item) => item.id === result.task.id ? result.task : item)
+        : [...current, result.task]);
+      setSelectedTaskId(result.task.id);
+    } catch (currentError) {
+      if (currentError instanceof ApiClientError && currentError.status === 404) {
+        message.info("当前没有待领取的阅卷任务");
+        setSelectedTaskId("");
+        return;
+      }
+      message.error(formatError(currentError));
+    }
+  };
+
+  const releaseCurrentTask = async () => {
+    if (!selectedTaskId || !ownsSelectedTask) return;
+    await runAction("release", async () => {
+      const result = await releaseReviewTask(selectedTaskId);
+      setTasks((current) => current.map((item) => item.id === result.task.id ? result.task : item));
+      setSelectedTaskId("");
+    }, "任务已释放，草稿仍会保留");
   };
 
   const submitGrade = async () => {
@@ -437,10 +719,28 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
           comments: draft.comments,
           private_note: draft.privateNote,
           student_feedback: draft.studentFeedback,
-          reason: draft.reason || "manual review completed"
+          reason: draft.reason || "教师复核完成"
         });
-        await loadTasks();
-        goNext();
+        removeReviewDraftFallback(currentUserId, ctx.task.id);
+        const [refreshed] = await Promise.all([listReviewTasks(), loadScoringSummary()]);
+        setTasks(refreshed.tasks);
+        const nextTask = refreshed.tasks.find((task) => (!initialExamId || task.exam_id === initialExamId) && ["assigned", "in_progress", "returned"].includes(task.status));
+        if (nextTask) {
+          setSelectedTaskId(nextTask.id);
+        } else if (!refreshed.tasks.some((task) => (!initialExamId || task.exam_id === initialExamId) && task.status === "pending")) {
+          setSelectedTaskId("");
+        } else {
+          try {
+            const claimed = await claimNextReviewTask(initialExamId);
+            setTasks((current) => current.some((item) => item.id === claimed.task.id)
+              ? current.map((item) => item.id === claimed.task.id ? claimed.task : item)
+              : [...current, claimed.task]);
+            setSelectedTaskId(claimed.task.id);
+          } catch (claimError) {
+            if (claimError instanceof ApiClientError && claimError.status === 404) setSelectedTaskId("");
+            else throw claimError;
+          }
+        }
       },
       "人工评分已提交"
     );
@@ -509,6 +809,9 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
   const viewerTransform = `translate(${offset.x}px, ${offset.y}px) scale(${scale}) rotate(${rotation}deg)`;
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (scale <= 1) {
+      return;
+    }
     setDragging(true);
     setDragStart({ x: event.clientX - offset.x, y: event.clientY - offset.y });
     viewportRef.current?.setPointerCapture(event.pointerId);
@@ -535,7 +838,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
     }
     const isImage = preview.contentType.startsWith("image/");
     const isPDF = preview.contentType === "application/pdf";
-    const ocrText = ctx?.ocrResults.map((item) => item.text).filter(Boolean).join("\n") || "当前页面暂无 OCR 结果。";
+    const ocrText = ctx?.ocrText || ctx?.ocrResults.map((item) => item.text).filter(Boolean).join("\n") || "当前页面暂无 OCR 结果。";
     return (
       <div
         ref={viewportRef}
@@ -543,6 +846,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
       >
         <div className="answer-viewer-stage" style={{ transform: viewerTransform }}>
           {viewerMode === "ocr" ? (
@@ -573,7 +877,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
 
   const renderEvidence = () => {
     if (!selectedGrade) {
-      return <EmptyState title="暂无 AI 建议" description="可先记录答案文本，再执行规则判分或主观题 AI 接口。" />;
+      return <EmptyState title="暂无 AI 建议" description="请依据答题区域与评分细则完成人工复核。" />;
     }
     return (
       <div className="evidence-stack">
@@ -688,25 +992,72 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
 
   return (
     <div className="grading-shell">
+      {initialExamId && canGrade ? <section className="grading-overview">
+        <div className="grading-overview-head">
+          <div><h2>评分进度</h2><p>系统只自动确认证据完整且规则明确的答案，其余进入人工队列。</p></div>
+          <Space wrap>
+            <Button icon={<RefreshCw size={15} />} loading={scoringLoading} onClick={() => void loadScoringSummary()}>刷新</Button>
+            {scoringSummary?.run ? <Button icon={<Eye size={15} />} loading={actioning === "scoring-detail"} onClick={() => void showScoringRunDetail()}>查看处理明细</Button> : null}
+            {scoringSummary?.run && scoringSummary.run.failed_count > 0 ? <Button icon={<RotateCcw size={15} />} loading={actioning === "retry-scoring"} onClick={() => void retryFailedScoring()}>重新处理失败项</Button> : null}
+            {scoringSummary?.run && ["queued", "processing", "needs_review", "failed"].includes(scoringSummary.run.status) ? <Popconfirm title="取消本次评分？" description="未完成的自动处理和人工任务将停止，已保留的历史结果不会删除。" okText="取消评分" cancelText="保留" okButtonProps={{ danger: true }} onConfirm={() => void cancelCurrentScoringRun()}>
+              <Button danger icon={<CircleStop size={15} />} loading={actioning === "cancel-scoring"}>取消评分</Button>
+            </Popconfirm> : null}
+            <Button type="primary" icon={<Play size={15} />} loading={actioning === "start-scoring"} onClick={() => void startExamScoring()}>开始评分</Button>
+          </Space>
+        </div>
+        {scoringSummary?.run ? <div className="grading-run-strip">
+          <StatusTag tone={scoringSummary.run.status === "completed" ? "success" : scoringSummary.run.status === "failed" ? "danger" : scoringSummary.run.status === "needs_review" ? "warning" : "processing"}>{scoringRunStatusLabels[scoringSummary.run.status] ?? scoringSummary.run.status}</StatusTag>
+          <span>总计 <strong>{scoringSummary.run.total_count}</strong></span>
+          <span>处理中 <strong>{scoringSummary.run.queued_count}</strong></span>
+          <span>自动确认 <strong>{scoringSummary.run.auto_confirmed_count}</strong></span>
+          <span>人工完成 <strong>{scoringSummary.run.human_confirmed_count}</strong></span>
+          <span>待人工 <strong>{scoringSummary.run.review_count}</strong></span>
+          <span>失败 <strong>{scoringSummary.run.failed_count}</strong></span>
+        </div> : <Alert type="info" showIcon message="尚未开始评分" description="确认采集与切题完成后启动；缺少规则或证据的答案会自动进入人工队列。" />}
+        <Table size="small" pagination={false} loading={scoringLoading} rowKey="question_id" dataSource={scoringSummary?.questions ?? []} columns={[
+          { title: "题号", dataIndex: "question_no", width: 90 },
+          { title: "题型", dataIndex: "question_type", width: 140 },
+          { title: "答卷", dataIndex: "total", width: 80 },
+          { title: "处理中", dataIndex: "queued", width: 90 },
+          { title: "已确认", dataIndex: "confirmed", width: 90 },
+          { title: "待人工", dataIndex: "review", width: 90 },
+          { title: "失败", dataIndex: "failed", width: 80 }
+        ]} />
+      </section> : null}
+      <Modal title="评分处理明细" open={scoringDetailOpen} onCancel={() => setScoringDetailOpen(false)} footer={<Button onClick={() => setScoringDetailOpen(false)}>关闭</Button>} width={900}>
+        <Table size="small" pagination={{ pageSize: 12, showSizeChanger: false }} rowKey="answer_segment_id" dataSource={scoringRunDetail?.items ?? []} columns={[
+          { title: "题号", dataIndex: "question_no", width: 84 },
+          { title: "题型", dataIndex: "question_type", width: 130 },
+          { title: "当前状态", dataIndex: "state", width: 112, render: (value: string) => <StatusTag tone={value === "confirmed" ? "success" : value === "failed" ? "danger" : value === "review" ? "warning" : "processing"}>{scoringItemStateLabels[value] ?? value}</StatusTag> },
+          { title: "需要处理的原因", render: (_, item: ScoringRunDetail["items"][number]) => item.error_code || item.reason_code || (item.state === "confirmed" ? "已完成" : "-") },
+          { title: "处理任务", render: (_, item: ScoringRunDetail["items"][number]) => item.runtime_status || item.review_status || "-", width: 120 }
+        ]} />
+      </Modal>
       <section className="grading-topbar">
         <div>
           <Space>
             <h1>阅卷工作台</h1>
           </Space>
-          <p>处理 review_task，核对原图、OCR、AI 建议和 Rubric 后提交人工分。</p>
+          <p>查看学生答案，对照评分标准，确认得分后进入下一份。</p>
         </div>
         <Space wrap>
+          <span className={`draft-save-status ${draftSaveStatus}`}>{draftSaveStatus === "saving" ? "正在保存" : draftSaveStatus === "saved" ? "草稿已保存" : draftSaveStatus === "offline" ? "离线草稿待同步" : draftSaveStatus === "conflict" ? "草稿冲突" : draftSaveStatus === "error" ? "草稿保存失败" : "尚未修改"}</span>
           <Button icon={<RefreshCw size={16} />} onClick={() => void refreshCurrent()} loading={loadingTasks || contextLoading}>
             刷新
           </Button>
-          <Button icon={<Undo2 size={16} />} onClick={goNext} disabled={filteredTasks.length === 0}>
-            下一份
+          <Button icon={<Undo2 size={16} />} onClick={() => void goNext()} disabled={!canWork}>
+            领取下一份
           </Button>
+          <Tooltip title="释放当前任务并保留草稿">
+            <Button icon={<LogOut size={16} />} disabled={!ownsSelectedTask} loading={actioning === "release"} onClick={() => void releaseCurrentTask()} aria-label="释放当前任务" />
+          </Tooltip>
           <Button type="primary" icon={<Save size={16} />} disabled={!canSubmit || !ctx || ctx.task.status === "submitted"} loading={actioning === "submit"} onClick={() => void submitGrade()}>
-            提交评分
+            确认并下一份
           </Button>
         </Space>
       </section>
+
+      {draftSaveStatus === "conflict" ? <Alert type="error" showIcon message="草稿已被其他会话更新" description="为防止覆盖他人修改，自动保存已暂停。重新载入任务后再应用本地修改。" action={<Button onClick={() => void loadContext(selectedTaskId)}>重新载入</Button>} /> : draftSaveStatus === "offline" ? <Alert type="warning" showIcon message="当前离线，草稿已保存在本机" description="恢复网络后会按版本号同步；提交或退出后会清理本机草稿。" /> : draftSaveStatus === "error" ? <Alert type="warning" showIcon message="草稿暂未保存到服务端" description="本机保留了短期草稿；检查网络后系统会再次尝试保存。" /> : null}
 
       {!hasSession ? (
         <Alert
@@ -726,11 +1077,11 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
       <section className="grading-workspace">
         <aside className="grading-task-list">
           {loadingTasks ? (
-            <LoadingState label="正在读取 review_task" />
+            <LoadingState label="正在读取阅卷任务" />
           ) : taskError ? (
             <ErrorState message={taskError} onRetry={() => void loadTasks()} />
           ) : filteredTasks.length === 0 ? (
-            <EmptyState title="暂无阅卷任务" description="当前筛选下没有后端返回的 review_task。" />
+            <EmptyState title="暂无阅卷任务" description="当前筛选下没有需要处理的答卷。" />
           ) : (
             <List
               dataSource={filteredTasks}
@@ -742,7 +1093,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
                   </div>
                   <div>
                     <StatusTag tone={taskTone(task.status)}>{taskStatusLabels[task.status] ?? task.status}</StatusTag>
-                    <span>P{task.priority}</span>
+                    {task.priority >= 80 ? <span>优先处理</span> : null}
                   </div>
                 </List.Item>
               )}
@@ -760,14 +1111,14 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
           </main>
         ) : !ctx ? (
           <main className="grading-main-empty">
-            <EmptyState title="请选择任务" description="选择左侧 review_task 后进入阅卷工作台。" />
+            <EmptyState title="请选择一份答卷" description="从左侧队列选择，或领取下一份待阅答卷。" />
           </main>
         ) : (
           <main className="grading-main">
             {ctx.warnings.length > 0 ? <Alert type="warning" showIcon message="上下文不完整" description={ctx.warnings.join("；")} /> : null}
 
             <section className="grading-context-row">
-              <Descriptions bordered size="small" column={4}>
+              <Descriptions bordered size="small" column={{ xs: 1, sm: 2, lg: 4 }}>
                 <Descriptions.Item label="匿名码">{ctx.task.anonymous_code}</Descriptions.Item>
                 <Descriptions.Item label="题号">{ctx.task.question_no}</Descriptions.Item>
                 <Descriptions.Item label="来源">{sourceLabels[ctx.task.source] ?? ctx.task.source}</Descriptions.Item>
@@ -779,11 +1130,11 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
               <section className="answer-panel">
                 <div className="panel-head">
                   <div>
-                    <h2>原始答卷</h2>
-                    <p>{preview?.filename ?? ctx.page?.file_asset_id ?? "未定位页面文件"}</p>
+                    <h2>学生答案</h2>
+                    <p>{preview?.filename ?? (viewerMode === "segment" ? "当前题目裁图" : "原始答卷页")}</p>
                   </div>
                   <Space wrap>
-                    <Segmented<ViewerMode> size="small" value={viewerMode} options={[{ label: "原图", value: "original" }, { label: "OCR", value: "ocr" }]} onChange={setViewerMode} />
+                    <Segmented<ViewerMode> size="small" value={viewerMode} options={[{ label: "答题区域", value: "segment" }, { label: "原图", value: "original" }, { label: "OCR", value: "ocr" }]} onChange={setViewerMode} />
                     <Tooltip title="缩小">
                       <Button icon={<ZoomOut size={14} />} onClick={() => setScale((value) => Math.max(0.4, Number((value - 0.1).toFixed(2))))} />
                     </Tooltip>
@@ -801,74 +1152,10 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
               <section className="evidence-panel">
                 <div className="panel-head">
                   <div>
-                    <h2>AI 证据</h2>
+                    <h2>识别与建议</h2>
                     <p>{gradeMockLabel(selectedGrade)}</p>
                   </div>
                   <Space wrap>
-                    <Button
-                      icon={<FileText size={14} />}
-                  disabled={!canGrade || !ctx.segment}
-                      loading={actioning === "record-answer"}
-                      onClick={() =>
-                        void runAction(
-                          "record-answer",
-                          async () => {
-                            if (!ctx.segment) {
-                              throw new Error("缺少 answer_segment");
-                            }
-                            await recordSegmentAnswer(ctx.segment.id, {
-                              answer_text: draft.answerText,
-                              answer_payload: { text: draft.answerText },
-                              source: "ocr_text",
-                              confidence: ctx.ocrResults[0]?.confidence
-                            });
-                          },
-                          "答案文本已记录"
-                        )
-                      }
-                    >
-                      记录答案
-                    </Button>
-                    <Button
-                      icon={<Play size={14} />}
-                  disabled={!canGrade || !ctx.segment}
-                      loading={actioning === "rule"}
-                      onClick={() =>
-                        void runAction(
-                          "rule",
-                          async () => {
-                            if (!ctx.segment) {
-                              throw new Error("缺少 answer_segment");
-                            }
-                            await createRuleGrade(ctx.segment.id);
-                            await loadContext(ctx.task.id);
-                          },
-                          "规则判分已生成"
-                        )
-                      }
-                    >
-                      规则判分
-                    </Button>
-                    <Button
-                      icon={<MessageSquareText size={14} />}
-                  disabled={!canGrade || !ctx.segment}
-                      loading={actioning === "subjective"}
-                      onClick={() =>
-                        void runAction(
-                          "subjective",
-                          async () => {
-                            if (!ctx.segment) {
-                              throw new Error("缺少 answer_segment");
-                            }
-                            await createSubjectiveAiGrade(ctx.segment.id);
-                            await loadContext(ctx.task.id);
-                          },
-                          "主观题 AI 接口已调用"
-                        )
-                      }
-                    >
-                      主观题 AI
-                    </Button>
                     <Button
                       icon={<BadgeCheck size={14} />}
                   disabled={!canVerifyEvidence || !selectedGrade}
@@ -894,8 +1181,8 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
                 <Input.TextArea
                   value={draft.answerText}
                   rows={4}
-                  placeholder="OCR 文本或人工录入答案"
-                  onChange={(event) => setDraft((current) => ({ ...current, answerText: event.target.value }))}
+                  readOnly
+                  placeholder="当前没有可用的 OCR 文本"
                 />
                 {renderEvidence()}
                 {renderEvidenceJob()}
@@ -904,7 +1191,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
               <aside className="score-panel">
                 <div className="panel-head">
                   <div>
-                    <h2>人工评分</h2>
+                    <h2>评分标准</h2>
                     <p>满分 {maxScore || "未返回"}</p>
                   </div>
                   {selectedGrade ? (
@@ -929,7 +1216,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
                 {rubricPoints.length > 0 ? (
                   <div className="rubric-score-list">
                     <div className="rubric-score-head">
-                      <strong>Rubric</strong>
+                      <strong>评分细则</strong>
                       <span>{rubricTotal} 分</span>
                     </div>
                     {rubricPoints.map((point) => (
@@ -960,7 +1247,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
                     ))}
                   </div>
                 ) : (
-                  <Alert type="info" showIcon message="当前题目没有 Rubric" description="可提交总分，但不会提交 rubric_selections。" />
+                  <Alert type="info" showIcon message="当前题目没有评分细则" description="仍可根据参考答案直接填写最终得分。" />
                 )}
 
                 <Select
@@ -980,7 +1267,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
                     标记争议
                   </Button>
                   <Button type="primary" icon={<CheckCircle2 size={16} />} disabled={!canSubmit || !ctx || ctx.task.status === "submitted"} loading={actioning === "submit"} onClick={() => void submitGrade()}>
-                    提交
+                    确认并下一份
                   </Button>
                 </Space>
               </aside>

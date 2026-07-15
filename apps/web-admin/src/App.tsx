@@ -5,6 +5,7 @@ import { getCurrentUser, login as loginWithPassword, logout as logoutSession } f
 import { listSchools } from "./api/org";
 import { ApiClientError } from "./api/client";
 import { hasAnyPermission, hasEveryPermission, sessionFromAuthUser, type SessionUser } from "./auth/session";
+import { clearReviewDraftFallbacks } from "./auth/reviewDraftFallback";
 import { AppLayout } from "./components/AppLayout";
 import { ForbiddenState, LoadingState, NotFoundState } from "./components/PageState";
 import { LoginPage } from "./pages/LoginPage";
@@ -108,6 +109,9 @@ function App() {
 
   const logout = () => {
     void logoutSession().catch(() => undefined);
+    if (user?.id) {
+      clearReviewDraftFallbacks(user.id);
+    }
     setUser(null);
   };
 
@@ -141,7 +145,7 @@ function App() {
       case "questions":
         return <PaperRubricPage canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} initialExamId={examId} onExamChanged={refreshWorkspace} />;
       case "template":
-        return <AnswerSheetTemplatePage examId={examId} canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} onExamChanged={refreshWorkspace} />;
+        return <AnswerSheetTemplatePage examId={examId} canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} canCalibrate={hasEveryPermission(user, ["grading:manage"])} onExamChanged={refreshWorkspace} />;
       case "settings":
         return <ExamReadinessPage examId={examId} canManage={hasEveryPermission(user, ["exam:manage"])} onNavigate={navigate} onExamChanged={refreshWorkspace} />;
       case "capture":
@@ -149,7 +153,7 @@ function App() {
       case "processing":
         return <SubmissionCapturePage canManage={hasEveryPermission(user, ["submission:manage", "file:manage", "ocr:manage", "segment:manage"])} canReadStudentNames={hasEveryPermission(user, ["org:manage"])} initialExamId={examId} />;
       case "grading":
-        return <GradingWorkbenchPage canWork={hasAnyPermission(user, ["review:manage", "review:work"])} canGrade={hasEveryPermission(user, ["grading:manage"])} canVerifyEvidence={hasEveryPermission(user, ["evidence:manage"])} canReturn={hasEveryPermission(user, ["review:manage"])} initialExamId={examId} />;
+        return <GradingWorkbenchPage canWork={hasAnyPermission(user, ["review:manage", "review:work"])} canGrade={hasEveryPermission(user, ["grading:manage"])} canVerifyEvidence={hasEveryPermission(user, ["evidence:manage"])} canReturn={hasEveryPermission(user, ["review:manage"])} currentUserId={user.id} initialExamId={examId} />;
       case "quality":
         return <ArbitrationPage canAssign={hasEveryPermission(user, ["arbitration:manage"])} canWork={hasAnyPermission(user, ["arbitration:manage", "arbitration:work"])} canReadAudit={hasEveryPermission(user, ["audit:read"])} canReadExams={hasEveryPermission(user, ["exam:manage"])} currentUser={user} initialExamId={examId} />;
       case "scores":
@@ -189,6 +193,7 @@ function App() {
         canGrade={hasEveryPermission(user, ["grading:manage"])}
         canVerifyEvidence={hasEveryPermission(user, ["evidence:manage"])}
         canReturn={hasEveryPermission(user, ["review:manage"])}
+        currentUserId={user.id}
       />
     ) : route.path === "/arbitration" ? (
       <ArbitrationPage
@@ -225,7 +230,7 @@ function App() {
 
   return (
     <AntApp>
-      <AppLayout user={user} currentRoute={route} onNavigate={navigate} onLogout={logout}>
+      <AppLayout user={user} currentRoute={route} onNavigate={navigate} onLogout={logout} immersive={route.path === "/grading" || examWorkspace?.section === "grading"}>
         <Suspense fallback={<LoadingState label="正在加载页面" />}>{content}</Suspense>
       </AppLayout>
     </AntApp>

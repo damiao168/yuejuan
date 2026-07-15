@@ -122,6 +122,15 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
     ...(failedSubmissions.length ? [{ label: "处理失败", value: failedSubmissions.length, path: "/capture", tone: "danger" as StatusTone }] : []),
     ...((data?.exams ?? []).filter((exam) => exam.status === "finalized").length ? [{ label: "待发布考试", value: (data?.exams ?? []).filter((exam) => exam.status === "finalized").length, path: "/scores", tone: "warning" as StatusTone }] : [])
   ];
+  const primaryIssue = failedSubmissions.length > 0
+    ? { title: `${failedSubmissions.length} 份答卷处理失败`, impact: "会阻断识别、切题和后续阅卷", action: "处理问题答卷", path: "/capture", tone: "danger" as StatusTone }
+    : unmatchedSubmissions.length > 0
+      ? { title: `${unmatchedSubmissions.length} 名学生尚未匹配`, impact: "未确认归属的答卷不能进入正式阅卷", action: "立即匹配", path: "/capture", tone: "warning" as StatusTone }
+      : pendingTasks.length > 0
+        ? { title: `${pendingTasks.length} 份答卷等待阅卷`, impact: "完成阅卷后才能汇总并发布成绩", action: "继续阅卷", path: "/grading", tone: "processing" as StatusTone }
+        : (data?.exams ?? []).some((exam) => exam.status === "finalized")
+          ? { title: "成绩已具备发布条件", impact: "完成发布检查后即可向师生开放成绩", action: "检查并发布", path: "/scores", tone: "success" as StatusTone }
+          : null;
 
   const quickActions = [
     ...(hasEveryPermission(user, ["exam:manage"]) ? [{ label: "创建考试", path: "/exams", icon: <ClipboardCheck size={17} /> }] : []),
@@ -138,8 +147,8 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
       <motion.section className="dashboard-heading" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
         <div>
           <span className="dashboard-kicker">{roleLabel(user)}</span>
-          <h1>{user.name}，今天需要处理这些事项</h1>
-          <p>{user.school} · 数据来自当前账号可访问的真实业务范围</p>
+          <h1>考试运营工作台</h1>
+          <p>{user.school} · 优先处理会阻断考试流程的问题</p>
         </div>
         <Button icon={<RefreshCw size={16} />} loading={loading} onClick={() => setNonce((value) => value + 1)}>刷新</Button>
       </motion.section>
@@ -147,9 +156,18 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
       {error ? <Alert type="error" showIcon message="刷新失败" description={error} /> : null}
       {data?.warnings.map((warning) => <Alert key={warning} type="warning" showIcon message={warning} />)}
 
+      {primaryIssue ? <motion.section className={`priority-action ${primaryIssue.tone}`} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }}>
+        <div>
+          <span>当前最需要处理</span>
+          <h2>{primaryIssue.title}</h2>
+          <p>{primaryIssue.impact}</p>
+        </div>
+        <Button type="primary" size="large" onClick={() => onNavigate(primaryIssue.path)}>{primaryIssue.action}<ArrowRight size={17} /></Button>
+      </motion.section> : <section className="priority-action success"><div><span>当前状态</span><h2>没有阻断考试流程的问题</h2><p>可以继续查看进行中的考试或创建新考试。</p></div></section>}
+
       <div className="dashboard-primary-grid">
         <section className="dashboard-pane todo-pane">
-          <div className="section-head"><div><h2>我的待办</h2><p>按风险和处理阶段汇总</p></div><strong>{todo.reduce((sum, item) => sum + item.value, 0)}</strong></div>
+          <div className="section-head"><div><h2>我的待办</h2><p>按对考试流程的影响排序</p></div><strong>{todo.reduce((sum, item) => sum + item.value, 0)}</strong></div>
           {todo.length ? <div className="todo-list">{todo.map((item) => (
             <button key={item.label} className="todo-row" onClick={() => onNavigate(item.path)}>
               <span><StatusTag tone={item.tone}>{item.label}</StatusTag></span><strong>{item.value}</strong><ArrowRight size={16} />
@@ -173,10 +191,10 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
           <section className="dashboard-pane exam-pane">
             <div className="section-head"><div><h2>正在进行的考试</h2><p>{activeExams.length} 场需要关注</p></div></div>
             {activeExams.length ? <div className="active-exam-list">{activeExams.map((exam) => (
-              <button key={exam.id} className="active-exam-row" onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/overview`)}>
-                <div><strong>{exam.name}</strong><span>{exam.subject} · {statusLabels[exam.status] ?? exam.status}</span></div>
-                <Progress percent={progressFor(exam.status)} size="small" showInfo={false} />
-                <ArrowRight size={16} />
+              <button key={exam.id} className="active-exam-row exam-task-row" onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/overview`)}>
+                <div><strong>{exam.name}</strong><span>{exam.subject} · 当前阶段：{statusLabels[exam.status] ?? exam.status}</span></div>
+                <div className="exam-progress"><Progress percent={progressFor(exam.status)} size="small" showInfo={false} /><span>{progressFor(exam.status)}%</span></div>
+                <span className="exam-next-action">进入考试 <ArrowRight size={15} /></span>
               </button>
             ))}</div> : <EmptyState title="暂无进行中考试" description="创建考试后，可从这里直接进入考试工作区。" />}
           </section>
@@ -185,11 +203,11 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
 
       {quickActions.length ? <section className="quick-actions"><div className="section-head"><div><h2>常用操作</h2></div></div><Space wrap>{quickActions.map((action) => <Button key={action.label} icon={action.icon} onClick={() => onNavigate(action.path)}>{action.label}</Button>)}</Space></section> : null}
 
-      <section className="attention-band">
+      <section className="attention-band attention-list">
         {isGrader ? (
           <><div><ShieldAlert size={19} /><span><strong>质量提醒</strong> 退回、复核和评分冲突会显示在这里。</span></div><span>{data?.reviewTasks.filter((task) => task.status === "returned" || task.status === "conflict").length ?? 0} 项</span></>
         ) : (
-          <><div><ShieldAlert size={19} /><span><strong>需要关注</strong> 失败任务、未匹配学生和待发布考试会阻断后续流程。</span></div><span>{failedSubmissions.length + unmatchedSubmissions.length} 项</span></>
+          <><div><ShieldAlert size={19} /><span><strong>问题清单</strong> 点击上方待处理事项可直接进入对应处理页面。</span></div><span>{failedSubmissions.length + unmatchedSubmissions.length} 项</span></>
         )}
       </section>
 

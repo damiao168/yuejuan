@@ -28,8 +28,11 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/segment"
 	"edugrade-enterprise/services/api-gateway/internal/subjective"
 	"edugrade-enterprise/services/api-gateway/internal/submission"
+	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
@@ -40,14 +43,16 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	db := e2eOpenPostgresTestDB(t, dsn)
 	e2eApplyPostgresMigrations(t, db)
 	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin", "teacher", "student"})
+	e2eActivatePostgresUsers(t, db, "platform", []string{"platform_admin"})
 	router := e2ePostgresRouter(db)
 	suffix := time.Now().UTC().Format("20060102150405.000000000")
 
+	platformToken := e2eLoginWithTenant(t, router, "platform", "platform_admin", "ChangeMe123!")
 	adminToken := e2eLoginWithTenant(t, router, "demo", "tenant_admin", "ChangeMe123!")
 	teacherID := e2eLookupUserID(t, db, "demo", "teacher")
 	teacherToken := e2eLoginWithTenant(t, router, "demo", "teacher", "ChangeMe123!")
 
-	tenant := e2ePostJSON(t, router, http.MethodPost, "/api/v1/tenants", adminToken, `{"name":"Story 041 Synthetic Tenant `+suffix+`","code":"story041-`+suffix+`"}`, http.StatusCreated)["tenant"].(map[string]any)
+	tenant := e2ePostJSON(t, router, http.MethodPost, "/api/v1/tenants", platformToken, `{"name":"Story 041 Synthetic Tenant `+suffix+`","code":"story041-`+suffix+`"}`, http.StatusCreated)["tenant"].(map[string]any)
 	if tenant["status"] != "active" {
 		t.Fatalf("test database tenant should be active: %#v", tenant)
 	}
@@ -167,6 +172,7 @@ func e2ePostgresRouter(db *sql.DB) http.Handler {
 		ocrpkg.NewPostgresStore(db),
 		ocrpkg.NewMemoryQueue(),
 		segment.NewPostgresStore(db),
+		workerruntime.NewPostgresStore(db),
 		grading.NewPostgresStore(db),
 		subjective.NewPostgresStore(db),
 		evidence.NewPostgresStore(db),
@@ -178,19 +184,45 @@ func e2ePostgresRouter(db *sql.DB) http.Handler {
 
 func e2eOpenPostgresTestDB(t *testing.T, dsn string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("pgx", dsn)
+	config, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		t.Fatalf("open PostgreSQL test database: %v", err)
+		t.Fatalf("parse PostgreSQL test database URL: %v", err)
 	}
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(2)
+	adminConfig := config.Copy()
+	adminConfig.Database = "postgres"
+	adminDB := stdlib.OpenDB(*adminConfig)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if err := adminDB.PingContext(ctx); err != nil {
+		_ = adminDB.Close()
+		t.Fatalf("ping PostgreSQL administration database: %v", err)
+	}
+	databaseName := "edugrade_e2e_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	quotedDatabaseName := pgx.Identifier{databaseName}.Sanitize()
+	if _, err := adminDB.ExecContext(ctx, "CREATE DATABASE "+quotedDatabaseName); err != nil {
+		_ = adminDB.Close()
+		t.Fatalf("create isolated PostgreSQL E2E database: %v", err)
+	}
+	testConfig := config.Copy()
+	testConfig.Database = databaseName
+	db := stdlib.OpenDB(*testConfig)
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
+		_, _ = adminDB.ExecContext(ctx, "DROP DATABASE "+quotedDatabaseName+" WITH (FORCE)")
+		_ = adminDB.Close()
 		t.Fatalf("ping PostgreSQL test database: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() {
+		_ = db.Close()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, cleanupErr := adminDB.ExecContext(cleanupCtx, "DROP DATABASE "+quotedDatabaseName+" WITH (FORCE)"); cleanupErr != nil {
+			t.Errorf("drop isolated PostgreSQL E2E database %s: %v", databaseName, cleanupErr)
+		}
+		_ = adminDB.Close()
+	})
 	return db
 }
 
@@ -206,7 +238,23 @@ func e2eApplyPostgresMigrations(t *testing.T, db *sql.DB) {
 	sort.Strings(files)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS edugrade_e2e_applied_migration (
+  name TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)`); err != nil {
+		t.Fatalf("create E2E migration ledger: %v", err)
+	}
 	for _, file := range files {
+		name := filepath.Base(file)
+		var applied bool
+		err := db.QueryRowContext(ctx, `SELECT true FROM edugrade_e2e_applied_migration WHERE name=$1`, name).Scan(&applied)
+		if err == nil {
+			continue
+		}
+		if err != sql.ErrNoRows {
+			t.Fatalf("read E2E migration ledger for %s: %v", name, err)
+		}
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatalf("read migration %s: %v", file, err)
@@ -215,6 +263,9 @@ func e2eApplyPostgresMigrations(t *testing.T, db *sql.DB) {
 			if _, err := db.ExecContext(ctx, statement); err != nil {
 				t.Fatalf("apply migration %s failed on statement %q: %v", filepath.Base(file), statement, err)
 			}
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO edugrade_e2e_applied_migration (name) VALUES ($1)`, name); err != nil {
+			t.Fatalf("record E2E migration %s: %v", name, err)
 		}
 	}
 }
@@ -363,6 +414,11 @@ DO UPDATE SET data_scope = EXCLUDED.data_scope, updated_at = now()
 
 func e2eActivatePostgresDemoUsers(t *testing.T, db *sql.DB, usernames []string) {
 	t.Helper()
+	e2eActivatePostgresUsers(t, db, "demo", usernames)
+}
+
+func e2eActivatePostgresUsers(t *testing.T, db *sql.DB, tenantCode string, usernames []string) {
+	t.Helper()
 	hash, err := auth.HashPassword("ChangeMe123!")
 	if err != nil {
 		t.Fatalf("hash synthetic demo user password: %v", err)
@@ -375,19 +431,19 @@ UPDATE app_user u
 SET password_hash = $2, status = 'active', updated_at = now()
 FROM tenant t
 WHERE t.id = u.tenant_id
-  AND t.code = 'demo'
-  AND u.username = $1
+  AND t.code = $1
+  AND u.username = $3
   AND u.deleted_at IS NULL
-`, username, hash)
+`, tenantCode, hash, username)
 		if err != nil {
-			t.Fatalf("activate PostgreSQL demo user %s: %v", username, err)
+			t.Fatalf("activate PostgreSQL user %s/%s: %v", tenantCode, username, err)
 		}
 		affected, err := result.RowsAffected()
 		if err != nil {
 			t.Fatalf("check activated PostgreSQL demo user %s: %v", username, err)
 		}
 		if affected != 1 {
-			t.Fatalf("expected to activate one PostgreSQL demo user %s, affected %d", username, affected)
+			t.Fatalf("expected to activate one PostgreSQL user %s/%s, affected %d", tenantCode, username, affected)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package grading_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/segment"
 	"edugrade-enterprise/services/api-gateway/internal/server"
 	"edugrade-enterprise/services/api-gateway/internal/submission"
+	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
 
 const tenantID = "00000000-0000-0000-0000-000000000002"
@@ -109,12 +111,185 @@ func TestGradingPermissionDeniedAndUnauthenticated(t *testing.T) {
 	}
 }
 
-func testRouter(authStore *auth.MemoryStore, gradingStore grading.Store) http.Handler {
+func TestScoringRecoveryEndpointsCoordinateWorkerRuntime(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"grading:manage"})
+	runtimeStore := workerruntime.NewMemoryStore()
+	store := newScoringRecoveryTestStore()
+
+	cancelTask, err := runtimeStore.CreateTask(context.Background(), tenantID, userID, recoveryRuntimeTask("cancel-task"))
+	if err != nil {
+		t.Fatalf("create cancel task: %v", err)
+	}
+	store.taskIDs = []string{cancelTask.ID}
+	router := testRouter(authStore, store, runtimeStore)
+	token := login(t, router)
+
+	req := authedRequest(http.MethodGet, "/api/v1/scoring-runs/run-1", nil, token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"answer_segment_id":"segment-1"`) || strings.Contains(rec.Body.String(), "student_id") {
+		t.Fatalf("scoring run detail should be anonymous and available, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = authedRequest(http.MethodPost, "/api/v1/scoring-runs/run-1/cancel", nil, token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"cancelled"`) {
+		t.Fatalf("cancel scoring run expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	cancelled, err := runtimeStore.Get(context.Background(), tenantID, cancelTask.ID)
+	if err != nil || cancelled.Status != workerruntime.StatusCancelled {
+		t.Fatalf("cancellation must reach worker runtime: task=%#v err=%v", cancelled, err)
+	}
+
+	retryTask, err := runtimeStore.CreateTask(context.Background(), tenantID, userID, recoveryRuntimeTask("retry-task"))
+	if err != nil {
+		t.Fatalf("create retry task: %v", err)
+	}
+	claimed, err := runtimeStore.Claim(context.Background(), tenantID, workerruntime.ClaimInput{QueueName: "image-quality", WorkerService: "test-worker", WorkerInstanceID: "worker-1", Limit: 1, LeaseSeconds: 300})
+	if err != nil || len(claimed) != 1 || claimed[0].ID != retryTask.ID {
+		t.Fatalf("claim retry task: %#v err=%v", claimed, err)
+	}
+	if _, err = runtimeStore.Fail(context.Background(), tenantID, retryTask.ID, workerruntime.FailInput{LeaseToken: claimed[0].LeaseToken, ErrorCode: "omr_failed", ErrorDetail: map[string]any{}, DurationMS: 1}); err != nil {
+		t.Fatalf("fail retry task: %v", err)
+	}
+	store.run = grading.ScoringRun{ID: "run-2", TenantID: tenantID, ExamID: "exam-1", Status: "failed", TotalCount: 1, FailedCount: 1}
+	store.failed = []grading.FailedOMRTask{{OMRRunID: "omr-1", RuntimeTaskID: retryTask.ID}}
+	req = authedRequest(http.MethodPost, "/api/v1/scoring-runs/run-2/retry-failed", nil, token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"requeued":1`) {
+		t.Fatalf("retry failed should requeue worker task, got %d %s", rec.Code, rec.Body.String())
+	}
+	requeued, err := runtimeStore.Get(context.Background(), tenantID, retryTask.ID)
+	if err != nil || requeued.Status != workerruntime.StatusQueued {
+		t.Fatalf("retry must return worker task to queue: task=%#v err=%v", requeued, err)
+	}
+
+	store.run = grading.ScoringRun{ID: "run-3", TenantID: tenantID, ExamID: "exam-1", Status: "processing", TotalCount: 1}
+	req = authedRequest(http.MethodPost, "/api/v1/answer-segments/segment-1/reprocess-score", bytes.NewBufferString(`{"idempotency_key":"operator-fix-1"}`), token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated || store.reprocessedSegmentID != "segment-1" || store.reprocessInput.IdempotencyKey != "operator-fix-1" {
+		t.Fatalf("segment-only reprocess should preserve its target and idempotency key: code=%d segment=%q input=%#v body=%s", rec.Code, store.reprocessedSegmentID, store.reprocessInput, rec.Body.String())
+	}
+
+	assertAuditAction(t, authStore, "grading.scoring_run_cancelled")
+	assertAuditAction(t, authStore, "grading.scoring_run_retry_failed")
+	assertAuditAction(t, authStore, "grading.segment_score_reprocessed")
+}
+
+func testRouter(authStore *auth.MemoryStore, gradingStore grading.Store, optionalStores ...any) http.Handler {
 	cfg := config.Config{
 		Service: config.ServiceConfig{Name: "test", Environment: "test", ReadinessTimeout: time.Millisecond},
 		Auth:    config.AuthConfig{SessionTTL: time.Hour},
 	}
-	return server.NewRouterComplete(cfg, logger.New(io.Discard, "error"), nil, authStore, org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore(), files.NewMemoryStore(), files.NewMemoryObjectStorage(), submission.NewMemoryStore(), ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), segment.NewMemoryStore(), gradingStore)
+	stores := append([]any{gradingStore}, optionalStores...)
+	return server.NewRouterComplete(cfg, logger.New(io.Discard, "error"), nil, authStore, org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore(), files.NewMemoryStore(), files.NewMemoryObjectStorage(), submission.NewMemoryStore(), ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), segment.NewMemoryStore(), stores...)
+}
+
+type scoringRecoveryTestStore struct {
+	*grading.MemoryStore
+	run                  grading.ScoringRun
+	detail               grading.ScoringRunDetail
+	taskIDs              []string
+	failed               []grading.FailedOMRTask
+	reprocessedSegmentID string
+	reprocessInput       grading.StartScoringRunInput
+}
+
+func newScoringRecoveryTestStore() *scoringRecoveryTestStore {
+	run := grading.ScoringRun{ID: "run-1", TenantID: tenantID, ExamID: "exam-1", Status: "processing", TotalCount: 1, QueuedCount: 1}
+	return &scoringRecoveryTestStore{
+		MemoryStore: grading.NewMemoryStore(),
+		run:         run,
+		detail: grading.ScoringRunDetail{Run: run, Items: []grading.ScoringRunItem{{
+			AnswerSegmentID: "segment-1", QuestionID: "question-1", QuestionNo: "Q1", QuestionType: "single_choice", State: "processing",
+		}}},
+	}
+}
+
+func (s *scoringRecoveryTestStore) StartScoringRun(_ context.Context, _ string, _ string, _ string, _ grading.StartScoringRunInput) (grading.ScoringRun, error) {
+	return s.run, nil
+}
+
+func (s *scoringRecoveryTestStore) GetScoringSummary(_ context.Context, _ string, _ string) (grading.ScoringSummary, error) {
+	return grading.ScoringSummary{Run: &s.run, Questions: []grading.ScoringQuestionSummary{}}, nil
+}
+
+func (s *scoringRecoveryTestStore) GetOMRRun(_ context.Context, _ string, _ string) (grading.OMRRun, error) {
+	return grading.OMRRun{}, grading.ErrNotFound
+}
+
+func (s *scoringRecoveryTestStore) ApplyOMRResult(_ context.Context, _ string, _ string, _ string, _ grading.OMRResultInput, _ *grading.Engine) (grading.OMRRun, *grading.QuestionGrade, error) {
+	return grading.OMRRun{}, nil, grading.ErrNotFound
+}
+
+func (s *scoringRecoveryTestStore) ApplyOMRFailure(_ context.Context, _ string, _ string, _ string, _ map[string]any, _ bool) (grading.OMRRun, error) {
+	return grading.OMRRun{}, grading.ErrNotFound
+}
+
+func (s *scoringRecoveryTestStore) ConfirmRuleGrade(_ context.Context, _ string, _ string, _ string, _ grading.Grade) (grading.QuestionGrade, error) {
+	return grading.QuestionGrade{}, grading.ErrNotFound
+}
+
+func (s *scoringRecoveryTestStore) ProcessRuleCandidates(_ context.Context, _ string, _ string, _ string, _ *grading.Engine) error {
+	return nil
+}
+
+func (s *scoringRecoveryTestStore) GetScoringRunDetail(_ context.Context, _ string, _ string) (grading.ScoringRunDetail, error) {
+	s.detail.Run = s.run
+	return s.detail, nil
+}
+
+func (s *scoringRecoveryTestStore) BeginScoringRunCancellation(_ context.Context, _ string, _ string) (grading.ScoringRun, []string, error) {
+	s.run.Status = "cancelling"
+	return s.run, append([]string{}, s.taskIDs...), nil
+}
+
+func (s *scoringRecoveryTestStore) FinalizeScoringRunCancellation(_ context.Context, _ string, _ string) (grading.ScoringRun, error) {
+	s.run.Status = "cancelled"
+	s.run.QueuedCount = 0
+	return s.run, nil
+}
+
+func (s *scoringRecoveryTestStore) ListFailedOMRTasks(_ context.Context, _ string, _ string) ([]grading.FailedOMRTask, error) {
+	return append([]grading.FailedOMRTask{}, s.failed...), nil
+}
+
+func (s *scoringRecoveryTestStore) PrepareOMRRetry(_ context.Context, _ string, omrRunID string) (grading.FailedOMRTask, error) {
+	for _, item := range s.failed {
+		if item.OMRRunID == omrRunID {
+			return item, nil
+		}
+	}
+	return grading.FailedOMRTask{}, grading.ErrNotFound
+}
+
+func (s *scoringRecoveryTestStore) RestoreOMRRetry(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+func (s *scoringRecoveryTestStore) RefreshScoringRun(_ context.Context, _ string, _ string) (grading.ScoringRun, error) {
+	if s.run.Status == "failed" {
+		s.run.Status = "processing"
+		s.run.FailedCount = 0
+		s.run.QueuedCount = len(s.failed)
+	}
+	return s.run, nil
+}
+
+func (s *scoringRecoveryTestStore) ReprocessSegmentScore(_ context.Context, _ string, segmentID string, _ string, input grading.StartScoringRunInput) (grading.ScoringRun, error) {
+	s.reprocessedSegmentID = segmentID
+	s.reprocessInput = input
+	return s.run, nil
+}
+
+func recoveryRuntimeTask(id string) workerruntime.CreateTaskInput {
+	return workerruntime.CreateTaskInput{
+		TaskType: "image_quality", QueueName: "image-quality", SourceType: "recovery_test", SourceID: id,
+		Payload: map[string]any{}, PayloadSchemaVersion: "recovery-test-v1", IdempotencyKey: "recovery:" + id,
+	}
 }
 
 func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemoryStore {

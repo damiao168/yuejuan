@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import type { Question } from "./papers";
 
 export interface ReviewTask {
   id: string;
@@ -50,6 +51,49 @@ export interface HumanGrade {
   reason?: string;
   grade_round: string;
   created_at: string;
+}
+
+export interface ReviewDraft {
+  id: string;
+  review_task_id: string;
+  reviewer_id: string;
+  score?: number;
+  rubric_selections: RubricSelection[];
+  comments: string;
+  private_note: string;
+  student_feedback: string;
+  viewer_state: Record<string, unknown>;
+  revision: number;
+  updated_at: string;
+}
+
+export interface SaveReviewDraftPayload {
+  score: number | null;
+  rubric_selections: RubricSelection[];
+  comments: string;
+  private_note: string;
+  student_feedback: string;
+  viewer_state: Record<string, unknown>;
+  expected_revision: number;
+}
+
+export interface ReviewWorkspace {
+  task: ReviewTask;
+  context: {
+    exam_id: string;
+    submission_id: string;
+    answer_segment_id: string;
+    anonymous_code: string;
+    question: Question;
+    rubric?: Question["rubric"];
+    raw_answer: string;
+    ocr_text: string;
+    ai_suggestion: Record<string, unknown>;
+  };
+  segment_image_url: string;
+  original_image_url?: string;
+  segment_status: string;
+  segment_confidence?: number;
 }
 
 export interface FinalGrade {
@@ -177,6 +221,55 @@ export interface ReviewTaskFilter {
   assigned_to?: string;
 }
 
+export interface ScoringRun {
+  id: string;
+  exam_id: string;
+  status: string;
+  total_count: number;
+  queued_count: number;
+  auto_confirmed_count: number;
+  human_confirmed_count: number;
+  review_count: number;
+  failed_count: number;
+  started_at?: string;
+}
+
+export interface ScoringQuestionSummary {
+  question_id: string;
+  question_no: string;
+  question_type: string;
+  total: number;
+  queued: number;
+  confirmed: number;
+  review: number;
+  failed: number;
+}
+
+export interface ScoringSummary {
+  run?: ScoringRun;
+  questions: ScoringQuestionSummary[];
+}
+
+export interface ScoringRunItem {
+  answer_segment_id: string;
+  question_id: string;
+  question_no: string;
+  question_type: string;
+  state: string;
+  omr_run_id?: string;
+  runtime_task_id?: string;
+  runtime_status?: string;
+  review_task_id?: string;
+  review_status?: string;
+  reason_code?: string;
+  error_code?: string;
+}
+
+export interface ScoringRunDetail {
+  scoring_run: ScoringRun;
+  items: ScoringRunItem[];
+}
+
 export interface ArbitrationContext {
   raw_answer?: string;
   ocr_text?: string;
@@ -251,6 +344,29 @@ export async function getReviewTask(id: string) {
   return apiClient.request<{ task: ReviewTask }>(`/api/v1/review-tasks/${encodeURIComponent(id)}`);
 }
 
+export async function getReviewWorkspace(id: string) {
+  return apiClient.request<{ workspace: ReviewWorkspace }>(`/api/v1/review-tasks/${encodeURIComponent(id)}/workspace`);
+}
+
+export async function downloadReviewWorkspaceImage(path: string) {
+  return apiClient.requestBlob(path);
+}
+
+export async function claimNextReviewTask(examId = "", questionId = "") {
+  return apiClient.request<{ task: ReviewTask }>("/api/v1/review-tasks/next", {
+    method: "POST",
+    body: JSON.stringify({ exam_id: examId, question_id: questionId })
+  });
+}
+
+export async function renewReviewTask(taskId: string) {
+  return apiClient.request<{ renewed: boolean }>(`/api/v1/review-tasks/${encodeURIComponent(taskId)}/renew`, { method: "POST" });
+}
+
+export async function releaseReviewTask(taskId: string) {
+  return apiClient.request<{ task: ReviewTask }>(`/api/v1/review-tasks/${encodeURIComponent(taskId)}/release`, { method: "POST" });
+}
+
 export async function submitHumanGrade(taskId: string, payload: SubmitHumanGradePayload) {
   return apiClient.request<SubmitHumanGradeResult>(`/api/v1/review-tasks/${encodeURIComponent(taskId)}/submit`, {
     method: "POST",
@@ -262,6 +378,17 @@ export async function returnReviewTask(taskId: string, reason: string) {
   return apiClient.request<{ task: ReviewTask }>(`/api/v1/review-tasks/${encodeURIComponent(taskId)}/return`, {
     method: "POST",
     body: JSON.stringify({ reason })
+  });
+}
+
+export async function getReviewDraft(taskId: string) {
+  return apiClient.request<{ draft: ReviewDraft | null }>(`/api/v1/review-tasks/${encodeURIComponent(taskId)}/draft`);
+}
+
+export async function saveReviewDraft(taskId: string, payload: SaveReviewDraftPayload) {
+  return apiClient.request<{ draft: ReviewDraft }>(`/api/v1/review-tasks/${encodeURIComponent(taskId)}/draft`, {
+    method: "PUT",
+    body: JSON.stringify(payload)
   });
 }
 
@@ -321,5 +448,35 @@ export async function verifyEvidence(gradeId: string) {
   return apiClient.request<{ job: EvidenceJob }>(`/api/v1/ai-grades/${encodeURIComponent(gradeId)}/verify-evidence`, {
     method: "POST",
     body: JSON.stringify({})
+  });
+}
+
+export async function startScoringRun(examId: string, idempotencyKey: string) {
+  return apiClient.request<{ scoring_run: ScoringRun }>(`/api/v1/exams/${encodeURIComponent(examId)}/scoring-runs`, {
+    method: "POST",
+    body: JSON.stringify({ idempotency_key: idempotencyKey })
+  });
+}
+
+export async function getScoringSummary(examId: string) {
+  return apiClient.request<{ scoring_summary: ScoringSummary }>(`/api/v1/exams/${encodeURIComponent(examId)}/scoring-summary`);
+}
+
+export async function getScoringRun(runId: string) {
+  return apiClient.request<ScoringRunDetail>(`/api/v1/scoring-runs/${encodeURIComponent(runId)}`);
+}
+
+export async function cancelScoringRun(runId: string) {
+  return apiClient.request<{ scoring_run: ScoringRun }>(`/api/v1/scoring-runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
+}
+
+export async function retryFailedScoringRun(runId: string) {
+  return apiClient.request<{ scoring_run: ScoringRun; requeued: number; skipped: number }>(`/api/v1/scoring-runs/${encodeURIComponent(runId)}/retry-failed`, { method: "POST" });
+}
+
+export async function reprocessSegmentScore(segmentId: string, idempotencyKey: string) {
+  return apiClient.request<{ scoring_run: ScoringRun }>(`/api/v1/answer-segments/${encodeURIComponent(segmentId)}/reprocess-score`, {
+    method: "POST",
+    body: JSON.stringify({ idempotency_key: idempotencyKey })
   });
 }

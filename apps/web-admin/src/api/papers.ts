@@ -40,6 +40,18 @@ export interface RubricPoint {
   required: boolean;
 }
 
+export interface ScoringRule {
+  id: string;
+  question_id: string;
+  version: number;
+  rule_type: string;
+  config: Record<string, unknown>;
+  status: "draft" | "published" | "retired";
+  revision: number;
+  content_hash: string;
+  published_at?: string;
+}
+
 export interface Rubric {
   id: string;
   question_id: string;
@@ -144,4 +156,26 @@ export async function validatePaperConfig(examId: string) {
   return apiClient.request<{ result: ValidationResult }>(`/api/v1/exams/${encodeURIComponent(examId)}/validate-paper-config`, {
     method: "POST"
   });
+}
+
+export async function listScoringRules(questionId: string) {
+  return apiClient.request<{ scoring_rules: ScoringRule[] }>(`/api/v1/questions/${encodeURIComponent(questionId)}/scoring-rules`);
+}
+
+export async function createScoringRule(questionId: string, ruleType: string, config: Record<string, unknown>) {
+  return apiClient.request<{ scoring_rule: ScoringRule }>(`/api/v1/questions/${encodeURIComponent(questionId)}/scoring-rules`, {
+    method: "POST",
+    body: JSON.stringify({ rule_type: ruleType, config })
+  });
+}
+
+export async function updateScoringRule(ruleId: string, config: Record<string, unknown>, expectedRevision: number) {
+  return apiClient.request<{ scoring_rule: ScoringRule }>(`/api/v1/scoring-rules/${encodeURIComponent(ruleId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ config, expected_revision: expectedRevision })
+  });
+}
+
+export async function publishScoringRule(ruleId: string) {
+  return apiClient.request<{ scoring_rule: ScoringRule }>(`/api/v1/scoring-rules/${encodeURIComponent(ruleId)}/publish`, { method: "POST" });
 }

@@ -7,6 +7,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 var numericPrefixPattern = regexp.MustCompile(`^[-+]?((\d+(\.\d*)?)|(\.\d+))([eE][-+]?\d+)?`)
@@ -18,20 +21,22 @@ func NewEngine() *Engine {
 }
 
 func (e *Engine) Grade(ctx Context) (Grade, error) {
+	var grade Grade
 	switch ctx.Question.QuestionType {
 	case "single_choice":
-		return e.gradeSingleChoice(ctx), nil
+		grade = e.gradeSingleChoice(ctx)
 	case "true_false":
-		return e.gradeTrueFalse(ctx), nil
+		grade = e.gradeTrueFalse(ctx)
 	case "multiple_choice":
-		return e.gradeMultipleChoice(ctx), nil
+		grade = e.gradeMultipleChoice(ctx)
 	case "fill_blank":
-		return e.gradeFillBlank(ctx), nil
+		grade = e.gradeFillBlank(ctx)
 	case "numeric":
-		return e.gradeNumeric(ctx), nil
+		grade = e.gradeNumeric(ctx)
 	default:
 		return Grade{}, ErrUnsupportedQuestionType
 	}
+	return applyInputConfidence(ctx, grade), nil
 }
 
 func (e *Engine) baseGrade(ctx Context, rule string) Grade {
@@ -112,11 +117,25 @@ func (e *Engine) gradeMultipleChoice(ctx Context) Grade {
 		return finalize(grade)
 	}
 	if hasWrongOption(expected, actual) {
-		grade.MissingPoints = append(grade.MissingPoints, point("multiple_choice_wrong_option", "student selected at least one wrong option", ctx.Question.Score))
+		penalty := floatConfig(ctx.AnswerKey.Tolerance, "wrong_option_penalty", ctx.Question.Score)
+		if penalty < 0 {
+			penalty = 0
+		}
+		correctCount := matchingOptionCount(expected, actual)
+		perOption := floatConfig(ctx.AnswerKey.Tolerance, "score_per_correct_option", 0)
+		if perOption > 0 {
+			grade.SuggestedScore = math.Max(0, float64(correctCount)*perOption-penalty*float64(len(actual)-correctCount))
+		}
+		grade.SuggestedScore = math.Max(grade.SuggestedScore, floatConfig(ctx.AnswerKey.Tolerance, "minimum_score", 0))
+		grade.MissingPoints = append(grade.MissingPoints, point("multiple_choice_wrong_option", "student selected at least one wrong option", math.Min(ctx.Question.Score, penalty)))
 		return finalize(grade)
 	}
 	if boolConfig(ctx.AnswerKey.Tolerance, "allow_partial", false) {
-		score := ctx.Question.Score * float64(len(actual)) / float64(len(expected))
+		score := floatConfig(ctx.AnswerKey.Tolerance, "score_per_correct_option", 0) * float64(len(actual))
+		if score == 0 {
+			score = ctx.Question.Score * float64(len(actual)) / float64(len(expected))
+		}
+		score = math.Max(score, floatConfig(ctx.AnswerKey.Tolerance, "minimum_score", 0))
 		grade.SuggestedScore = score
 		grade.MatchedPoints = append(grade.MatchedPoints, point("multiple_choice_partial", "student selected a correct subset", score))
 		grade.MissingPoints = append(grade.MissingPoints, point("multiple_choice_missing_options", "student missed one or more correct options", ctx.Question.Score-score))
@@ -162,13 +181,18 @@ func (e *Engine) gradeNumeric(ctx Context) Grade {
 	if math.IsNaN(tolerance) {
 		tolerance = floatConfig(ctx.AnswerKey.Tolerance, "value", 0)
 	}
-	if math.Abs(actual-expected) <= tolerance {
+	relative := floatConfig(ctx.AnswerKey.Tolerance, "relative", 0)
+	allowedDifference := tolerance
+	if relative > 0 {
+		allowedDifference = math.Max(allowedDifference, math.Abs(expected)*relative)
+	}
+	if math.Abs(actual-expected) <= allowedDifference {
 		grade.Confidence = 0.95
 		grade.SuggestedScore = ctx.Question.Score
-		grade.MatchedPoints = append(grade.MatchedPoints, point("numeric_tolerance", fmt.Sprintf("numeric answer within tolerance %.6g", tolerance), ctx.Question.Score))
+		grade.MatchedPoints = append(grade.MatchedPoints, point("numeric_tolerance", fmt.Sprintf("numeric answer within tolerance %.6g", allowedDifference), ctx.Question.Score))
 	} else {
 		grade.Confidence = 0.95
-		grade.MissingPoints = append(grade.MissingPoints, point("numeric_tolerance", fmt.Sprintf("numeric answer outside tolerance %.6g", tolerance), ctx.Question.Score))
+		grade.MissingPoints = append(grade.MissingPoints, point("numeric_tolerance", fmt.Sprintf("numeric answer outside tolerance %.6g", allowedDifference), ctx.Question.Score))
 	}
 	return finalize(grade)
 }
@@ -284,12 +308,20 @@ func hasWrongOption(expected []string, actual []string) bool {
 }
 
 func normalizeFill(value string, tolerance any) string {
-	value = strings.TrimSpace(value)
+	value = norm.NFKC.String(strings.TrimSpace(value))
 	if boolConfig(tolerance, "ignore_case", false) {
 		value = strings.ToLower(value)
 	}
 	if boolConfig(tolerance, "ignore_spaces", false) {
 		value = strings.Join(strings.Fields(value), "")
+	}
+	if boolConfig(tolerance, "ignore_punctuation", false) {
+		value = strings.Map(func(r rune) rune {
+			if unicode.IsPunct(r) {
+				return -1
+			}
+			return r
+		}, value)
 	}
 	return value
 }
@@ -315,6 +347,16 @@ func numericFromString(value string) (float64, string, bool) {
 	if value == "" {
 		return 0, "", false
 	}
+	if slash := strings.Index(value, "/"); slash > 0 {
+		left := strings.TrimSpace(value[:slash])
+		rest := strings.TrimSpace(value[slash+1:])
+		denominatorText := numericPrefixPattern.FindString(rest)
+		numerator, numeratorErr := strconv.ParseFloat(left, 64)
+		denominator, denominatorErr := strconv.ParseFloat(denominatorText, 64)
+		if numeratorErr == nil && denominatorErr == nil && denominator != 0 {
+			return numerator / denominator, strings.TrimSpace(strings.TrimPrefix(rest, denominatorText)), true
+		}
+	}
 	match := numericPrefixPattern.FindString(value)
 	if match == "" {
 		return 0, "", false
@@ -324,7 +366,52 @@ func numericFromString(value string) (float64, string, bool) {
 		return 0, "", false
 	}
 	unit := strings.TrimSpace(strings.TrimPrefix(value, match))
+	if strings.HasPrefix(unit, "%") {
+		number /= 100
+		unit = strings.TrimSpace(strings.TrimPrefix(unit, "%"))
+	}
 	return number, unit, true
+}
+
+func matchingOptionCount(expected []string, actual []string) int {
+	allowed := map[string]bool{}
+	for _, value := range expected {
+		allowed[value] = true
+	}
+	count := 0
+	for _, value := range actual {
+		if allowed[value] {
+			count++
+		}
+	}
+	return count
+}
+
+func applyInputConfidence(ctx Context, grade Grade) Grade {
+	if ctx.Answer.Confidence == nil {
+		if ctx.Answer.Source != "manual_entry" && ctx.Answer.Source != "imported_answer" {
+			grade.RiskFlags = appendUnique(grade.RiskFlags, "answer_confidence_missing")
+		}
+	} else {
+		if *ctx.Answer.Confidence < grade.Confidence {
+			grade.Confidence = *ctx.Answer.Confidence
+		}
+		if *ctx.Answer.Confidence < 0.9 {
+			grade.RiskFlags = appendUnique(grade.RiskFlags, "answer_low_confidence")
+		}
+	}
+	grade.NeedsHumanReview = grade.Confidence < 0.8 || hasReviewRisk(grade.RiskFlags)
+	grade.AutoPass = !grade.NeedsHumanReview && grade.Confidence >= 0.9
+	return grade
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func boolValue(value any) (bool, bool) {
@@ -437,6 +524,8 @@ func hasReviewRisk(flags []string) bool {
 	for _, flag := range flags {
 		switch flag {
 		case "true_false_parse_failed", "multiple_choice_empty_answer", "numeric_parse_failed":
+			return true
+		case "answer_confidence_missing", "answer_low_confidence":
 			return true
 		}
 	}

@@ -95,6 +95,12 @@ class Client:
     def fail_correction(self, correction_id: str, payload: dict[str, Any]) -> None:
         self._json("POST", f"/api/v1/internal/page-registration-corrections/{correction_id}/failure", payload)
 
+    def complete_omr(self, run_id: str, payload: dict[str, Any]) -> None:
+        self._json("POST", f"/api/v1/internal/omr-runs/{run_id}/result", payload)
+
+    def fail_omr(self, run_id: str, payload: dict[str, Any]) -> None:
+        self._json("POST", f"/api/v1/internal/omr-runs/{run_id}/failure", payload)
+
     def fail_task(self, task: dict[str, Any], error_code: str, detail: dict[str, Any]) -> None:
         self._json("POST", f"/api/v1/internal/worker/tasks/{task['id']}/fail", {"lease_token": task["lease_token"], "retryable": True, "error_code": error_code, "error_detail": detail, "duration_ms": 0})
 

@@ -96,6 +96,26 @@ function buildTarget(record: AuditLog) {
   return record.target_id ? `${record.target_type}:${record.target_id}` : record.target_type;
 }
 
+const actionLabels: Record<string, string> = {
+  "review.draft_saved": "保存阅卷草稿",
+  "review.human_grade_submitted": "提交人工评分",
+  "review.task_released": "释放阅卷任务",
+  "grading.scoring_run_started": "开始考试评分",
+  "grading.scoring_rule_published": "发布评分规则",
+  "report.generated": "生成学情报告",
+  "file.downloaded": "下载答卷文件",
+  "score.published": "发布考试成绩",
+  "audit.exported": "导出操作记录"
+};
+
+function actionLabel(action: string) {
+  return actionLabels[action] ?? action.replace(/_/g, " ").replace(/\./g, " · ");
+}
+
+function actorLabel(actor?: string) {
+  return actor ? `操作人员 ${actor.slice(0, 8)}` : "系统自动处理";
+}
+
 export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPageProps) {
   const { message, modal } = App.useApp();
   const hasSession = true;
@@ -163,8 +183,8 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
     () => ({
       total: logs.length,
       actors: new Set(logs.map((item) => item.actor_id).filter(Boolean)).size,
-      actions: new Set(logs.map((item) => item.action)).size,
-      ips: new Set(logs.map((item) => item.ip_address).filter(Boolean)).size
+      failures: logs.filter((item) => item.action.includes("failed") || item.action.includes("rejected")).length,
+      sensitive: logs.filter((item) => item.action.includes("publish") || item.action.includes("export") || item.action.includes("adjust")).length
     }),
     [logs]
   );
@@ -172,11 +192,11 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
   const columns = useMemo<TableColumnsType<AuditLog>>(
     () => [
       { title: "时间", dataIndex: "created_at", width: 170, render: (value: string) => formatTime(value) },
-      { title: "Actor", dataIndex: "actor_id", width: 180, render: (value?: string) => value || <span className="muted">system</span> },
-      { title: "Action", dataIndex: "action", width: 190, render: (value: string) => <StatusTag tone={actionTone(value)}>{value}</StatusTag> },
-      { title: "Target", width: 240, render: (_, record) => buildTarget(record) },
-      { title: "Reason", dataIndex: "reason", ellipsis: true, render: (value?: string) => maskText(value) },
-      { title: "IP", dataIndex: "ip_address", width: 130, render: (value?: string) => value || "-" }
+      { title: "操作人员", dataIndex: "actor_id", width: 170, render: (value?: string) => actorLabel(value) },
+      { title: "操作内容", dataIndex: "action", width: 230, render: (value: string) => actionLabel(value) },
+      { title: "业务对象", width: 170, render: (_, record) => record.target_type || "系统" },
+      { title: "说明", dataIndex: "reason", ellipsis: true, render: (value?: string) => maskText(value) },
+      { title: "结果", dataIndex: "action", width: 90, render: (value: string) => <StatusTag tone={actionTone(value)}>{value.includes("failed") || value.includes("rejected") ? "失败" : "完成"}</StatusTag> }
     ],
     []
   );
@@ -246,9 +266,9 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
       <section className="audit-topbar">
         <div>
           <Space align="center" wrap>
-            <h1>审计日志</h1>
+          <h1>操作记录</h1>
           </Space>
-          <p>只读查看当前租户内的关键操作记录，筛选、追踪并导出带水印的审计 CSV。</p>
+          <p>查看谁在什么时间执行了什么操作，异常时再展开技术详情。</p>
         </div>
         <Space wrap>
           <Button icon={<RefreshCw size={16} />} onClick={loadLogs} loading={loading}>
@@ -284,9 +304,8 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
             setCreatedTo(dates?.[1]?.toISOString() ?? "");
           }}
         />
-        <Input placeholder="操作人 actor_id" value={actorFilter} onChange={(event) => setActorFilter(event.target.value)} allowClear />
+        <Input placeholder="操作人员" value={actorFilter} onChange={(event) => setActorFilter(event.target.value)} allowClear />
         <Select allowClear placeholder="操作类型" value={actionFilter || undefined} options={actionOptions} onChange={(value) => setActionFilter(value ?? "")} />
-        <Select allowClear placeholder="目标类型" value={targetTypeFilter || undefined} options={targetTypeOptions} onChange={(value) => setTargetTypeFilter(value ?? "")} />
         <Select
           allowClear
           placeholder="考试"
@@ -294,8 +313,6 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
           options={exams.map((exam) => ({ value: exam.id, label: `${exam.name} · ${exam.subject}` }))}
           onChange={(value) => setExamFilter(value ?? "")}
         />
-        <Input placeholder="目标 ID" value={targetIdFilter} onChange={(event) => setTargetIdFilter(event.target.value)} allowClear />
-        <Input placeholder="IP" value={ipFilter} onChange={(event) => setIpFilter(event.target.value)} allowClear />
         <Button icon={<Search size={16} />} onClick={loadLogs} loading={loading}>
           查询
         </Button>
@@ -303,30 +320,30 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
 
       <section className="audit-summary-strip">
         <div>
-          <span>返回日志</span>
+          <span>本次查询</span>
           <strong>{summary.total}</strong>
         </div>
         <div>
-          <span>操作人数</span>
+          <span>涉及人员</span>
           <strong>{summary.actors}</strong>
         </div>
         <div>
-          <span>操作类型</span>
-          <strong>{summary.actions}</strong>
+          <span>异常操作</span>
+          <strong>{summary.failures}</strong>
         </div>
         <div>
-          <span>IP 数</span>
-          <strong>{summary.ips}</strong>
+          <span>敏感操作</span>
+          <strong>{summary.sensitive}</strong>
         </div>
       </section>
 
       <section className="audit-table-panel">
         <div className="panel-head">
           <div>
-            <h2>审计日志列表</h2>
+            <h2>操作记录</h2>
             <p>{filteredLogs.length} / {logs.length} 条日志，点击行查看详情。</p>
           </div>
-          <Input className="audit-keyword" prefix={<Search size={16} />} placeholder="页内搜索 action、target、reason、IP" value={keyword} onChange={(event) => setKeyword(event.target.value)} allowClear />
+          <Input className="audit-keyword" prefix={<Search size={16} />} placeholder="搜索操作内容或说明" value={keyword} onChange={(event) => setKeyword(event.target.value)} allowClear />
         </div>
         {loading ? (
           <LoadingState label="正在读取审计日志" />

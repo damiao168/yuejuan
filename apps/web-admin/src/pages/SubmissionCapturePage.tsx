@@ -4,6 +4,7 @@ import {
   App,
   Button,
   Descriptions,
+  Dropdown,
   Drawer,
   Input,
   InputNumber,
@@ -12,23 +13,19 @@ import {
   Select,
   Space,
   Table,
-  Tooltip,
   Upload,
   type TableColumnsType,
   type UploadProps
 } from "antd";
 import {
-  CheckCircle2,
   Eye,
   FileSearch,
   FileUp,
   Image as ImageIcon,
-  Layers3,
-  Play,
+  MoreHorizontal,
   RefreshCw,
   RotateCcw,
   Search,
-  ShieldAlert
 } from "lucide-react";
 import { ApiClientError } from "../api/client";
 import { downloadFileBlob, uploadFile, uploadFileWithProgress } from "../api/files";
@@ -566,33 +563,25 @@ export function SubmissionCapturePage({
       render: (_, row) => `${row.pages.length || row.submission.actual_page_count}/${row.submission.expected_page_count || "未设"}`
     },
     {
-      title: "采集状态",
-      width: 112,
-      render: (_, row) => <StatusTag tone={statusTone(row.submission.status)}>{submissionStatusLabels[row.submission.status] ?? row.submission.status}</StatusTag>
+      title: "当前状态",
+      width: 190,
+      render: (_, row) => {
+        const task = latestTask(row.ocrTasks);
+        if (row.submission.quality_status !== "passed") {
+          return <StatusTag tone={qualityTone(row.submission.quality_status)}>等待确认图片质量</StatusTag>;
+        }
+        if (task?.status === "completed" && row.segments.length > 0) {
+          return <StatusTag tone="success">识别处理已完成</StatusTag>;
+        }
+        if (task) {
+          return <StatusTag tone={ocrTone(task)}>{ocrLabel(row.ocrTasks)}</StatusTag>;
+        }
+        return <StatusTag tone={statusTone(row.submission.status)}>{submissionStatusLabels[row.submission.status] ?? "等待自动处理"}</StatusTag>;
+      }
     },
     {
-      title: "质量",
-      width: 108,
-      render: (_, row) => <StatusTag tone={qualityTone(row.submission.quality_status)}>{qualityStatusLabels[row.submission.quality_status] ?? row.submission.quality_status}</StatusTag>
-    },
-    {
-      title: "OCR 状态",
-      width: 128,
-      render: (_, row) => <StatusTag tone={ocrTone(latestTask(row.ocrTasks))}>{ocrLabel(row.ocrTasks)}</StatusTag>
-    },
-    {
-      title: "切分状态",
-      width: 128,
-      render: (_, row) => <StatusTag tone={segmentTone(row.segments)}>{segmentLabel(row.segments)}</StatusTag>
-    },
-    {
-      title: "阅卷状态",
-      width: 132,
-      render: () => <StatusTag tone="neutral">待后续 API 支持</StatusTag>
-    },
-    {
-      title: "质量问题",
-      width: 260,
+      title: "问题说明",
+      width: 300,
       render: (_, row) => {
         const issues = derivedIssues(row);
         return issues.length > 0 ? (
@@ -605,102 +594,81 @@ export function SubmissionCapturePage({
             {issues.length > 3 ? <StatusTag tone="neutral">{`+${issues.length - 3}`}</StatusTag> : null}
           </Space>
         ) : (
-          <StatusTag tone="success">无</StatusTag>
+          <span className="muted-text">未发现阻断问题</span>
         );
       }
     },
     {
-      title: "操作",
+      title: "下一步",
       fixed: "right",
-      width: 430,
+      width: 220,
       render: (_, row) => {
         const id = row.submission.id;
-        const readyDisabled = row.submission.quality_status !== "passed" || row.submission.status === "ready_for_ocr";
-        const ocrDisabled = row.submission.status !== "ready_for_ocr";
+        const task = latestTask(row.ocrTasks);
+        const qualityPending = row.submission.quality_status !== "passed";
+        const needsReady = !qualityPending && row.submission.status !== "ready_for_ocr";
+        const needsOcr = !qualityPending && !needsReady && !task;
+        const needsSegments = task?.status === "completed" && row.segments.length === 0;
+
+        const runNext = () => {
+          if (qualityPending) {
+            return runAction(`quality-${id}`, async () => {
+              await runQualityCheck(id);
+              await refreshSingle(id);
+            }, "图片质量检查完成");
+          }
+          if (needsReady) {
+            return runAction(`ready-${id}`, async () => {
+              await updateSubmissionStatus(id, "ready_for_ocr");
+              await refreshSingle(id);
+            }, "答卷已进入自动处理队列");
+          }
+          if (needsOcr) {
+            return runAction(`ocr-${id}`, async () => {
+              await createOcrTask(id);
+              await refreshSingle(id);
+            }, "文字识别已开始");
+          }
+          if (needsSegments) {
+            return runAction(`segment-${id}`, async () => {
+              await generateAnswerSegments(id);
+              await refreshSingle(id);
+            }, "题目区域已生成");
+          }
+          openPages(row);
+          return Promise.resolve();
+        };
+
+        const primaryLabel = qualityPending
+          ? "确认图片"
+          : needsReady
+            ? "继续自动处理"
+            : needsOcr
+              ? "开始识别"
+              : needsSegments
+                ? "生成题目区域"
+                : "查看答卷";
         return (
-          <Space className="table-actions" wrap>
-            <Button size="small" icon={<ImageIcon size={14} />} onClick={() => openPages(row)}>
-              页面
-            </Button>
+          <Space className="table-actions" size={6}>
             <Button
-              size="small"
-              icon={<CheckCircle2 size={14} />}
-              disabled={!canWrite}
-              loading={actioning === `quality-${id}`}
-              onClick={() =>
-                void runAction(
-                  `quality-${id}`,
-                  async () => {
-                    await runQualityCheck(id);
-                    await refreshSingle(id);
-                  },
-                  "质量检查完成"
-                )
-              }
+              type="primary"
+              disabled={!canWrite && primaryLabel !== "查看答卷"}
+              loading={Boolean(actioning?.endsWith(id))}
+              onClick={() => void runNext()}
             >
-              质量检查
+              {primaryLabel}
             </Button>
-            <Tooltip title={readyDisabled ? "需要质量检查通过后才能进入 OCR 准备状态" : ""}>
-              <Button
-                size="small"
-                icon={<ShieldAlert size={14} />}
-                disabled={!canWrite || readyDisabled}
-                loading={actioning === `ready-${id}`}
-                onClick={() =>
-                  void runAction(
-                    `ready-${id}`,
-                    async () => {
-                      await updateSubmissionStatus(id, "ready_for_ocr");
-                      await refreshSingle(id);
-                    },
-                    "已标记为待 OCR"
-                  )
-                }
-              >
-                标记 OCR
-              </Button>
-            </Tooltip>
-            <Tooltip title={ocrDisabled ? "submission 必须处于 ready_for_ocr" : "创建 OCR 任务，等待真实 worker 回写结果"}>
-              <Button
-                size="small"
-                icon={<Play size={14} />}
-                disabled={!canWrite || ocrDisabled}
-                loading={actioning === `ocr-${id}`}
-                onClick={() =>
-                  void runAction(
-                    `ocr-${id}`,
-                    async () => {
-                      await createOcrTask(id);
-                      await refreshSingle(id);
-                    },
-                    "OCR 任务已创建"
-                  )
-                }
-              >
-                触发 OCR
-              </Button>
-            </Tooltip>
-            <Button
-              size="small"
-              icon={<Layers3 size={14} />}
-              disabled={!canWrite || ocrDisabled}
-              loading={actioning === `segment-${id}`}
-              onClick={() =>
-                void runAction(
-                  `segment-${id}`,
-                  async () => {
-                    await generateAnswerSegments(id);
-                    await refreshSingle(id);
-                  },
-                  "切分任务已执行"
-                )
-              }
+            <Dropdown
+              menu={{
+                items: [
+                  { key: "pages", label: "查看原始页面", icon: <ImageIcon size={14} />, onClick: () => openPages(row) },
+                  { key: "ocr", label: "查看识别详情", icon: <FileSearch size={14} />, onClick: () => void openOcrDrawer(row) }
+                ]
+              }}
+              trigger={["click"]}
             >
-              触发切分
-            </Button>
-            <Button size="small" icon={<FileSearch size={14} />} onClick={() => void openOcrDrawer(row)}>
-              OCR 结果
-            </Button>
+              <Button aria-label="更多操作" icon={<MoreHorizontal size={16} />} />
+            </Dropdown>
           </Space>
         );
       }
@@ -766,7 +734,7 @@ export function SubmissionCapturePage({
           <Space>
             <h1>答卷采集</h1>
           </Space>
-          <p>按考试管理答卷上传、质量门禁、OCR 任务和答案切分入口。</p>
+          <p>优先处理异常答卷，其余识别和题目切分由系统自动完成。</p>
         </div>
         <Space wrap>
           <Button icon={<RefreshCw size={16} />} onClick={() => void loadCaptureData(selectedExamId)} loading={captureLoading}>
@@ -806,7 +774,7 @@ export function SubmissionCapturePage({
           <Input
             className="toolbar-input"
             prefix={<Search size={16} />}
-            placeholder="搜索匿名码、学生、答卷 ID"
+            placeholder="搜索学生或准考证号"
             value={filters.search}
             onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
           />
@@ -816,11 +784,10 @@ export function SubmissionCapturePage({
             options={qualityFilterOptions}
             onChange={(value) => setFilters((current) => ({ ...current, quality: value }))}
           />
-          <label className="inline-number-field">
+          <label className="inline-number-field capture-advanced-control">
             <span>默认页数</span>
             <InputNumber min={1} max={200} precision={0} value={expectedPages} onChange={(value) => setExpectedPages(Number(value ?? 1))} />
           </label>
-          {selectedExam ? <span className="muted">批量上传按一个文件创建一份答卷，文件先关联为第 1 页。</span> : null}
         </div>
       </section>
 
@@ -851,24 +818,24 @@ export function SubmissionCapturePage({
 
       <section className="capture-summary-grid">
         <div className="metric-tile">
-          <span>答卷数</span>
+          <span>已上传</span>
           <strong>{summary.total}</strong>
-          <small>真实 submission</small>
+          <small>本场考试答卷</small>
         </div>
         <div className="metric-tile">
-          <span>质量问题</span>
+          <span>需要处理</span>
           <strong>{summary.issueCount}</strong>
-          <small>后端问题 + OCR/切分风险</small>
+          <small>处理后自动继续</small>
         </div>
         <div className="metric-tile">
-          <span>待 OCR</span>
+          <span>等待识别</span>
           <strong>{summary.readyCount}</strong>
-          <small>ready_for_ocr</small>
+          <small>系统正在排队</small>
         </div>
         <div className="metric-tile">
-          <span>已切分</span>
-          <strong>{summary.segmented}</strong>
-          <small>answer_segment 记录</small>
+          <span>已完成识别</span>
+          <strong>{summary.ocrDone}</strong>
+          <small>{summary.ocrDone} 份文字识别完成</small>
         </div>
       </section>
 
@@ -892,7 +859,7 @@ export function SubmissionCapturePage({
         <section className="workspace-section">
           <div className="section-head">
             <div>
-              <h2>学生答卷列表</h2>
+              <h2>{summary.issueCount > 0 ? "需要处理的答卷" : "学生答卷"}</h2>
               <p>
                 {filteredRows.length} / {rows.length} 条记录，OCR 完成 {summary.ocrDone} 份
               </p>

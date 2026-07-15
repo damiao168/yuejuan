@@ -16,6 +16,8 @@ const (
 var (
 	ErrNotFound                = errors.New("grading resource not found")
 	ErrInvalidInput            = errors.New("invalid grading input")
+	ErrInvalidTransition       = errors.New("invalid grading transition")
+	ErrForbidden               = errors.New("grading action forbidden")
 	ErrUnsupportedQuestionType = errors.New("unsupported question type for rule grading")
 	ErrAnswerMissing           = errors.New("answer segment has no recorded answer")
 	ErrAnswerKeyMissing        = errors.New("question has no answer key")

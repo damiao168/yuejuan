@@ -429,11 +429,10 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
 
   const stats = overview?.stats;
   const kpis = [
+    { label: "参考人数", value: overview ? String(overview.student_count) : "-" },
     { label: "平均分", value: formatScore(stats?.average) },
-    { label: "中位数", value: formatScore(stats?.median) },
     { label: "最高分", value: formatScore(stats?.highest) },
     { label: "最低分", value: formatScore(stats?.lowest) },
-    { label: "标准差", value: formatScore(stats?.stddev) },
     { label: "及格率", value: formatPercent(stats?.pass_rate) },
     { label: "优秀率", value: formatPercent(stats?.excellent_rate) }
   ];
@@ -445,7 +444,7 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
           <Space align="center" wrap>
             <h1>学情报告</h1>
           </Space>
-          <p>查看已发布成绩形成的考试质量、班级、题目和阅卷质量分析。</p>
+          <p>先看整体成绩，再定位低分题、薄弱知识点和班级差异。</p>
         </div>
         <Space wrap>
           <Select
@@ -542,7 +541,7 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
             </ResponsiveContainer>
           </ChartPanel>
 
-          <section className="reports-panel reports-wide">
+          <section className="reports-panel reports-wide grading-quality-report-panel">
             <div className="panel-head">
               <div>
                 <h2>阅卷质量分析</h2>

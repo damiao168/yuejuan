@@ -114,6 +114,9 @@ func (h *Handler) SubmitGrade(w http.ResponseWriter, r *http.Request) {
 		h.auditAction(r, "arbitration.task_created", "arbitration_task", result.ArbitrationTask.ID, "double mark score difference exceeds threshold")
 	}
 	response := map[string]any{"task": result.Task, "human_grade": result.Grade}
+	if result.QuestionGradeID != "" {
+		response["question_grade_id"] = result.QuestionGradeID
+	}
 	if result.DoubleMarkSession != nil {
 		response["double_mark_session"] = result.DoubleMarkSession
 	}
@@ -138,6 +141,102 @@ func (h *Handler) ReturnTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.auditAction(r, "review.task_returned", "review_task", task.ID, "return review task")
+	httpx.JSON(w, http.StatusOK, map[string]any{"task": task})
+}
+
+func (h *Handler) GetDraft(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	if !h.authorizeTaskWorker(w, r, user) {
+		return
+	}
+	draft, err := h.store.(DraftStore).GetDraft(r.Context(), user.TenantID, r.PathValue("id"), user.ID)
+	if errors.Is(err, ErrNotFound) {
+		httpx.JSON(w, http.StatusOK, map[string]any{"draft": nil})
+		return
+	}
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"draft": draft})
+}
+
+func (h *Handler) SaveDraft(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	if !h.authorizeTaskWorker(w, r, user) {
+		return
+	}
+	var input SaveDraftInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	draft, err := h.store.(DraftStore).SaveDraft(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "review.draft_saved", "review_task", draft.ReviewTaskID, "save review draft")
+	httpx.JSON(w, http.StatusOK, map[string]any{"draft": draft})
+}
+
+func (h *Handler) authorizeTaskWorker(w http.ResponseWriter, r *http.Request, user auth.User) bool {
+	task, err := h.store.GetTask(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return false
+	}
+	if reviewWorkerScoped(user) && task.AssignedTo != user.ID {
+		writeStoreError(w, r, ErrForbidden)
+		return false
+	}
+	return true
+}
+
+func (h *Handler) ClaimNextTask(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input NextTaskInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	task, err := h.store.(WorkbenchStore).ClaimNextTask(r.Context(), user.TenantID, user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "review.task_claimed", "review_task", task.ID, "claim next review task")
+	httpx.JSON(w, http.StatusOK, map[string]any{"task": task})
+}
+
+func (h *Handler) GetWorkspace(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	if !h.authorizeTaskWorker(w, r, user) {
+		return
+	}
+	workspace, err := h.store.(WorkbenchStore).GetWorkspace(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"workspace": workspace})
+}
+
+func (h *Handler) RenewTaskClaim(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	if err := h.store.(WorkbenchStore).RenewTaskClaim(r.Context(), user.TenantID, r.PathValue("id"), user.ID); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"renewed": true})
+}
+
+func (h *Handler) ReleaseTaskClaim(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	task, err := h.store.(WorkbenchStore).ReleaseTaskClaim(r.Context(), user.TenantID, r.PathValue("id"), user.ID)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "review.task_released", "review_task", task.ID, "release review task claim")
 	httpx.JSON(w, http.StatusOK, map[string]any{"task": task})
 }
 
@@ -314,7 +413,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 	if r.Body == nil {
 		return true
 	}
-	if err := json.NewDecoder(r.Body).Decode(target); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "invalid json body")
 		return false
 	}
@@ -331,6 +432,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusForbidden, "review_action_forbidden", "review action is forbidden")
 	case errors.Is(err, ErrInvalidTransition):
 		httpx.Error(w, r, http.StatusConflict, "invalid_review_transition", "review task transition is invalid")
+	case errors.Is(err, ErrRevisionConflict):
+		httpx.Error(w, r, http.StatusConflict, "review_draft_revision_conflict", "review draft was updated in another session")
 	default:
 		httpx.Error(w, r, http.StatusInternalServerError, "review_operation_failed", "review operation failed")
 	}

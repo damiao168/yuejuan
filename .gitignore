@@ -16,6 +16,7 @@ target/
 .playwright-cli/
 output/
 infra/docker-compose/backups/
+infra/docker-compose/.cookies
 .env
 .env.*
 !.env.example

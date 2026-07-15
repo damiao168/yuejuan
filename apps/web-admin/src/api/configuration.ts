@@ -8,6 +8,16 @@ export interface LayoutRegion {
   y: number;
   width: number;
   height: number;
+  option_regions?: OptionRegion[];
+}
+
+export interface OptionRegion {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface TemplatePage {
@@ -19,8 +29,22 @@ export interface TemplatePage {
   question_regions: LayoutRegion[];
 }
 
+export interface TemplateOMRReference {
+  source: "exam_paper";
+  file_asset_id: string;
+  hash_sha256: string;
+  content_type: string;
+}
+
+export interface TemplateOMRProfile {
+  mode: "manual_only" | "template_difference";
+  version: "opencv-fill-v1" | "opencv-template-difference-bubble-v1";
+  reference?: TemplateOMRReference;
+}
+
 export interface TemplateLayout {
   pages: TemplatePage[];
+  omr_profile?: TemplateOMRProfile;
 }
 
 export interface AnswerSheetTemplate {
@@ -40,6 +64,77 @@ export interface AnswerSheetTemplate {
   locked_at?: string;
   created_at: string;
   updated_at: string;
+}
+
+export type OMRCalibrationStatus = "draft" | "approved" | "revoked" | "discarded";
+
+export interface OMRCalibrationSummary {
+  total_count: number;
+  labeled_count: number;
+  pending_count: number;
+  match_count: number;
+  mismatch_count: number;
+  option_coverage: Record<string, number>;
+  ready_to_approve: boolean;
+  blockers: string[];
+}
+
+export interface OMRCalibrationSession {
+  id: string;
+  tenant_id: string;
+  template_id: string;
+  template_content_hash: string;
+  question_id: string;
+  question_type: "single_choice" | "true_false";
+  profile_version: string;
+  profile_hash: string;
+  reference_file_asset_id: string;
+  reference_sha256: string;
+  option_labels: string[];
+  sample_seed: string;
+  sample_count: number;
+  minimum_samples: number;
+  minimum_samples_per_option: number;
+  minimum_confidence: number;
+  status: OMRCalibrationStatus;
+  created_by: string;
+  created_at: string;
+  approved_by?: string;
+  approved_at?: string;
+  approval_note?: string;
+  evidence_hash?: string;
+  revoked_by?: string;
+  revoked_at?: string;
+  revoke_reason?: string;
+  discarded_by?: string;
+  discarded_at?: string;
+  discard_reason?: string;
+  updated_at: string;
+  summary: OMRCalibrationSummary;
+}
+
+export interface OMRCalibrationCase {
+  id: string;
+  calibration_id: string;
+  omr_run_id: string;
+  answer_segment_id: string;
+  crop_sha256: string;
+  observed_decision: string;
+  observed_options: string[];
+  observed_confidence: number;
+  measurements: Array<Record<string, unknown>>;
+  expected_options?: string[];
+  matches?: boolean;
+  labeled_by?: string;
+  labeled_at?: string;
+  created_at: string;
+  overlay_file_asset_id?: string;
+  segment_image_url?: string;
+}
+
+export interface OMRCalibrationDetail {
+  session: OMRCalibrationSession;
+  cases: OMRCalibrationCase[];
 }
 
 export interface TemplatePayload {
@@ -91,6 +186,53 @@ export async function lockAnswerSheetTemplate(templateId: string) {
 
 export async function cloneAnswerSheetTemplate(templateId: string) {
   return apiClient.request<{ template: AnswerSheetTemplate }>(`/api/v1/answer-sheet-templates/${encodeURIComponent(templateId)}/clone`, { method: "POST" });
+}
+
+export async function listOMRCalibrations(templateId: string) {
+  return apiClient.request<{ calibrations: OMRCalibrationSession[] }>(`/api/v1/answer-sheet-templates/${encodeURIComponent(templateId)}/omr-calibrations`);
+}
+
+export async function createOMRCalibration(templateId: string, questionId: string) {
+  return apiClient.request<{ calibration: OMRCalibrationDetail }>(`/api/v1/answer-sheet-templates/${encodeURIComponent(templateId)}/omr-calibrations`, {
+    method: "POST",
+    body: JSON.stringify({ question_id: questionId })
+  });
+}
+
+export async function getOMRCalibration(calibrationId: string) {
+  return apiClient.request<{ calibration: OMRCalibrationDetail }>(`/api/v1/omr-calibrations/${encodeURIComponent(calibrationId)}`);
+}
+
+export async function labelOMRCalibrationCase(calibrationId: string, caseId: string, expectedOption: string) {
+  return apiClient.request<{ calibration: OMRCalibrationDetail }>(`/api/v1/omr-calibrations/${encodeURIComponent(calibrationId)}/cases/${encodeURIComponent(caseId)}/label`, {
+    method: "POST",
+    body: JSON.stringify({ expected_option: expectedOption })
+  });
+}
+
+export async function approveOMRCalibration(calibrationId: string, approvalNote: string) {
+  return apiClient.request<{ calibration: OMRCalibrationDetail }>(`/api/v1/omr-calibrations/${encodeURIComponent(calibrationId)}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ approval_note: approvalNote })
+  });
+}
+
+export async function revokeOMRCalibration(calibrationId: string, reason: string) {
+  return apiClient.request<{ calibration: OMRCalibrationDetail }>(`/api/v1/omr-calibrations/${encodeURIComponent(calibrationId)}/revoke`, {
+    method: "POST",
+    body: JSON.stringify({ reason })
+  });
+}
+
+export async function discardOMRCalibration(calibrationId: string, reason: string) {
+  return apiClient.request<{ calibration: OMRCalibrationDetail }>(`/api/v1/omr-calibrations/${encodeURIComponent(calibrationId)}/discard`, {
+    method: "POST",
+    body: JSON.stringify({ reason })
+  });
+}
+
+export async function downloadOMRCalibrationCaseImage(answerSegmentId: string) {
+  return apiClient.requestBlob(`/api/v1/answer-segments/${encodeURIComponent(answerSegmentId)}/image`);
 }
 
 export async function getExamReadiness(examId: string) {

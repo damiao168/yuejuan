@@ -193,16 +193,57 @@ RETURNING id::text, tenant_id::text, review_task_id::text, answer_segment_id::te
 	if err != nil {
 		return SubmitResult{}, err
 	}
+	questionGradeID := ""
+	if task.GradeRound == "single" {
+		evidence, marshalErr := json.Marshal(map[string]any{
+			"human_grade_id":    grade.ID,
+			"rubric_selections": input.RubricSelections,
+			"comments":          stringsTrim(input.Comments),
+			"student_feedback":  stringsTrim(input.StudentFeedback),
+			"reason":            stringsTrim(input.Reason),
+		})
+		if marshalErr != nil {
+			return SubmitResult{}, marshalErr
+		}
+		var priorID string
+		_ = tx.QueryRowContext(ctx, `SELECT id::text FROM question_grade WHERE tenant_id=$1::uuid AND answer_segment_id=$2::uuid AND is_current AND deleted_at IS NULL FOR UPDATE`, tenantID, task.AnswerSegmentID).Scan(&priorID)
+		if priorID != "" {
+			if _, err = tx.ExecContext(ctx, `UPDATE question_grade SET is_current=false,status='superseded' WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, priorID); err != nil {
+				return SubmitResult{}, err
+			}
+		}
+		err = tx.QueryRowContext(ctx, `
+INSERT INTO question_grade(tenant_id,exam_id,submission_id,question_id,answer_segment_id,scoring_run_id,review_task_id,source,status,score,max_score,evidence,version,supersedes_id,is_current,confirmed_by)
+SELECT rt.tenant_id,rt.exam_id,rt.submission_id,rt.question_id,rt.answer_segment_id,rt.scoring_run_id,rt.id,'human','confirmed',$3,$4,$5::jsonb,
+  (SELECT COALESCE(MAX(version),0)+1 FROM question_grade WHERE tenant_id=$1::uuid AND answer_segment_id=rt.answer_segment_id),NULLIF($6,'')::uuid,true,$7::uuid
+FROM review_task rt WHERE rt.tenant_id=$1::uuid AND rt.id=$2::uuid
+RETURNING id::text`, tenantID, task.ID, input.Score, taskContext.Question.Score, evidence, priorID, reviewerID).Scan(&questionGradeID)
+		if err != nil {
+			return SubmitResult{}, err
+		}
+	}
 	task, err = scanTask(tx.QueryRowContext(ctx, `
 UPDATE review_task
-SET status = 'submitted', updated_at = now()
+SET status = 'submitted', current_grade_id = NULLIF($3,'')::uuid,
+  claim_expires_at = NULL, revision = revision + 1, updated_at = now()
 WHERE tenant_id = $1 AND id::text = $2
 RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
   answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
   COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
-`, tenantID, id))
+`, tenantID, id, questionGradeID))
 	if err != nil {
 		return SubmitResult{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE review_draft SET deleted_at=now(),updated_at=now() WHERE tenant_id=$1::uuid AND review_task_id=$2::uuid AND reviewer_id=$3::uuid AND deleted_at IS NULL`, tenantID, task.ID, reviewerID); err != nil {
+		return SubmitResult{}, err
+	}
+	if task.GradeRound == "single" {
+		if _, err = tx.ExecContext(ctx, `UPDATE scoring_run sr SET review_count=GREATEST(0,sr.review_count-1),human_confirmed_count=sr.human_confirmed_count+1,
+status=CASE WHEN sr.queued_count=0 AND GREATEST(0,sr.review_count-1)=0 AND sr.failed_count=0 THEN 'completed' WHEN sr.queued_count=0 THEN 'needs_review' ELSE sr.status END,
+completed_at=CASE WHEN sr.queued_count=0 AND GREATEST(0,sr.review_count-1)=0 AND sr.failed_count=0 THEN now() ELSE sr.completed_at END,updated_at=now()
+FROM review_task rt WHERE rt.tenant_id=$1::uuid AND rt.id=$2::uuid AND rt.scoring_run_id=sr.id AND sr.tenant_id=rt.tenant_id`, tenantID, task.ID); err != nil {
+			return SubmitResult{}, err
+		}
 	}
 	session, finalGrade, arbitrationTask, err := s.resolveDoubleMarkAfterGradeTx(ctx, tx, tenantID, reviewerID, task)
 	if err != nil {
@@ -217,6 +258,7 @@ RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_
 	return SubmitResult{
 		Task:              task,
 		Grade:             grade,
+		QuestionGradeID:   questionGradeID,
 		DoubleMarkSession: session,
 		FinalGrade:        finalGrade,
 		ArbitrationTask:   arbitrationTask,

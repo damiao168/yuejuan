@@ -132,13 +132,23 @@ type ValidationResult struct {
 }
 
 type LayoutRegion struct {
-	ID         string  `json:"id"`
-	QuestionID string  `json:"question_id,omitempty"`
-	Label      string  `json:"label,omitempty"`
-	X          float64 `json:"x"`
-	Y          float64 `json:"y"`
-	Width      float64 `json:"width"`
-	Height     float64 `json:"height"`
+	ID            string         `json:"id"`
+	QuestionID    string         `json:"question_id,omitempty"`
+	Label         string         `json:"label,omitempty"`
+	X             float64        `json:"x"`
+	Y             float64        `json:"y"`
+	Width         float64        `json:"width"`
+	Height        float64        `json:"height"`
+	OptionRegions []OptionRegion `json:"option_regions,omitempty"`
+}
+
+type OptionRegion struct {
+	ID     string  `json:"id"`
+	Label  string  `json:"label"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 type TemplatePage struct {
@@ -151,7 +161,8 @@ type TemplatePage struct {
 }
 
 type TemplateLayout struct {
-	Pages []TemplatePage `json:"pages"`
+	Pages      []TemplatePage     `json:"pages"`
+	OMRProfile TemplateOMRProfile `json:"omr_profile,omitempty"`
 }
 
 type AnswerSheetTemplate struct {

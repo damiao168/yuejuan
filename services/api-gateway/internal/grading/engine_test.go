@@ -111,6 +111,49 @@ func TestEngineRejectsUnsupportedQuestionType(t *testing.T) {
 	}
 }
 
+func TestEngineRoutesLowConfidenceMachineAnswerToReview(t *testing.T) {
+	ctx := gradingContext("single_choice", "B", nil, nil, "B", nil)
+	confidence := 0.72
+	ctx.Answer.Source = "ocr_text"
+	ctx.Answer.Confidence = &confidence
+	grade, err := grading.NewEngine().Grade(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !grade.NeedsHumanReview || grade.AutoPass || grade.Confidence != confidence || !contains(grade.RiskFlags, "answer_low_confidence") {
+		t.Fatalf("low confidence machine input must not auto pass: %#v", grade)
+	}
+}
+
+func TestEngineNormalizesExplicitFillRules(t *testing.T) {
+	ctx := gradingContext("fill_blank", "Ａ，B", nil, map[string]any{
+		"ignore_case": true, "ignore_spaces": true, "ignore_punctuation": true,
+	}, "a b", nil)
+	grade, err := grading.NewEngine().Grade(ctx)
+	if err != nil || grade.SuggestedScore != grade.MaxScore {
+		t.Fatalf("explicit NFKC and punctuation rules should match: grade=%#v err=%v", grade, err)
+	}
+}
+
+func TestEngineNumericFractionPercentAndRelativeTolerance(t *testing.T) {
+	tests := []struct {
+		expected  any
+		answer    string
+		tolerance any
+	}{
+		{expected: 0.5, answer: "1/2", tolerance: map[string]any{"absolute": 0.0001}},
+		{expected: 0.5, answer: "50%", tolerance: map[string]any{"absolute": 0.0001}},
+		{expected: 100.0, answer: "104", tolerance: map[string]any{"relative": 0.05}},
+	}
+	for _, tt := range tests {
+		ctx := gradingContext("numeric", tt.expected, nil, tt.tolerance, tt.answer, nil)
+		grade, err := grading.NewEngine().Grade(ctx)
+		if err != nil || grade.SuggestedScore != grade.MaxScore {
+			t.Fatalf("numeric format should match: %#v grade=%#v err=%v", tt, grade, err)
+		}
+	}
+}
+
 func gradingContext(kind string, standard any, equiv []any, tolerance any, answerText string, payload map[string]any) grading.Context {
 	if payload == nil {
 		payload = map[string]any{}

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Avatar, Breadcrumb, Button, ConfigProvider, Dropdown, Layout, Menu, Space, theme } from "antd";
-import { ChevronDown, UserRound } from "lucide-react";
+import { ArrowLeft, ChevronDown, UserRound } from "lucide-react";
 import type { SessionUser } from "../auth/session";
 import type { AppRoute } from "../router/routes";
 import { hasRouteAccess, routeGroups, visibleRoutes } from "../router/routes";
@@ -13,13 +13,15 @@ export function AppLayout({
   currentRoute,
   children,
   onNavigate,
-  onLogout
+  onLogout,
+  immersive = false
 }: {
   user: SessionUser;
   currentRoute: AppRoute;
   children: ReactNode;
   onNavigate: (path: string) => void;
   onLogout: () => void;
+  immersive?: boolean;
 }) {
   const permittedRoutes = visibleRoutes().filter((route) => hasRouteAccess(user, route));
   const selectedPath = currentRoute.key === "examWorkspace" ? "/exams" : currentRoute.path;
@@ -58,8 +60,8 @@ export function AppLayout({
         }
       }}
     >
-      <Layout className="app-frame">
-        <Sider width={244} className="sidebar" breakpoint="lg" collapsedWidth={72}>
+      <Layout className={immersive ? "app-frame immersive-frame" : "app-frame"}>
+        {!immersive ? <Sider width={244} className="sidebar" breakpoint="lg" collapsedWidth={72}>
           <button className="brand-block brand-button" onClick={() => onNavigate("/dashboard")} aria-label="返回工作台">
             <div className="brand-mark">E</div>
             <div className="brand-copy">
@@ -74,11 +76,14 @@ export function AppLayout({
             onClick={(item) => onNavigate(item.key)}
             className="side-menu"
           />
-        </Sider>
+        </Sider> : null}
         <Layout>
-          <Header className="topbar">
+          <Header className={immersive ? "topbar immersive-topbar" : "topbar"}>
             <div className="topbar-left">
-              <Breadcrumb items={[{ title: user.school }, { title: currentRoute.title }]} />
+              {immersive ? <Space size="middle">
+                <Button type="text" icon={<ArrowLeft size={17} />} aria-label="退出阅卷" onClick={() => onNavigate("/dashboard")}>退出阅卷</Button>
+                <strong>{currentRoute.title}</strong>
+              </Space> : <Breadcrumb items={[{ title: user.school }, { title: currentRoute.title }]} />}
               {currentRoute.mock ? <MockBadge compact={true} /> : null}
             </div>
             <Space className="topbar-actions">
@@ -103,7 +108,7 @@ export function AppLayout({
               </Dropdown>
             </Space>
           </Header>
-          <Content className="workspace">{children}</Content>
+          <Content className={immersive ? "workspace immersive-workspace" : "workspace"}>{children}</Content>
         </Layout>
       </Layout>
     </ConfigProvider>

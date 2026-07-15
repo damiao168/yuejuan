@@ -470,33 +470,12 @@ export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: 
       ) : null}
 
       <section className="workspace-section filter-panel">
-        <div className="filter-grid">
+        <div className="filter-grid exam-filter-primary">
           <Input
             prefix={<Search size={16} />}
             placeholder="搜索考试名称、学科、创建人"
             value={filters.search}
             onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
-          />
-          <Select
-            placeholder="学校"
-            allowClear
-            value={filters.schoolId || undefined}
-            options={schoolOptions}
-            onChange={(value) => setFilters((current) => ({ ...current, schoolId: value ?? "", gradeId: "" }))}
-          />
-          <Select
-            placeholder="学科"
-            allowClear
-            value={filters.subject || undefined}
-            options={subjectOptions}
-            onChange={(value) => setFilters((current) => ({ ...current, subject: value ?? "" }))}
-          />
-          <Select
-            placeholder="年级"
-            allowClear
-            value={filters.gradeId || undefined}
-            options={gradeOptions}
-            onChange={(value) => setFilters((current) => ({ ...current, gradeId: value ?? "" }))}
           />
           <Select
             placeholder="状态"
@@ -505,14 +484,16 @@ export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: 
             options={statusFlow.map((status) => ({ label: statusLabels[status], value: status }))}
             onChange={(value) => setFilters((current) => ({ ...current, status: value ?? "" }))}
           />
-          <Select
-            placeholder="考试类型"
-            allowClear
-            value={filters.examType || undefined}
-            options={examTypeOptions}
-            onChange={(value) => setFilters((current) => ({ ...current, examType: value ?? "" }))}
-          />
         </div>
+        <details className="advanced-filter-disclosure">
+          <summary>更多筛选</summary>
+          <div className="filter-grid">
+            <Select placeholder="学校" allowClear value={filters.schoolId || undefined} options={schoolOptions} onChange={(value) => setFilters((current) => ({ ...current, schoolId: value ?? "", gradeId: "" }))} />
+            <Select placeholder="学科" allowClear value={filters.subject || undefined} options={subjectOptions} onChange={(value) => setFilters((current) => ({ ...current, subject: value ?? "" }))} />
+            <Select placeholder="年级" allowClear value={filters.gradeId || undefined} options={gradeOptions} onChange={(value) => setFilters((current) => ({ ...current, gradeId: value ?? "" }))} />
+            <Select placeholder="考试类型" allowClear value={filters.examType || undefined} options={examTypeOptions} onChange={(value) => setFilters((current) => ({ ...current, examType: value ?? "" }))} />
+          </div>
+        </details>
       </section>
 
       {loading ? (
@@ -525,7 +506,7 @@ export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: 
         <section className="workspace-section">
           <div className="section-head">
             <div>
-              <h2>考试列表</h2>
+              <h2>考试任务</h2>
               <p>{filteredExams.length} 条考试记录</p>
             </div>
           </div>

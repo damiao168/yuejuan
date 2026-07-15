@@ -548,7 +548,7 @@ export function AppealCenterPage({ canRead, canManage, canReadAudit, canReadIden
   };
 
   return (
-    <div className="appeal-shell">
+    <div className={appeals.length === 0 && !loadingList ? "appeal-shell empty" : "appeal-shell"}>
       <section className="appeal-topbar">
         <div>
           <Space align="center" wrap>

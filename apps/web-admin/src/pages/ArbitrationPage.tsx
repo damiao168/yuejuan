@@ -526,13 +526,13 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
   };
 
   return (
-    <div className="arbitration-shell">
+    <div className={tasks.length === 0 && !loadingTasks ? "arbitration-shell empty" : "arbitration-shell"}>
       <section className="arbitration-topbar">
         <div>
           <Space>
             <h1>双评仲裁</h1>
           </Space>
-          <p>处理 arbitration_task，对照双评分差、答案证据和 Rubric 后提交最终分。</p>
+          <p>对比两次评分及其依据，确认最终得分。</p>
         </div>
         <Space wrap>
           <Button icon={<RefreshCw size={16} />} onClick={() => void refreshCurrent()} loading={loadingTasks || detailLoading}>
@@ -567,7 +567,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
 
       <section className="arbitration-queue-panel">
         {loadingTasks ? (
-          <LoadingState label="正在读取 arbitration_task" />
+          <LoadingState label="正在读取仲裁任务" />
         ) : taskError ? (
           <ErrorState message={taskError} onRetry={() => void loadTasks()} />
         ) : (
@@ -579,7 +579,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
             pagination={{ pageSize: 6, showSizeChanger: false }}
             scroll={{ x: 860 }}
             rowClassName={(record) => (record.id === selectedTaskId ? "arbitration-row-active" : "")}
-            locale={{ emptyText: <Empty description="当前筛选下没有后端返回的仲裁任务" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+            locale={{ emptyText: <Empty description="当前没有需要仲裁的评分差异" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
             onRow={(record) => ({
               onClick: () => setSelectedTaskId(record.id)
             })}

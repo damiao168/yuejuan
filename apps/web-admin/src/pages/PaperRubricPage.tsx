@@ -21,17 +21,22 @@ import { listExams, type Exam } from "../api/exams";
 import {
   createQuestion,
   createRubric,
+  createScoringRule,
   deleteQuestion,
   listPapers,
   listQuestions,
+  listScoringRules,
+  publishScoringRule,
   registerPaperFromFile,
   updateQuestion,
+  updateScoringRule,
   uploadFile,
   validatePaperConfig,
   type PaperVersion,
   type Question,
   type QuestionPayload,
   type RubricPoint,
+  type ScoringRule,
   type ValidationResult
 } from "../api/papers";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
@@ -169,6 +174,9 @@ export function PaperRubricPage({
   const [rubricPoints, setRubricPoints] = useState<RubricPoint[]>([]);
   const [deductionsJson, setDeductionsJson] = useState("[]");
   const [examplesJson, setExamplesJson] = useState("[]");
+  const [scoringRules, setScoringRules] = useState<ScoringRule[]>([]);
+  const [scoringRuleConfig, setScoringRuleConfig] = useState<Record<string, unknown>>({});
+  const [savingScoringRule, setSavingScoringRule] = useState(false);
 
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
   const selectedQuestion = useMemo(
@@ -177,6 +185,9 @@ export function PaperRubricPage({
   );
   const selectedLocked = selectedQuestion?.rubric?.status === "locked";
   const questionDisabled = !canWrite || selectedLocked;
+  const objectiveRuleType = selectedQuestion && ["single_choice", "true_false", "multiple_choice", "fill_blank", "numeric"].includes(selectedQuestion.question_type) ? selectedQuestion.question_type : "";
+  const draftScoringRule = scoringRules.find((rule) => rule.status === "draft");
+  const publishedScoringRule = scoringRules.find((rule) => rule.status === "published");
 
   const loadExams = useCallback(async () => {
     setLoading(true);
@@ -278,6 +289,57 @@ export function PaperRubricPage({
     setDeductionsJson("[]");
     setExamplesJson("[]");
   }, [form, papers, questions.length, selectedQuestion]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadRules() {
+      if (!selectedQuestion || !objectiveRuleType) {
+        setScoringRules([]);
+        setScoringRuleConfig({});
+        return;
+      }
+      try {
+        const result = await listScoringRules(selectedQuestion.id);
+        if (!active) return;
+        setScoringRules(result.scoring_rules);
+        const editable = result.scoring_rules.find((rule) => rule.status === "draft") ?? result.scoring_rules.find((rule) => rule.status === "published");
+        setScoringRuleConfig(editable?.config ?? {});
+      } catch (currentError) {
+        if (active) message.error(formatError(currentError));
+      }
+    }
+    void loadRules();
+    return () => { active = false; };
+  }, [message, objectiveRuleType, selectedQuestion]);
+
+  function setRuleConfig(key: string, value: unknown) {
+    setScoringRuleConfig((current) => ({ ...current, [key]: value }));
+  }
+
+  async function saveScoringRule(publish: boolean) {
+    if (!selectedQuestion || !objectiveRuleType) return;
+    setSavingScoringRule(true);
+    try {
+      const saved = draftScoringRule
+        ? (await updateScoringRule(draftScoringRule.id, scoringRuleConfig, draftScoringRule.revision)).scoring_rule
+        : (await createScoringRule(selectedQuestion.id, objectiveRuleType, scoringRuleConfig)).scoring_rule;
+      if (publish) {
+        await publishScoringRule(saved.id);
+        message.success("评分规则已发布并锁定版本");
+      } else {
+        message.success("评分规则草稿已保存");
+      }
+      const result = await listScoringRules(selectedQuestion.id);
+      setScoringRules(result.scoring_rules);
+      const editable = result.scoring_rules.find((rule) => rule.status === "draft") ?? result.scoring_rules.find((rule) => rule.status === "published");
+      setScoringRuleConfig(editable?.config ?? {});
+      onExamChanged?.();
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setSavingScoringRule(false);
+    }
+  }
 
   const paperColumns: TableColumnsType<PaperVersion> = [
     { title: "版本", dataIndex: "version_no", width: 72, render: (value: number) => `v${value}` },
@@ -693,6 +755,37 @@ export function PaperRubricPage({
                   <Input.TextArea rows={3} spellCheck={false} />
                 </Form.Item>
               </Form>
+
+              {selectedQuestion && objectiveRuleType ? <section className="scoring-rule-editor">
+                <div className="section-head">
+                  <div>
+                    <h2>客观题评分规则</h2>
+                    <p>规则发布后不可修改；再次调整会创建新版本。</p>
+                  </div>
+                  <Space>
+                    {publishedScoringRule ? <StatusTag tone="success">{`已发布 v${publishedScoringRule.version}`}</StatusTag> : <StatusTag tone="warning">未发布</StatusTag>}
+                    <Button icon={<Save size={16} />} disabled={!canWrite} loading={savingScoringRule} onClick={() => void saveScoringRule(false)}>保存草稿</Button>
+                    <Button type="primary" icon={<LockKeyhole size={16} />} disabled={!canWrite} loading={savingScoringRule} onClick={() => void saveScoringRule(true)}>发布规则</Button>
+                  </Space>
+                </div>
+                {objectiveRuleType === "multiple_choice" ? <div className="scoring-rule-grid">
+                  <label><span>允许少选得分</span><Switch checked={Boolean(scoringRuleConfig.allow_partial)} onChange={(value) => setRuleConfig("allow_partial", value)} /></label>
+                  <label><span>每个正确选项分值</span><InputNumber min={0} max={selectedQuestion.score} precision={2} value={Number(scoringRuleConfig.score_per_correct_option ?? 0)} onChange={(value) => setRuleConfig("score_per_correct_option", Number(value ?? 0))} /></label>
+                  <label><span>每个错误选项扣分</span><InputNumber min={0} max={selectedQuestion.score} precision={2} value={Number(scoringRuleConfig.wrong_option_penalty ?? selectedQuestion.score)} onChange={(value) => setRuleConfig("wrong_option_penalty", Number(value ?? 0))} /></label>
+                  <label><span>最低得分</span><InputNumber min={0} max={selectedQuestion.score} precision={2} value={Number(scoringRuleConfig.minimum_score ?? 0)} onChange={(value) => setRuleConfig("minimum_score", Number(value ?? 0))} /></label>
+                </div> : null}
+                {objectiveRuleType === "fill_blank" ? <div className="scoring-rule-grid">
+                  <label><span>忽略大小写</span><Switch checked={Boolean(scoringRuleConfig.ignore_case)} onChange={(value) => setRuleConfig("ignore_case", value)} /></label>
+                  <label><span>忽略空格</span><Switch checked={Boolean(scoringRuleConfig.ignore_spaces)} onChange={(value) => setRuleConfig("ignore_spaces", value)} /></label>
+                  <label><span>忽略标点</span><Switch checked={Boolean(scoringRuleConfig.ignore_punctuation)} onChange={(value) => setRuleConfig("ignore_punctuation", value)} /></label>
+                </div> : null}
+                {objectiveRuleType === "numeric" ? <div className="scoring-rule-grid">
+                  <label><span>绝对误差</span><InputNumber min={0} precision={6} value={Number(scoringRuleConfig.absolute ?? 0)} onChange={(value) => setRuleConfig("absolute", Number(value ?? 0))} /></label>
+                  <label><span>相对误差</span><InputNumber min={0} max={1} step={0.001} precision={6} value={Number(scoringRuleConfig.relative ?? 0)} onChange={(value) => setRuleConfig("relative", Number(value ?? 0))} /></label>
+                  <label><span>单位必须填写</span><Switch checked={Boolean(scoringRuleConfig.unit_required)} onChange={(value) => setRuleConfig("unit_required", value)} /></label>
+                </div> : null}
+                {["single_choice", "true_false"].includes(objectiveRuleType) ? <Alert type="info" showIcon message="使用标准答案精确判定" description="空白、多涂、擦除或低置信结果不会自动判零，将进入人工确认。" /> : null}
+              </section> : null}
 
               <div className="rubric-editor">
                 <div className="section-head">

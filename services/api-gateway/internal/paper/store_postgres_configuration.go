@@ -34,10 +34,10 @@ ORDER BY version_no DESC
 }
 
 func (s *PostgresStore) CreateTemplate(ctx context.Context, tenantID string, examID string, userID string, input CreateTemplateInput) (AnswerSheetTemplate, error) {
+	input.Layout = NormalizeTemplateLayout(input.Layout)
 	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
 		return AnswerSheetTemplate{}, ErrInvalidInput
 	}
-	layout, _ := json.Marshal(input.Layout)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AnswerSheetTemplate{}, err
@@ -46,6 +46,14 @@ func (s *PostgresStore) CreateTemplate(ctx context.Context, tenantID string, exa
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, examID); err != nil {
 		return AnswerSheetTemplate{}, err
 	}
+	input.Layout, err = s.materializeTemplateOMRReferenceTx(ctx, tx, tenantID, examID, input.ExamPaperID, input.Layout)
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
+		return AnswerSheetTemplate{}, ErrInvalidInput
+	}
+	layout, _ := json.Marshal(input.Layout)
 	row := tx.QueryRowContext(ctx, `
 INSERT INTO answer_sheet_template (tenant_id, exam_id, exam_paper_id, version_no, name, page_count, layout, content_hash, created_by)
 SELECT $1::uuid, $2::uuid, p.id,
@@ -71,11 +79,44 @@ RETURNING id::text, tenant_id::text, exam_id::text, exam_paper_id::text, version
 }
 
 func (s *PostgresStore) UpdateTemplate(ctx context.Context, tenantID string, id string, input UpdateTemplateInput) (AnswerSheetTemplate, error) {
+	input.Layout = NormalizeTemplateLayout(input.Layout)
+	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
+		return AnswerSheetTemplate{}, ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	defer tx.Rollback()
+	var examID, examPaperID, status string
+	var revision int
+	err = tx.QueryRowContext(ctx, `
+SELECT exam_id::text, exam_paper_id::text, status, revision
+FROM answer_sheet_template
+WHERE tenant_id = $1::uuid AND id = $2::uuid AND deleted_at IS NULL
+FOR UPDATE
+`, tenantID, id).Scan(&examID, &examPaperID, &status, &revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AnswerSheetTemplate{}, ErrNotFound
+	}
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	if status != "draft" {
+		return AnswerSheetTemplate{}, ErrTemplateLocked
+	}
+	if revision != input.ExpectedRevision {
+		return AnswerSheetTemplate{}, ErrConflict
+	}
+	input.Layout, err = s.materializeTemplateOMRReferenceTx(ctx, tx, tenantID, examID, examPaperID, input.Layout)
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
 	if err := ValidateTemplateInput(input.Name, input.PageCount, input.Layout); err != nil {
 		return AnswerSheetTemplate{}, ErrInvalidInput
 	}
 	layout, _ := json.Marshal(input.Layout)
-	row := s.db.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, `
 UPDATE answer_sheet_template
 SET name = $3, page_count = $4, layout = $5::jsonb, content_hash = $6, revision = revision + 1, updated_at = now()
 WHERE tenant_id = $1::uuid AND id = $2::uuid AND deleted_at IS NULL AND status = 'draft' AND revision = $7
@@ -86,8 +127,11 @@ RETURNING id::text, tenant_id::text, exam_id::text, exam_paper_id::text, version
 	var item AnswerSheetTemplate
 	if err := scanTemplate(row, &item); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return AnswerSheetTemplate{}, s.templateWriteError(ctx, tenantID, id, input.ExpectedRevision)
+			return AnswerSheetTemplate{}, ErrConflict
 		}
+		return AnswerSheetTemplate{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return AnswerSheetTemplate{}, err
 	}
 	return item, nil
@@ -100,18 +144,40 @@ func (s *PostgresStore) LockTemplate(ctx context.Context, tenantID string, id st
 	}
 	defer tx.Rollback()
 	row := tx.QueryRowContext(ctx, `
+SELECT id::text, tenant_id::text, exam_id::text, exam_paper_id::text, version_no, revision,
+       name, status, page_count, layout, content_hash, created_by::text,
+       COALESCE(locked_by::text, ''), locked_at, created_at, updated_at
+FROM answer_sheet_template
+WHERE tenant_id = $1::uuid AND id = $2::uuid AND deleted_at IS NULL AND status = 'draft'
+FOR UPDATE
+`, tenantID, id)
+	var draft AnswerSheetTemplate
+	if err := scanTemplate(row, &draft); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AnswerSheetTemplate{}, s.templateWriteError(ctx, tenantID, id, 0)
+		}
+		return AnswerSheetTemplate{}, err
+	}
+	draft.Layout = NormalizeTemplateLayout(draft.Layout)
+	draft.Layout, err = s.materializeTemplateOMRReferenceTx(ctx, tx, tenantID, draft.ExamID, draft.ExamPaperID, draft.Layout)
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	if err := ValidateTemplateInput(draft.Name, draft.PageCount, draft.Layout); err != nil {
+		return AnswerSheetTemplate{}, ErrInvalidInput
+	}
+	layout, _ := json.Marshal(draft.Layout)
+	row = tx.QueryRowContext(ctx, `
 UPDATE answer_sheet_template
-SET status = 'locked', locked_by = $3::uuid, locked_at = now(), revision = revision + 1, updated_at = now()
+SET status = 'locked', locked_by = $3::uuid, locked_at = now(), layout = $4::jsonb, content_hash = $5,
+    revision = revision + 1, updated_at = now()
 WHERE tenant_id = $1::uuid AND id = $2::uuid AND deleted_at IS NULL AND status = 'draft'
 RETURNING id::text, tenant_id::text, exam_id::text, exam_paper_id::text, version_no, revision,
           name, status, page_count, layout, content_hash, created_by::text,
           COALESCE(locked_by::text, ''), locked_at, created_at, updated_at
-`, tenantID, id, userID)
+`, tenantID, id, userID, layout, stableContentHash(draft.Layout))
 	var item AnswerSheetTemplate
 	if err := scanTemplate(row, &item); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return AnswerSheetTemplate{}, s.templateWriteError(ctx, tenantID, id, 0)
-		}
 		return AnswerSheetTemplate{}, err
 	}
 	for _, page := range item.Layout.Pages {
@@ -123,10 +189,11 @@ SET answer_area = jsonb_build_object(
   'x', $5::float8,
   'y', $6::float8,
   'width', $7::float8,
-  'height', $8::float8
+  'height', $8::float8,
+  'option_regions', $9::jsonb
 ), updated_at = now()
 WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND id = $3::uuid AND deleted_at IS NULL AND status <> 'deleted'
-`, tenantID, item.ExamID, region.QuestionID, page.PageNo, region.X, region.Y, region.Width, region.Height)
+`, tenantID, item.ExamID, region.QuestionID, page.PageNo, region.X, region.Y, region.Width, region.Height, mustJSON(region.OptionRegions))
 			if err != nil {
 				return AnswerSheetTemplate{}, err
 			}
@@ -331,4 +398,33 @@ func scanTemplate(row templateScanner, item *AnswerSheetTemplate) error {
 		item.LockedAt = &lockedAt.Time
 	}
 	return nil
+}
+
+func mustJSON(value any) []byte {
+	raw, _ := json.Marshal(value)
+	return raw
+}
+
+func (s *PostgresStore) materializeTemplateOMRReferenceTx(ctx context.Context, tx *sql.Tx, tenantID, examID, examPaperID string, layout TemplateLayout) (TemplateLayout, error) {
+	if layout.OMRProfile.Mode != OMRProfileModeTemplateDifference {
+		return BindTemplateOMRReference(layout, TemplateOMRReference{}), nil
+	}
+	var reference TemplateOMRReference
+	err := tx.QueryRowContext(ctx, `
+SELECT fa.id::text, fa.hash_sha256, fa.content_type
+FROM exam_paper ep
+JOIN file_asset fa ON fa.tenant_id = ep.tenant_id AND fa.id = ep.file_asset_id AND fa.deleted_at IS NULL
+WHERE ep.tenant_id = $1::uuid AND ep.exam_id = $2::uuid AND ep.id = $3::uuid AND ep.deleted_at IS NULL
+`, tenantID, examID, examPaperID).Scan(&reference.FileAssetID, &reference.HashSHA256, &reference.ContentType)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TemplateLayout{}, ErrInvalidInput
+	}
+	if err != nil {
+		return TemplateLayout{}, err
+	}
+	reference.Source = OMRReferenceSourceExamPaper
+	if err := ValidateTemplateOMRReference(reference); err != nil {
+		return TemplateLayout{}, ErrInvalidInput
+	}
+	return BindTemplateOMRReference(layout, reference), nil
 }

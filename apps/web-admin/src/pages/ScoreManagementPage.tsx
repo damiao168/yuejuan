@@ -528,9 +528,9 @@ export function ScoreManagementPage({
       <section className="score-topbar">
         <div>
           <Space>
-            <h1>成绩管理</h1>
+            <h1>成绩发布</h1>
           </Space>
-          <p>汇总最终分，执行发布前质量检查，确认、发布并导出带水印的成绩 CSV。</p>
+          <p>先处理阻断问题，检查无误后确认并发布成绩。</p>
         </div>
         <Space wrap>
           <Select
@@ -562,27 +562,27 @@ export function ScoreManagementPage({
 
       <section className="score-summary-strip">
         <div>
-          <span>考试总人数</span>
+          <span>参考人数</span>
           <strong>{summary.totalSubmissions}</strong>
         </div>
         <div>
-          <span>已完成阅卷人数</span>
+          <span>已完成阅卷</span>
           <strong>{summary.completedGrades}</strong>
         </div>
         <div>
-          <span>未完成任务</span>
+          <span>阅卷未完成</span>
           <strong>{summary.unfinishedReviews}</strong>
         </div>
         <div>
-          <span>待仲裁任务</span>
+          <span>等待仲裁</span>
           <strong>{summary.pendingArbitrations}</strong>
         </div>
         <div>
-          <span>OCR 失败</span>
+          <span>识别失败</span>
           <strong>{summary.ocrFailures}</strong>
         </div>
         <div>
-          <span>异常任务</span>
+          <span>其他异常</span>
           <strong>{summary.anomalies}</strong>
         </div>
         <div>
@@ -634,7 +634,7 @@ export function ScoreManagementPage({
         <aside className="score-actions-panel">
           <div className="panel-head">
             <div>
-              <h2>发布操作</h2>
+              <h2>发布步骤</h2>
               <p>{publishedOrLocked ? "成绩已锁定" : "按顺序完成汇总、确认、发布"}</p>
             </div>
             {publishedOrLocked ? <LockKeyhole size={18} /> : <Calculator size={18} />}
@@ -662,6 +662,8 @@ export function ScoreManagementPage({
             导出 CSV
           </Button>
 
+          <details className="score-advanced-details">
+            <summary>更多与审计</summary>
           <Alert
             type="info"
             showIcon
@@ -686,6 +688,7 @@ export function ScoreManagementPage({
               }
             ]}
           />
+          </details>
         </aside>
       </section>
     </div>

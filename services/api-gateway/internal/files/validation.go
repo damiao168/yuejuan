@@ -24,6 +24,7 @@ var allowedOwnerTypes = map[string]bool{
 	"page_registration_output":             true,
 	"answer_segment_crop":                  true,
 	"page_registration_correction_preview": true,
+	"omr_evidence":                         true,
 	"report":                               true,
 	"import":                               true,
 }
@@ -94,6 +95,8 @@ func ValidateOwnerReferences(ownerType string, ownerID string, examID string, su
 	case "capture_batch":
 		return ownerID != "" && examID != ""
 	case "capture_page_decoded":
+		return ownerID != "" && examID != ""
+	case "omr_evidence":
 		return ownerID != "" && examID != ""
 	default:
 		return true

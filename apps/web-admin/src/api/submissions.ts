@@ -87,6 +87,14 @@ export interface AnswerSegment {
   reviewed_by?: string;
   reviewed_at?: string;
   created_at: string;
+  crop_file_asset_id?: string;
+  crop_sha256?: string;
+  processing_status?: string;
+  confidence?: number;
+}
+
+export async function downloadAnswerSegmentImage(segmentId: string) {
+  return apiClient.requestBlob(`/api/v1/answer-segments/${encodeURIComponent(segmentId)}/image`);
 }
 
 export interface SegmentIssue {

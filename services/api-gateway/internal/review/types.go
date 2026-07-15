@@ -13,18 +13,19 @@ var (
 	ErrInvalidInput      = errors.New("invalid review input")
 	ErrForbidden         = errors.New("review action forbidden")
 	ErrInvalidTransition = errors.New("invalid review task transition")
+	ErrRevisionConflict  = errors.New("review draft revision conflict")
 )
 
 type Context struct {
-	ExamID          string
-	SubmissionID    string
-	AnswerSegmentID string
-	AnonymousCode   string
-	Question        paper.Question
-	Rubric          paper.Rubric
-	RawAnswer       string
-	OCRText         string
-	AISuggestion    map[string]any
+	ExamID          string         `json:"exam_id"`
+	SubmissionID    string         `json:"submission_id"`
+	AnswerSegmentID string         `json:"answer_segment_id"`
+	AnonymousCode   string         `json:"anonymous_code"`
+	Question        paper.Question `json:"question"`
+	Rubric          paper.Rubric   `json:"rubric"`
+	RawAnswer       string         `json:"raw_answer"`
+	OCRText         string         `json:"ocr_text"`
+	AISuggestion    map[string]any `json:"ai_suggestion"`
 }
 
 type ReviewTask struct {
@@ -101,9 +102,60 @@ type ReturnTaskInput struct {
 	Reason string `json:"reason"`
 }
 
+type ReviewDraft struct {
+	ID               string            `json:"id"`
+	ReviewTaskID     string            `json:"review_task_id"`
+	ReviewerID       string            `json:"reviewer_id"`
+	Score            *float64          `json:"score,omitempty"`
+	RubricSelections []RubricSelection `json:"rubric_selections"`
+	Comments         string            `json:"comments"`
+	PrivateNote      string            `json:"private_note"`
+	StudentFeedback  string            `json:"student_feedback"`
+	ViewerState      map[string]any    `json:"viewer_state"`
+	Revision         int               `json:"revision"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
+type SaveDraftInput struct {
+	Score            *float64          `json:"score"`
+	RubricSelections []RubricSelection `json:"rubric_selections"`
+	Comments         string            `json:"comments"`
+	PrivateNote      string            `json:"private_note"`
+	StudentFeedback  string            `json:"student_feedback"`
+	ViewerState      map[string]any    `json:"viewer_state"`
+	ExpectedRevision int               `json:"expected_revision"`
+}
+
+type DraftStore interface {
+	GetDraft(context.Context, string, string, string) (ReviewDraft, error)
+	SaveDraft(context.Context, string, string, string, SaveDraftInput) (ReviewDraft, error)
+}
+
+type NextTaskInput struct {
+	ExamID     string `json:"exam_id"`
+	QuestionID string `json:"question_id"`
+}
+
+type Workspace struct {
+	Task              ReviewTask `json:"task"`
+	Context           Context    `json:"context"`
+	SegmentImageURL   string     `json:"segment_image_url"`
+	OriginalImageURL  string     `json:"original_image_url,omitempty"`
+	SegmentStatus     string     `json:"segment_status"`
+	SegmentConfidence *float64   `json:"segment_confidence,omitempty"`
+}
+
+type WorkbenchStore interface {
+	ClaimNextTask(context.Context, string, string, NextTaskInput) (ReviewTask, error)
+	GetWorkspace(context.Context, string, string) (Workspace, error)
+	RenewTaskClaim(context.Context, string, string, string) error
+	ReleaseTaskClaim(context.Context, string, string, string) (ReviewTask, error)
+}
+
 type SubmitResult struct {
 	Task              ReviewTask         `json:"task"`
 	Grade             HumanGrade         `json:"human_grade"`
+	QuestionGradeID   string             `json:"question_grade_id,omitempty"`
 	DoubleMarkSession *DoubleMarkSession `json:"double_mark_session,omitempty"`
 	FinalGrade        *FinalGrade        `json:"final_grade,omitempty"`
 	ArbitrationTask   *ArbitrationTask   `json:"arbitration_task,omitempty"`

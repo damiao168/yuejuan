@@ -28,6 +28,9 @@ func ValidateTemplateInput(name string, pageCount int, layout TemplateLayout) er
 	if strings.TrimSpace(name) == "" {
 		return errors.New("template name is required")
 	}
+	if err := ValidateTemplateOMRProfile(layout.OMRProfile); err != nil {
+		return err
+	}
 	if pageCount < 1 || pageCount > maxTemplatePages || len(layout.Pages) != pageCount {
 		return fmt.Errorf("page_count must match 1-%d layout pages", maxTemplatePages)
 	}
@@ -57,6 +60,18 @@ func ValidateTemplateInput(name string, pageCount int, layout TemplateLayout) er
 						return errors.New("question_id may only have one template region")
 					}
 					questionIDs[region.QuestionID] = true
+					labels := map[string]bool{}
+					regions += len(region.OptionRegions)
+					for _, option := range region.OptionRegions {
+						label := strings.ToUpper(strings.TrimSpace(option.Label))
+						if label == "" || len(label) > 16 || labels[label] {
+							return errors.New("option regions require unique labels up to 16 characters")
+						}
+						labels[label] = true
+						if err := validateOptionRegion(option); err != nil {
+							return err
+						}
+					}
 				}
 			}
 		}
@@ -65,6 +80,10 @@ func ValidateTemplateInput(name string, pageCount int, layout TemplateLayout) er
 		return fmt.Errorf("layout exceeds %d regions", maxTemplateRegions)
 	}
 	return nil
+}
+
+func validateOptionRegion(region OptionRegion) error {
+	return validateRegion(LayoutRegion{X: region.X, Y: region.Y, Width: region.Width, Height: region.Height})
 }
 
 func validateRegion(region LayoutRegion) error {
