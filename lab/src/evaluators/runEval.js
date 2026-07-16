@@ -94,6 +94,49 @@ export function runEvaluation({ datasetPath, adapterName = "mock", filters = {} 
   };
 }
 
+export async function runEvaluationAsync({ datasetPath, adapterName = "mock", adapterOptions = {}, filters = {} }) {
+  const adapter = createAdapter(adapterName, adapterOptions);
+  const samples = filterSamples(readJsonl(datasetPath), filters);
+  const records = [];
+  for (const sample of samples) {
+    const input = sampleToInput(sample);
+    const inputValidation = validateGradingInput(input);
+    if (!inputValidation.valid) {
+      throw new Error(`Invalid sample input ${sample.sample_id}: ${inputValidation.errors.join("; ")}`);
+    }
+    const rawOutput = await adapter.grade(input);
+    const adjustedOutput = applyEvidenceVerification(input, rawOutput);
+    records.push({
+      sample,
+      input,
+      output: adjustedOutput,
+      schema_validation: validateGradingOutput(adjustedOutput, input),
+      verification: verifyEvidence(input, adjustedOutput)
+    });
+  }
+  const metrics = computeMetrics(records);
+  return {
+    generated_at: new Date().toISOString(),
+    dataset_path: datasetPath,
+    adapter: adapterName,
+    model_info: adapter.get_model_info(),
+    prompt_version: "prompt-base-v1",
+    sample_count: records.length,
+    metrics,
+    results: records.map((record) => ({
+      sample_id: record.sample.sample_id,
+      subject: record.sample.subject,
+      question_type: record.sample.question_type,
+      expected_score: record.sample.expected_score,
+      suggested_score: record.output.suggested_score,
+      needs_human_review: record.output.needs_human_review,
+      risk_flags: record.output.risk_flags,
+      schema_valid: record.schema_validation.valid,
+      evidence_valid: record.verification.verification_passed
+    }))
+  };
+}
+
 export function failedCasesFromReport(report, records = report.results) {
   return records.filter((record) => record.schema_valid !== true || record.evidence_valid !== true || Math.abs(record.expected_score - record.suggested_score) > 1);
 }

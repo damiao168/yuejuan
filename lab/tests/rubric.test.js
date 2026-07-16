@@ -30,3 +30,9 @@ test("calculation rubric must include steps", () => {
   assert.equal(validation.valid, false);
   assert.match(validation.errors.join("\n"), /steps/);
 });
+
+test("rubric point match policy is explicit and validated", () => {
+  const rubric = baseRubric();
+  rubric.points[0].match_policy = "guess";
+  assert.equal(validateRubricDsl(rubric).valid, false);
+});

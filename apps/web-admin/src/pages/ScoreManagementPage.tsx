@@ -18,8 +18,10 @@ import {
 } from "../api/scores";
 import { listSubmissions, type Submission } from "../api/submissions";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
+import type { ProductExperience } from "../router/experience";
 
 interface IdentityMaps {
   students: Record<string, Student>;
@@ -163,11 +165,13 @@ async function loadIdentities(canReadStudentNames: boolean): Promise<IdentityMap
 }
 
 export function ScoreManagementPage({
+  mode,
   canManage,
   canReadStudentNames,
   canReadAudit,
   initialExamId = ""
 }: {
+  mode: ProductExperience;
   canManage: boolean;
   canReadStudentNames: boolean;
   canReadAudit: boolean;
@@ -524,13 +528,13 @@ export function ScoreManagementPage({
   };
 
   return (
-    <div className="score-shell">
+    <div className={mode === "teacher" ? "score-shell read-only" : "score-shell"}>
       <section className="score-topbar">
         <div>
           <Space>
-            <h1>成绩发布</h1>
+            <h1>{mode === "teacher" ? "班级成绩" : "成绩发布"}</h1>
           </Space>
-          <p>先处理阻断问题，检查无误后确认并发布成绩。</p>
+          <p>{mode === "teacher" ? "查看当前授权考试的班级成绩与阅卷完成情况。" : "先处理阻断问题，检查无误后确认并发布成绩。"}</p>
         </div>
         <Space wrap>
           <Select
@@ -586,12 +590,12 @@ export function ScoreManagementPage({
           <strong>{summary.anomalies}</strong>
         </div>
         <div>
-          <span>是否可发布</span>
-          <StatusTag tone={summary.canPublish ? "success" : "danger"}>{summary.canPublish ? "可发布" : "不可发布"}</StatusTag>
+          <span>{mode === "teacher" ? "当前状态" : "是否可发布"}</span>
+          <StatusTag tone={mode === "teacher" ? "neutral" : summary.canPublish ? "success" : "danger"}>{mode === "teacher" ? (selectedExam ? statusLabels[selectedExam.status] ?? selectedExam.status : "未选择") : summary.canPublish ? "可发布" : "不可发布"}</StatusTag>
         </div>
       </section>
 
-      <section className="score-workspace">
+      <section className={mode === "teacher" ? "score-workspace read-only" : "score-workspace"}>
         <main className="score-main">
           <section className="score-quality-panel">
             <div className="panel-head">
@@ -618,20 +622,19 @@ export function ScoreManagementPage({
             {loadingScores ? (
               <LoadingState label="正在读取成绩" />
             ) : (
-              <Table
+              <ResponsiveTable
                 rowKey="id"
                 size="small"
                 columns={columns}
                 dataSource={filteredGrades}
                 pagination={{ pageSize: 8, showSizeChanger: false }}
-                scroll={{ x: 980 }}
                 locale={{ emptyText: <Empty description="当前考试没有后端返回的成绩" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
               />
             )}
           </section>
         </main>
 
-        <aside className="score-actions-panel">
+        {mode === "admin" ? <aside className="score-actions-panel">
           <div className="panel-head">
             <div>
               <h2>发布步骤</h2>
@@ -689,7 +692,7 @@ export function ScoreManagementPage({
             ]}
           />
           </details>
-        </aside>
+        </aside> : null}
       </section>
     </div>
   );

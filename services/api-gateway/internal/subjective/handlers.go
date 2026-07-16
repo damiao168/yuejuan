@@ -28,6 +28,9 @@ func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy := NormalizePolicy(input.ModelPolicy)
+	if governed, ok := h.adapter.(GovernedPolicyProvider); ok {
+		policy = governed.Policy()
+	}
 	if err := ValidatePolicy(policy); err != nil {
 		writeStoreError(w, r, err)
 		return
@@ -43,6 +46,10 @@ func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 	}
 	promptGuard := InspectPromptInjection(ctx.AnswerText)
 	adapterInput := AdapterInput{
+		RequestID:      newAdapterRequestID(),
+		SegmentID:      ctx.SegmentID,
+		Subject:        ctx.Subject,
+		GradeLevel:     ctx.GradeLevel,
 		Question:       ctx.Question,
 		Rubric:         ctx.Rubric,
 		AnswerText:     ctx.AnswerText,
@@ -63,7 +70,7 @@ func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusCreated, map[string]any{"grade": grade})
 		return
 	}
-	if err := ValidateOutput(output, ctx.Question.Score); err != nil {
+	if err := ValidateOutput(output, ctx); err != nil {
 		ApplyPromptGuard(&output, promptGuard)
 		grade, createErr := h.store.CreateGrade(r.Context(), user.TenantID, user.ID, failedGrade(ctx, policy, err.Error(), output))
 		if createErr != nil {
@@ -91,26 +98,35 @@ func successfulGrade(ctx Context, policy ModelPolicy, output AdapterOutput) Grad
 		graderType = MockGraderType
 	}
 	return Grade{
-		AnswerSegmentID:  ctx.SegmentID,
-		QuestionID:       ctx.Question.ID,
-		QuestionNo:       ctx.Question.QuestionNo,
-		QuestionType:     ctx.Question.QuestionType,
-		GraderType:       graderType,
-		ModelVersion:     policy.ModelVersion,
-		PromptVersion:    policy.PromptVersion,
-		SuggestedScore:   output.SuggestedScore,
-		MaxScore:         ctx.Question.Score,
-		Confidence:       output.Confidence,
-		MatchedPoints:    output.MatchedPoints,
-		MissingPoints:    output.MissingPoints,
-		Evidence:         output.Evidence,
-		RiskFlags:        output.RiskFlags,
-		NeedsHumanReview: output.NeedsHumanReview,
-		StudentFeedback:  output.StudentFeedback,
-		TeacherNote:      output.TeacherNote,
-		Mock:             output.Mock,
-		Status:           "succeeded",
-		RawOutput:        output.RawOutput,
+		AnswerSegmentID:        ctx.SegmentID,
+		QuestionID:             ctx.Question.ID,
+		QuestionNo:             ctx.Question.QuestionNo,
+		QuestionType:           ctx.Question.QuestionType,
+		AnswerVersion:          ctx.AnswerVersion,
+		GraderType:             graderType,
+		ModelVersion:           firstNonEmpty(output.ModelVersion, policy.ModelVersion),
+		PromptVersion:          firstNonEmpty(output.PromptVersion, policy.PromptVersion),
+		RubricVersion:          firstNonEmpty(output.RubricVersion, ctx.Rubric.Version),
+		DeliveryMode:           firstNonEmpty(output.DeliveryMode, "teacher_review"),
+		CapabilityProfile:      output.CapabilityProfile,
+		AdapterRequestID:       output.RequestID,
+		AdapterName:            output.Telemetry.Adapter,
+		AdapterAttempts:        output.Telemetry.Attempts,
+		AdapterLatencyMS:       output.Telemetry.ElapsedMS,
+		AdapterRepairAttempted: output.Telemetry.RepairAttempted,
+		SuggestedScore:         output.SuggestedScore,
+		MaxScore:               ctx.Question.Score,
+		Confidence:             output.Confidence,
+		MatchedPoints:          output.MatchedPoints,
+		MissingPoints:          output.MissingPoints,
+		Evidence:               output.Evidence,
+		RiskFlags:              output.RiskFlags,
+		NeedsHumanReview:       output.NeedsHumanReview,
+		StudentFeedback:        output.StudentFeedback,
+		TeacherNote:            output.TeacherNote,
+		Mock:                   output.Mock,
+		Status:                 "succeeded",
+		RawOutput:              output.RawOutput,
 	}
 }
 
@@ -129,28 +145,46 @@ func failedGrade(ctx Context, policy ModelPolicy, reason string, output AdapterO
 	}
 	raw["failure_reason"] = reason
 	return Grade{
-		AnswerSegmentID:  ctx.SegmentID,
-		QuestionID:       ctx.Question.ID,
-		QuestionNo:       ctx.Question.QuestionNo,
-		QuestionType:     ctx.Question.QuestionType,
-		GraderType:       graderType,
-		ModelVersion:     policy.ModelVersion,
-		PromptVersion:    policy.PromptVersion,
-		SuggestedScore:   0,
-		MaxScore:         ctx.Question.Score,
-		Confidence:       0,
-		MatchedPoints:    []grading.PointResult{},
-		MissingPoints:    []grading.PointResult{},
-		Evidence:         output.Evidence,
-		RiskFlags:        riskFlags,
-		NeedsHumanReview: true,
-		StudentFeedback:  "",
-		TeacherNote:      "Adapter output failed schema validation; no valid subjective score was produced.",
-		Mock:             output.Mock,
-		Status:           "failed",
-		FailureReason:    reason,
-		RawOutput:        raw,
+		AnswerSegmentID:        ctx.SegmentID,
+		QuestionID:             ctx.Question.ID,
+		QuestionNo:             ctx.Question.QuestionNo,
+		QuestionType:           ctx.Question.QuestionType,
+		AnswerVersion:          ctx.AnswerVersion,
+		GraderType:             graderType,
+		ModelVersion:           firstNonEmpty(output.ModelVersion, policy.ModelVersion),
+		PromptVersion:          firstNonEmpty(output.PromptVersion, policy.PromptVersion),
+		RubricVersion:          firstNonEmpty(output.RubricVersion, ctx.Rubric.Version),
+		DeliveryMode:           "teacher_review",
+		CapabilityProfile:      output.CapabilityProfile,
+		AdapterRequestID:       output.RequestID,
+		AdapterName:            output.Telemetry.Adapter,
+		AdapterAttempts:        output.Telemetry.Attempts,
+		AdapterLatencyMS:       output.Telemetry.ElapsedMS,
+		AdapterRepairAttempted: output.Telemetry.RepairAttempted,
+		SuggestedScore:         0,
+		MaxScore:               ctx.Question.Score,
+		Confidence:             0,
+		MatchedPoints:          []grading.PointResult{},
+		MissingPoints:          []grading.PointResult{},
+		Evidence:               []grading.Evidence{},
+		RiskFlags:              riskFlags,
+		NeedsHumanReview:       true,
+		StudentFeedback:        "",
+		TeacherNote:            "Adapter output failed schema validation; no valid subjective score was produced.",
+		Mock:                   output.Mock,
+		Status:                 "failed",
+		FailureReason:          reason,
+		RawOutput:              raw,
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {

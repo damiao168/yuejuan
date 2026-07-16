@@ -74,6 +74,7 @@ import {
   type SubmissionPage
 } from "../api/submissions";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
 
@@ -312,7 +313,7 @@ function fallbackSnapshot(value: unknown, initial: ScoreDraft): DraftFallbackSna
   };
 }
 
-export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, canReturn, currentUserId, initialExamId = "" }: { canWork: boolean; canGrade: boolean; canVerifyEvidence: boolean; canReturn: boolean; currentUserId: string; initialExamId?: string }) {
+export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, canReturn, currentUserId, initialExamId = "", personalScope = false }: { canWork: boolean; canGrade: boolean; canVerifyEvidence: boolean; canReturn: boolean; currentUserId: string; initialExamId?: string; personalScope?: boolean }) {
   const { message } = App.useApp();
   const hasSession = true;
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("active");
@@ -386,7 +387,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
       return;
     }
     try {
-      const result = await listReviewTasks();
+      const result = await listReviewTasks(personalScope ? { assigned_to: currentUserId } : {});
       setTasks(result.tasks);
       setSelectedTaskId((current) => current || result.tasks.find((task) => ["assigned", "in_progress", "returned"].includes(task.status))?.id || "");
     } catch (currentError) {
@@ -394,7 +395,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
     } finally {
       setLoadingTasks(false);
     }
-  }, [hasSession]);
+  }, [currentUserId, hasSession, personalScope]);
 
   const loadScoringSummary = useCallback(async () => {
     if (!initialExamId || !canGrade) return;
@@ -1014,7 +1015,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
           <span>待人工 <strong>{scoringSummary.run.review_count}</strong></span>
           <span>失败 <strong>{scoringSummary.run.failed_count}</strong></span>
         </div> : <Alert type="info" showIcon message="尚未开始评分" description="确认采集与切题完成后启动；缺少规则或证据的答案会自动进入人工队列。" />}
-        <Table size="small" pagination={false} loading={scoringLoading} rowKey="question_id" dataSource={scoringSummary?.questions ?? []} columns={[
+        <ResponsiveTable size="small" pagination={false} loading={scoringLoading} rowKey="question_id" dataSource={scoringSummary?.questions ?? []} columns={[
           { title: "题号", dataIndex: "question_no", width: 90 },
           { title: "题型", dataIndex: "question_type", width: 140 },
           { title: "答卷", dataIndex: "total", width: 80 },
@@ -1025,7 +1026,7 @@ export function GradingWorkbenchPage({ canWork, canGrade, canVerifyEvidence, can
         ]} />
       </section> : null}
       <Modal title="评分处理明细" open={scoringDetailOpen} onCancel={() => setScoringDetailOpen(false)} footer={<Button onClick={() => setScoringDetailOpen(false)}>关闭</Button>} width={900}>
-        <Table size="small" pagination={{ pageSize: 12, showSizeChanger: false }} rowKey="answer_segment_id" dataSource={scoringRunDetail?.items ?? []} columns={[
+        <ResponsiveTable size="small" pagination={{ pageSize: 12, showSizeChanger: false }} rowKey="answer_segment_id" dataSource={scoringRunDetail?.items ?? []} columns={[
           { title: "题号", dataIndex: "question_no", width: 84 },
           { title: "题型", dataIndex: "question_type", width: 130 },
           { title: "当前状态", dataIndex: "state", width: 112, render: (value: string) => <StatusTag tone={value === "confirmed" ? "success" : value === "failed" ? "danger" : value === "review" ? "warning" : "processing"}>{scoringItemStateLabels[value] ?? value}</StatusTag> },

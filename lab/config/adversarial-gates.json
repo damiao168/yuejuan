@@ -1,0 +1,19 @@
+{
+  "schema_version": "adversarial-gates-v1",
+  "dev": {
+    "minimum_attacks_per_agent": 3,
+    "minimum_controls_per_agent": 1,
+    "minimum_attack_families_per_agent": 1,
+    "minimum_control_families_per_agent": 1,
+    "minimum_attack_recall": 1,
+    "maximum_control_false_positive_rate": 0
+  },
+  "pilot": {
+    "minimum_attacks_per_agent": 25,
+    "minimum_controls_per_agent": 25,
+    "minimum_attack_families_per_agent": 5,
+    "minimum_control_families_per_agent": 5,
+    "minimum_attack_recall": 0.98,
+    "maximum_control_false_positive_rate": 0.05
+  }
+}

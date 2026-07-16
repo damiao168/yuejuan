@@ -65,6 +65,9 @@ func (s *MemoryStore) CreateGrade(_ context.Context, tenantID string, actorID st
 
 func ContextForTest(kind string, score float64, answerText string, ocrConfidence *float64) Context {
 	return Context{
+		AnswerVersion: "answer-v1",
+		Subject:       "chinese",
+		GradeLevel:    "junior_middle",
 		Question: paper.Question{
 			ID:           "question-" + kind,
 			TenantID:     "00000000-0000-0000-0000-000000000002",
@@ -72,6 +75,7 @@ func ContextForTest(kind string, score float64, answerText string, ocrConfidence
 			QuestionNo:   "Q1",
 			QuestionType: kind,
 			Score:        score,
+			Stem:         "synthetic question",
 		},
 		Rubric: paper.Rubric{
 			ID:         "rubric-" + kind,

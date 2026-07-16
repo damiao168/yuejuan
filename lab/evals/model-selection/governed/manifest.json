@@ -1,0 +1,47 @@
+{
+  "schema_version": "governed-dataset-manifest-v1",
+  "generated_at": "2026-07-15T03:22:23.194Z",
+  "input_file": "fixed-synthetic-v1.jsonl",
+  "input_sha256": "8eb282b05bb5477ab2e06cb122a49ece91a11f260d6e9457cc23789167365d51",
+  "source": {
+    "source_id": "lab_synthetic",
+    "license_id": "internal-synthetic",
+    "intended_use": "evaluation"
+  },
+  "total_records": 4,
+  "unique_question_rubric_groups": 4,
+  "split_seed": "edugrade-group-split-v1",
+  "split_ratios": {
+    "train": 0.7,
+    "validation": 0.15,
+    "test": 0.15
+  },
+  "split_group_counts": {
+    "train": 2,
+    "validation": 1,
+    "test": 1
+  },
+  "files": {
+    "train": {
+      "file": "train.jsonl",
+      "records": 2,
+      "sha256": "6d62b09ca038cc39682efb7a57f54d5f1adc7b9a4cc8729387c09601b067176f"
+    },
+    "validation": {
+      "file": "validation.jsonl",
+      "records": 1,
+      "sha256": "f1059186d641699a89b12bb154dbfff24ff5b7290e4e250e48de381c4366e1f3"
+    },
+    "test": {
+      "file": "test.jsonl",
+      "records": 1,
+      "sha256": "1d7fccf803ea391c9364b9f1c9097ee952bad73c90f24692878be0cc698a5be8"
+    }
+  },
+  "leakage_audit": {
+    "passed": true,
+    "leaked_groups": [],
+    "unique_groups": 4
+  },
+  "privacy_scan_passed": true
+}

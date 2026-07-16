@@ -12,12 +12,16 @@ export class BaseQuestionGrader {
     if (!inputValidation.valid) {
       throw new Error(`Invalid grading input: ${inputValidation.errors.join("; ")}`);
     }
-    const output = applyEvidenceVerification(input, this.adapter.grade(input));
-    const outputValidation = validateGradingOutput(output, input);
-    if (!outputValidation.valid) {
-      throw new Error(`Invalid grading output: ${outputValidation.errors.join("; ")}`);
-    }
-    return output;
+    const finalize = (rawOutput) => {
+      const output = applyEvidenceVerification(input, rawOutput);
+      const outputValidation = validateGradingOutput(output, input);
+      if (!outputValidation.valid) {
+        throw new Error(`Invalid grading output: ${outputValidation.errors.join("; ")}`);
+      }
+      return output;
+    };
+    const result = this.adapter.grade(input);
+    return result && typeof result.then === "function" ? result.then(finalize) : finalize(result);
   }
 }
 

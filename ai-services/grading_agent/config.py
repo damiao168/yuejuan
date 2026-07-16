@@ -1,0 +1,80 @@
+from dataclasses import dataclass
+import os
+
+
+def _integer(name, default, minimum, maximum):
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _float(name, default, minimum, maximum):
+    raw = os.getenv(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+@dataclass(frozen=True)
+class Settings:
+    host: str = "0.0.0.0"
+    port: int = 8100
+    service_token: str = ""
+    model_base_url: str = "http://127.0.0.1:8087/v1"
+    model_api_key: str = ""
+    model_name: str = "qwen3-4b-q4-k-m"
+    model_version: str = "Qwen/Qwen3-4B-GGUF:Q4_K_M"
+    prompt_version: str = "subjective-local-structured-v2"
+    model_timeout_seconds: int = 230
+    model_ready_timeout_seconds: int = 3
+    model_queue_timeout_seconds: int = 5
+    model_max_retries: int = 1
+    model_context_tokens: int = 4096
+    model_max_output_tokens: int = 384
+    model_temperature: float = 0.0
+    model_seed: int = 42
+    max_request_bytes: int = 262144
+    idempotency_ttl_seconds: int = 900
+    idempotency_max_entries: int = 256
+    contract_root: str = "/app/contracts/grading-agent/v1"
+    prompt_root: str = "/app/prompts"
+
+    @classmethod
+    def from_env(cls):
+        settings = cls(
+            host=os.getenv("EDUGRADE_GRADING_AGENT_HOST", "0.0.0.0").strip(),
+            port=_integer("EDUGRADE_GRADING_AGENT_PORT", 8100, 1, 65535),
+            service_token=os.getenv("EDUGRADE_GRADING_AGENT_TOKEN", ""),
+            model_base_url=os.getenv("EDUGRADE_GRADING_MODEL_BASE_URL", "http://127.0.0.1:8087/v1").rstrip("/"),
+            model_api_key=os.getenv("EDUGRADE_GRADING_MODEL_API_KEY", ""),
+            model_name=os.getenv("EDUGRADE_GRADING_MODEL_NAME", "qwen3-4b-q4-k-m").strip(),
+            model_version=os.getenv("EDUGRADE_GRADING_MODEL_VERSION", "Qwen/Qwen3-4B-GGUF:Q4_K_M").strip(),
+            prompt_version=os.getenv("EDUGRADE_GRADING_PROMPT_VERSION", "subjective-local-structured-v2").strip(),
+            model_timeout_seconds=_integer("EDUGRADE_GRADING_MODEL_TIMEOUT_SECONDS", 230, 1, 600),
+            model_ready_timeout_seconds=_integer("EDUGRADE_GRADING_MODEL_READY_TIMEOUT_SECONDS", 3, 1, 30),
+            model_queue_timeout_seconds=_integer("EDUGRADE_GRADING_MODEL_QUEUE_TIMEOUT_SECONDS", 5, 0, 120),
+            model_max_retries=_integer("EDUGRADE_GRADING_MODEL_MAX_RETRIES", 1, 0, 1),
+            model_context_tokens=_integer("EDUGRADE_GRADING_MODEL_CONTEXT_TOKENS", 4096, 1024, 32768),
+            model_max_output_tokens=_integer("EDUGRADE_GRADING_MODEL_MAX_OUTPUT_TOKENS", 384, 128, 4096),
+            model_temperature=_float("EDUGRADE_GRADING_MODEL_TEMPERATURE", 0, 0, 2),
+            model_seed=_integer("EDUGRADE_GRADING_MODEL_SEED", 42, 0, 2147483647),
+            max_request_bytes=_integer("EDUGRADE_GRADING_MAX_REQUEST_BYTES", 262144, 1024, 2097152),
+            idempotency_ttl_seconds=_integer("EDUGRADE_GRADING_IDEMPOTENCY_TTL_SECONDS", 900, 60, 86400),
+            idempotency_max_entries=_integer("EDUGRADE_GRADING_IDEMPOTENCY_MAX_ENTRIES", 256, 1, 10000),
+            contract_root=os.getenv("EDUGRADE_GRADING_CONTRACT_ROOT", "/app/contracts/grading-agent/v1"),
+            prompt_root=os.getenv("EDUGRADE_GRADING_PROMPT_ROOT", "/app/prompts"),
+        )
+        if len(settings.service_token) < 32:
+            raise ValueError("EDUGRADE_GRADING_AGENT_TOKEN must contain at least 32 characters")
+        if not settings.model_name or not settings.model_version or not settings.prompt_version:
+            raise ValueError("model and prompt versions must be configured")
+        return settings

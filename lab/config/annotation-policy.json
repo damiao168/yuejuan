@@ -1,0 +1,27 @@
+{
+  "schema_version": "annotation-policy-v1",
+  "score_dispute_tolerance": 0,
+  "evidence_disagreement_requires_adjudication": true,
+  "normalized_score_bins": 20,
+  "adjacent_fraction": 0.1,
+  "workflow": {
+    "schema_version": "blind-annotation-workflow-v1",
+    "teacher_assignments_per_sample": 2,
+    "blind_teacher_packets": true,
+    "assignment_seed": "edugrade-blind-annotation-v1"
+  },
+  "gates": {
+    "dev": {
+      "minimum_double_scored": 3,
+      "minimum_qwk": null,
+      "maximum_normalized_mae": null,
+      "minimum_point_agreement": null
+    },
+    "pilot": {
+      "minimum_double_scored": 500,
+      "minimum_qwk": 0.8,
+      "maximum_normalized_mae": 0.08,
+      "minimum_point_agreement": 0.85
+    }
+  }
+}

@@ -18,7 +18,8 @@ export const SUBJECTS = Object.freeze([
   "biology",
   "history",
   "politics",
-  "geography"
+  "geography",
+  "computer_science"
 ]);
 
 export const RISK_FLAGS = Object.freeze([
@@ -56,6 +57,9 @@ export function validateRubricPoint(point, index = 0) {
   if (typeof point.evidence_required !== "boolean") {
     errors.push(`rubric.points[${index}].evidence_required must be boolean`);
   }
+  if (point.match_policy !== undefined && !["semantic", "strict_alias"].includes(point.match_policy)) {
+    errors.push(`rubric.points[${index}].match_policy is unsupported`);
+  }
   return errors;
 }
 
@@ -74,6 +78,7 @@ export function validateRubric(rubric) {
   }
   if (Array.isArray(rubric.points)) {
     const seen = new Set();
+    const aliasOwners = new Map();
     let total = 0;
     rubric.points.forEach((point, index) => {
       errors.push(...validateRubricPoint(point, index));
@@ -82,6 +87,13 @@ export function validateRubric(rubric) {
         seen.add(point.id);
       }
       if (isNumber(point?.score)) total += point.score;
+      for (const alias of point?.aliases ?? []) {
+        const normalizedAlias = String(alias).normalize("NFKC").trim().toLowerCase();
+        if (!normalizedAlias) errors.push(`rubric.points[${index}].aliases cannot contain empty values`);
+        else if (aliasOwners.has(normalizedAlias) && aliasOwners.get(normalizedAlias) !== point.id) {
+          errors.push(`rubric alias is shared by multiple points: ${alias}`);
+        } else aliasOwners.set(normalizedAlias, point.id);
+      }
     });
     if (!rubric.allow_partial_total && isNumber(rubric.max_score) && round(total) !== round(rubric.max_score)) {
       errors.push(`rubric points total ${round(total)} must equal max_score ${rubric.max_score}`);
@@ -200,7 +212,12 @@ export function validateGradingOutput(output, input = undefined) {
     });
   }
   if (Array.isArray(output.evidence)) {
-    output.evidence.forEach((evidence, index) => errors.push(...validateEvidence(evidence, index)));
+    const evidenceIds = new Set();
+    output.evidence.forEach((evidence, index) => {
+      errors.push(...validateEvidence(evidence, index));
+      if (evidenceIds.has(evidence?.evidence_id)) errors.push(`output.evidence contains duplicate evidence_id: ${evidence.evidence_id}`);
+      evidenceIds.add(evidence?.evidence_id);
+    });
   }
   if (Array.isArray(output.matched_points)) {
     let total = 0;
@@ -237,6 +254,7 @@ export function validateGradingOutput(output, input = undefined) {
       errors.push("low OCR confidence outputs must set needs_human_review=true");
     }
     const rubricPoints = new Map(input.rubric.points.map((point) => [point.id, point]));
+    const evidenceById = new Map((output.evidence ?? []).map((evidence) => [evidence.evidence_id, evidence]));
     const evidenceByRubricPoint = new Map();
     for (const evidence of output.evidence ?? []) {
       if (!evidenceByRubricPoint.has(evidence.rubric_point_id)) evidenceByRubricPoint.set(evidence.rubric_point_id, []);
@@ -252,6 +270,12 @@ export function validateGradingOutput(output, input = undefined) {
         const linkedEvidence = evidenceByRubricPoint.get(point.rubric_point_id) ?? [];
         if (linkedEvidence.length === 0 || point.evidence_ids?.length === 0) {
           errors.push(`matched required point lacks evidence: ${point.rubric_point_id}`);
+        }
+      }
+      for (const evidenceId of point.evidence_ids ?? []) {
+        const linked = evidenceById.get(evidenceId);
+        if (!linked || linked.rubric_point_id !== point.rubric_point_id) {
+          errors.push(`matched point has invalid evidence_id link: ${point.rubric_point_id}:${evidenceId}`);
         }
       }
     }

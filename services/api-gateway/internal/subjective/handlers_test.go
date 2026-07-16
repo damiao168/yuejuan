@@ -48,6 +48,60 @@ func TestMockSubjectiveGradeCreatesReviewGrade(t *testing.T) {
 	assertAuditAction(t, authStore, "subjective.ai_grade_created")
 }
 
+func TestConfiguredRouterUsesGovernedGradingAgentAndOverridesCallerPolicy(t *testing.T) {
+	const serviceToken = "test-service-token-with-at-least-32-characters"
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+serviceToken {
+			t.Fatalf("missing service authentication")
+		}
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request["model_policy"].(map[string]any)["model_version"] != "governed-model-v1" || request["prompt_version"] != "governed-prompt-v2" {
+			t.Fatalf("caller controlled governed versions: %#v", request)
+		}
+		if _, leaked := request["tenant_id"]; leaked {
+			t.Fatal("tenant identity leaked to grading agent")
+		}
+		response := map[string]any{
+			"schema_version": "grading-agent-v1", "request_id": request["request_id"], "status": "suggestion",
+			"delivery": "teacher_suggestion", "suggested_score": 8, "max_score": 8, "confidence": 0,
+			"matched_points": []any{map[string]any{"rubric_point_id": "p1", "label": "synthetic rubric point", "score": 8, "evidence_ids": []string{"e1"}}},
+			"missing_points": []any{}, "deductions": []any{},
+			"evidence":   []any{map[string]any{"evidence_id": "e1", "rubric_point_id": "p1", "text_excerpt": "synthetic answer", "location": "answer_text", "confidence": 0.9}},
+			"risk_flags": []string{"score_needs_review", "human_review_required"}, "needs_human_review": true,
+			"student_feedback": "teacher review required", "teacher_note": "shadow suggestion",
+			"model_version": "governed-model-v1", "prompt_version": "governed-prompt-v2", "rubric_version": "v1",
+			"capability_profile": "local-pilot-v1", "mock": false,
+			"telemetry": map[string]any{"adapter": "local_llama_cpp", "attempts": 1, "repair_attempted": false, "prior_error_codes": []string{}, "elapsed_ms": 25},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer agent.Close()
+
+	authStore := authStoreWithPermissions(t, []string{"grading:manage"})
+	store := subjective.NewMemoryStore()
+	store.AddContext(tenantID, "segment-1", subjectiveContext("short_answer", 8, "synthetic answer", nil))
+	cfg := config.Config{
+		Service: config.ServiceConfig{Name: "test", Environment: "test", ReadinessTimeout: time.Millisecond},
+		Auth:    config.AuthConfig{SessionTTL: time.Hour},
+		AIService: config.AIServiceConfig{
+			URL: agent.URL, Token: serviceToken, Timeout: 2 * time.Second, MaxRetries: 0,
+			ModelVersion: "governed-model-v1", PromptVersion: "governed-prompt-v2", MinConfidence: 0.8,
+		},
+	}
+	router := server.NewRouterComplete(cfg, logger.New(io.Discard, "error"), nil, authStore, org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore(), files.NewMemoryStore(), files.NewMemoryObjectStorage(), submission.NewMemoryStore(), ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), segment.NewMemoryStore(), store)
+	token := login(t, router)
+	req := authedRequest(http.MethodPost, "/api/v1/answer-segments/segment-1/subjective-ai-grade", bytes.NewBufferString(`{"model_policy":{"model_version":"caller-selected-model","prompt_version":"caller-prompt","min_confidence":0.1}}`), token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"mock":false`) || !strings.Contains(rec.Body.String(), `"model_version":"governed-model-v1"`) || !strings.Contains(rec.Body.String(), `"needs_human_review":true`) || !strings.Contains(rec.Body.String(), `"adapter_name":"local_llama_cpp"`) {
+		t.Fatalf("governed grading agent was not used: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSubjectiveReviewPolicies(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"grading:manage"})
 	store := subjective.NewMemoryStore()
@@ -120,17 +174,24 @@ func (fixedAdapter) Name() string { return "fixed-test-adapter" }
 
 func (fixedAdapter) Grade(_ context.Context, input subjective.AdapterInput) (subjective.AdapterOutput, error) {
 	return subjective.AdapterOutput{
-		SuggestedScore:   input.Question.Score / 2,
-		Confidence:       0.95,
-		MatchedPoints:    []grading.PointResult{{Code: "p1", Label: "synthetic matched point", Score: input.Question.Score / 2}},
-		MissingPoints:    []grading.PointResult{},
-		Evidence:         []grading.Evidence{{Type: "text", AnswerSegment: input.AnswerImageRef["answer_segment_id"].(string), AnswerText: input.AnswerText, Rule: "fixed test adapter"}},
-		RiskFlags:        []string{},
-		NeedsHumanReview: false,
-		StudentFeedback:  "synthetic feedback",
-		TeacherNote:      "synthetic teacher note",
-		RawOutput:        map[string]any{"adapter": "fixed-test-adapter"},
-		Mock:             false,
+		RequestID:         input.RequestID,
+		SuggestedScore:    input.Question.Score / 2,
+		Confidence:        0.95,
+		MatchedPoints:     []grading.PointResult{{Code: "p1", Label: "synthetic matched point", Score: input.Question.Score / 2, EvidenceIDs: []string{"e1"}}},
+		MissingPoints:     []grading.PointResult{},
+		Evidence:          []grading.Evidence{{Type: "answer_text", EvidenceID: "e1", RubricPointID: "p1", AnswerSegment: input.SegmentID, AnswerText: input.AnswerText, Location: "answer_text", Confidence: 0.9}},
+		RiskFlags:         []string{},
+		NeedsHumanReview:  true,
+		StudentFeedback:   "synthetic feedback",
+		TeacherNote:       "synthetic teacher note",
+		ModelVersion:      input.ModelPolicy.ModelVersion,
+		PromptVersion:     input.ModelPolicy.PromptVersion,
+		RubricVersion:     input.Rubric.Version,
+		DeliveryMode:      "teacher_suggestion",
+		CapabilityProfile: "local-pilot-v1",
+		Telemetry:         subjective.AdapterTelemetry{Adapter: "fixed-test-adapter", Attempts: 1, PriorErrorCodes: []string{}},
+		RawOutput:         map[string]any{"adapter": "fixed-test-adapter"},
+		Mock:              false,
 	}, nil
 }
 
@@ -222,6 +283,9 @@ func callSubjectiveHandler(t *testing.T, handler *subjective.Handler, segmentID 
 
 func subjectiveContext(kind string, score float64, answerText string, ocrConfidence *float64) subjective.Context {
 	return subjective.Context{
+		AnswerVersion: "answer-v1",
+		Subject:       "chinese",
+		GradeLevel:    "junior_middle",
 		Question: paper.Question{
 			ID:           "question-" + kind,
 			TenantID:     tenantID,
@@ -229,6 +293,7 @@ func subjectiveContext(kind string, score float64, answerText string, ocrConfide
 			QuestionNo:   "Q1",
 			QuestionType: kind,
 			Score:        score,
+			Stem:         "synthetic question",
 		},
 		Rubric: paper.Rubric{
 			ID:         "rubric-" + kind,

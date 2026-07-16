@@ -9,15 +9,26 @@ import { clearReviewDraftFallbacks } from "./auth/reviewDraftFallback";
 import { AppLayout } from "./components/AppLayout";
 import { ForbiddenState, LoadingState, NotFoundState } from "./components/PageState";
 import { LoginPage } from "./pages/LoginPage";
-import { examWorkspaceFromPath, hasRouteAccess, notFoundRoute, pathFromHash, routeFromPath } from "./router/routes";
+import { examWorkspaceFromPath, hasExamWorkspaceSectionAccess, hasRouteAccess, notFoundRoute, pathFromHash, routeFromPath } from "./router/routes";
+import {
+  availableExperiences,
+  canonicalPathFromPath,
+  defaultExperience,
+  experienceFromPath,
+  hasExperienceAccess,
+  pathForExperience,
+  type ProductExperience
+} from "./router/experience";
 import type { LoginFormValues } from "./pages/LoginPage";
 
 const AppealCenterPage = lazy(() => import("./pages/AppealCenterPage").then((module) => ({ default: module.AppealCenterPage })));
 const ArbitrationPage = lazy(() => import("./pages/ArbitrationPage").then((module) => ({ default: module.ArbitrationPage })));
 const AuditLogPage = lazy(() => import("./pages/AuditLogPage").then((module) => ({ default: module.AuditLogPage })));
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
+const TeacherDashboardPage = lazy(() => import("./pages/TeacherDashboardPage").then((module) => ({ default: module.TeacherDashboardPage })));
 const ExamManagementPage = lazy(() => import("./pages/ExamManagementPage").then((module) => ({ default: module.ExamManagementPage })));
 const GradingWorkbenchPage = lazy(() => import("./pages/GradingWorkbenchPage").then((module) => ({ default: module.GradingWorkbenchPage })));
+const AdminGradingOperationsPage = lazy(() => import("./pages/AdminGradingOperationsPage").then((module) => ({ default: module.AdminGradingOperationsPage })));
 const LearningReportsPage = lazy(() => import("./pages/LearningReportsPage").then((module) => ({ default: module.LearningReportsPage })));
 const OrganizationSetupPage = lazy(() => import("./pages/OrganizationSetupPage").then((module) => ({ default: module.OrganizationSetupPage })));
 const ExamWorkspacePage = lazy(() => import("./pages/ExamWorkspacePage").then((module) => ({ default: module.ExamWorkspacePage })));
@@ -85,12 +96,35 @@ function App() {
     };
   }, []);
 
-  const route = useMemo(() => routeFromPath(path), [path]);
-  const examWorkspace = useMemo(() => examWorkspaceFromPath(path), [path]);
+  const requestedExperience = useMemo(() => experienceFromPath(path), [path]);
+  const experience = useMemo<ProductExperience>(
+    () => requestedExperience ?? (user ? defaultExperience(user) : "admin"),
+    [requestedExperience, user]
+  );
+  const navigationExperience = useMemo<ProductExperience>(
+    () => user && !hasExperienceAccess(user, experience) ? defaultExperience(user) : experience,
+    [experience, user]
+  );
+  const canonicalPath = useMemo(() => canonicalPathFromPath(path), [path]);
+  const route = useMemo(() => routeFromPath(canonicalPath), [canonicalPath]);
+  const examWorkspace = useMemo(() => examWorkspaceFromPath(canonicalPath), [canonicalPath]);
+
+  useEffect(() => {
+    if (!user || requestedExperience) return;
+    const nextPath = pathForExperience(canonicalPath, defaultExperience(user));
+    window.history.replaceState(null, "", `#${nextPath}`);
+    setPath(nextPath);
+  }, [canonicalPath, requestedExperience, user]);
 
   const navigate = (nextPath: string) => {
-    window.location.hash = nextPath;
-    setPath(nextPath);
+    const targetExperience = experienceFromPath(nextPath) ?? navigationExperience;
+    const externalPath = pathForExperience(nextPath, targetExperience);
+    window.location.hash = externalPath;
+    setPath(externalPath);
+  };
+
+  const changeExperience = (nextExperience: ProductExperience) => {
+    navigate(pathForExperience("/dashboard", nextExperience));
   };
 
   const login = async (values: LoginFormValues) => {
@@ -98,8 +132,11 @@ function App() {
     setLoginError(undefined);
     try {
       const response = await loginWithPassword(values);
-      setUser(sessionFromAuthUser(response.user));
-      navigate("/dashboard");
+      const nextUser = sessionFromAuthUser(response.user);
+      const nextPath = pathForExperience("/dashboard", defaultExperience(nextUser));
+      setUser(nextUser);
+      window.location.hash = nextPath;
+      setPath(nextPath);
     } catch (error) {
       setLoginError(error instanceof ApiClientError && error.code === "invalid_credentials" ? "租户、账号或密码不正确。" : "暂时无法登录，请检查网络连接后重试。");
     } finally {
@@ -145,7 +182,7 @@ function App() {
       case "questions":
         return <PaperRubricPage canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} initialExamId={examId} onExamChanged={refreshWorkspace} />;
       case "template":
-        return <AnswerSheetTemplatePage examId={examId} canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} canCalibrate={hasEveryPermission(user, ["grading:manage"])} onExamChanged={refreshWorkspace} />;
+        return <AnswerSheetTemplatePage examId={examId} canManage={experience === "admin" && hasEveryPermission(user, ["exam:manage", "file:manage"])} canCalibrate={experience === "admin" && hasEveryPermission(user, ["grading:manage"])} onExamChanged={refreshWorkspace} />;
       case "settings":
         return <ExamReadinessPage examId={examId} canManage={hasEveryPermission(user, ["exam:manage"])} onNavigate={navigate} onExamChanged={refreshWorkspace} />;
       case "capture":
@@ -153,13 +190,13 @@ function App() {
       case "processing":
         return <SubmissionCapturePage canManage={hasEveryPermission(user, ["submission:manage", "file:manage", "ocr:manage", "segment:manage"])} canReadStudentNames={hasEveryPermission(user, ["org:manage"])} initialExamId={examId} />;
       case "grading":
-        return <GradingWorkbenchPage canWork={hasAnyPermission(user, ["review:manage", "review:work"])} canGrade={hasEveryPermission(user, ["grading:manage"])} canVerifyEvidence={hasEveryPermission(user, ["evidence:manage"])} canReturn={hasEveryPermission(user, ["review:manage"])} currentUserId={user.id} initialExamId={examId} />;
+        return <GradingWorkbenchPage canWork={hasAnyPermission(user, ["review:manage", "review:work"])} canGrade={experience === "admin" && hasEveryPermission(user, ["grading:manage"])} canVerifyEvidence={experience === "admin" && hasEveryPermission(user, ["evidence:manage"])} canReturn={experience === "admin" && hasEveryPermission(user, ["review:manage"])} currentUserId={user.id} initialExamId={examId} personalScope={experience === "teacher"} />;
       case "quality":
-        return <ArbitrationPage canAssign={hasEveryPermission(user, ["arbitration:manage"])} canWork={hasAnyPermission(user, ["arbitration:manage", "arbitration:work"])} canReadAudit={hasEveryPermission(user, ["audit:read"])} canReadExams={hasEveryPermission(user, ["exam:manage"])} currentUser={user} initialExamId={examId} />;
+        return <ArbitrationPage canAssign={experience === "admin" && hasEveryPermission(user, ["arbitration:manage"])} canWork={hasAnyPermission(user, ["arbitration:manage", "arbitration:work"])} canReadAudit={experience === "admin" && hasEveryPermission(user, ["audit:read"])} canReadExams={hasEveryPermission(user, ["exam:manage"])} currentUser={user} initialExamId={examId} personalScope={experience === "teacher"} />;
       case "scores":
-        return <ScoreManagementPage canManage={hasEveryPermission(user, ["score:manage", "exam:manage", "submission:manage"])} canReadStudentNames={hasEveryPermission(user, ["org:manage"])} canReadAudit={hasEveryPermission(user, ["audit:read"])} initialExamId={examId} />;
+        return <ScoreManagementPage mode={experience} canManage={experience === "admin" && hasEveryPermission(user, ["score:manage", "exam:manage", "submission:manage"])} canReadStudentNames={experience === "admin" && hasEveryPermission(user, ["org:manage"])} canReadAudit={experience === "admin" && hasEveryPermission(user, ["audit:read"])} initialExamId={examId} />;
       case "appeals":
-        return <AppealCenterPage canRead={hasEveryPermission(user, ["appeal:read"])} canManage={hasEveryPermission(user, ["appeal:manage"])} canReadAudit={hasEveryPermission(user, ["audit:read"])} canReadIdentities={hasEveryPermission(user, ["org:manage"])} canReadExams={hasEveryPermission(user, ["exam:manage"])} currentUser={user} initialExamId={examId} />;
+        return <AppealCenterPage mode={experience} canRead={hasEveryPermission(user, ["appeal:read"])} canManage={experience === "admin" && hasEveryPermission(user, ["appeal:manage"])} canWork={experience === "teacher" && hasEveryPermission(user, ["appeal:work"])} canReadAudit={experience === "admin" && hasEveryPermission(user, ["audit:read"])} canReadIdentities={experience === "admin" && hasEveryPermission(user, ["org:manage"])} canReadExams={hasEveryPermission(user, ["exam:manage"])} currentUser={user} initialExamId={examId} />;
       case "reports":
         return <LearningReportsPage canRead={hasEveryPermission(user, ["report:read"])} canExport={hasEveryPermission(user, ["report:export"])} initialExamId={examId} />;
       default:
@@ -170,14 +207,16 @@ function App() {
   const content =
     route === notFoundRoute ? (
       <NotFoundState onBack={() => navigate("/dashboard")} />
-    ) : !hasRouteAccess(user, route) ? (
+    ) : !hasExperienceAccess(user, experience)
+      || !hasRouteAccess(user, route, experience)
+      || Boolean(examWorkspace && !hasExamWorkspaceSectionAccess(experience, examWorkspace.section)) ? (
       <ForbiddenState onBack={() => navigate("/dashboard")} />
     ) : route.path === "/dashboard" ? (
-      <DashboardPage user={user} onNavigate={navigate} />
+      experience === "admin" ? <DashboardPage user={user} onNavigate={navigate} /> : <TeacherDashboardPage user={user} onNavigate={navigate} />
     ) : examWorkspace ? (
-      <ExamWorkspacePage examId={examWorkspace.examId} section={examWorkspace.section} currentUser={user} moduleContent={workspaceModule} refreshKey={workspaceRefreshKey} onNavigate={navigate} />
+      <ExamWorkspacePage examId={examWorkspace.examId} section={examWorkspace.section} experience={experience} currentUser={user} moduleContent={workspaceModule} refreshKey={workspaceRefreshKey} onNavigate={navigate} />
     ) : route.path === "/exams" ? (
-      <ExamManagementPage canManage={hasEveryPermission(user, ["exam:manage"])} currentUser={user} onOpenWorkspace={(examId) => navigate(`/exams/${encodeURIComponent(examId)}/overview`)} />
+      <ExamManagementPage mode={experience} canManage={experience === "admin" && hasEveryPermission(user, ["exam:manage"])} currentUser={user} onOpenWorkspace={(examId) => navigate(`/exams/${encodeURIComponent(examId)}/overview`)} />
     ) : route.path === "/organization/setup" ? (
       <OrganizationSetupPage onNavigate={navigate} />
     ) : route.path === "/papers" ? (
@@ -188,35 +227,42 @@ function App() {
         canReadStudentNames={hasEveryPermission(user, ["org:manage"])}
       />
     ) : route.path === "/grading" ? (
-      <GradingWorkbenchPage
-        canWork={hasAnyPermission(user, ["review:manage", "review:work"])}
-        canGrade={hasEveryPermission(user, ["grading:manage"])}
-        canVerifyEvidence={hasEveryPermission(user, ["evidence:manage"])}
-        canReturn={hasEveryPermission(user, ["review:manage"])}
-        currentUserId={user.id}
-      />
+      experience === "admin" ? <AdminGradingOperationsPage onNavigate={navigate} /> : (
+        <GradingWorkbenchPage
+          canWork={hasAnyPermission(user, ["review:manage", "review:work"])}
+          canGrade={false}
+          canVerifyEvidence={false}
+          canReturn={false}
+          currentUserId={user.id}
+          personalScope
+        />
+      )
     ) : route.path === "/arbitration" ? (
       <ArbitrationPage
-        canAssign={hasEveryPermission(user, ["arbitration:manage"])}
+        canAssign={experience === "admin" && hasEveryPermission(user, ["arbitration:manage"])}
         canWork={hasAnyPermission(user, ["arbitration:manage", "arbitration:work"])}
-        canReadAudit={hasEveryPermission(user, ["audit:read"])}
+        canReadAudit={experience === "admin" && hasEveryPermission(user, ["audit:read"])}
         canReadExams={hasEveryPermission(user, ["exam:manage"])}
         currentUser={user}
+        personalScope={experience === "teacher"}
       />
     ) : route.path === "/scores" ? (
       <ScoreManagementPage
-        canManage={hasEveryPermission(user, ["score:manage", "exam:manage", "submission:manage"])}
-        canReadStudentNames={hasEveryPermission(user, ["org:manage"])}
-        canReadAudit={hasEveryPermission(user, ["audit:read"])}
+        mode={experience}
+        canManage={experience === "admin" && hasEveryPermission(user, ["score:manage", "exam:manage", "submission:manage"])}
+        canReadStudentNames={experience === "admin" && hasEveryPermission(user, ["org:manage"])}
+        canReadAudit={experience === "admin" && hasEveryPermission(user, ["audit:read"])}
       />
     ) : route.path === "/reports" ? (
       <LearningReportsPage canRead={hasEveryPermission(user, ["report:read"])} canExport={hasEveryPermission(user, ["report:export"])} />
     ) : route.path === "/appeals" ? (
       <AppealCenterPage
+        mode={experience}
         canRead={hasEveryPermission(user, ["appeal:read"])}
-        canManage={hasEveryPermission(user, ["appeal:manage"])}
-        canReadAudit={hasEveryPermission(user, ["audit:read"])}
-        canReadIdentities={hasEveryPermission(user, ["org:manage"])}
+        canManage={experience === "admin" && hasEveryPermission(user, ["appeal:manage"])}
+        canWork={experience === "teacher" && hasEveryPermission(user, ["appeal:work"])}
+        canReadAudit={experience === "admin" && hasEveryPermission(user, ["audit:read"])}
+        canReadIdentities={experience === "admin" && hasEveryPermission(user, ["org:manage"])}
         canReadExams={hasEveryPermission(user, ["exam:manage"])}
         currentUser={user}
       />
@@ -230,7 +276,16 @@ function App() {
 
   return (
     <AntApp>
-      <AppLayout user={user} currentRoute={route} onNavigate={navigate} onLogout={logout} immersive={route.path === "/grading" || examWorkspace?.section === "grading"}>
+      <AppLayout
+        user={user}
+        currentRoute={route}
+        experience={navigationExperience}
+        availableExperiences={availableExperiences(user)}
+        onNavigate={navigate}
+        onExperienceChange={changeExperience}
+        onLogout={logout}
+        immersive={(experience === "teacher" && route.path === "/grading") || examWorkspace?.section === "grading"}
+      >
         <Suspense fallback={<LoadingState label="正在加载页面" />}>{content}</Suspense>
       </AppLayout>
     </AntApp>

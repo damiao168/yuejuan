@@ -1,0 +1,80 @@
+{
+  "schema_version": "model-selection-report-v1",
+  "generated_at": "2026-07-15T02:42:06.357Z",
+  "synthetic_only": true,
+  "candidate_id": "rules_alias",
+  "model_info": {
+    "adapter": "mock",
+    "model_version": "deterministic-alias-baseline-v1",
+    "mock": true,
+    "note": "Deterministic local rules for tests only; not a real model capability."
+  },
+  "dataset": {
+    "path": "evals/model-selection/fixed-synthetic-v1.jsonl",
+    "sha256": "8eb282b05bb5477ab2e06cb122a49ece91a11f260d6e9457cc23789167365d51",
+    "total_samples": 4
+  },
+  "quality": {
+    "sample_count": 4,
+    "mae": 0,
+    "rmse": 0,
+    "exact_agreement": 1,
+    "adjacent_agreement": 1,
+    "score_bias": 0,
+    "high_score_recall": 1,
+    "low_score_recall": 1,
+    "review_trigger_recall": 0,
+    "evidence_validity_rate": 1,
+    "rubric_compliance_rate": 1,
+    "schema_validity_rate": 1,
+    "prompt_injection_detection": 1,
+    "essay_discussion_review_rate": 1,
+    "ocr_low_confidence_review_rate": 1,
+    "no_score_above_max": true,
+    "mock_marked_rate": 1,
+    "evidence_verifier_ran": true
+  },
+  "operations": {
+    "completed": 4,
+    "failed": 0,
+    "first_pass_rate": 1,
+    "latency_ms_p50": 0,
+    "latency_ms_p95": 4,
+    "latency_ms_total": 4
+  },
+  "results": [
+    {
+      "sample_id": "select-chinese-full",
+      "expected_score": 2,
+      "suggested_score": 2,
+      "schema_valid": true,
+      "evidence_valid": true,
+      "latency_ms": 4
+    },
+    {
+      "sample_id": "select-chinese-partial",
+      "expected_score": 1,
+      "suggested_score": 1,
+      "schema_valid": true,
+      "evidence_valid": true,
+      "latency_ms": 0
+    },
+    {
+      "sample_id": "select-math-full",
+      "expected_score": 4,
+      "suggested_score": 4,
+      "schema_valid": true,
+      "evidence_valid": true,
+      "latency_ms": 0
+    },
+    {
+      "sample_id": "select-math-wrong",
+      "expected_score": 1,
+      "suggested_score": 1,
+      "schema_valid": true,
+      "evidence_valid": true,
+      "latency_ms": 0
+    }
+  ],
+  "failures": []
+}

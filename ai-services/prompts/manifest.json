@@ -1,0 +1,11 @@
+{
+  "prompt_version": "subjective-local-structured-v2",
+  "files": {
+    "base_grading.md": "b4d35e60d967bee8d1cad7f5f825402d6f372086a65d670d8842417fe875cb3e",
+    "calculation.md": "f19460188946b4416a94400e2a41065104885356ec92c3ff99e93828ae52999b",
+    "discussion.md": "78de3649474fd63d98f4d1ddd8a11127c3a60ed81c7d5c0223c6ca48980f2aa4",
+    "essay.md": "d4e049ab6de4602501ed29738981d6fdcc75ca3c289c4172b3edb3ddd4f7e339",
+    "local_structured_grading.md": "0c96009b32cf908af0d164791106d158cd90ee1740058482c18ae1830b19383f",
+    "short_answer.md": "c618d9cca663b9df0fab6e4532a2715fdd0598a2fb587b9bafc1091008be21f2"
+  }
+}

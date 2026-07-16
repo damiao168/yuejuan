@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Input, Select, Space, Table, type TableColumnsType, type TableProps } from "antd";
 import { Search, SlidersHorizontal } from "lucide-react";
 import { EmptyState } from "./PageState";
+import { ResponsiveTable } from "./ResponsiveTable";
 
 export interface DataTableProps<T extends object> {
   title: string;
@@ -51,11 +52,10 @@ export function DataTable<T extends object>({ title, rows, columns, searchPlaceh
           ) : null}
         </Space>
       </div>
-      <Table<T>
+      <ResponsiveTable<T>
         rowKey={rowKey ?? getDefaultRowKey}
         dataSource={filteredRows}
         columns={columns}
-        scroll={{ x: "max-content" }}
         pagination={{ pageSize: 5, showSizeChanger: false }}
         locale={{ emptyText: <EmptyState title="暂无记录" description="当前模块没有可显示的数据。" /> }}
         size="middle"

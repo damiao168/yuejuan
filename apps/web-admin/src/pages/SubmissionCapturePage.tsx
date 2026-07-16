@@ -52,6 +52,7 @@ import {
   type SubmissionPage
 } from "../api/submissions";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
 
@@ -865,11 +866,10 @@ export function SubmissionCapturePage({
               </p>
             </div>
           </div>
-          <Table<SubmissionView>
+          <ResponsiveTable<SubmissionView>
             rowKey={(row) => row.submission.id}
             dataSource={filteredRows}
             columns={columns}
-            scroll={{ x: "max-content" }}
             pagination={{ pageSize: 10, showSizeChanger: false }}
             size="small"
             rowClassName={(row) => (row.detailError ? "row-with-warning" : "")}
@@ -887,13 +887,12 @@ export function SubmissionCapturePage({
               <Descriptions.Item label="采集状态">{submissionStatusLabels[pageDrawer.submission.status] ?? pageDrawer.submission.status}</Descriptions.Item>
               <Descriptions.Item label="质量状态">{qualityStatusLabels[pageDrawer.submission.quality_status] ?? pageDrawer.submission.quality_status}</Descriptions.Item>
             </Descriptions>
-            <Table<SubmissionPage>
+            <ResponsiveTable<SubmissionPage>
               rowKey="id"
               dataSource={pageDrawer.pages}
               columns={pageColumns}
               pagination={false}
               size="small"
-              scroll={{ x: "max-content" }}
               locale={{ emptyText: <EmptyState title="暂无页面" description="该答卷还没有关联页面文件。" /> }}
             />
             {preview ? (
@@ -931,13 +930,12 @@ export function SubmissionCapturePage({
               <Descriptions.Item label="匿名码/准考证">{ocrDrawer.row.submission.candidate_no || "暂未生成"}</Descriptions.Item>
               <Descriptions.Item label="OCR 状态">{ocrLabel(ocrDrawer.row.ocrTasks)}</Descriptions.Item>
             </Descriptions>
-            <Table<OcrTask>
+            <ResponsiveTable<OcrTask>
               rowKey="id"
               dataSource={ocrDrawer.tasks}
               columns={ocrTaskColumns}
               pagination={false}
               size="small"
-              scroll={{ x: "max-content" }}
               locale={{ emptyText: <EmptyState title="暂无 OCR 任务" description="还没有通过真实接口创建 OCR 任务。" /> }}
             />
             {ocrDrawer.tasks.flatMap((task) => task.results ?? []).length > 0 ? (
@@ -950,7 +948,7 @@ export function SubmissionCapturePage({
                         <p>{task.results?.length ?? 0} 条 OCR 结果</p>
                       </div>
                     </div>
-                    <Table
+                    <ResponsiveTable
                       rowKey="id"
                       dataSource={task.results ?? []}
                       pagination={false}
@@ -961,7 +959,6 @@ export function SubmissionCapturePage({
                         { title: "置信度", dataIndex: "confidence", width: 100, render: (value: number) => value.toFixed(2) },
                         { title: "BBox", dataIndex: "bbox", width: 180, render: (value: number[]) => `[${value.join(", ")}]` }
                       ]}
-                      scroll={{ x: "max-content" }}
                     />
                   </section>
                 ))}

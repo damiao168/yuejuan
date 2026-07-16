@@ -52,6 +52,12 @@ export const SUBJECT_STRATEGIES = Object.freeze({
     required_risk_flags: [],
     scoring_constraints: ["require_location_or_process_evidence"],
     prompt_template_id: "short_answer"
+  },
+  computer_science: {
+    default_review_policy: "always_review_external_technical_answers",
+    required_risk_flags: ["HUMAN_REVIEW_REQUIRED"],
+    scoring_constraints: ["require_technical_claim_evidence", "do_not_infer_missing_code_or_configuration"],
+    prompt_template_id: "short_answer"
   }
 });
 

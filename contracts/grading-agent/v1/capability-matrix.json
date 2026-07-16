@@ -1,0 +1,47 @@
+{
+  "schema_version": "capability-matrix-v1",
+  "profile_id": "local-pilot-v1",
+  "status": "shadow-integration",
+  "grade_levels": ["junior_middle"],
+  "final_grade_publication_allowed": false,
+  "default_route": {
+    "mode": "human_only",
+    "grader": "human",
+    "delivery": "teacher_review",
+    "review_policy": "always"
+  },
+  "capabilities": [
+    {
+      "subject": "math",
+      "question_type": "calculation",
+      "mode": "hybrid_assisted",
+      "grader": "rules_plus_llm",
+      "delivery": "teacher_suggestion",
+      "review_policy": "always"
+    },
+    {
+      "subject": "chinese",
+      "question_type": "short_answer",
+      "mode": "llm_assisted",
+      "grader": "llm",
+      "delivery": "teacher_suggestion",
+      "review_policy": "always"
+    },
+    {
+      "subject": "*",
+      "question_type": "essay",
+      "mode": "shadow",
+      "grader": "llm",
+      "delivery": "shadow_only",
+      "review_policy": "always"
+    },
+    {
+      "subject": "*",
+      "question_type": "discussion",
+      "mode": "shadow",
+      "grader": "llm",
+      "delivery": "shadow_only",
+      "review_policy": "always"
+    }
+  ]
+}

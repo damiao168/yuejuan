@@ -33,8 +33,11 @@ export interface Appeal {
   id: string;
   tenant_id: string;
   exam_id: string;
+  exam_name?: string;
+  subject?: string;
   submission_id: string;
   submission_grade_id: string;
+  anonymous_code?: string;
   student_id: string;
   target_type: "exam" | "question" | "deduction_point" | string;
   final_grade_id?: string;
@@ -46,6 +49,11 @@ export interface Appeal {
   status: AppealStatus | string;
   result_reason?: string;
   assigned_to?: string;
+  teacher_recommendation?: "accept" | "reject" | "adjust_score" | "need_more_info" | string;
+  teacher_recommendation_reason?: string;
+  teacher_recommended_score?: number;
+  teacher_recommendation_by?: string;
+  teacher_recommendation_at?: string;
   reviewed_by?: string;
   reviewed_at?: string;
   closed_by?: string;
@@ -69,6 +77,12 @@ export interface ReviewAppealPayload {
   assigned_to?: string;
   final_grade_id?: string;
   adjusted_score?: number;
+}
+
+export interface SubmitAppealRecommendationPayload {
+  recommendation: "accept" | "reject" | "adjust_score" | "need_more_info";
+  reason: string;
+  recommended_score?: number;
 }
 
 export interface AppealStatistics {
@@ -99,6 +113,20 @@ export async function listAppeals(filter: AppealListFilter = {}) {
 
 export async function getAppeal(id: string) {
   return apiClient.request<{ appeal: Appeal }>(`/api/v1/appeals/${encodeURIComponent(id)}`);
+}
+
+export async function assignAppeal(id: string, assignedTo: string) {
+  return apiClient.request<{ appeal: Appeal }>(`/api/v1/appeals/${encodeURIComponent(id)}/assign`, {
+    method: "POST",
+    body: JSON.stringify({ assigned_to: assignedTo })
+  });
+}
+
+export async function submitAppealRecommendation(id: string, payload: SubmitAppealRecommendationPayload) {
+  return apiClient.request<{ appeal: Appeal }>(`/api/v1/appeals/${encodeURIComponent(id)}/recommendation`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function reviewAppeal(id: string, payload: ReviewAppealPayload) {

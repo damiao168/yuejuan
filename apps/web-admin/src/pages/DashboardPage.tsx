@@ -49,11 +49,8 @@ function progressFor(status: string) {
 }
 
 function roleLabel(user: SessionUser) {
-  if (user.roles.includes("grader")) return "阅卷工作台";
-  if (user.roles.includes("arbitrator")) return "仲裁工作台";
   if (user.roles.includes("platform_admin")) return "系统运维工作台";
-  if (hasEveryPermission(user, ["submission:manage"]) && !hasEveryPermission(user, ["exam:manage"])) return "采集工作台";
-  return "考试工作台";
+  return "管理端";
 }
 
 async function fetchHome(user: SessionUser): Promise<HomeData> {
@@ -64,8 +61,8 @@ async function fetchHome(user: SessionUser): Promise<HomeData> {
   const warnings: string[] = [];
   const [examResult, reviewResult, arbitrationResult, systemResult] = await Promise.allSettled([
     canReadExams ? listExams() : Promise.resolve({ exams: [] }),
-    canReview ? listReviewTasks(user.roles.includes("grader") ? { assigned_to: user.id } : {}) : Promise.resolve({ tasks: [] }),
-    canArbitrate ? listArbitrationTasks(user.roles.includes("arbitrator") ? { assigned_to: user.id } : {}) : Promise.resolve({ arbitration_tasks: [] }),
+    canReview ? listReviewTasks() : Promise.resolve({ tasks: [] }),
+    canArbitrate ? listArbitrationTasks() : Promise.resolve({ arbitration_tasks: [] }),
     isOperations ? getSystemStatus() : Promise.resolve(undefined)
   ]);
 
@@ -111,7 +108,6 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
   }, [nonce, user]);
 
   const activeExams = useMemo(() => (data?.exams ?? []).filter((exam) => !["published", "archived"].includes(exam.status)).slice(0, 5), [data?.exams]);
-  const isGrader = user.roles.includes("grader");
   const failedSubmissions = (data?.submissions ?? []).filter((submission) => submission.status.includes("failed") || submission.quality_status.includes("failed"));
   const unmatchedSubmissions = (data?.submissions ?? []).filter((submission) => !submission.student_id);
   const pendingTasks = (data?.reviewTasks ?? []).filter((task) => !["submitted", "finalized"].includes(task.status));
@@ -135,7 +131,7 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
   const quickActions = [
     ...(hasEveryPermission(user, ["exam:manage"]) ? [{ label: "创建考试", path: "/exams", icon: <ClipboardCheck size={17} /> }] : []),
     ...(hasEveryPermission(user, ["submission:manage"]) ? [{ label: "导入答卷", path: "/capture", icon: <FileUp size={17} /> }] : []),
-    ...(hasAnyPermission(user, ["review:manage", "review:work"]) ? [{ label: "继续阅卷", path: "/grading", icon: <ScanLine size={17} /> }] : []),
+    ...(hasAnyPermission(user, ["review:manage", "review:work"]) ? [{ label: "阅卷运营", path: "/grading", icon: <ScanLine size={17} /> }] : []),
     ...(hasEveryPermission(user, ["org:manage"]) ? [{ label: "组织启用", path: "/organization/setup", icon: <ArrowRight size={17} /> }] : [])
   ].slice(0, 6);
 
@@ -175,40 +171,22 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
           ))}</div> : <EmptyState title="当前没有待办" description="新的采集、阅卷或发布事项出现后会显示在这里。" />}
         </section>
 
-        {isGrader ? (
-          <section className="dashboard-pane exam-pane">
-            <div className="section-head"><div><h2>最近工作</h2><p>仅显示分配给我的阅卷任务</p></div><strong>{data?.reviewTasks.filter((task) => ["submitted", "finalized"].includes(task.status)).length ?? 0}</strong></div>
-            <div className="review-role-summary"><span>当前题目<strong>{pendingTasks[0]?.question_no || "等待分配"}</strong></span><span>待阅<strong>{pendingTasks.length}</strong></span></div>
-            {data?.reviewTasks.length ? <div className="active-exam-list">{data.reviewTasks.slice(0, 5).map((task) => (
-              <button key={task.id} className="active-exam-row" onClick={() => onNavigate("/grading")}>
-                <div><strong>第 {task.question_no} 题</strong><span>{statusLabels[task.status] ?? task.status} · {task.anonymous_code}</span></div>
-                <StatusTag tone={tone(task.status)}>{statusLabels[task.status] ?? task.status}</StatusTag>
-                <ArrowRight size={16} />
-              </button>
-            ))}</div> : <EmptyState title="尚未分配阅卷任务" description="任务分配后可从这里继续处理。" />}
-          </section>
-        ) : (
-          <section className="dashboard-pane exam-pane">
-            <div className="section-head"><div><h2>正在进行的考试</h2><p>{activeExams.length} 场需要关注</p></div></div>
-            {activeExams.length ? <div className="active-exam-list">{activeExams.map((exam) => (
-              <button key={exam.id} className="active-exam-row exam-task-row" onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/overview`)}>
-                <div><strong>{exam.name}</strong><span>{exam.subject} · 当前阶段：{statusLabels[exam.status] ?? exam.status}</span></div>
-                <div className="exam-progress"><Progress percent={progressFor(exam.status)} size="small" showInfo={false} /><span>{progressFor(exam.status)}%</span></div>
-                <span className="exam-next-action">进入考试 <ArrowRight size={15} /></span>
-              </button>
-            ))}</div> : <EmptyState title="暂无进行中考试" description="创建考试后，可从这里直接进入考试工作区。" />}
-          </section>
-        )}
+        <section className="dashboard-pane exam-pane">
+          <div className="section-head"><div><h2>正在进行的考试</h2><p>{activeExams.length} 场需要关注</p></div></div>
+          {activeExams.length ? <div className="active-exam-list">{activeExams.map((exam) => (
+            <button key={exam.id} className="active-exam-row exam-task-row" onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/overview`)}>
+              <div><strong>{exam.name}</strong><span>{exam.subject} · 当前阶段：{statusLabels[exam.status] ?? exam.status}</span></div>
+              <div className="exam-progress"><Progress percent={progressFor(exam.status)} size="small" showInfo={false} /><span>{progressFor(exam.status)}%</span></div>
+              <span className="exam-next-action">进入考试 <ArrowRight size={15} /></span>
+            </button>
+          ))}</div> : <EmptyState title="暂无进行中考试" description="创建考试后，可从这里直接进入考试工作区。" />}
+        </section>
       </div>
 
       {quickActions.length ? <section className="quick-actions"><div className="section-head"><div><h2>常用操作</h2></div></div><Space wrap>{quickActions.map((action) => <Button key={action.label} icon={action.icon} onClick={() => onNavigate(action.path)}>{action.label}</Button>)}</Space></section> : null}
 
       <section className="attention-band attention-list">
-        {isGrader ? (
-          <><div><ShieldAlert size={19} /><span><strong>质量提醒</strong> 退回、复核和评分冲突会显示在这里。</span></div><span>{data?.reviewTasks.filter((task) => task.status === "returned" || task.status === "conflict").length ?? 0} 项</span></>
-        ) : (
-          <><div><ShieldAlert size={19} /><span><strong>问题清单</strong> 点击上方待处理事项可直接进入对应处理页面。</span></div><span>{failedSubmissions.length + unmatchedSubmissions.length} 项</span></>
-        )}
+        <div><ShieldAlert size={19} /><span><strong>问题清单</strong> 点击上方待处理事项可直接进入对应处理页面。</span></div><span>{failedSubmissions.length + unmatchedSubmissions.length} 项</span>
       </section>
 
       {data?.systemStatus && user.roles.includes("platform_admin") ? <section className="operations-strip"><strong>系统运维</strong>{data.systemStatus.dependencies.map((dependency) => <span key={dependency.name}>{dependency.name}<StatusTag tone={tone(dependency.status)}>{dependency.status === "ok" ? "正常" : "异常"}</StatusTag></span>)}</section> : null}

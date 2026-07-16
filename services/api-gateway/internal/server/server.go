@@ -184,7 +184,19 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	captureHandler := capture.NewHandler(captureStore, fileStore, examStore, workerRuntimeStore, authStore)
 	gradingHandler := grading.NewHandler(gradingStore, grading.NewEngine(), authStore)
 	gradingHandler.SetProductionDependencies(workerRuntimeStore, fileStore)
-	subjectiveHandler := subjective.NewHandler(subjectiveStore, subjective.NewMockLLMAdapter(), authStore)
+	var subjectiveAdapter subjective.LLMGradingAdapter = subjective.NewMockLLMAdapter()
+	if cfg.AIService.URL != "" {
+		subjectiveAdapter = subjective.NewHTTPAdapter(subjective.HTTPAdapterConfig{
+			BaseURL:       cfg.AIService.URL,
+			Token:         cfg.AIService.Token,
+			Timeout:       cfg.AIService.Timeout,
+			MaxRetries:    cfg.AIService.MaxRetries,
+			ModelVersion:  cfg.AIService.ModelVersion,
+			PromptVersion: cfg.AIService.PromptVersion,
+			MinConfidence: cfg.AIService.MinConfidence,
+		})
+	}
+	subjectiveHandler := subjective.NewHandler(subjectiveStore, subjectiveAdapter, authStore)
 	evidenceHandler := evidence.NewHandler(evidenceStore, evidence.NewEngine(), authStore)
 	reviewHandler := review.NewHandler(reviewStore, authStore)
 	scoreHandler := score.NewHandler(scoreStore, authStore)
@@ -256,6 +268,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	}
 	requireAppealManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("appeal:manage")(handler))
+	}
+	requireAppealWork := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequirePermission("appeal:work")(handler))
 	}
 	requireAuditRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("audit:read")(handler))
@@ -466,6 +481,8 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/appeals", requireAppealRead(appealHandler.ListAppeals))
 	mux.Handle("GET /api/v1/appeals/statistics", requireAppealManage(appealHandler.Statistics))
 	mux.Handle("GET /api/v1/appeals/{id}", requireAppealRead(appealHandler.GetAppeal))
+	mux.Handle("POST /api/v1/appeals/{id}/assign", requireAppealManage(appealHandler.AssignAppeal))
+	mux.Handle("POST /api/v1/appeals/{id}/recommendation", requireAppealWork(appealHandler.SubmitRecommendation))
 	mux.Handle("POST /api/v1/appeals/{id}/review", requireAppealManage(appealHandler.ReviewAppeal))
 	mux.Handle("POST /api/v1/appeals/{id}/close", requireAppealManage(appealHandler.CloseAppeal))
 	mux.Handle("GET /api/v1/exams/{examId}/reports/overview", requireReportRead(reportHandler.Overview))

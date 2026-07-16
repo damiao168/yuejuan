@@ -1,0 +1,172 @@
+{
+  "schema_version": "lab-graduation-audit-v1",
+  "generated_at": "2026-07-15T07:14:01.253Z",
+  "lab_status": "LAB_IMPLEMENTATION_COMPLETE",
+  "pilot_status": "NOT_READY",
+  "audit_passed": true,
+  "controls": {
+    "all_commands_passed": true,
+    "required_reports_present": true,
+    "model_stays_in_d_drive_lab": true,
+    "local_model_server_stopped": true,
+    "runtime_directories_git_ignored": true,
+    "freeze_contains_no_api_secret": true,
+    "suggestion_only": true,
+    "final_grade_publication_disabled": true,
+    "readiness_decision_present": true,
+    "external_benchmark_governed": true,
+    "external_benchmark_restricted": true,
+    "external_smoke_not_selection_eligible": true,
+    "blind_annotation_workflow_valid": true
+  },
+  "missing_reports": [],
+  "commands": [
+    {
+      "name": "unit_tests",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 2361,
+      "stdout_tail": "✔ grader factory routes supported question type (5.6438ms)\n✔ grader factory rejects unsupported question type (2.923ms)\n✔ essay grader output is marked for human review (1.4865ms)\nℹ tests 112\nℹ suites 0\nℹ pass 112\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1401.6691\n",
+      "stderr_tail": "npm warn Unknown env config \"store-dir\". This will stop working in the next major version of npm.\n"
+    },
+    {
+      "name": "synthetic_eval",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 1105,
+      "stdout_tail": "    \"evidence_validity_rate\": 0.9545454545454546,\n    \"rubric_compliance_rate\": 1,\n    \"schema_validity_rate\": 1,\n    \"prompt_injection_detection\": 1,\n    \"essay_discussion_review_rate\": 1,\n    \"ocr_low_confidence_review_rate\": 1,\n    \"no_score_above_max\": true,\n    \"mock_marked_rate\": 1,\n    \"evidence_verifier_ran\": true\n  }\n}\n",
+      "stderr_tail": "npm warn Unknown env config \"store-dir\". This will stop working in the next major version of npm.\n"
+    },
+    {
+      "name": "dev_gate",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 816,
+      "stdout_tail": "\n> edugrade-grading-agent-lab@0.1.0 gate:dev\n> node scripts/check-gate.js --report evals/reports/latest-report.json --level dev\n\n{\n  \"level\": \"dev\",\n  \"passed\": true,\n  \"reasons\": []\n}\n",
+      "stderr_tail": "npm warn Unknown env config \"store-dir\". This will stop working in the next major version of npm.\n"
+    },
+    {
+      "name": "regression",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 103,
+      "stdout_tail": "{\n  \"cases\": 1,\n  \"failures\": []\n}\n",
+      "stderr_tail": ""
+    },
+    {
+      "name": "annotation_workflow_demo",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 1194,
+      "stdout_tail": "    \"pilot_gate\": {\n      \"level\": \"pilot\",\n      \"passed\": false,\n      \"reasons\": [\n        \"double_scored_count 3 < 500\",\n        \"normalized_mae 0.16666666666666666 > 0.08\",\n        \"point_agreement 0.8333333333333334 < 0.85\"\n      ]\n    }\n  }\n}\n",
+      "stderr_tail": "npm warn Unknown env config \"store-dir\". This will stop working in the next major version of npm.\n"
+    },
+    {
+      "name": "jorgpt_import",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 2162,
+      "stdout_tail": "\n{\n  \"source_id\": \"jorgpt_zenodo_18981627_en\",\n  \"records\": 3041,\n  \"questions\": 50,\n  \"participants\": 79,\n  \"output\": \".downloads/jorgpt-18981627/governable-en.jsonl\",\n  \"report\": \"evals/reports/jorgpt-import-audit.json\",\n  \"pilot_gold\": false,\n  \"training\": false\n}\n",
+      "stderr_tail": "npm warn Unknown env config \"store-dir\". This will stop working in the next major version of npm.\n"
+    },
+    {
+      "name": "jorgpt_govern",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 1688,
+      "stdout_tail": "      \"records\": 452,\n      \"sha256\": \"c98c75eb49e13d15da789890d8364794c2c3524e86734210c6301891aa80f441\"\n    }\n  },\n  \"leakage_audit\": {\n    \"passed\": true,\n    \"leaked_groups\": [],\n    \"unique_groups\": 50\n  },\n  \"privacy_scan_passed\": true\n}\n",
+      "stderr_tail": "npm warn Unknown env config \"store-dir\". This will stop working in the next major version of npm.\n"
+    },
+    {
+      "name": "jorgpt_rules_baseline",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 1195,
+      "stdout_tail": "    \"completed\": 452,\n    \"failed\": 0,\n    \"completion_rate\": 1,\n    \"first_pass_rate\": 1,\n    \"latency_ms_p50\": 0,\n    \"latency_ms_p95\": 0,\n    \"latency_ms_total\": 17\n  },\n  \"failure_count\": 0,\n  \"output\": \"evals/reports/jorgpt-rules-baseline.json\"\n}\n",
+      "stderr_tail": "npm warn Unknown env config \"store-dir\". This will stop working in the next major version of npm.\n"
+    },
+    {
+      "name": "adversarial_dev",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 1047,
+      "stdout_tail": "          \"detected\": false\n        }\n      ]\n    }\n  ],\n  \"gate\": {\n    \"level\": \"dev\",\n    \"passed\": true,\n    \"reasons\": []\n  }\n}\n",
+      "stderr_tail": "npm warn Unknown env config \"store-dir\". This will stop working in the next major version of npm.\n"
+    },
+    {
+      "name": "calibration_dev",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 1060,
+      "stdout_tail": "        \"normalized_mae_gap\": 0.25\n      }\n    },\n    \"insufficient_slices\": []\n  },\n  \"gate\": {\n    \"level\": \"dev\",\n    \"passed\": true,\n    \"reasons\": []\n  }\n}\n",
+      "stderr_tail": "npm warn Unknown env config \"store-dir\". This will stop working in the next major version of npm.\n"
+    },
+    {
+      "name": "training_decision",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 1062,
+      "stdout_tail": "      \"real dataset license approval is missing\",\n      \"real dataset privacy approval is missing\",\n      \"real grouped split verification is missing\",\n      \"real Gold baseline evaluation is missing\",\n      \"frozen real test set is missing\"\n    ],\n    \"selected_base_model\": \"qwen3_4b\",\n    \"no_chain_of_thought_training\": true,\n    \"test_set_must_remain_unseen\": true\n  }\n}\n",
+      "stderr_tail": "npm warn Unknown env config \"store-dir\". This will stop working in the next major version of npm.\n"
+    },
+    {
+      "name": "pilot_freeze",
+      "passed": true,
+      "exit_code": 0,
+      "spawn_error": null,
+      "elapsed_ms": 9673,
+      "stdout_tail": "        \"description\": \"Calibration and fairness pilot gate passes\",\n        \"detail\": [\n          \"evaluation_records 8 < 500\",\n          \"ece 0.12499999999999997 > 0.08\",\n          \"brier_score 0.125 > 0.12\",\n          \"8 slices are below minimum_records_per_slice 50\"\n        ]\n      }\n    ]\n  }\n}\n",
+      "stderr_tail": "npm warn Unknown env config \"store-dir\". This will stop working in the next major version of npm.\n"
+    }
+  ],
+  "pilot_blockers": [
+    {
+      "id": "real_dataset_governed",
+      "description": "Governed real Gold dataset exists",
+      "detail": "evals/gold/real/manifest.json is absent"
+    },
+    {
+      "id": "real_model_selection_passed",
+      "description": "Model selection passed on real Gold data",
+      "detail": [
+        "governed real Gold manifest is missing"
+      ]
+    },
+    {
+      "id": "teacher_agreement_pilot_passed",
+      "description": "Teacher agreement pilot gate passes",
+      "detail": [
+        "double_scored_count 3 < 500",
+        "normalized_mae 0.16666666666666666 > 0.08",
+        "point_agreement 0.8333333333333334 < 0.85"
+      ]
+    },
+    {
+      "id": "calibration_fairness_pilot_passed",
+      "description": "Calibration and fairness pilot gate passes",
+      "detail": [
+        "evaluation_records 8 < 500",
+        "ece 0.12499999999999997 > 0.08",
+        "brier_score 0.125 > 0.12",
+        "8 slices are below minimum_records_per_slice 50"
+      ]
+    }
+  ],
+  "boundary": {
+    "lab_root": "D:\\project\\yuejuan\\lab",
+    "model_path": "D:\\project\\yuejuan\\lab\\.models\\Qwen3-4B-Q4_K_M.gguf",
+    "model_bytes": 2497280256,
+    "modifications_outside_lab_authorized": false
+  }
+}

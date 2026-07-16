@@ -1,0 +1,29 @@
+{
+  "schema_version": "model-candidates-v1",
+  "candidates": [
+    {
+      "candidate_id": "qwen3_4b",
+      "provider": "Qwen",
+      "repository": "Qwen/Qwen3-4B-GGUF",
+      "revision": "master",
+      "file": "Qwen3-4B-Q4_K_M.gguf",
+      "model_path": ".models/Qwen3-4B-Q4_K_M.gguf",
+      "url": "https://modelscope.cn/models/Qwen/Qwen3-4B-GGUF/resolve/master/Qwen3-4B-Q4_K_M.gguf",
+      "expected_bytes": 2497280256,
+      "expected_sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+      "quantization": "Q4_K_M"
+    },
+    {
+      "candidate_id": "qwen3_8b",
+      "provider": "Qwen",
+      "repository": "Qwen/Qwen3-8B-GGUF",
+      "revision": "c38f9307f3d23c914614557de83d66c0104f942c",
+      "file": "Qwen3-8B-Q4_K_M.gguf",
+      "model_path": ".models/Qwen3-8B-Q4_K_M.gguf",
+      "url": "https://modelscope.cn/models/Qwen/Qwen3-8B-GGUF/resolve/master/Qwen3-8B-Q4_K_M.gguf",
+      "expected_bytes": 5027783488,
+      "expected_sha256": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785",
+      "quantization": "Q4_K_M"
+    }
+  ]
+}

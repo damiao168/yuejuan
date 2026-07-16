@@ -1,0 +1,35 @@
+{
+  "schema_version": "grading-agent-v1",
+  "request_id": "subjective-grade-0001",
+  "status": "suggestion",
+  "delivery": "teacher_suggestion",
+  "suggested_score": 4,
+  "max_score": 4,
+  "confidence": 0,
+  "matched_points": [
+    {"rubric_point_id": "p1", "label": "指出主人公对家乡有责任感", "score": 2, "evidence_ids": ["e1"]},
+    {"rubric_point_id": "p2", "label": "指出主人公希望帮助孩子继续读书", "score": 2, "evidence_ids": ["e2"]}
+  ],
+  "missing_points": [],
+  "deductions": [],
+  "evidence": [
+    {"evidence_id": "e1", "rubric_point_id": "p1", "text_excerpt": "对家乡有责任感", "location": "answer_text", "confidence": 0.9},
+    {"evidence_id": "e2", "rubric_point_id": "p2", "text_excerpt": "帮助村里的孩子继续读书", "location": "answer_text", "confidence": 0.9}
+  ],
+  "risk_flags": ["score_needs_review", "human_review_required"],
+  "needs_human_review": true,
+  "student_feedback": "已识别两个采分点，最终结果以教师复核为准。",
+  "teacher_note": "本地模型置信度尚未校准，教师必须复核。",
+  "model_version": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+  "prompt_version": "subjective-local-structured-v2",
+  "rubric_version": "rubric-v3",
+  "capability_profile": "local-pilot-v1",
+  "mock": false,
+  "telemetry": {
+    "adapter": "local_llama_cpp",
+    "attempts": 1,
+    "repair_attempted": false,
+    "prior_error_codes": [],
+    "elapsed_ms": 106000
+  }
+}

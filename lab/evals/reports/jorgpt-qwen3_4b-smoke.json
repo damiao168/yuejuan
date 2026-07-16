@@ -1,0 +1,102 @@
+{
+  "schema_version": "model-selection-report-v1",
+  "generated_at": "2026-07-15T06:12:22.903Z",
+  "synthetic_only": false,
+  "evidence_scope": "external_real_benchmark",
+  "candidate_id": "qwen3_4b",
+  "model_info": {
+    "adapter": "local_llama_cpp",
+    "model_version": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+    "base_url": "http://127.0.0.1:8087/v1",
+    "mock": false
+  },
+  "dataset": {
+    "path": ".downloads/jorgpt-18981627/governed/test.jsonl",
+    "sha256": "8389baf45d1658e578e35816fca0d0a3c76510d3cee051bbf68b69f4ed926673",
+    "total_samples": 3,
+    "source_total_samples": 452,
+    "source_sha256": "c98c75eb49e13d15da789890d8364794c2c3524e86734210c6301891aa80f441",
+    "complete_dataset": false,
+    "selection_method": "deterministic_question_round_robin_smoke",
+    "source_id": "jorgpt_zenodo_18981627_en",
+    "evidence_scope": "external_real_benchmark",
+    "governance_passed": true
+  },
+  "quality": {
+    "sample_count": 3,
+    "mae": 1.3333333333333333,
+    "rmse": 1.8257418583505538,
+    "exact_agreement": 0.3333333333333333,
+    "adjacent_agreement": 0.6666666666666666,
+    "score_bias": -1.3333333333333333,
+    "high_score_recall": 1,
+    "low_score_recall": 1,
+    "review_trigger_recall": 1,
+    "evidence_validity_rate": 0.6666666666666666,
+    "rubric_compliance_rate": 0.6666666666666666,
+    "schema_validity_rate": 1,
+    "prompt_injection_detection": 1,
+    "essay_discussion_review_rate": 1,
+    "ocr_low_confidence_review_rate": 1,
+    "no_score_above_max": true,
+    "mock_marked_rate": 0,
+    "evidence_verifier_ran": true
+  },
+  "quality_scope": "completed_samples_only",
+  "operations": {
+    "completed": 3,
+    "failed": 0,
+    "completion_rate": 1,
+    "first_pass_rate": 0.6666666666666666,
+    "latency_ms_p50": 80647,
+    "latency_ms_p95": 189854,
+    "latency_ms_total": 344406
+  },
+  "results": [
+    {
+      "sample_id": "jorgpt-en-2625",
+      "expected_score": 0,
+      "suggested_score": 0,
+      "schema_valid": true,
+      "evidence_valid": true,
+      "latency_ms": 73905,
+      "adapter_run": {
+        "attempts": 1,
+        "repair_attempted": false,
+        "prior_error_codes": [],
+        "elapsed_ms": 73904
+      }
+    },
+    {
+      "sample_id": "jorgpt-en-0007",
+      "expected_score": 7,
+      "suggested_score": 6,
+      "schema_valid": true,
+      "evidence_valid": false,
+      "latency_ms": 189854,
+      "adapter_run": {
+        "attempts": 2,
+        "repair_attempted": true,
+        "prior_error_codes": [
+          "INVALID_JSON"
+        ],
+        "elapsed_ms": 189854
+      }
+    },
+    {
+      "sample_id": "jorgpt-en-2622",
+      "expected_score": 3,
+      "suggested_score": 0,
+      "schema_valid": true,
+      "evidence_valid": true,
+      "latency_ms": 80647,
+      "adapter_run": {
+        "attempts": 1,
+        "repair_attempted": false,
+        "prior_error_codes": [],
+        "elapsed_ms": 80647
+      }
+    }
+  ],
+  "failures": []
+}

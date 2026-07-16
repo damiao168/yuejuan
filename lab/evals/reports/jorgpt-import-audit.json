@@ -1,0 +1,129 @@
+{
+  "schema_version": "jorgpt-import-audit-v1",
+  "generated_at": "2026-07-15T07:13:45.405Z",
+  "source": {
+    "source_id": "jorgpt_zenodo_18981627_en",
+    "record_id": 18981627,
+    "record_doi": "10.5281/zenodo.18981627",
+    "license_id": "CC-BY-4.0",
+    "intended_use": "evaluation",
+    "attribution": "Cisneros-González and Sánchez-Soriano, JorGPT dataset, Zenodo record 18981627, licensed CC BY 4.0."
+  },
+  "raw_integrity": {
+    "expected_bytes": 14558120,
+    "actual_bytes": 14558120,
+    "expected_md5": "196825ce723a632b1b117efc187b0147",
+    "actual_md5": "196825ce723a632b1b117efc187b0147",
+    "expected_sha256": "1d5deb07247a415181f1999e66763c29a2a4df9130d0ad6e9bc813f64343653c",
+    "actual_sha256": "1d5deb07247a415181f1999e66763c29a2a4df9130d0ad6e9bc813f64343653c",
+    "passed": true
+  },
+  "import": {
+    "input_path": ".downloads/jorgpt-18981627/dataset_en.csv",
+    "output_path": ".downloads/jorgpt-18981627/governable-en.jsonl",
+    "output_sha256": "bdf1b59285b39b4d307d8f29e9c04690493b3548224a85e6e9a728297ba38d9f",
+    "records": 3041,
+    "questions": 50,
+    "participants": 79,
+    "empty_answers": 10,
+    "structured_identity_values_redacted": 3,
+    "grade_distribution": {
+      "0": 230,
+      "1": 113,
+      "2": 217,
+      "3": 327,
+      "4": 349,
+      "5": 317,
+      "6": 465,
+      "7": 368,
+      "8": 341,
+      "9": 225,
+      "10": 89
+    }
+  },
+  "field_minimization": {
+    "raw_columns": [
+      "entry_id",
+      "question_id",
+      "question_text",
+      "student_answer",
+      "ideal_answer",
+      "student_anom_id",
+      "deepseek_raw_json",
+      "deepseek_grade",
+      "qwen_raw_json",
+      "qwen_grade",
+      "gemini_raw_json",
+      "gemini_grade",
+      "judge_status",
+      "judge_raw_json",
+      "judge_grade",
+      "student_answer_length",
+      "teacher_grade",
+      "teacher_feedback",
+      "teacher_corrected_at",
+      "teacher_corrected"
+    ],
+    "dropped_columns": [
+      "student_anom_id",
+      "deepseek_raw_json",
+      "deepseek_grade",
+      "qwen_raw_json",
+      "qwen_grade",
+      "gemini_raw_json",
+      "gemini_grade",
+      "judge_status",
+      "judge_raw_json",
+      "judge_grade",
+      "student_answer_length",
+      "teacher_corrected_at",
+      "teacher_corrected"
+    ],
+    "source_participant_id_retained": false,
+    "project_scoped_participant_hash_used_in_memory_for_audit": true,
+    "project_scoped_participant_hash_persisted": false,
+    "external_model_outputs_retained": false,
+    "timestamps_retained": false
+  },
+  "validation": {
+    "source_approved_for_evaluation": true,
+    "privacy_scan_passed": true,
+    "grading_schema_valid_records": 3041,
+    "question_rubric_leakage": {
+      "passed": true,
+      "leaked_groups": 0,
+      "unique_groups": 50
+    },
+    "participant_leakage_under_question_group_split": {
+      "passed": false,
+      "unique_participants": 79,
+      "participants_across_multiple_partitions": 79
+    }
+  },
+  "split_preview": {
+    "seed": "edugrade-group-split-v1",
+    "question_rubric_groups": 50,
+    "group_counts": {
+      "train": 34,
+      "validation": 8,
+      "test": 8
+    },
+    "record_counts": {
+      "train": 2133,
+      "validation": 456,
+      "test": 452
+    }
+  },
+  "eligibility": {
+    "external_benchmark": true,
+    "pilot_gold": false,
+    "teacher_agreement_evidence": false,
+    "training": false,
+    "reasons": [
+      "English university computer-science data is out of the local-pilot domain.",
+      "Only a single holistic teacher grade is published per answer.",
+      "The machine Rubric is reconstructed from the ideal answer, not the original teacher Rubric.",
+      "Question-group splits retain cross-partition participant overlap, reported explicitly."
+    ]
+  }
+}

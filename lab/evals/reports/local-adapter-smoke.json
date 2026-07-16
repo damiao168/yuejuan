@@ -1,0 +1,83 @@
+{
+  "schema_version": "local-adapter-smoke-v1",
+  "generated_at": "2026-07-15T02:24:14.667Z",
+  "synthetic": true,
+  "adapter": {
+    "adapter": "local_llama_cpp",
+    "model_version": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+    "base_url": "http://127.0.0.1:8087/v1",
+    "mock": false
+  },
+  "adapter_run": {
+    "attempts": 1,
+    "repair_attempted": false,
+    "prior_error_codes": [],
+    "elapsed_ms": 85054
+  },
+  "sample_id": "local-smoke-001",
+  "elapsed_ms": 85055,
+  "output": {
+    "request_id": "local-smoke-001",
+    "suggested_score": 2,
+    "max_score": 2,
+    "confidence": 0,
+    "matched_points": [
+      {
+        "rubric_point_id": "photosynthesis",
+        "score": 1,
+        "evidence_ids": [
+          "0"
+        ]
+      },
+      {
+        "rubric_point_id": "energy_conversion",
+        "score": 1,
+        "evidence_ids": [
+          "1"
+        ]
+      }
+    ],
+    "missing_points": [],
+    "deductions": [],
+    "evidence": [
+      {
+        "evidence_id": "0",
+        "rubric_point_id": "photosynthesis",
+        "text_excerpt": "绿色植物能够通过光合作用制造有机物",
+        "location": "answer_text",
+        "confidence": 0.99
+      },
+      {
+        "evidence_id": "1",
+        "rubric_point_id": "energy_conversion",
+        "text_excerpt": "并将太阳能转化为化学能",
+        "location": "answer_text",
+        "confidence": 0.99
+      }
+    ],
+    "risk_flags": [
+      "SCORE_NEEDS_REVIEW",
+      "HUMAN_REVIEW_REQUIRED"
+    ],
+    "needs_human_review": true,
+    "student_feedback": "The answer correctly identifies that green plants are producers in an ecosystem because they produce organic matter through photosynthesis and convert solar energy into chemical energy. The answer is complete and accurate, matching both required rubric points with explicit evidence from the answer.",
+    "teacher_note": "Local model confidence is not calibrated. Teacher review is mandatory under local-pilot-v1.",
+    "model_version": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+    "prompt_version": "prompt-local-structured-v1",
+    "rubric_version": "local-smoke-rubric-v1",
+    "mock": false
+  },
+  "schema_validation": {
+    "valid": true,
+    "errors": []
+  },
+  "evidence_verification": {
+    "verification_passed": true,
+    "evidence_validity_rate": 1,
+    "invalid_points": [],
+    "warnings": [],
+    "forced_risk_flags": [],
+    "forced_needs_human_review": false
+  },
+  "passed": true
+}

@@ -89,3 +89,18 @@ copy .env.example .env
 docker compose --env-file .env -f docker-compose.yml config
 powershell -ExecutionPolicy Bypass -File .\scripts\init.ps1
 ```
+
+## Lab quality gate
+
+The `lab/` directory is part of the main-project verification flow, while remaining
+an offline evaluation boundary. It does not publish grades or enable a real model in
+the platform runtime. Run the integrated preflight from the repository root:
+
+```bash
+npm.cmd run check:lab-integration
+```
+
+The check runs Lab unit tests, the synthetic evaluation, the development release
+gate, and the Go objective-grading tests. It also fails closed if the Lab artifacts
+stop declaring suggestion-only behavior or if Pilot readiness is reported as ready
+without real-data evidence. Stories 57-59 remain outside this integration gate.

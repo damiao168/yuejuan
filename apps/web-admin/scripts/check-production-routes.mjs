@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const root = process.cwd();
@@ -13,6 +13,21 @@ const appLayout = read("src/components/AppLayout.tsx");
 const app = read("src/App.tsx");
 const login = read("src/pages/LoginPage.tsx");
 const grading = read("src/pages/GradingWorkbenchPage.tsx");
+const experience = read("src/router/experience.ts");
+const teacherDashboard = read("src/pages/TeacherDashboardPage.tsx");
+const responsiveTable = read("src/components/ResponsiveTable.tsx");
+const examWorkspace = read("src/pages/ExamWorkspacePage.tsx");
+const appealCenter = read("src/pages/AppealCenterPage.tsx");
+const appealApi = read("src/api/appeals.ts");
+const styles = read("src/styles.css");
+
+function sourceFiles(directory) {
+  return readdirSync(join(root, directory), { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return sourceFiles(path);
+    return /\.(ts|tsx)$/.test(entry.name) ? [read(path)] : [];
+  });
+}
 
 const failures = [];
 
@@ -53,9 +68,84 @@ assert(
 );
 
 assert(
-  /hasRouteAccess/.test(appLayout) && /visibleRoutes\(\)/.test(appLayout),
+  /hasRouteAccess\(user, route, experience\)/.test(appLayout) && /visibleRoutes\(experience\)/.test(appLayout),
   "AppLayout menu must combine production visibility with user permissions."
 );
+
+assert(
+  /ADMIN_ROLES[\s\S]*platform_admin[\s\S]*tenant_admin[\s\S]*school_admin/.test(experience)
+    && /TEACHER_ROLES[\s\S]*teacher[\s\S]*grader[\s\S]*arbitrator/.test(experience),
+  "Product experiences must be derived from the approved administrator and teacher role sets."
+);
+
+assert(
+  /experienceFromPath/.test(experience) && /canonicalPathFromPath/.test(experience) && /pathForExperience/.test(experience),
+  "Experience routing must support prefixed hashes and canonical internal paths."
+);
+
+assert(
+  /defaultExperience\(nextUser\)/.test(app) && /hasExperienceAccess\(user, experience\)/.test(app),
+  "Login and deep-link access must enforce the role-specific product experience."
+);
+
+assert(
+  /experienceLabel\(experience\)/.test(appLayout) && /onExperienceChange/.test(appLayout),
+  "AppLayout must identify the current product end and support explicit mixed-role switching."
+);
+
+assert(
+  /listReviewTasks\(\{ assigned_to: user\.id \}\)/.test(teacherDashboard)
+    && /listArbitrationTasks\(\{ assigned_to: user\.id \}\)/.test(teacherDashboard),
+  "Teacher home must request only review and arbitration tasks assigned to the current user."
+);
+
+assert(
+  /personalScope \? \{ assigned_to: currentUserId \} : \{\}/.test(grading),
+  "Teacher grading must enforce personal task scope in the API query."
+);
+
+assert(
+  /teacher:\s*\["overview", "paper", "questions", "grading", "quality", "scores", "appeals", "reports"\]/.test(routes)
+    && /hasExamWorkspaceSectionAccess/.test(app),
+  "Teacher exam workspaces must use the approved section allowlist for navigation and deep links."
+);
+
+assert(
+  /AdminGradingOperationsPage/.test(app) && /experience === "admin"/.test(app),
+  "Administrator grading navigation must open exam-level operations instead of the personal workbench."
+);
+
+assert(
+  /canWork=\{experience === "teacher" && hasEveryPermission\(user, \["appeal:work"\]\)\}/.test(app)
+    && /selectedAppeal\?\.assigned_to === currentUser\.id/.test(appealCenter),
+  "Teacher appeal handling must require appeal:work and an assignment to the current user."
+);
+
+assert(
+  /assignAppeal/.test(appealCenter)
+    && /submitAppealRecommendation/.test(appealCenter)
+    && /建议不会直接修改成绩或关闭申诉/.test(appealCenter),
+  "Appeal UI must separate administrator assignment from teacher recommendations."
+);
+
+assert(
+  /\/assign/.test(appealApi) && /\/recommendation/.test(appealApi),
+  "Appeal API client must expose assignment and teacher recommendation endpoints."
+);
+
+assert(
+  /Drawer/.test(appLayout) && /mobile-nav-button/.test(appLayout),
+  "Compact viewports must use a navigation drawer."
+);
+
+assert(
+  /responsive-record-list/.test(responsiveTable) && /flexibleColumns/.test(responsiveTable),
+  "Wide tables must have a vertical record mode and flexible desktop columns."
+);
+
+const allUiSource = sourceFiles("src").join("\n");
+assert(!/scroll=\{\{\s*x\s*:/.test(allUiSource), "Production tables must not enable horizontal scrolling.");
+assert(!/overflow-x:\s*(?:auto|scroll|hidden|clip)/.test(styles), "CSS must not create or conceal horizontal overflow.");
 
 assert(
   /currentRoute\.mock/.test(appLayout) && !/<MockBadge compact \/>/.test(appLayout),

@@ -1,0 +1,57 @@
+{
+  "schema_version": "fine-tuning-decision-v1",
+  "generated_at": "2026-07-15T07:13:51.523Z",
+  "evidence": {
+    "evidence_paths": {
+      "annotation": "evals/reports/annotation-reliability.json",
+      "selection": "evals/reports/model-selection-decision.json",
+      "regression": "evals/reports/local-regression-v2.json",
+      "real_manifest": "evals/gold/real/manifest.json",
+      "prompt_history": "config/prompt-optimization-history.json"
+    },
+    "real_gold_training_records": 0,
+    "real_gold_test_records": 0,
+    "teacher_qwk": null,
+    "annotation_is_real": false,
+    "baseline_is_real": false,
+    "regression_is_real": false,
+    "license_approved": false,
+    "privacy_approved": false,
+    "grouped_split_verified": false,
+    "frozen_test_set": false,
+    "prompt_plateau_iterations": 0,
+    "latest_prompt_regression_passed": true,
+    "selected_base_model": "qwen3_4b"
+  },
+  "gate": {
+    "schema_version": "fine-tuning-gates-v1",
+    "minimum_real_gold_training_records": 5000,
+    "minimum_real_gold_test_records": 500,
+    "minimum_teacher_qwk": 0.8,
+    "minimum_prompt_plateau_iterations": 3,
+    "require_license_approval": true,
+    "require_privacy_approval": true,
+    "require_grouped_split": true,
+    "require_real_baseline": true,
+    "require_frozen_test_set": true,
+    "require_latest_regression_passed": true
+  },
+  "decision": {
+    "decision": "do_not_train",
+    "eligible": false,
+    "unmet_conditions": [
+      "real_gold_training_records 0 < 5000",
+      "real_gold_test_records 0 < 500",
+      "teacher_qwk missing < 0.8",
+      "prompt_plateau_iterations 0 < 3",
+      "real dataset license approval is missing",
+      "real dataset privacy approval is missing",
+      "real grouped split verification is missing",
+      "real Gold baseline evaluation is missing",
+      "frozen real test set is missing"
+    ],
+    "selected_base_model": "qwen3_4b",
+    "no_chain_of_thought_training": true,
+    "test_set_must_remain_unseen": true
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": "grading-agent-contract-v1",
+  "capability_profile": "local-pilot-v1",
+  "deployment_mode": "shadow",
+  "request_schema": "request.schema.json",
+  "response_schema": "response.schema.json",
+  "error_schema": "error.schema.json",
+  "final_grade_publication_allowed": false,
+  "student_visible": false,
+  "human_review_required": true,
+  "ocr_review_threshold": 0.85,
+  "allowed_grade_levels": ["junior_middle"],
+  "allowed_question_types": ["short_answer", "calculation", "essay", "discussion"],
+  "risk_flags": [
+    "ocr_low_confidence",
+    "ocr_text_empty_review_required",
+    "ambiguous_answer",
+    "insufficient_evidence",
+    "possible_off_topic",
+    "score_needs_review",
+    "schema_repaired",
+    "prompt_injection_suspected",
+    "human_review_required"
+  ],
+  "forbidden_request_fields": [
+    "tenant_id",
+    "student_id",
+    "student_name",
+    "student_no",
+    "final_score",
+    "published_score"
+  ]
+}

@@ -3,6 +3,7 @@ package appeal
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
@@ -55,18 +56,24 @@ func (h *Handler) ListAppeals(w http.ResponseWriter, r *http.Request) {
 		StudentID: r.URL.Query().Get("student_id"),
 		Status:    r.URL.Query().Get("status"),
 	}
-	if !hasPermission(user, "appeal:manage") {
+	if hasPermission(user, "appeal:work") && !hasPermission(user, "appeal:manage") {
+		filter.StudentID = ""
+		filter.AssignedTo = user.ID
+	} else if !hasPermission(user, "appeal:manage") {
 		studentID, ok := scopedStudentID(user)
-		if !ok {
-			httpx.Error(w, r, http.StatusForbidden, "student_scope_required", "student scope is required")
-			return
+		if ok {
+			filter.StudentID = studentID
 		}
-		filter.StudentID = studentID
 	}
 	items, err := h.store.ListAppeals(r.Context(), user.TenantID, filter)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
+	}
+	if hasPermission(user, "appeal:work") && !hasPermission(user, "appeal:manage") {
+		for index := range items {
+			items[index] = teacherAppealView(items[index])
+		}
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"appeals": items})
 }
@@ -78,14 +85,70 @@ func (h *Handler) GetAppeal(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	if !hasPermission(user, "appeal:manage") {
+	if hasPermission(user, "appeal:work") && !hasPermission(user, "appeal:manage") {
+		if item.AssignedTo != user.ID {
+			httpx.Error(w, r, http.StatusForbidden, "appeal_assignment_scope_violation", "teacher can only view assigned appeals")
+			return
+		}
+		item = teacherAppealView(item)
+	} else if !hasPermission(user, "appeal:manage") {
 		studentID, ok := scopedStudentID(user)
-		if !ok || item.StudentID != studentID {
+		if ok && item.StudentID != studentID {
 			httpx.Error(w, r, http.StatusForbidden, "appeal_student_scope_violation", "student can only view own appeal")
 			return
 		}
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"appeal": item})
+}
+
+func (h *Handler) AssignAppeal(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input AssignAppealInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	item, err := h.store.AssignAppeal(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "appeal.assigned", "appeal", item.ID, "assigned_to="+input.AssignedTo)
+	httpx.JSON(w, http.StatusOK, map[string]any{"appeal": item})
+}
+
+func (h *Handler) SubmitRecommendation(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input SubmitRecommendationInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	item, err := h.store.SubmitRecommendation(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	auditReason := fmt.Sprintf("recommendation=%s reason=%s", input.Recommendation, input.Reason)
+	if input.RecommendedScore != nil {
+		auditReason = fmt.Sprintf("recommendation=%s score=%.2f reason=%s", input.Recommendation, *input.RecommendedScore, input.Reason)
+	}
+	h.auditAction(r, "appeal.teacher_recommendation_submitted", "appeal", item.ID, auditReason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"appeal": teacherAppealView(item)})
+}
+
+func teacherAppealView(item Appeal) Appeal {
+	item.StudentID = ""
+	item.CreatedBy = ""
+	item.ReviewedBy = ""
+	item.ClosedBy = ""
+	if item.Evidence != nil {
+		for _, grade := range item.Evidence.HumanGrades {
+			delete(grade, "reviewer_id")
+		}
+	}
+	for index := range item.Adjustments {
+		item.Adjustments[index].AdjustedBy = ""
+	}
+	return item
 }
 
 func (h *Handler) ReviewAppeal(w http.ResponseWriter, r *http.Request) {

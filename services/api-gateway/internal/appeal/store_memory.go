@@ -12,6 +12,8 @@ import (
 type SubmissionGradeSeed struct {
 	ID            string
 	ExamID        string
+	ExamName      string
+	Subject       string
 	SubmissionID  string
 	StudentID     string
 	AnonymousCode string
@@ -100,8 +102,11 @@ func (s *MemoryStore) CreateAppeal(_ context.Context, tenantID string, actorID s
 		ID:                s.id("appeal"),
 		TenantID:          tenantID,
 		ExamID:            input.ExamID,
+		ExamName:          submission.ExamName,
+		Subject:           submission.Subject,
 		SubmissionID:      submission.SubmissionID,
 		SubmissionGradeID: submission.ID,
+		AnonymousCode:     submission.AnonymousCode,
 		StudentID:         input.StudentID,
 		TargetType:        input.TargetType,
 		FinalGradeID:      input.FinalGradeID,
@@ -136,12 +141,74 @@ func (s *MemoryStore) ListAppeals(_ context.Context, tenantID string, filter Lis
 		if filter.Status != "" && item.Status != filter.Status {
 			continue
 		}
+		if filter.AssignedTo != "" && item.AssignedTo != filter.AssignedTo {
+			continue
+		}
 		out = append(out, cloneAppeal(item))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
 	return out, nil
+}
+
+func (s *MemoryStore) AssignAppeal(_ context.Context, tenantID string, id string, _ string, input AssignAppealInput) (Appeal, error) {
+	input.AssignedTo = strings.TrimSpace(input.AssignedTo)
+	if input.AssignedTo == "" {
+		return Appeal{}, ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.appeals[id]
+	if !ok || item.TenantID != tenantID {
+		return Appeal{}, ErrNotFound
+	}
+	if isTerminalStatus(item.Status) {
+		return Appeal{}, ErrInvalidTransition
+	}
+	if item.FinalGradeID != "" && reviewerParticipated(s.finals[item.FinalGradeID], input.AssignedTo) {
+		return Appeal{}, ErrForbidden
+	}
+	item.AssignedTo = input.AssignedTo
+	item.Status = "under_review"
+	item.UpdatedAt = time.Now().UTC()
+	s.appeals[id] = item
+	return s.withDetailsLocked(item), nil
+}
+
+func (s *MemoryStore) SubmitRecommendation(_ context.Context, tenantID string, id string, actorID string, input SubmitRecommendationInput) (Appeal, error) {
+	input = normalizeRecommendationInput(input)
+	if err := validateRecommendationInput(input); err != nil {
+		return Appeal{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.appeals[id]
+	if !ok || item.TenantID != tenantID {
+		return Appeal{}, ErrNotFound
+	}
+	if item.AssignedTo != actorID {
+		return Appeal{}, ErrForbidden
+	}
+	if isTerminalStatus(item.Status) {
+		return Appeal{}, ErrInvalidTransition
+	}
+	if input.RecommendedScore != nil {
+		final, ok := s.finals[item.FinalGradeID]
+		if !ok || *input.RecommendedScore > final.MaxScore {
+			return Appeal{}, ErrInvalidInput
+		}
+	}
+	now := time.Now().UTC()
+	item.Status = "under_review"
+	item.Recommendation = input.Recommendation
+	item.RecommendationReason = input.Reason
+	item.RecommendedScore = cloneFloat(input.RecommendedScore)
+	item.RecommendationBy = actorID
+	item.RecommendationAt = &now
+	item.UpdatedAt = now
+	s.appeals[id] = item
+	return s.withDetailsLocked(item), nil
 }
 
 func (s *MemoryStore) GetAppeal(_ context.Context, tenantID string, id string) (Appeal, error) {
@@ -342,6 +409,31 @@ func normalizeReviewInput(input ReviewAppealInput) ReviewAppealInput {
 	return input
 }
 
+func normalizeRecommendationInput(input SubmitRecommendationInput) SubmitRecommendationInput {
+	input.Recommendation = strings.TrimSpace(input.Recommendation)
+	input.Reason = strings.TrimSpace(input.Reason)
+	return input
+}
+
+func validateRecommendationInput(input SubmitRecommendationInput) error {
+	switch input.Recommendation {
+	case "accept", "reject", "need_more_info":
+		if input.RecommendedScore != nil {
+			return ErrInvalidInput
+		}
+	case "adjust_score":
+		if input.RecommendedScore == nil || *input.RecommendedScore < 0 {
+			return ErrInvalidInput
+		}
+	default:
+		return ErrInvalidInput
+	}
+	if input.Reason == "" {
+		return ErrInvalidInput
+	}
+	return nil
+}
+
 func validateReviewInput(input ReviewAppealInput) error {
 	if !validStatus(input.Status) || input.Status == "submitted" || input.Status == "closed" {
 		return ErrInvalidInput
@@ -368,6 +460,19 @@ func canReviewTransition(current string, next string) bool {
 	}
 }
 
+func isTerminalStatus(status string) bool {
+	return status == "accepted" || status == "rejected" || status == "score_adjusted" || status == "closed"
+}
+
+func reviewerParticipated(final FinalGradeSeed, userID string) bool {
+	for _, grade := range final.HumanGrades {
+		if reviewerID, ok := grade["reviewer_id"].(string); ok && reviewerID == userID {
+			return true
+		}
+	}
+	return false
+}
+
 func validTargetType(value string) bool {
 	switch value {
 	case "exam", "question", "deduction_point":
@@ -389,6 +494,8 @@ func validStatus(value string) bool {
 func cloneAppeal(in Appeal) Appeal {
 	in.Attachment = cloneMap(in.Attachment)
 	in.ReviewedAt = cloneTime(in.ReviewedAt)
+	in.RecommendationAt = cloneTime(in.RecommendationAt)
+	in.RecommendedScore = cloneFloat(in.RecommendedScore)
 	in.ClosedAt = cloneTime(in.ClosedAt)
 	in.Adjustments = append([]ScoreAdjustment(nil), in.Adjustments...)
 	if in.Evidence != nil {
@@ -400,6 +507,14 @@ func cloneAppeal(in Appeal) Appeal {
 		in.Evidence = &ev
 	}
 	return in
+}
+
+func cloneFloat(in *float64) *float64 {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func cloneMap(in map[string]any) map[string]any {

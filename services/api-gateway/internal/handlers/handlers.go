@@ -71,6 +71,22 @@ func (h *Handlers) SystemStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) SystemInfo(w http.ResponseWriter, _ *http.Request) {
+	modelCapability := "mock_llm_grading_adapter"
+	notImplemented := []string{
+		"real_subjective_model_inference",
+		"semantic_evidence_verification",
+		"visual_evidence_verification",
+		"ai_grading",
+	}
+	if h.cfg.AIService.URL != "" {
+		modelCapability = "governed_shadow_grading_agent"
+		notImplemented = []string{
+			"calibrated_subjective_model_confidence",
+			"semantic_evidence_verification",
+			"visual_evidence_verification",
+			"automatic_subjective_grade_acceptance",
+		}
+	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"service":     h.cfg.Service.Name,
 		"environment": h.cfg.Service.Environment,
@@ -119,7 +135,7 @@ func (h *Handlers) SystemInfo(w http.ResponseWriter, _ *http.Request) {
 			"ai_grade_recording",
 			"grading_low_confidence_review_trigger",
 			"subjective_ai_grading_interface",
-			"mock_llm_grading_adapter",
+			modelCapability,
 			"subjective_ai_grade_failure_recording",
 			"rule_based_evidence_verification",
 			"evidence_agent_job_recording",
@@ -147,12 +163,7 @@ func (h *Handlers) SystemInfo(w http.ResponseWriter, _ *http.Request) {
 			"grading_quality_report",
 			"report_csv_export",
 		},
-		"not_implemented": []string{
-			"real_subjective_model_inference",
-			"semantic_evidence_verification",
-			"visual_evidence_verification",
-			"ai_grading",
-		},
+		"not_implemented": notImplemented,
 	})
 }
 

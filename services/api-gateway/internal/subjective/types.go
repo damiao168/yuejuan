@@ -35,6 +35,9 @@ type GradeRequest struct {
 
 type Context struct {
 	SegmentID       string
+	AnswerVersion   string
+	Subject         string
+	GradeLevel      string
 	Question        paper.Question
 	Rubric          paper.Rubric
 	AnswerText      string
@@ -44,6 +47,10 @@ type Context struct {
 }
 
 type AdapterInput struct {
+	RequestID      string         `json:"request_id"`
+	SegmentID      string         `json:"answer_segment_id"`
+	Subject        string         `json:"subject"`
+	GradeLevel     string         `json:"grade_level"`
 	Question       paper.Question `json:"question"`
 	Rubric         paper.Rubric   `json:"rubric"`
 	AnswerText     string         `json:"answer_text"`
@@ -61,45 +68,69 @@ type PromptGuard struct {
 }
 
 type AdapterOutput struct {
-	SuggestedScore   float64               `json:"suggested_score"`
-	Confidence       float64               `json:"confidence"`
-	MatchedPoints    []grading.PointResult `json:"matched_points"`
-	MissingPoints    []grading.PointResult `json:"missing_points"`
-	Evidence         []grading.Evidence    `json:"evidence"`
-	RiskFlags        []string              `json:"risk_flags"`
-	NeedsHumanReview bool                  `json:"needs_human_review"`
-	StudentFeedback  string                `json:"student_feedback"`
-	TeacherNote      string                `json:"teacher_note"`
-	RawOutput        map[string]any        `json:"raw_output"`
-	Mock             bool                  `json:"mock"`
+	RequestID         string                `json:"request_id"`
+	SuggestedScore    float64               `json:"suggested_score"`
+	Confidence        float64               `json:"confidence"`
+	MatchedPoints     []grading.PointResult `json:"matched_points"`
+	MissingPoints     []grading.PointResult `json:"missing_points"`
+	Evidence          []grading.Evidence    `json:"evidence"`
+	RiskFlags         []string              `json:"risk_flags"`
+	NeedsHumanReview  bool                  `json:"needs_human_review"`
+	StudentFeedback   string                `json:"student_feedback"`
+	TeacherNote       string                `json:"teacher_note"`
+	ModelVersion      string                `json:"model_version"`
+	PromptVersion     string                `json:"prompt_version"`
+	RubricVersion     string                `json:"rubric_version"`
+	DeliveryMode      string                `json:"delivery_mode"`
+	CapabilityProfile string                `json:"capability_profile"`
+	Telemetry         AdapterTelemetry      `json:"telemetry"`
+	RawOutput         map[string]any        `json:"raw_output"`
+	Mock              bool                  `json:"mock"`
+}
+
+type AdapterTelemetry struct {
+	Adapter         string   `json:"adapter"`
+	Attempts        int      `json:"attempts"`
+	RepairAttempted bool     `json:"repair_attempted"`
+	PriorErrorCodes []string `json:"prior_error_codes"`
+	ElapsedMS       int64    `json:"elapsed_ms"`
 }
 
 type Grade struct {
-	ID               string                `json:"id"`
-	TenantID         string                `json:"tenant_id"`
-	AnswerSegmentID  string                `json:"answer_segment_id"`
-	QuestionID       string                `json:"question_id"`
-	QuestionNo       string                `json:"question_no"`
-	QuestionType     string                `json:"question_type"`
-	GraderType       string                `json:"grader_type"`
-	ModelVersion     string                `json:"model_version"`
-	PromptVersion    string                `json:"prompt_version"`
-	SuggestedScore   float64               `json:"suggested_score"`
-	MaxScore         float64               `json:"max_score"`
-	Confidence       float64               `json:"confidence"`
-	MatchedPoints    []grading.PointResult `json:"matched_points"`
-	MissingPoints    []grading.PointResult `json:"missing_points"`
-	Evidence         []grading.Evidence    `json:"evidence"`
-	RiskFlags        []string              `json:"risk_flags"`
-	NeedsHumanReview bool                  `json:"needs_human_review"`
-	StudentFeedback  string                `json:"student_feedback"`
-	TeacherNote      string                `json:"teacher_note"`
-	Mock             bool                  `json:"mock"`
-	Status           string                `json:"status"`
-	FailureReason    string                `json:"failure_reason,omitempty"`
-	RawOutput        map[string]any        `json:"raw_output"`
-	CreatedBy        string                `json:"created_by"`
-	CreatedAt        time.Time             `json:"created_at"`
+	ID                     string                `json:"id"`
+	TenantID               string                `json:"tenant_id"`
+	AnswerSegmentID        string                `json:"answer_segment_id"`
+	QuestionID             string                `json:"question_id"`
+	QuestionNo             string                `json:"question_no"`
+	QuestionType           string                `json:"question_type"`
+	AnswerVersion          string                `json:"answer_version"`
+	GraderType             string                `json:"grader_type"`
+	ModelVersion           string                `json:"model_version"`
+	PromptVersion          string                `json:"prompt_version"`
+	RubricVersion          string                `json:"rubric_version"`
+	DeliveryMode           string                `json:"delivery_mode"`
+	CapabilityProfile      string                `json:"capability_profile"`
+	AdapterRequestID       string                `json:"adapter_request_id"`
+	AdapterName            string                `json:"adapter_name"`
+	AdapterAttempts        int                   `json:"adapter_attempts"`
+	AdapterLatencyMS       int64                 `json:"adapter_latency_ms"`
+	AdapterRepairAttempted bool                  `json:"adapter_repair_attempted"`
+	SuggestedScore         float64               `json:"suggested_score"`
+	MaxScore               float64               `json:"max_score"`
+	Confidence             float64               `json:"confidence"`
+	MatchedPoints          []grading.PointResult `json:"matched_points"`
+	MissingPoints          []grading.PointResult `json:"missing_points"`
+	Evidence               []grading.Evidence    `json:"evidence"`
+	RiskFlags              []string              `json:"risk_flags"`
+	NeedsHumanReview       bool                  `json:"needs_human_review"`
+	StudentFeedback        string                `json:"student_feedback"`
+	TeacherNote            string                `json:"teacher_note"`
+	Mock                   bool                  `json:"mock"`
+	Status                 string                `json:"status"`
+	FailureReason          string                `json:"failure_reason,omitempty"`
+	RawOutput              map[string]any        `json:"raw_output"`
+	CreatedBy              string                `json:"created_by"`
+	CreatedAt              time.Time             `json:"created_at"`
 }
 
 type Store interface {
@@ -110,4 +141,8 @@ type Store interface {
 type LLMGradingAdapter interface {
 	Name() string
 	Grade(ctx context.Context, input AdapterInput) (AdapterOutput, error)
+}
+
+type GovernedPolicyProvider interface {
+	Policy() ModelPolicy
 }

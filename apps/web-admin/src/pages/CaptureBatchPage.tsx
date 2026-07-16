@@ -64,6 +64,7 @@ import {
 } from "../api/capture";
 import { downloadFileBlob, uploadFile } from "../api/files";
 import { ErrorState, LoadingState } from "../components/PageState";
+import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import { RegistrationCorrectionWorkspace } from "../components/RegistrationCorrectionWorkspace";
 
@@ -938,21 +939,19 @@ export function CaptureBatchPage({
                       label: `文件与页面 (${detail.files.length})`,
                       children: (
                         <div className="capture-detail-stack">
-                          <Table
+                          <ResponsiveTable
                             rowKey="id"
                             columns={fileColumns}
                             dataSource={detail.files}
                             pagination={false}
                             size="small"
-                            scroll={{ x: 720 }}
                           />
-                          <Table
+                          <ResponsiveTable
                             rowKey="id"
                             columns={pageColumns}
                             dataSource={detail.pages}
                             pagination={{ pageSize: 20 }}
                             size="small"
-                            scroll={{ x: 700 }}
                           />
                         </div>
                       ),
@@ -1060,13 +1059,12 @@ export function CaptureBatchPage({
                               <Button icon={<FileUp size={15} />} disabled={!batchCanManage} onClick={() => setActiveTab("files")}>替换源文件</Button>
                             </div>
                           ))}
-                          {issuePages.length > 0 && <Table
+                          {issuePages.length > 0 && <ResponsiveTable
                             rowKey="id"
                             columns={pageColumns}
                             dataSource={issuePages}
                             pagination={false}
                             size="small"
-                            scroll={{ x: 700 }}
                           />}
                         </div>
                       ) : (

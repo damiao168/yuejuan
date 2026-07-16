@@ -16,6 +16,7 @@ import {
 } from "../api/review";
 import type { SessionUser } from "../auth/session";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
 
@@ -127,10 +128,9 @@ async function loadQuestion(task: ArbitrationTask) {
   return result.questions.find((item) => item.id === task.question_id);
 }
 
-export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams, currentUser, initialExamId = "" }: { canAssign: boolean; canWork: boolean; canReadAudit: boolean; canReadExams: boolean; currentUser: SessionUser; initialExamId?: string }) {
+export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams, currentUser, initialExamId = "", personalScope = false }: { canAssign: boolean; canWork: boolean; canReadAudit: boolean; canReadExams: boolean; currentUser: SessionUser; initialExamId?: string; personalScope?: boolean }) {
   const { message } = App.useApp();
   const hasSession = true;
-  const canSubmit = canWork && hasSession;
   const [actorId, setActorId] = useState(currentUser.id);
   const [actorError, setActorError] = useState<string | null>(null);
   const [scope, setScope] = useState<ScopeFilter>("mine");
@@ -150,6 +150,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [actioning, setActioning] = useState<string | null>(null);
+  const canSubmit = canWork && hasSession && (!personalScope || detail?.task.assigned_to === currentUser.id);
 
   useEffect(() => {
     if (!hasSession) {
@@ -255,7 +256,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
     try {
       const result = await listArbitrationTasks({
         status: statusFilter === "active" ? undefined : statusFilter,
-        assigned_to: scope === "mine" ? actorId : undefined
+        assigned_to: personalScope ? currentUser.id : scope === "mine" ? actorId : undefined
       });
       setTasks(result.arbitration_tasks);
       setSelectedTaskId((current) => (result.arbitration_tasks.some((task) => task.id === current) ? current : result.arbitration_tasks[0]?.id ?? ""));
@@ -266,7 +267,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
     } finally {
       setLoadingTasks(false);
     }
-  }, [actorId, hasSession, loadExamNames, scope, statusFilter]);
+  }, [actorId, currentUser.id, hasSession, loadExamNames, personalScope, scope, statusFilter]);
 
   const loadDetail = useCallback(
     async (taskId: string) => {
@@ -530,7 +531,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
       <section className="arbitration-topbar">
         <div>
           <Space>
-            <h1>双评仲裁</h1>
+            <h1>{personalScope ? "我的复核" : "双评仲裁"}</h1>
           </Space>
           <p>对比两次评分及其依据，确认最终得分。</p>
         </div>
@@ -538,9 +539,9 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
           <Button icon={<RefreshCw size={16} />} onClick={() => void refreshCurrent()} loading={loadingTasks || detailLoading}>
             刷新
           </Button>
-          <Button icon={<UserCheck size={16} />} disabled={!canAssign || !detail || detail.task.status === "submitted"} loading={actioning === "assign"} onClick={() => void assignToMe()}>
+          {canAssign ? <Button icon={<UserCheck size={16} />} disabled={!detail || detail.task.status === "submitted"} loading={actioning === "assign"} onClick={() => void assignToMe()}>
             分配给我
-          </Button>
+          </Button> : null}
           <Button type="primary" icon={<Save size={16} />} disabled={!canSubmit || !detail || detail.task.status === "submitted"} loading={actioning === "submit"} onClick={() => void submitDecision()}>
             提交仲裁
           </Button>
@@ -559,7 +560,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
       {actorError ? <Alert type="warning" showIcon message="未能读取真实登录用户" description={`我的任务过滤暂用前端会话用户：${actorError}`} /> : null}
 
       <section className="arbitration-filterbar">
-        <Select className="toolbar-select" value={scope} options={scopeOptions} onChange={setScope} />
+        {personalScope ? <span className="scope-fixed-label">仅显示分配给我的任务</span> : <Select className="toolbar-select" value={scope} options={scopeOptions} onChange={setScope} />}
         <Select className="toolbar-select" value={statusFilter} options={statusOptions} onChange={setStatusFilter} />
         <Input prefix={<Search size={16} />} placeholder="搜索考试、匿名码、题号、任务 ID" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
         <span className="muted">{filteredTasks.length} / {tasks.length} 个仲裁任务</span>
@@ -571,13 +572,12 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
         ) : taskError ? (
           <ErrorState message={taskError} onRetry={() => void loadTasks()} />
         ) : (
-          <Table
+          <ResponsiveTable
             rowKey="id"
             size="small"
             columns={columns}
             dataSource={filteredTasks}
             pagination={{ pageSize: 6, showSizeChanger: false }}
-            scroll={{ x: 860 }}
             rowClassName={(record) => (record.id === selectedTaskId ? "arbitration-row-active" : "")}
             locale={{ emptyText: <Empty description="当前没有需要仲裁的评分差异" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
             onRow={(record) => ({
@@ -688,9 +688,9 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
           />
 
           <Space wrap>
-            <Button icon={<UserCheck size={16} />} disabled={!canAssign || !detail || detail.task.status === "submitted"} loading={actioning === "assign"} onClick={() => void assignToMe()}>
+            {canAssign ? <Button icon={<UserCheck size={16} />} disabled={!detail || detail.task.status === "submitted"} loading={actioning === "assign"} onClick={() => void assignToMe()}>
               分配给我
-            </Button>
+            </Button> : null}
             <Button type="primary" icon={<CheckCircle2 size={16} />} disabled={!canSubmit || !detail || detail.task.status === "submitted"} loading={actioning === "submit"} onClick={() => void submitDecision()}>
               提交
             </Button>

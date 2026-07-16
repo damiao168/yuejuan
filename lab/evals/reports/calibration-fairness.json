@@ -1,0 +1,262 @@
+{
+  "schema_version": "calibration-fairness-report-v1",
+  "generated_at": "2026-07-15T07:13:50.463Z",
+  "synthetic_only": true,
+  "promotable_to_runtime": false,
+  "input_sha256": "263a3649a8024a99f1451902e58d895ced486241df240e17c91fde7fe3167e61",
+  "partitions": {
+    "calibration": 8,
+    "evaluation": 8
+  },
+  "calibration_model": {
+    "schema_version": "isotonic-calibration-v1",
+    "training_records": 8,
+    "blocks": [
+      {
+        "min_signal": 0.6975,
+        "max_signal": 0.6975,
+        "probability": 0,
+        "count": 1
+      },
+      {
+        "min_signal": 0.7475,
+        "max_signal": 0.7475,
+        "probability": 0,
+        "count": 1
+      },
+      {
+        "min_signal": 0.7925,
+        "max_signal": 0.7925,
+        "probability": 0,
+        "count": 1
+      },
+      {
+        "min_signal": 0.895,
+        "max_signal": 0.895,
+        "probability": 1,
+        "count": 1
+      },
+      {
+        "min_signal": 0.955,
+        "max_signal": 0.955,
+        "probability": 1,
+        "count": 1
+      },
+      {
+        "min_signal": 0.9975,
+        "max_signal": 0.9975,
+        "probability": 1,
+        "count": 3
+      }
+    ]
+  },
+  "calibration": {
+    "evaluation_records": 8,
+    "ece": 0.12499999999999997,
+    "brier_score": 0.125,
+    "bins": [
+      {
+        "bin": 0,
+        "count": 3,
+        "average_probability": 0,
+        "empirical_accuracy": 0
+      },
+      {
+        "bin": 9,
+        "count": 5,
+        "average_probability": 1,
+        "empirical_accuracy": 0.8
+      }
+    ],
+    "coverage_risk": [
+      {
+        "threshold": 0,
+        "coverage": 1,
+        "risk": 0.5
+      },
+      {
+        "threshold": 0.5,
+        "coverage": 0.625,
+        "risk": 0.2
+      },
+      {
+        "threshold": 0.6,
+        "coverage": 0.625,
+        "risk": 0.2
+      },
+      {
+        "threshold": 0.7,
+        "coverage": 0.625,
+        "risk": 0.2
+      },
+      {
+        "threshold": 0.8,
+        "coverage": 0.625,
+        "risk": 0.2
+      },
+      {
+        "threshold": 0.9,
+        "coverage": 0.625,
+        "risk": 0.2
+      }
+    ],
+    "predictions": [
+      {
+        "observation_id": "eval-01",
+        "signal": 0.9975,
+        "probability": 1,
+        "outcome": 1
+      },
+      {
+        "observation_id": "eval-02",
+        "signal": 0.9975,
+        "probability": 1,
+        "outcome": 1
+      },
+      {
+        "observation_id": "eval-03",
+        "signal": 0.7475,
+        "probability": 0,
+        "outcome": 0
+      },
+      {
+        "observation_id": "eval-04",
+        "signal": 0.6975,
+        "probability": 0,
+        "outcome": 0
+      },
+      {
+        "observation_id": "eval-05",
+        "signal": 0.895,
+        "probability": 1,
+        "outcome": 1
+      },
+      {
+        "observation_id": "eval-06",
+        "signal": 0.95,
+        "probability": 1,
+        "outcome": 0
+      },
+      {
+        "observation_id": "eval-07",
+        "signal": 0.9975,
+        "probability": 1,
+        "outcome": 1
+      },
+      {
+        "observation_id": "eval-08",
+        "signal": 0.75,
+        "probability": 0,
+        "outcome": 0
+      }
+    ]
+  },
+  "fairness": {
+    "dimensions": {
+      "subject": [
+        {
+          "value": "chinese",
+          "count": 4,
+          "normalized_mae": 0.625,
+          "acceptable_agreement_rate": 0.25,
+          "overgrade_rate": 0.75,
+          "undergrade_rate": 0,
+          "mean_calibrated_probability": 0.5
+        },
+        {
+          "value": "math",
+          "count": 4,
+          "normalized_mae": 0.125,
+          "acceptable_agreement_rate": 0.75,
+          "overgrade_rate": 0.25,
+          "undergrade_rate": 0,
+          "mean_calibrated_probability": 0.75
+        }
+      ],
+      "question_type": [
+        {
+          "value": "short_answer",
+          "count": 4,
+          "normalized_mae": 0.625,
+          "acceptable_agreement_rate": 0.25,
+          "overgrade_rate": 0.75,
+          "undergrade_rate": 0,
+          "mean_calibrated_probability": 0.5
+        },
+        {
+          "value": "calculation",
+          "count": 4,
+          "normalized_mae": 0.125,
+          "acceptable_agreement_rate": 0.75,
+          "overgrade_rate": 0.25,
+          "undergrade_rate": 0,
+          "mean_calibrated_probability": 0.75
+        }
+      ],
+      "ocr_band": [
+        {
+          "value": "high",
+          "count": 6,
+          "normalized_mae": 0.25,
+          "acceptable_agreement_rate": 0.6666666666666666,
+          "overgrade_rate": 0.3333333333333333,
+          "undergrade_rate": 0,
+          "mean_calibrated_probability": 0.6666666666666666
+        },
+        {
+          "value": "low",
+          "count": 2,
+          "normalized_mae": 0.75,
+          "acceptable_agreement_rate": 0,
+          "overgrade_rate": 1,
+          "undergrade_rate": 0,
+          "mean_calibrated_probability": 0.5
+        }
+      ],
+      "answer_length_band": [
+        {
+          "value": "short",
+          "count": 4,
+          "normalized_mae": 0.25,
+          "acceptable_agreement_rate": 0.5,
+          "overgrade_rate": 0.5,
+          "undergrade_rate": 0,
+          "mean_calibrated_probability": 0.75
+        },
+        {
+          "value": "medium",
+          "count": 4,
+          "normalized_mae": 0.5,
+          "acceptable_agreement_rate": 0.5,
+          "overgrade_rate": 0.5,
+          "undergrade_rate": 0,
+          "mean_calibrated_probability": 0.5
+        }
+      ]
+    },
+    "disparities": {
+      "subject": {
+        "eligible_slices": 2,
+        "normalized_mae_gap": 0.5
+      },
+      "question_type": {
+        "eligible_slices": 2,
+        "normalized_mae_gap": 0.5
+      },
+      "ocr_band": {
+        "eligible_slices": 2,
+        "normalized_mae_gap": 0.5
+      },
+      "answer_length_band": {
+        "eligible_slices": 2,
+        "normalized_mae_gap": 0.25
+      }
+    },
+    "insufficient_slices": []
+  },
+  "gate": {
+    "level": "dev",
+    "passed": true,
+    "reasons": []
+  }
+}

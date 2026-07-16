@@ -30,8 +30,10 @@ import {
 } from "../api/exams";
 import { listClasses, listGrades, listSchools, type Grade, type School, type SchoolClass } from "../api/org";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
+import type { ProductExperience } from "../router/experience";
 
 const statusFlow = ["draft", "configured", "ready", "collecting", "grading", "reviewing", "finalized", "published", "archived"];
 
@@ -152,7 +154,7 @@ function formatTime(value?: string) {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("zh-CN", { hour12: false });
 }
 
-export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: { canManage: boolean; currentUser: SessionUser; onOpenWorkspace: (examId: string) => void }) {
+export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspace }: { mode: ProductExperience; canManage: boolean; currentUser: SessionUser; onOpenWorkspace: (examId: string) => void }) {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<ExamFormValues>();
   const watchedSchoolId = Form.useWatch("school_id", form);
@@ -172,6 +174,7 @@ export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: 
   const [actioningId, setActioningId] = useState<string | null>(null);
   const hasSession = true;
   const canWrite = canManage && hasSession;
+  const teacherMode = mode === "teacher";
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -186,22 +189,28 @@ export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: 
       return;
     }
     try {
-      const [examResult, schoolResult, gradeResult, classResult] = await Promise.all([
-        listExams({ status: filters.status || undefined, school_id: filters.schoolId || undefined }),
-        listSchools(),
-        listGrades(filters.schoolId || undefined),
-        listClasses()
-      ]);
+      const examResult = await listExams({ status: filters.status || undefined, school_id: teacherMode ? undefined : filters.schoolId || undefined });
       setExams(examResult.exams);
-      setSchools(schoolResult.schools);
-      setGrades(gradeResult.grades);
-      setClasses(classResult.classes);
+      if (teacherMode) {
+        setSchools([]);
+        setGrades([]);
+        setClasses([]);
+      } else {
+        const [schoolResult, gradeResult, classResult] = await Promise.all([
+          listSchools(),
+          listGrades(filters.schoolId || undefined),
+          listClasses()
+        ]);
+        setSchools(schoolResult.schools);
+        setGrades(gradeResult.grades);
+        setClasses(classResult.classes);
+      }
     } catch (currentError) {
       setError(formatError(currentError));
     } finally {
       setLoading(false);
     }
-  }, [filters.schoolId, filters.status]);
+  }, [filters.schoolId, filters.status, teacherMode]);
 
   useEffect(() => {
     void loadData();
@@ -417,20 +426,20 @@ export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: 
             <Button size="small" icon={<Eye size={14} />} onClick={() => void openDetail(exam)}>
               详情
             </Button>
-            <Button
+            {canWrite ? <Button
               size="small"
               icon={<Pencil size={14} />}
-              disabled={!canWrite || locked}
+              disabled={locked}
               onClick={() => setDrawer({ mode: "edit", exam })}
             >
               编辑
-            </Button>
-            {next && next !== "archived" ? (
+            </Button> : null}
+            {canWrite && next && next !== "archived" ? (
               <Button size="small" disabled={!canWrite} loading={actioningId === exam.id} onClick={() => changeStatus(exam, next)}>
                 推进到{statusLabels[next] ?? next}
               </Button>
             ) : null}
-            {exam.status !== "archived" ? (
+            {canWrite && exam.status !== "archived" ? (
               <Button size="small" danger icon={<Archive size={14} />} disabled={!canWrite} loading={actioningId === exam.id} onClick={() => archive(exam)}>
                 归档
               </Button>
@@ -447,16 +456,16 @@ export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: 
     <div className="page-stack">
       <section className="page-heading">
         <div>
-          <h1>考试管理</h1>
-          <p>创建考试、维护班级范围、推进考试状态和进入后续配置流程。</p>
+          <h1>{teacherMode ? "我的考试" : "考试管理"}</h1>
+          <p>{teacherMode ? "查看已授权考试，并进入试卷、阅卷、成绩和学情工作区。" : "创建考试、维护班级范围、推进考试状态和进入后续配置流程。"}</p>
         </div>
         <Space wrap>
           <Button icon={<RefreshCw size={16} />} onClick={() => void loadData()} loading={loading}>
             刷新
           </Button>
-          <Button type="primary" icon={<Plus size={16} />} disabled={!canWrite} onClick={() => setDrawer({ mode: "create" })}>
+          {canWrite ? <Button type="primary" icon={<Plus size={16} />} onClick={() => setDrawer({ mode: "create" })}>
             新建考试
-          </Button>
+          </Button> : null}
         </Space>
       </section>
 
@@ -485,7 +494,7 @@ export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: 
             onChange={(value) => setFilters((current) => ({ ...current, status: value ?? "" }))}
           />
         </div>
-        <details className="advanced-filter-disclosure">
+        {!teacherMode ? <details className="advanced-filter-disclosure">
           <summary>更多筛选</summary>
           <div className="filter-grid">
             <Select placeholder="学校" allowClear value={filters.schoolId || undefined} options={schoolOptions} onChange={(value) => setFilters((current) => ({ ...current, schoolId: value ?? "", gradeId: "" }))} />
@@ -493,7 +502,7 @@ export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: 
             <Select placeholder="年级" allowClear value={filters.gradeId || undefined} options={gradeOptions} onChange={(value) => setFilters((current) => ({ ...current, gradeId: value ?? "" }))} />
             <Select placeholder="考试类型" allowClear value={filters.examType || undefined} options={examTypeOptions} onChange={(value) => setFilters((current) => ({ ...current, examType: value ?? "" }))} />
           </div>
-        </details>
+        </details> : null}
       </section>
 
       {loading ? (
@@ -506,15 +515,14 @@ export function ExamManagementPage({ canManage, currentUser, onOpenWorkspace }: 
         <section className="workspace-section">
           <div className="section-head">
             <div>
-              <h2>考试任务</h2>
+              <h2>{teacherMode ? "已授权考试" : "考试任务"}</h2>
               <p>{filteredExams.length} 条考试记录</p>
             </div>
           </div>
-          <Table<Exam>
+          <ResponsiveTable<Exam>
             rowKey="id"
             dataSource={filteredExams}
             columns={columns}
-            scroll={{ x: "max-content" }}
             pagination={{ pageSize: 8, showSizeChanger: false }}
             locale={{ emptyText: <EmptyState title="暂无考试" description="当前筛选条件下没有后端返回的考试记录。" /> }}
             size="middle"

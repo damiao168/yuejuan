@@ -1,0 +1,110 @@
+{
+  "schema_version": "pilot-readiness-report-v1",
+  "freeze_id": "pilot-candidate-v1",
+  "generated_at": "2026-07-15T07:14:01.194Z",
+  "readiness": {
+    "decision": "NOT_READY",
+    "ready": false,
+    "checks": [
+      {
+        "id": "capability_boundary_safe",
+        "description": "Capability matrix forbids final grade publication",
+        "passed": true,
+        "detail": "local-pilot-v1"
+      },
+      {
+        "id": "model_integrity_verified",
+        "description": "Selected model artifact integrity is verified",
+        "passed": true,
+        "detail": "Qwen3-4B-Q4_K_M.gguf sha256=7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"
+      },
+      {
+        "id": "local_regression_passed",
+        "description": "Frozen local-model regression passes",
+        "passed": true,
+        "detail": "3/3"
+      },
+      {
+        "id": "real_dataset_governed",
+        "description": "Governed real Gold dataset exists",
+        "passed": false,
+        "detail": "evals/gold/real/manifest.json is absent"
+      },
+      {
+        "id": "real_model_selection_passed",
+        "description": "Model selection passed on real Gold data",
+        "passed": false,
+        "detail": [
+          "governed real Gold manifest is missing"
+        ]
+      },
+      {
+        "id": "teacher_agreement_pilot_passed",
+        "description": "Teacher agreement pilot gate passes",
+        "passed": false,
+        "detail": [
+          "double_scored_count 3 < 500",
+          "normalized_mae 0.16666666666666666 > 0.08",
+          "point_agreement 0.8333333333333334 < 0.85"
+        ]
+      },
+      {
+        "id": "adversarial_pilot_passed",
+        "description": "Adversarial pilot breadth and quality gate passes",
+        "passed": true,
+        "detail": []
+      },
+      {
+        "id": "calibration_fairness_pilot_passed",
+        "description": "Calibration and fairness pilot gate passes",
+        "passed": false,
+        "detail": [
+          "evaluation_records 8 < 500",
+          "ece 0.12499999999999997 > 0.08",
+          "brier_score 0.125 > 0.12",
+          "8 slices are below minimum_records_per_slice 50"
+        ]
+      },
+      {
+        "id": "operational_latency_passed",
+        "description": "Local one-request latency stays within the pilot ceiling",
+        "passed": true,
+        "detail": "p95=106768ms ceiling=120000ms"
+      }
+    ],
+    "blocker_count": 4,
+    "blockers": [
+      {
+        "id": "real_dataset_governed",
+        "description": "Governed real Gold dataset exists",
+        "detail": "evals/gold/real/manifest.json is absent"
+      },
+      {
+        "id": "real_model_selection_passed",
+        "description": "Model selection passed on real Gold data",
+        "detail": [
+          "governed real Gold manifest is missing"
+        ]
+      },
+      {
+        "id": "teacher_agreement_pilot_passed",
+        "description": "Teacher agreement pilot gate passes",
+        "detail": [
+          "double_scored_count 3 < 500",
+          "normalized_mae 0.16666666666666666 > 0.08",
+          "point_agreement 0.8333333333333334 < 0.85"
+        ]
+      },
+      {
+        "id": "calibration_fairness_pilot_passed",
+        "description": "Calibration and fairness pilot gate passes",
+        "detail": [
+          "evaluation_records 8 < 500",
+          "ece 0.12499999999999997 > 0.08",
+          "brier_score 0.125 > 0.12",
+          "8 slices are below minimum_records_per_slice 50"
+        ]
+      }
+    ]
+  }
+}

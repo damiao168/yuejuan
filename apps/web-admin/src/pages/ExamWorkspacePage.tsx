@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Alert, Button, Progress, Segmented, Space, Statistic } from "antd";
+import { Alert, Button, Grid, Progress, Segmented, Select, Space, Statistic } from "antd";
 import { ArrowLeft, ArrowRight, CheckCircle2, CircleAlert, RefreshCw } from "lucide-react";
 import { getExam, type Exam } from "../api/exams";
 import { getExamReadiness, type ExamReadiness } from "../api/configuration";
@@ -9,6 +9,8 @@ import { listSubmissions } from "../api/submissions";
 import { ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
 import type { SessionUser } from "../auth/session";
+import { examWorkspaceSections, hasExamWorkspaceSectionAccess } from "../router/routes";
+import type { ProductExperience } from "../router/experience";
 
 interface WorkspaceData {
   exam: Exam;
@@ -89,7 +91,8 @@ async function fetchWorkspace(examId: string): Promise<WorkspaceData> {
   };
 }
 
-export function ExamWorkspacePage({ examId, section, currentUser, moduleContent, refreshKey = 0, onNavigate }: { examId: string; section: string; currentUser: SessionUser; moduleContent?: ReactNode; refreshKey?: number; onNavigate: (path: string) => void }) {
+export function ExamWorkspacePage({ examId, section, experience, currentUser, moduleContent, refreshKey = 0, onNavigate }: { examId: string; section: string; experience: ProductExperience; currentUser: SessionUser; moduleContent?: ReactNode; refreshKey?: number; onNavigate: (path: string) => void }) {
+  const screens = Grid.useBreakpoint();
   const [data, setData] = useState<WorkspaceData>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
@@ -108,20 +111,27 @@ export function ExamWorkspacePage({ examId, section, currentUser, moduleContent,
 
   const nextAction = useMemo(() => {
     const status = data?.exam.status;
+    if (experience === "teacher") {
+      if (status === "draft" || status === "configured") return { label: "完善试卷与评分标准", section: "paper" };
+      if (status === "grading" || status === "reviewing") return { label: "继续我的阅卷", section: "grading" };
+      if (status === "finalized" || status === "published") return { label: "查看班级成绩", section: "scores" };
+      return { label: "查看考试概览", section: "overview" };
+    }
     if (status === "draft" || status === "configured") return { label: "继续开考准备", section: "settings" };
     if (status === "ready") return { label: "开始采集", section: "settings" };
     if (status === "collecting") return { label: "继续采集", section: "capture" };
     if (status === "grading" || status === "reviewing") return { label: "继续阅卷", section: "grading" };
     if (status === "finalized") return { label: "发布检查", section: "scores" };
     return { label: "查看概览", section: "overview" };
-  }, [data?.exam.status]);
+  }, [data?.exam.status, experience]);
 
   if (!data && loading) return <LoadingState label="正在加载考试工作区" />;
   if (!data && error) return <ErrorState message={error} onRetry={() => setNonce((value) => value + 1)} />;
   if (!data) return null;
 
   const destination = sectionDestinations[section];
-  const readyIssues = data.readiness?.checks.filter((item) => !item.passed) ?? [];
+  const readyIssues = data.readiness?.checks.filter((item) => !item.passed && hasExamWorkspaceSectionAccess(experience, item.section)) ?? [];
+  const visibleSections = sections.filter(([key]) => examWorkspaceSections[experience].includes(key));
 
   return (
     <div className="exam-workspace-page">
@@ -137,7 +147,7 @@ export function ExamWorkspacePage({ examId, section, currentUser, moduleContent,
       </header>
 
       <nav className="exam-section-nav" aria-label="考试工作区导航">
-        <Segmented value={sections.some(([key]) => key === section) ? section : "overview"} options={sections.map(([value, label]) => ({ value, label }))} onChange={(value) => onNavigate(`/exams/${encodeURIComponent(examId)}/${value}`)} />
+        {screens.xxl ? <Segmented value={visibleSections.some(([key]) => key === section) ? section : "overview"} options={visibleSections.map(([value, label]) => ({ value, label }))} onChange={(value) => onNavigate(`/exams/${encodeURIComponent(examId)}/${value}`)} /> : <Select aria-label="选择考试工作区环节" value={visibleSections.some(([key]) => key === section) ? section : "overview"} options={visibleSections.map(([value, label]) => ({ value, label }))} onChange={(value) => onNavigate(`/exams/${encodeURIComponent(examId)}/${value}`)} />}
       </nav>
 
       {data.warnings.map((warning) => <Alert key={warning} type="warning" showIcon message={warning} />)}
@@ -157,7 +167,7 @@ export function ExamWorkspacePage({ examId, section, currentUser, moduleContent,
             </section>
             <section className="workspace-section risk-section">
               <div className="section-head"><div><h2>需要关注</h2><p>需要人工确认的业务事项</p></div><strong>{data.reviewRequiredCount}</strong></div>
-              {data.reviewRequiredCount ? <Alert type="warning" showIcon message={`${data.reviewRequiredCount} 份答卷需要确认学生或质量状态`} action={<Button size="small" onClick={() => onNavigate(`/exams/${encodeURIComponent(examId)}/processing`)}>处理</Button>} /> : <div className="ready-line"><CheckCircle2 size={18} /><span>当前没有待人工处理的答卷风险</span></div>}
+              {data.reviewRequiredCount ? <Alert type="warning" showIcon message={`${data.reviewRequiredCount} 份答卷需要确认学生或质量状态`} action={experience === "admin" ? <Button size="small" onClick={() => onNavigate(`/exams/${encodeURIComponent(examId)}/processing`)}>处理</Button> : undefined} /> : <div className="ready-line"><CheckCircle2 size={18} /><span>当前没有待人工处理的答卷风险</span></div>}
             </section>
           </div>
         </main>

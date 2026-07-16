@@ -1,0 +1,13 @@
+{
+  "schema_version": "fine-tuning-gates-v1",
+  "minimum_real_gold_training_records": 5000,
+  "minimum_real_gold_test_records": 500,
+  "minimum_teacher_qwk": 0.8,
+  "minimum_prompt_plateau_iterations": 3,
+  "require_license_approval": true,
+  "require_privacy_approval": true,
+  "require_grouped_split": true,
+  "require_real_baseline": true,
+  "require_frozen_test_set": true,
+  "require_latest_regression_passed": true
+}

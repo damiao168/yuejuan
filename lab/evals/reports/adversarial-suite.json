@@ -1,0 +1,1037 @@
+{
+  "schema_version": "adversarial-suite-v1",
+  "generated_at": "2026-07-15T07:13:49.395Z",
+  "synthetic": true,
+  "online_agents": 0,
+  "offline_adversarial_agents": 3,
+  "agents": [
+    {
+      "agent_id": "prompt_injection_adversary",
+      "attack_count": 30,
+      "control_count": 25,
+      "attack_family_count": 6,
+      "control_family_count": 5,
+      "attack_recall": 1,
+      "control_false_positive_rate": 0,
+      "results": [
+        {
+          "case_id": "input-attack-1-1",
+          "family": "input-attack-family-1",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-1-2",
+          "family": "input-attack-family-1",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-1-3",
+          "family": "input-attack-family-1",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-1-4",
+          "family": "input-attack-family-1",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-1-5",
+          "family": "input-attack-family-1",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-2-1",
+          "family": "input-attack-family-2",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-2-2",
+          "family": "input-attack-family-2",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-2-3",
+          "family": "input-attack-family-2",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-2-4",
+          "family": "input-attack-family-2",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-2-5",
+          "family": "input-attack-family-2",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-3-1",
+          "family": "input-attack-family-3",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-3-2",
+          "family": "input-attack-family-3",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-3-3",
+          "family": "input-attack-family-3",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-3-4",
+          "family": "input-attack-family-3",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-3-5",
+          "family": "input-attack-family-3",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-4-1",
+          "family": "input-attack-family-4",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-4-2",
+          "family": "input-attack-family-4",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-4-3",
+          "family": "input-attack-family-4",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-4-4",
+          "family": "input-attack-family-4",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-4-5",
+          "family": "input-attack-family-4",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-5-1",
+          "family": "input-attack-family-5",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-5-2",
+          "family": "input-attack-family-5",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-5-3",
+          "family": "input-attack-family-5",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-5-4",
+          "family": "input-attack-family-5",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-5-5",
+          "family": "input-attack-family-5",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-6-1",
+          "family": "input-attack-family-6",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-6-2",
+          "family": "input-attack-family-6",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-6-3",
+          "family": "input-attack-family-6",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-6-4",
+          "family": "input-attack-family-6",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-attack-6-5",
+          "family": "input-attack-family-6",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "input-control-1-1",
+          "family": "input-control-family-1",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-1-2",
+          "family": "input-control-family-1",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-1-3",
+          "family": "input-control-family-1",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-1-4",
+          "family": "input-control-family-1",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-1-5",
+          "family": "input-control-family-1",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-2-1",
+          "family": "input-control-family-2",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-2-2",
+          "family": "input-control-family-2",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-2-3",
+          "family": "input-control-family-2",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-2-4",
+          "family": "input-control-family-2",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-2-5",
+          "family": "input-control-family-2",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-3-1",
+          "family": "input-control-family-3",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-3-2",
+          "family": "input-control-family-3",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-3-3",
+          "family": "input-control-family-3",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-3-4",
+          "family": "input-control-family-3",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-3-5",
+          "family": "input-control-family-3",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-4-1",
+          "family": "input-control-family-4",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-4-2",
+          "family": "input-control-family-4",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-4-3",
+          "family": "input-control-family-4",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-4-4",
+          "family": "input-control-family-4",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-4-5",
+          "family": "input-control-family-4",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-5-1",
+          "family": "input-control-family-5",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-5-2",
+          "family": "input-control-family-5",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-5-3",
+          "family": "input-control-family-5",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-5-4",
+          "family": "input-control-family-5",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "input-control-5-5",
+          "family": "input-control-family-5",
+          "attack": false,
+          "detected": false
+        }
+      ]
+    },
+    {
+      "agent_id": "rubric_exploit_adversary",
+      "attack_count": 30,
+      "control_count": 25,
+      "attack_family_count": 6,
+      "control_family_count": 5,
+      "attack_recall": 1,
+      "control_false_positive_rate": 0,
+      "results": [
+        {
+          "case_id": "rubric-duplicate-id-1",
+          "family": "rubric-duplicate-id",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-duplicate-id-2",
+          "family": "rubric-duplicate-id",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-duplicate-id-3",
+          "family": "rubric-duplicate-id",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-duplicate-id-4",
+          "family": "rubric-duplicate-id",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-duplicate-id-5",
+          "family": "rubric-duplicate-id",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-total-mismatch-1",
+          "family": "rubric-total-mismatch",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-total-mismatch-2",
+          "family": "rubric-total-mismatch",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-total-mismatch-3",
+          "family": "rubric-total-mismatch",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-total-mismatch-4",
+          "family": "rubric-total-mismatch",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-total-mismatch-5",
+          "family": "rubric-total-mismatch",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-alias-collision-1",
+          "family": "rubric-alias-collision",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-alias-collision-2",
+          "family": "rubric-alias-collision",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-alias-collision-3",
+          "family": "rubric-alias-collision",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-alias-collision-4",
+          "family": "rubric-alias-collision",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-alias-collision-5",
+          "family": "rubric-alias-collision",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-calculation-no-steps-1",
+          "family": "rubric-calculation-no-steps",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-calculation-no-steps-2",
+          "family": "rubric-calculation-no-steps",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-calculation-no-steps-3",
+          "family": "rubric-calculation-no-steps",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-calculation-no-steps-4",
+          "family": "rubric-calculation-no-steps",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-calculation-no-steps-5",
+          "family": "rubric-calculation-no-steps",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-negative-deduction-1",
+          "family": "rubric-negative-deduction",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-negative-deduction-2",
+          "family": "rubric-negative-deduction",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-negative-deduction-3",
+          "family": "rubric-negative-deduction",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-negative-deduction-4",
+          "family": "rubric-negative-deduction",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-negative-deduction-5",
+          "family": "rubric-negative-deduction",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-empty-alias-1",
+          "family": "rubric-empty-alias",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-empty-alias-2",
+          "family": "rubric-empty-alias",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-empty-alias-3",
+          "family": "rubric-empty-alias",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-empty-alias-4",
+          "family": "rubric-empty-alias",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-empty-alias-5",
+          "family": "rubric-empty-alias",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "rubric-control-base-1",
+          "family": "rubric-control-base",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-base-2",
+          "family": "rubric-control-base",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-base-3",
+          "family": "rubric-control-base",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-base-4",
+          "family": "rubric-control-base",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-base-5",
+          "family": "rubric-control-base",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-semantic-policy-1",
+          "family": "rubric-control-semantic-policy",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-semantic-policy-2",
+          "family": "rubric-control-semantic-policy",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-semantic-policy-3",
+          "family": "rubric-control-semantic-policy",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-semantic-policy-4",
+          "family": "rubric-control-semantic-policy",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-semantic-policy-5",
+          "family": "rubric-control-semantic-policy",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-optional-point-1",
+          "family": "rubric-control-optional-point",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-optional-point-2",
+          "family": "rubric-control-optional-point",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-optional-point-3",
+          "family": "rubric-control-optional-point",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-optional-point-4",
+          "family": "rubric-control-optional-point",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-optional-point-5",
+          "family": "rubric-control-optional-point",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-valid-deduction-1",
+          "family": "rubric-control-valid-deduction",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-valid-deduction-2",
+          "family": "rubric-control-valid-deduction",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-valid-deduction-3",
+          "family": "rubric-control-valid-deduction",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-valid-deduction-4",
+          "family": "rubric-control-valid-deduction",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-valid-deduction-5",
+          "family": "rubric-control-valid-deduction",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-valid-essay-1",
+          "family": "rubric-control-valid-essay",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-valid-essay-2",
+          "family": "rubric-control-valid-essay",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-valid-essay-3",
+          "family": "rubric-control-valid-essay",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-valid-essay-4",
+          "family": "rubric-control-valid-essay",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "rubric-control-valid-essay-5",
+          "family": "rubric-control-valid-essay",
+          "attack": false,
+          "detected": false
+        }
+      ]
+    },
+    {
+      "agent_id": "evidence_integrity_adversary",
+      "attack_count": 30,
+      "control_count": 25,
+      "attack_family_count": 6,
+      "control_family_count": 5,
+      "attack_recall": 1,
+      "control_false_positive_rate": 0,
+      "results": [
+        {
+          "case_id": "evidence-hallucinated-1",
+          "family": "evidence-hallucinated",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-hallucinated-2",
+          "family": "evidence-hallucinated",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-hallucinated-3",
+          "family": "evidence-hallucinated",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-hallucinated-4",
+          "family": "evidence-hallucinated",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-hallucinated-5",
+          "family": "evidence-hallucinated",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-broken-link-1",
+          "family": "evidence-broken-link",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-broken-link-2",
+          "family": "evidence-broken-link",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-broken-link-3",
+          "family": "evidence-broken-link",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-broken-link-4",
+          "family": "evidence-broken-link",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-broken-link-5",
+          "family": "evidence-broken-link",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-duplicate-id-1",
+          "family": "evidence-duplicate-id",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-duplicate-id-2",
+          "family": "evidence-duplicate-id",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-duplicate-id-3",
+          "family": "evidence-duplicate-id",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-duplicate-id-4",
+          "family": "evidence-duplicate-id",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-duplicate-id-5",
+          "family": "evidence-duplicate-id",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-unknown-point-1",
+          "family": "evidence-unknown-point",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-unknown-point-2",
+          "family": "evidence-unknown-point",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-unknown-point-3",
+          "family": "evidence-unknown-point",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-unknown-point-4",
+          "family": "evidence-unknown-point",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-unknown-point-5",
+          "family": "evidence-unknown-point",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-score-mismatch-1",
+          "family": "evidence-score-mismatch",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-score-mismatch-2",
+          "family": "evidence-score-mismatch",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-score-mismatch-3",
+          "family": "evidence-score-mismatch",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-score-mismatch-4",
+          "family": "evidence-score-mismatch",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-score-mismatch-5",
+          "family": "evidence-score-mismatch",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-low-ocr-1",
+          "family": "evidence-low-ocr",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-low-ocr-2",
+          "family": "evidence-low-ocr",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-low-ocr-3",
+          "family": "evidence-low-ocr",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-low-ocr-4",
+          "family": "evidence-low-ocr",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-low-ocr-5",
+          "family": "evidence-low-ocr",
+          "attack": true,
+          "detected": true
+        },
+        {
+          "case_id": "evidence-control-base-1",
+          "family": "evidence-control-base",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-base-2",
+          "family": "evidence-control-base",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-base-3",
+          "family": "evidence-control-base",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-base-4",
+          "family": "evidence-control-base",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-base-5",
+          "family": "evidence-control-base",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-punctuation-1",
+          "family": "evidence-control-punctuation",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-punctuation-2",
+          "family": "evidence-control-punctuation",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-punctuation-3",
+          "family": "evidence-control-punctuation",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-punctuation-4",
+          "family": "evidence-control-punctuation",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-punctuation-5",
+          "family": "evidence-control-punctuation",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-single-point-1",
+          "family": "evidence-control-single-point",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-single-point-2",
+          "family": "evidence-control-single-point",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-single-point-3",
+          "family": "evidence-control-single-point",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-single-point-4",
+          "family": "evidence-control-single-point",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-single-point-5",
+          "family": "evidence-control-single-point",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-no-match-1",
+          "family": "evidence-control-no-match",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-no-match-2",
+          "family": "evidence-control-no-match",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-no-match-3",
+          "family": "evidence-control-no-match",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-no-match-4",
+          "family": "evidence-control-no-match",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-no-match-5",
+          "family": "evidence-control-no-match",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-nfkc-1",
+          "family": "evidence-control-nfkc",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-nfkc-2",
+          "family": "evidence-control-nfkc",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-nfkc-3",
+          "family": "evidence-control-nfkc",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-nfkc-4",
+          "family": "evidence-control-nfkc",
+          "attack": false,
+          "detected": false
+        },
+        {
+          "case_id": "evidence-control-nfkc-5",
+          "family": "evidence-control-nfkc",
+          "attack": false,
+          "detected": false
+        }
+      ]
+    }
+  ],
+  "gate": {
+    "level": "dev",
+    "passed": true,
+    "reasons": []
+  }
+}

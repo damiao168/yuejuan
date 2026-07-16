@@ -1,0 +1,81 @@
+{
+  "schema_version": "model-selection-report-v1",
+  "generated_at": "2026-07-15T03:17:32.186Z",
+  "synthetic_only": true,
+  "candidate_id": "qwen3_8b",
+  "model_info": {
+    "adapter": "local_llama_cpp",
+    "model_version": "Qwen/Qwen3-8B-GGUF:Q4_K_M",
+    "base_url": "http://127.0.0.1:8087/v1",
+    "mock": false
+  },
+  "dataset": {
+    "path": "evals/model-selection/fixed-synthetic-v1.jsonl",
+    "sha256": "8eb282b05bb5477ab2e06cb122a49ece91a11f260d6e9457cc23789167365d51",
+    "total_samples": 4
+  },
+  "quality": {
+    "sample_count": 1,
+    "mae": 0,
+    "rmse": 0,
+    "exact_agreement": 1,
+    "adjacent_agreement": 1,
+    "score_bias": 0,
+    "high_score_recall": 1,
+    "low_score_recall": 1,
+    "review_trigger_recall": 1,
+    "evidence_validity_rate": 1,
+    "rubric_compliance_rate": 1,
+    "schema_validity_rate": 1,
+    "prompt_injection_detection": 1,
+    "essay_discussion_review_rate": 1,
+    "ocr_low_confidence_review_rate": 1,
+    "no_score_above_max": true,
+    "mock_marked_rate": 0,
+    "evidence_verifier_ran": true
+  },
+  "operations": {
+    "completed": 1,
+    "failed": 3,
+    "first_pass_rate": 0.25,
+    "latency_ms_p50": 108322,
+    "latency_ms_p95": 108322,
+    "latency_ms_total": 108322
+  },
+  "results": [
+    {
+      "sample_id": "select-chinese-partial",
+      "expected_score": 1,
+      "suggested_score": 1,
+      "schema_valid": true,
+      "evidence_valid": true,
+      "latency_ms": 108322,
+      "adapter_run": {
+        "attempts": 1,
+        "repair_attempted": false,
+        "prior_error_codes": [],
+        "elapsed_ms": 108317
+      }
+    }
+  ],
+  "failures": [
+    {
+      "sample_id": "select-chinese-full",
+      "code": "RETRIES_EXHAUSTED",
+      "message": "local model failed after 2 attempts (INVALID_EVIDENCE_LINK)",
+      "latency_ms": 227057
+    },
+    {
+      "sample_id": "select-math-full",
+      "code": "RETRIES_EXHAUSTED",
+      "message": "local model failed after 2 attempts (TIMEOUT)",
+      "latency_ms": 240013
+    },
+    {
+      "sample_id": "select-math-wrong",
+      "code": "RETRIES_EXHAUSTED",
+      "message": "local model failed after 2 attempts (TIMEOUT)",
+      "latency_ms": 240041
+    }
+  ]
+}

@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("EDUGRADE_HTTP_PORT", "")
@@ -33,6 +36,42 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	}
 	if !cfg.MinIO.UseSSL {
 		t.Fatal("expected MinIO SSL to be true")
+	}
+}
+
+func TestLoadReadsGovernedAIServiceConfiguration(t *testing.T) {
+	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
+	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "test-service-token-with-at-least-32-characters")
+	t.Setenv("EDUGRADE_AI_SERVICE_TIMEOUT", "240s")
+	t.Setenv("EDUGRADE_AI_SERVICE_MAX_RETRIES", "0")
+	t.Setenv("EDUGRADE_AI_MODEL_VERSION", "model-v1")
+	t.Setenv("EDUGRADE_AI_PROMPT_VERSION", "prompt-v2")
+	t.Setenv("EDUGRADE_AI_MIN_CONFIDENCE", "0.75")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AIService.URL != "http://grading-agent:8100" || cfg.AIService.Timeout != 240*time.Second || cfg.AIService.MaxRetries != 0 || cfg.AIService.ModelVersion != "model-v1" || cfg.AIService.PromptVersion != "prompt-v2" || cfg.AIService.MinConfidence != 0.75 {
+		t.Fatalf("unexpected AI service configuration: %#v", cfg.AIService)
+	}
+}
+
+func TestLoadRejectsAIServiceWithoutStrongServiceToken(t *testing.T) {
+	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
+	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "short")
+	if _, err := Load(""); err == nil {
+		t.Fatal("configured AI service must require a strong service token")
+	}
+}
+
+func TestLoadRejectsHTTPWriteTimeoutShorterThanAIRequest(t *testing.T) {
+	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
+	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "test-service-token-with-at-least-32-characters")
+	t.Setenv("EDUGRADE_AI_SERVICE_TIMEOUT", "250s")
+	t.Setenv("EDUGRADE_HTTP_WRITE_TIMEOUT", "15s")
+	if _, err := Load(""); err == nil {
+		t.Fatal("HTTP write timeout must outlive the synchronous grading request")
 	}
 }
 
@@ -84,8 +123,21 @@ func TestLoadRejectsDevelopmentCredentialsInProduction(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsMissingAIServiceInProduction(t *testing.T) {
+	t.Setenv("EDUGRADE_ENV", "production")
+	t.Setenv("EDUGRADE_SESSION_COOKIE_SECURE", "true")
+	setSecureProductionEnvironment(t)
+	t.Setenv("EDUGRADE_AI_SERVICE_URL", "")
+
+	if _, err := Load(""); err == nil {
+		t.Fatal("production-like environments must not silently use the mock grading adapter")
+	}
+}
+
 func setSecureProductionEnvironment(t *testing.T) {
 	t.Helper()
+	t.Setenv("EDUGRADE_AI_SERVICE_URL", "https://grading-agent.internal")
+	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "production-service-token-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_POSTGRES_DSN", "postgres://edugrade:strong-password@db.internal:5432/edugrade?sslmode=require")
 	t.Setenv("EDUGRADE_MINIO_ACCESS_KEY", "production-access")
 	t.Setenv("EDUGRADE_MINIO_SECRET_KEY", "production-secret")

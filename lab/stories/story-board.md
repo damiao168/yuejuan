@@ -26,6 +26,27 @@
 | STORY-022 | Integration option selection | Done | `docs/grading-agent-integration-options.md` |
 | STORY-023 | Platform mock output eval compatibility | Done | `docs/platform-mock-output-eval-compatibility.md` |
 | STORY-024 | Risk flags naming standard | Done | `docs/risk-flags-naming-standard.md` |
-| STORY-025 | Rubric field extension proposal | Done | `docs/rubric-field-extension-proposal.md` |
+| STORY-025 / Story F | Rubric field extension proposal | Done | `docs/rubric-field-extension-proposal.md` |
 
-Next story: STORY-026, recommended candidate: Prompt injection defense migration proposal.
+## Finite Product Program
+
+This program supersedes the old open-ended `STORY-026` candidate. It ends at Story R and does not create another story automatically.
+
+| Story | Scope | Status | Verification |
+| --- | --- | --- | --- |
+| Story G | Product capability boundary and executable capability matrix | Done | `docs/product-capability-boundary.md`, `config/capability-matrix.json`, `tests/capabilities.test.js` |
+| Story H | Local model runtime and hardware baseline | Done | `docs/local-model-runtime-baseline.md`, `evals/reports/local-runtime-benchmark.json`, `tests/local-runtime.test.js` |
+| Story I | Real local model adapter and structured output | Done | `docs/local-model-adapter.md`, `evals/reports/local-adapter-smoke.json`, `tests/local-adapter.test.js` |
+| Story J | Dataset governance and grouped split | Done | `docs/dataset-governance.md`, `evals/governed/synthetic/manifest.json`, `tests/dataset-governance.test.js` |
+| Story K | Gold annotation, blind assignment, adjudication, and agreement | Done | `docs/gold-annotation-protocol.md`, `docs/blind-annotation-workflow.md`, `evals/reports/annotation-workflow-demo.json`, `tests/annotation-workflow.test.js` |
+| Story L | Fixed-set rule/4B/8B benchmark and model selection | Done | `docs/model-selection-protocol.md`, `evals/reports/model-selection-decision.json`, `tests/model-selection.test.js` |
+| Story M | Three offline adversarial agents | Done | `docs/adversarial-agent-suite.md`, `evals/reports/adversarial-suite.json`, `tests/adversarial.test.js` |
+| Story N | Calibration, fairness, and slice evaluation | Done | `docs/calibration-and-fairness.md`, `evals/reports/calibration-fairness.json`, `tests/calibration-fairness.test.js` |
+| Story O | Failure-driven prompt and rubric optimization | Done | `docs/prompt-rubric-optimization-v2.md`, `evals/reports/local-regression-v2.json`, `tests/local-adapter.test.js` |
+| Story P | Fine-tuning decision gate and optional QLoRA | Done: do not train | `docs/qlora-training-protocol.md`, `evals/reports/fine-tuning-decision.json`, `tests/fine-tuning-decision.test.js` |
+| Story Q | Pilot freeze package | Done: NOT_READY | `docs/pilot-freeze-package.md`, `evals/pilot/pilot-candidate-v1/manifest.json`, `tests/pilot-readiness.test.js` |
+| Story R | Lab graduation audit and platform handoff | Done | `docs/lab-graduation-audit.md`, `docs/platform-handoff-package.md`, `evals/reports/graduation-audit.json` |
+
+## Program End
+
+Story G-R is complete. No Story S is created. Final state: `LAB_IMPLEMENTATION_COMPLETE`, `PILOT_NOT_READY`. Future work is driven only by the four real-evidence Pilot blockers and requires explicit authorization for any main-project integration.

@@ -24,13 +24,17 @@ type Config struct {
 }
 
 type ServiceConfig struct {
-	Name             string
-	Environment      string
-	Host             string
-	Port             int
-	LogLevel         string
-	ReadinessTimeout time.Duration
-	ShutdownTimeout  time.Duration
+	Name              string
+	Environment       string
+	Host              string
+	Port              int
+	LogLevel          string
+	ReadinessTimeout  time.Duration
+	ShutdownTimeout   time.Duration
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
 }
 
 func (c ServiceConfig) Addr() string {
@@ -76,7 +80,13 @@ type QdrantConfig struct {
 }
 
 type AIServiceConfig struct {
-	URL string
+	URL           string
+	Token         string
+	Timeout       time.Duration
+	MaxRetries    int
+	ModelVersion  string
+	PromptVersion string
+	MinConfidence float64
 }
 
 type FileConfig struct {
@@ -111,13 +121,17 @@ func Load(envFile string) (Config, error) {
 
 	cfg := Config{
 		Service: ServiceConfig{
-			Name:             getEnv("EDUGRADE_SERVICE_NAME", "api-gateway"),
-			Environment:      environment,
-			Host:             getEnv("EDUGRADE_HTTP_HOST", "127.0.0.1"),
-			Port:             getEnvInt("EDUGRADE_HTTP_PORT", 8080),
-			LogLevel:         getEnv("EDUGRADE_LOG_LEVEL", "info"),
-			ReadinessTimeout: getEnvDuration("EDUGRADE_READINESS_TIMEOUT", 2*time.Second),
-			ShutdownTimeout:  getEnvDuration("EDUGRADE_SHUTDOWN_TIMEOUT", 10*time.Second),
+			Name:              getEnv("EDUGRADE_SERVICE_NAME", "api-gateway"),
+			Environment:       environment,
+			Host:              getEnv("EDUGRADE_HTTP_HOST", "127.0.0.1"),
+			Port:              getEnvInt("EDUGRADE_HTTP_PORT", 8080),
+			LogLevel:          getEnv("EDUGRADE_LOG_LEVEL", "info"),
+			ReadinessTimeout:  getEnvDuration("EDUGRADE_READINESS_TIMEOUT", 2*time.Second),
+			ShutdownTimeout:   getEnvDuration("EDUGRADE_SHUTDOWN_TIMEOUT", 10*time.Second),
+			ReadHeaderTimeout: getEnvDuration("EDUGRADE_HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+			ReadTimeout:       getEnvDuration("EDUGRADE_HTTP_READ_TIMEOUT", 15*time.Second),
+			WriteTimeout:      getEnvDuration("EDUGRADE_HTTP_WRITE_TIMEOUT", 300*time.Second),
+			IdleTimeout:       getEnvDuration("EDUGRADE_HTTP_IDLE_TIMEOUT", 60*time.Second),
 		},
 		Auth: AuthConfig{
 			SessionTTL:          getEnvDuration("EDUGRADE_SESSION_TTL", 8*time.Hour),
@@ -152,7 +166,13 @@ func Load(envFile string) (Config, error) {
 			APIKey: getEnv("EDUGRADE_QDRANT_API_KEY", ""),
 		},
 		AIService: AIServiceConfig{
-			URL: getEnv("EDUGRADE_AI_SERVICE_URL", ""),
+			URL:           getEnv("EDUGRADE_AI_SERVICE_URL", ""),
+			Token:         getEnv("EDUGRADE_AI_SERVICE_TOKEN", ""),
+			Timeout:       getEnvDuration("EDUGRADE_AI_SERVICE_TIMEOUT", 250*time.Second),
+			MaxRetries:    getEnvInt("EDUGRADE_AI_SERVICE_MAX_RETRIES", 1),
+			ModelVersion:  getEnv("EDUGRADE_AI_MODEL_VERSION", "Qwen/Qwen3-4B-GGUF:Q4_K_M"),
+			PromptVersion: getEnv("EDUGRADE_AI_PROMPT_VERSION", "subjective-local-structured-v2"),
+			MinConfidence: getEnvFloat("EDUGRADE_AI_MIN_CONFIDENCE", 0.8),
 		},
 		Files: FileConfig{
 			Bucket:            getEnv("EDUGRADE_FILE_BUCKET", "edugrade-files"),
@@ -185,10 +205,24 @@ func parseBarcodeKeys(raw string) map[string][]byte {
 }
 
 func validateProductionConfig(cfg Config) error {
+	if strings.TrimSpace(cfg.AIService.URL) != "" {
+		if len(cfg.AIService.Token) < 32 {
+			return fmt.Errorf("unsafe AI service configuration: EDUGRADE_AI_SERVICE_TOKEN must contain at least 32 characters")
+		}
+		if cfg.AIService.Timeout <= 0 || cfg.AIService.MaxRetries < 0 || cfg.AIService.MaxRetries > 1 || cfg.AIService.MinConfidence < 0 || cfg.AIService.MinConfidence > 1 {
+			return fmt.Errorf("invalid AI service timeout, retry, or confidence configuration")
+		}
+		if cfg.Service.WriteTimeout <= cfg.AIService.Timeout {
+			return fmt.Errorf("EDUGRADE_HTTP_WRITE_TIMEOUT must exceed EDUGRADE_AI_SERVICE_TIMEOUT")
+		}
+	}
 	if !isProductionLike(cfg.Service.Environment) {
 		return nil
 	}
 	var problems []string
+	if strings.TrimSpace(cfg.AIService.URL) == "" {
+		problems = append(problems, "EDUGRADE_AI_SERVICE_URL must be configured for production-like environments")
+	}
 	if !cfg.Auth.SessionCookieSecure {
 		problems = append(problems, "EDUGRADE_SESSION_COOKIE_SECURE must be true")
 	}
@@ -294,6 +328,18 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return fallback
 	}

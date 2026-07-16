@@ -1,0 +1,26 @@
+{
+  "schema_version": "annotation-roster-v1",
+  "workers": [
+    {
+      "worker_id": "teacher-a",
+      "roles": ["teacher"],
+      "active": true,
+      "subjects": ["biology"],
+      "grade_levels": ["junior_middle"]
+    },
+    {
+      "worker_id": "teacher-b",
+      "roles": ["teacher"],
+      "active": true,
+      "subjects": ["biology"],
+      "grade_levels": ["junior_middle"]
+    },
+    {
+      "worker_id": "adjudicator-c",
+      "roles": ["adjudicator"],
+      "active": true,
+      "subjects": ["biology"],
+      "grade_levels": ["junior_middle"]
+    }
+  ]
+}

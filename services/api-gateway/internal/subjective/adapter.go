@@ -18,6 +18,7 @@ func (a *MockLLMAdapter) Name() string {
 
 func (a *MockLLMAdapter) Grade(_ context.Context, input AdapterInput) (AdapterOutput, error) {
 	return AdapterOutput{
+		RequestID:      input.RequestID,
 		SuggestedScore: 0,
 		Confidence:     0.5,
 		MatchedPoints:  []grading.PointResult{},
@@ -31,6 +32,15 @@ func (a *MockLLMAdapter) Grade(_ context.Context, input AdapterInput) (AdapterOu
 		NeedsHumanReview: true,
 		StudentFeedback:  "MOCK: subjective AI feedback is not available from a real model in this environment.",
 		TeacherNote:      "MOCK LLM adapter returned a fixed low-confidence placeholder. Human review is required.",
+		ModelVersion:     input.ModelPolicy.ModelVersion,
+		PromptVersion:    input.ModelPolicy.PromptVersion,
+		RubricVersion:    input.Rubric.Version,
+		DeliveryMode:     "teacher_review",
+		Telemetry: AdapterTelemetry{
+			Adapter:         a.Name(),
+			Attempts:        1,
+			PriorErrorCodes: []string{},
+		},
 		RawOutput: map[string]any{
 			"adapter":        a.Name(),
 			"mock":           true,

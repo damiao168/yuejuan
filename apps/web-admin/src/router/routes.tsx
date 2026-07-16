@@ -20,6 +20,13 @@ import {
 } from "lucide-react";
 import type { ViewKey } from "../types";
 import { hasAnyPermission, hasEveryPermission, type SessionUser } from "../auth/session";
+import type { ProductExperience } from "./experience";
+import { canonicalPathFromPath } from "./experience";
+
+interface RoutePresentation {
+  title: string;
+  group: string;
+}
 
 export interface AppRoute {
   key: ViewKey | "permissions" | "settings";
@@ -34,12 +41,23 @@ export interface AppRoute {
   mock: boolean;
   productionReady: boolean;
   replacementPath?: string;
+  experiences: Partial<Record<ProductExperience, RoutePresentation>>;
+  navigationExperiences?: ProductExperience[];
 }
 
 export const routes: AppRoute[] = [
-  { key: "dashboard", path: "/dashboard", title: "工作台", group: "工作", icon: <Home size={18} />, permissions: [], mock: false, productionReady: true },
-  { key: "exams", path: "/exams", title: "考试", group: "工作", icon: <ClipboardCheck size={18} />, permissions: ["exam:manage"], mock: false, productionReady: true },
-  { key: "papers", path: "/papers", title: "试卷管理", group: "考试配置", icon: <FileText size={18} />, permissions: ["exam:manage", "file:manage"], navigation: false, mock: false, productionReady: true },
+  {
+    key: "dashboard", path: "/dashboard", title: "运营总览", group: "工作台", icon: <Home size={18} />, permissions: [], mock: false, productionReady: true,
+    experiences: { admin: { title: "运营总览", group: "工作台" }, teacher: { title: "我的工作", group: "工作台" } }
+  },
+  {
+    key: "exams", path: "/exams", title: "考试管理", group: "考试运营", icon: <ClipboardCheck size={18} />, permissions: ["exam:manage"], mock: false, productionReady: true,
+    experiences: { admin: { title: "考试管理", group: "考试运营" }, teacher: { title: "我的考试", group: "教学工作" } }
+  },
+  {
+    key: "papers", path: "/papers", title: "试卷管理", group: "考试运营", icon: <FileText size={18} />, permissions: ["exam:manage", "file:manage"], navigation: false, mock: false, productionReady: true,
+    experiences: { admin: { title: "试卷管理", group: "考试运营" }, teacher: { title: "试卷与评分标准", group: "教学工作" } }, navigationExperiences: ["teacher"]
+  },
   {
     key: "capture",
     path: "/capture",
@@ -48,7 +66,8 @@ export const routes: AppRoute[] = [
     icon: <ScanLine size={18} />,
     permissions: ["submission:manage", "file:manage", "ocr:manage", "segment:manage"],
     mock: false,
-    productionReady: true
+    productionReady: true,
+    experiences: { admin: { title: "答卷采集", group: "考试运营" } }
   },
   {
     key: "grading",
@@ -59,7 +78,8 @@ export const routes: AppRoute[] = [
     permissions: [],
     anyPermissions: ["review:manage", "review:work"],
     mock: false,
-    productionReady: true
+    productionReady: true,
+    experiences: { admin: { title: "阅卷运营", group: "阅卷与质量" }, teacher: { title: "我的阅卷", group: "阅卷工作" } }
   },
   {
     key: "review",
@@ -70,18 +90,49 @@ export const routes: AppRoute[] = [
     permissions: ["review:manage"],
     mock: true,
     productionReady: false,
-    replacementPath: "/grading"
+    replacementPath: "/grading",
+    experiences: { teacher: { title: "我的复核", group: "阅卷工作" } }
   },
-  { key: "arbitration", path: "/arbitration", title: "质量", group: "业务", icon: <Gavel size={18} />, permissions: [], anyPermissions: ["arbitration:manage", "arbitration:work"], mock: false, productionReady: true },
-  { key: "scores", path: "/scores", title: "发布", group: "业务", icon: <Gauge size={18} />, permissions: ["score:manage", "exam:manage", "submission:manage"], mock: false, productionReady: true },
-  { key: "reports", path: "/reports", title: "报告", group: "业务", icon: <BarChart3 size={18} />, permissions: ["report:read"], mock: false, productionReady: true },
-  { key: "quality", path: "/quality", title: "质量控制", group: "结果", icon: <Activity size={18} />, permissions: ["quality:read"], mock: true, productionReady: false },
-  { key: "appeals", path: "/appeals", title: "申诉", group: "业务", icon: <Inbox size={18} />, permissions: ["appeal:read"], mock: false, productionReady: true },
-  { key: "organization", path: "/organization/setup", title: "组织与用户", group: "管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: false, productionReady: true },
-  { key: "permissions", path: "/permissions", title: "用户权限", group: "治理", icon: <Users size={18} />, permissions: ["org:manage"], mock: true, productionReady: false },
-  { key: "settings", path: "/settings", title: "系统设置", group: "治理", icon: <Settings size={18} />, permissions: ["system:manage"], mock: true, productionReady: false },
-  { key: "systemStatus", path: "/system/status", title: "系统运维", group: "管理", icon: <ServerCog size={18} />, permissions: ["system:read"], allowedRoles: ["platform_admin"], mock: false, productionReady: true },
-  { key: "audit", path: "/audit", title: "审计日志", group: "管理", icon: <ScrollText size={18} />, permissions: ["audit:read"], mock: false, productionReady: true }
+  {
+    key: "arbitration", path: "/arbitration", title: "质量与仲裁", group: "阅卷与质量", icon: <Gavel size={18} />, permissions: [], anyPermissions: ["arbitration:manage", "arbitration:work"], mock: false, productionReady: true,
+    experiences: { admin: { title: "质量与仲裁", group: "阅卷与质量" }, teacher: { title: "我的复核", group: "阅卷工作" } }
+  },
+  {
+    key: "scores", path: "/scores", title: "成绩发布", group: "结果管理", icon: <Gauge size={18} />, permissions: ["score:manage", "exam:manage", "submission:manage"], mock: false, productionReady: true,
+    experiences: { admin: { title: "成绩发布", group: "结果管理" }, teacher: { title: "班级成绩", group: "教学结果" } }
+  },
+  {
+    key: "reports", path: "/reports", title: "统计报告", group: "结果管理", icon: <BarChart3 size={18} />, permissions: ["report:read"], mock: false, productionReady: true,
+    experiences: { admin: { title: "统计报告", group: "结果管理" }, teacher: { title: "班级学情", group: "教学结果" } }
+  },
+  {
+    key: "quality", path: "/quality", title: "质量控制", group: "阅卷与质量", icon: <Activity size={18} />, permissions: ["quality:read"], mock: true, productionReady: false,
+    experiences: { admin: { title: "质量控制", group: "阅卷与质量" } }
+  },
+  {
+    key: "appeals", path: "/appeals", title: "申诉管理", group: "结果管理", icon: <Inbox size={18} />, permissions: ["appeal:read"], mock: false, productionReady: true,
+    experiences: { admin: { title: "申诉管理", group: "结果管理" }, teacher: { title: "申诉处理", group: "教学结果" } }
+  },
+  {
+    key: "organization", path: "/organization/setup", title: "组织与用户", group: "平台治理", icon: <Users size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
+    experiences: { admin: { title: "组织与用户", group: "平台治理" } }
+  },
+  {
+    key: "permissions", path: "/permissions", title: "用户权限", group: "平台治理", icon: <Users size={18} />, permissions: ["org:manage"], mock: true, productionReady: false,
+    experiences: { admin: { title: "用户权限", group: "平台治理" } }
+  },
+  {
+    key: "settings", path: "/settings", title: "系统设置", group: "平台治理", icon: <Settings size={18} />, permissions: ["system:manage"], mock: true, productionReady: false,
+    experiences: { admin: { title: "系统设置", group: "平台治理" } }
+  },
+  {
+    key: "systemStatus", path: "/system/status", title: "系统运维", group: "平台治理", icon: <ServerCog size={18} />, permissions: ["system:read"], allowedRoles: ["platform_admin"], mock: false, productionReady: true,
+    experiences: { admin: { title: "系统运维", group: "平台治理" } }
+  },
+  {
+    key: "audit", path: "/audit", title: "操作审计", group: "平台治理", icon: <ScrollText size={18} />, permissions: ["audit:read"], mock: false, productionReady: true,
+    experiences: { admin: { title: "操作审计", group: "平台治理" } }
+  }
 ];
 
 export const examWorkspaceRoute: AppRoute = {
@@ -93,8 +144,18 @@ export const examWorkspaceRoute: AppRoute = {
   permissions: ["exam:manage"],
   navigation: false,
   mock: false,
-  productionReady: true
+  productionReady: true,
+  experiences: { admin: { title: "考试工作区", group: "考试运营" }, teacher: { title: "考试工作区", group: "教学工作" } }
 };
+
+export const examWorkspaceSections: Record<ProductExperience, readonly string[]> = {
+  admin: ["overview", "students", "paper", "questions", "template", "capture", "processing", "grading", "quality", "scores", "appeals", "reports", "settings"],
+  teacher: ["overview", "paper", "questions", "grading", "quality", "scores", "appeals", "reports"]
+};
+
+export function hasExamWorkspaceSectionAccess(experience: ProductExperience, section: string): boolean {
+  return examWorkspaceSections[experience].includes(section);
+}
 
 export const forbiddenRoute: AppRoute = {
   key: "system",
@@ -104,7 +165,8 @@ export const forbiddenRoute: AppRoute = {
   icon: <LockKeyhole size={18} />,
   permissions: [],
   mock: false,
-  productionReady: true
+  productionReady: true,
+  experiences: { admin: { title: "无权限", group: "系统" }, teacher: { title: "无权限", group: "系统" } }
 };
 
 export const notFoundRoute: AppRoute = {
@@ -115,7 +177,8 @@ export const notFoundRoute: AppRoute = {
   icon: <Layers3 size={18} />,
   permissions: [],
   mock: false,
-  productionReady: true
+  productionReady: true,
+  experiences: { admin: { title: "未找到", group: "系统" }, teacher: { title: "未找到", group: "系统" } }
 };
 
 export function mockRoutesEnabled(): boolean {
@@ -126,33 +189,41 @@ export function isRouteVisible(route: AppRoute): boolean {
   return route.productionReady || mockRoutesEnabled();
 }
 
-export function visibleRoutes(): AppRoute[] {
-  return routes.filter((route) => isRouteVisible(route) && route.navigation !== false);
+export function routePresentation(route: AppRoute, experience: ProductExperience): RoutePresentation {
+  return route.experiences[experience] ?? { title: route.title, group: route.group };
 }
 
-export function hasRouteAccess(user: SessionUser | null, route: AppRoute): boolean {
-  return hasEveryPermission(user, route.permissions)
+export function visibleRoutes(experience: ProductExperience): AppRoute[] {
+  return routes.filter((route) => isRouteVisible(route)
+    && Boolean(route.experiences[experience])
+    && (route.navigation !== false || route.navigationExperiences?.includes(experience)));
+}
+
+export function hasRouteAccess(user: SessionUser | null, route: AppRoute, experience: ProductExperience): boolean {
+  return Boolean(route.experiences[experience])
+    && hasEveryPermission(user, route.permissions)
     && (!route.anyPermissions || hasAnyPermission(user, route.anyPermissions))
     && (!route.allowedRoles || Boolean(user && route.allowedRoles.some((role) => user.roles.includes(role))));
 }
 
 export function routeFromPath(pathname: string): AppRoute {
-  if (examWorkspaceFromPath(pathname)) {
+  const canonicalPath = canonicalPathFromPath(pathname);
+  if (examWorkspaceFromPath(canonicalPath)) {
     return examWorkspaceRoute;
   }
-  return routes.filter(isRouteVisible).find((route) => route.path === pathname) ?? notFoundRoute;
+  return routes.filter(isRouteVisible).find((route) => route.path === canonicalPath) ?? notFoundRoute;
 }
 
 export function examWorkspaceFromPath(pathname: string): { examId: string; section: string } | null {
-  const match = pathname.match(/^\/exams\/([^/]+)\/([^/?]+)$/);
+  const match = canonicalPathFromPath(pathname).match(/^\/exams\/([^/]+)\/([^/?]+)$/);
   if (!match) {
     return null;
   }
   return { examId: decodeURIComponent(match[1]), section: match[2] };
 }
 
-export function routeGroups() {
-  return Array.from(new Set(visibleRoutes().map((route) => route.group)));
+export function routeGroups(experience: ProductExperience) {
+  return Array.from(new Set(visibleRoutes(experience).map((route) => routePresentation(route, experience).group)));
 }
 
 export function pathFromHash(): string {

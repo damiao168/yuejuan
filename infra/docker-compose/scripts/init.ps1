@@ -58,9 +58,9 @@ try {
 
   $appArgs = @("up", "-d")
   if (-not $SkipBuild) { $appArgs += "--build" }
-  $appArgs += @("api-gateway", "web-admin", "ai-services-placeholder", "nginx")
+  $appArgs += @("grading-agent", "api-gateway", "web-admin", "nginx")
   Invoke-Compose -Arguments $appArgs
-  foreach ($service in @("api-gateway", "web-admin", "ai-services-placeholder", "nginx")) { Wait-ComposeService $service 300 }
+  foreach ($service in @("grading-agent", "api-gateway", "web-admin", "nginx")) { Wait-ComposeService $service 300 }
 
   if ($BootstrapAdmin) {
     if ([string]::IsNullOrWhiteSpace($env:EDUGRADE_BOOTSTRAP_PASSWORD)) {

@@ -1,0 +1,12 @@
+{
+  "schema_version": "prompt-optimization-history-v1",
+  "iterations": [
+    {
+      "iteration_id": "prompt-local-structured-v2",
+      "evaluated_on": "synthetic-regression-v2",
+      "material_improvement": true,
+      "regression_passed": true,
+      "evidence_report": "evals/reports/local-regression-v2.json"
+    }
+  ]
+}

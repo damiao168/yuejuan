@@ -42,7 +42,7 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	db := e2eOpenPostgresTestDB(t, dsn)
 	e2eApplyPostgresMigrations(t, db)
-	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin", "teacher", "student"})
+	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin", "teacher", "arbitrator", "student"})
 	e2eActivatePostgresUsers(t, db, "platform", []string{"platform_admin"})
 	router := e2ePostgresRouter(db)
 	suffix := time.Now().UTC().Format("20060102150405.000000000")
@@ -51,6 +51,8 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	adminToken := e2eLoginWithTenant(t, router, "demo", "tenant_admin", "ChangeMe123!")
 	teacherID := e2eLookupUserID(t, db, "demo", "teacher")
 	teacherToken := e2eLoginWithTenant(t, router, "demo", "teacher", "ChangeMe123!")
+	appealReviewerID := e2eLookupUserID(t, db, "demo", "arbitrator")
+	appealReviewerToken := e2eLoginWithTenant(t, router, "demo", "arbitrator", "ChangeMe123!")
 
 	tenant := e2ePostJSON(t, router, http.MethodPost, "/api/v1/tenants", platformToken, `{"name":"Story 041 Synthetic Tenant `+suffix+`","code":"story041-`+suffix+`"}`, http.StatusCreated)["tenant"].(map[string]any)
 	if tenant["status"] != "active" {
@@ -139,12 +141,14 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	finalID := e2eString(t, studentGrade["items"].([]any)[0].(map[string]any), "id")
 	appealResp := e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals", studentToken, `{"exam_id":"`+examID+`","student_id":"`+studentID+`","target_type":"question","final_grade_id":"`+finalID+`","reason":"Story 041 synthetic appeal"}`, http.StatusCreated)["appeal"].(map[string]any)
 	appealID := e2eString(t, appealResp, "id")
-	appealReviewed := e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/review", teacherToken, `{"status":"score_adjusted","reason":"Story 041 synthetic appeal adjustment","adjusted_score":5}`, http.StatusOK)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/assign", adminToken, `{"assigned_to":"`+appealReviewerID+`"}`, http.StatusOK)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/recommendation", appealReviewerToken, `{"recommendation":"adjust_score","reason":"Story 041 synthetic independent appeal review","recommended_score":5}`, http.StatusOK)
+	appealReviewed := e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/review", adminToken, `{"status":"score_adjusted","reason":"Story 041 synthetic appeal adjustment","adjusted_score":5}`, http.StatusOK)
 	if appealReviewed["score_adjustment"] == nil {
 		t.Fatalf("PostgreSQL appeal review should create score adjustment: %#v", appealReviewed)
 	}
 	audits := e2eGetJSON(t, router, "/api/v1/audit-logs?limit=200", adminToken, http.StatusOK)["audit_logs"].([]any)
-	e2eAssertAuditActions(t, audits, []string{"score.published", "appeal.reviewed", "review.human_grade_submitted"})
+	e2eAssertAuditActions(t, audits, []string{"score.published", "appeal.assigned", "appeal.teacher_recommendation_submitted", "appeal.reviewed", "review.human_grade_submitted"})
 }
 
 func e2ePostgresRouter(db *sql.DB) http.Handler {

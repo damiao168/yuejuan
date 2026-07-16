@@ -30,6 +30,7 @@ import {
   type ReportMetric
 } from "../api/reports";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 
 interface LearningReportsPageProps {
@@ -653,13 +654,12 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
                 <p>{questions.length} 道题目分析</p>
               </div>
             </div>
-            <Table
+            <ResponsiveTable
               rowKey="question_id"
               size="small"
               columns={questionColumns}
               dataSource={questions}
               pagination={{ pageSize: 6 }}
-              scroll={{ x: 760 }}
               locale={{ emptyText: <EmptyState title="暂无题目明细" description="当前报告 API 没有返回题目分析。" /> }}
             />
           </section>
@@ -671,13 +671,12 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
                 <p>{classReports.length} 个班级报告</p>
               </div>
             </div>
-            <Table
+            <ResponsiveTable
               rowKey="class_id"
               size="small"
               columns={classColumns}
               dataSource={classReports}
               pagination={false}
-              scroll={{ x: 620 }}
               locale={{ emptyText: <EmptyState title="暂无班级明细" description="当前报告 API 没有返回班级报告。" /> }}
             />
           </section>
@@ -689,13 +688,12 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
                 <p>来自题目错误线索或班级高频错题。</p>
               </div>
             </div>
-            <Table
+            <ResponsiveTable
               rowKey="key"
               size="small"
               columns={errorColumns}
               dataSource={errorRows}
               pagination={false}
-              scroll={{ x: 640 }}
               locale={{ emptyText: <EmptyState title="暂无高频错误" description="当前报告 API 没有返回错误线索或高频错题。" /> }}
             />
           </section>

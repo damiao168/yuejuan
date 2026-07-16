@@ -38,12 +38,21 @@ $requiredKeys = @(
   "EDUGRADE_REDIS_PASSWORD",
   "EDUGRADE_MINIO_ACCESS_KEY",
   "EDUGRADE_MINIO_SECRET_KEY",
-  "EDUGRADE_FILE_BUCKET"
+  "EDUGRADE_FILE_BUCKET",
+  "EDUGRADE_AI_SERVICE_URL",
+  "EDUGRADE_AI_SERVICE_TOKEN",
+  "EDUGRADE_AI_MODEL_VERSION",
+  "EDUGRADE_AI_PROMPT_VERSION",
+  "EDUGRADE_GRADING_MODEL_BASE_URL",
+  "EDUGRADE_GRADING_MODEL_API_KEY"
 )
 foreach ($key in $requiredKeys) {
   if (-not $envValues.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($envValues[$key])) {
     throw "Required deployment setting is missing: $key"
   }
+}
+if ($envValues["EDUGRADE_AI_SERVICE_TOKEN"].Length -lt 32) {
+  throw "EDUGRADE_AI_SERVICE_TOKEN must contain at least 32 characters."
 }
 
 $localEnvironments = @("local", "development", "dev", "test")

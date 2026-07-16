@@ -1,0 +1,53 @@
+{
+  "schema_version": "governed-dataset-manifest-v1",
+  "generated_at": "2026-07-15T07:13:47.064Z",
+  "input_file": "governable-en.jsonl",
+  "input_path": ".downloads/jorgpt-18981627/governable-en.jsonl",
+  "input_sha256": "bdf1b59285b39b4d307d8f29e9c04690493b3548224a85e6e9a728297ba38d9f",
+  "output_dir": ".downloads/jorgpt-18981627/governed",
+  "source": {
+    "source_id": "jorgpt_zenodo_18981627_en",
+    "license_id": "CC-BY-4.0",
+    "intended_use": "evaluation",
+    "evidence_scope": "external_real_benchmark"
+  },
+  "total_records": 3041,
+  "unique_question_rubric_groups": 50,
+  "split_seed": "edugrade-group-split-v1",
+  "split_ratios": {
+    "train": 0.7,
+    "validation": 0.15,
+    "test": 0.15
+  },
+  "split_group_counts": {
+    "train": 34,
+    "validation": 8,
+    "test": 8
+  },
+  "files": {
+    "train": {
+      "file": "train.jsonl",
+      "path": ".downloads/jorgpt-18981627/governed/train.jsonl",
+      "records": 2133,
+      "sha256": "9a82c0db2d00f2eadcdd023ed02228208841fdc50666cf29a9ce8563ca91741a"
+    },
+    "validation": {
+      "file": "validation.jsonl",
+      "path": ".downloads/jorgpt-18981627/governed/validation.jsonl",
+      "records": 456,
+      "sha256": "4330259258b73444593c0efa48ea00f270d2734a4e1e1d88cf13a090fba919a7"
+    },
+    "test": {
+      "file": "test.jsonl",
+      "path": ".downloads/jorgpt-18981627/governed/test.jsonl",
+      "records": 452,
+      "sha256": "c98c75eb49e13d15da789890d8364794c2c3524e86734210c6301891aa80f441"
+    }
+  },
+  "leakage_audit": {
+    "passed": true,
+    "leaked_groups": [],
+    "unique_groups": 50
+  },
+  "privacy_scan_passed": true
+}

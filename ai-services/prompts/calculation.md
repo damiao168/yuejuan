@@ -1,0 +1,1 @@
+Score calculation answers by result, steps, units, and numeric tolerance as defined by the Rubric. Verify each claimed result against the actual expression in the answer. Never award a result point when the answer gives a contradictory value. A correct result without required steps does not receive full credit unless the Rubric allows it.

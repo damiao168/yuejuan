@@ -1,0 +1,17 @@
+{
+  "schema_version": "calibration-gates-v1",
+  "dev": {
+    "minimum_evaluation_records": 8,
+    "maximum_ece": 0.35,
+    "maximum_brier_score": 0.35,
+    "maximum_slice_nmae_gap": 0.6,
+    "minimum_records_per_slice": 2
+  },
+  "pilot": {
+    "minimum_evaluation_records": 500,
+    "maximum_ece": 0.08,
+    "maximum_brier_score": 0.12,
+    "maximum_slice_nmae_gap": 0.03,
+    "minimum_records_per_slice": 50
+  }
+}

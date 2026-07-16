@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/config"
@@ -41,10 +40,10 @@ func main() {
 	httpServer := &http.Server{
 		Addr:              cfg.Service.Addr(),
 		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		ReadHeaderTimeout: cfg.Service.ReadHeaderTimeout,
+		ReadTimeout:       cfg.Service.ReadTimeout,
+		WriteTimeout:      cfg.Service.WriteTimeout,
+		IdleTimeout:       cfg.Service.IdleTimeout,
 		MaxHeaderBytes:    cfg.Security.MaxHeaderBytes,
 	}
 

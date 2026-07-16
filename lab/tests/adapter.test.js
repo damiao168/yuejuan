@@ -22,6 +22,10 @@ test("openai-compatible adapter fails clearly without env", () => {
   assert.throws(() => new OpenAICompatibleGradingAdapter({}), /GRADING_OPENAI_API_KEY/);
 });
 
-test("local adapter fails clearly while placeholder is not configured", () => {
-  assert.throws(() => new LocalModelAdapter(), /placeholder/);
+test("local adapter exposes the verified llama.cpp model identity", () => {
+  const adapter = new LocalModelAdapter({ fetchImpl: async () => { throw new Error("not called"); } });
+  assert.equal(adapter.get_model_info().adapter, "local_llama_cpp");
+  assert.equal(adapter.get_model_info().mock, false);
+  assert.equal(adapter.supports_structured_output(), true);
+  assert.equal(adapter.supports_vision(), false);
 });

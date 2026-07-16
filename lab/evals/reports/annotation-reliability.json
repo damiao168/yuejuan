@@ -1,0 +1,20 @@
+{
+  "schema_version": "annotation-reliability-report-v1",
+  "generated_at": "2026-07-15T02:38:08.371Z",
+  "synthetic_only": true,
+  "metrics": {
+    "double_scored_count": 3,
+    "qwk": 0.8,
+    "exact_agreement": 0.6666666666666666,
+    "adjacent_agreement": 0.6666666666666666,
+    "normalized_mae": 0.16666666666666666,
+    "normalized_score_bias_label2_minus_label1": -0.16666666666666666,
+    "point_agreement": 0.8333333333333334,
+    "adjudication_rate": 0.3333333333333333
+  },
+  "gate": {
+    "level": "dev",
+    "passed": true,
+    "reasons": []
+  }
+}

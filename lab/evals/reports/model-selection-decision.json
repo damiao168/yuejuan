@@ -1,0 +1,53 @@
+{
+  "generated_at": "2026-07-15T06:29:55.445Z",
+  "schema_version": "model-selection-decision-v1",
+  "synthetic_only": true,
+  "evidence_scope": "synthetic_development",
+  "dataset_source_id": "lab_synthetic",
+  "dataset_sha256": "8eb282b05bb5477ab2e06cb122a49ece91a11f260d6e9457cc23789167365d51",
+  "candidates": [
+    {
+      "candidate_id": "rules_alias",
+      "role": "deterministic_reference",
+      "eligible": false,
+      "completion_rate": 1,
+      "failures": 0,
+      "mae_completed_samples": 0,
+      "exact_agreement_completed_samples": 1,
+      "schema_validity_completed_samples": 1,
+      "evidence_validity_completed_samples": 1,
+      "p95_latency_ms": 4
+    },
+    {
+      "candidate_id": "qwen3_4b",
+      "role": "llm_candidate",
+      "eligible": true,
+      "completion_rate": 1,
+      "failures": 0,
+      "mae_completed_samples": 0.5,
+      "exact_agreement_completed_samples": 0.75,
+      "schema_validity_completed_samples": 1,
+      "evidence_validity_completed_samples": 1,
+      "p95_latency_ms": 106768
+    },
+    {
+      "candidate_id": "qwen3_8b",
+      "role": "llm_candidate",
+      "eligible": false,
+      "completion_rate": 0.25,
+      "failures": 3,
+      "mae_completed_samples": 0,
+      "exact_agreement_completed_samples": 1,
+      "schema_validity_completed_samples": 1,
+      "evidence_validity_completed_samples": 1,
+      "p95_latency_ms": 108322
+    }
+  ],
+  "selected_local_llm": "qwen3_4b",
+  "decision_status": "preliminary_synthetic_baseline",
+  "constraints": [
+    "Quality metrics cover completed samples only; completion rate is a separate eligibility gate.",
+    "Deterministic alias rules are a reference, not an LLM candidate.",
+    "Synthetic selection must be repeated on governed real Gold data before pilot release."
+  ]
+}

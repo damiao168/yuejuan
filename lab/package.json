@@ -8,6 +8,33 @@
     "test": "node --test tests/*.test.js",
     "eval": "node scripts/run-eval.js --dataset synthetic --adapter mock",
     "gate:dev": "node scripts/check-gate.js --report evals/reports/latest-report.json --level dev",
-    "gate:pilot": "node scripts/check-gate.js --report evals/reports/latest-report.json --level pilot"
+    "gate:pilot": "node scripts/check-gate.js --report evals/reports/latest-report.json --level pilot",
+    "runtime:prepare": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-local-runtime.ps1",
+    "runtime:check": "node scripts/check-local-runtime.js --full-hash",
+    "benchmark:local": "node scripts/benchmark-local-model.js",
+    "server:local:start": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-local-server.ps1",
+    "server:local:stop": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/stop-local-server.ps1",
+    "smoke:local": "node scripts/smoke-local-adapter.js",
+    "dataset:govern": "node scripts/govern-dataset.js",
+    "dataset:jorgpt:prepare": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-jorgpt-dataset.ps1",
+    "dataset:jorgpt:import": "node scripts/import-jorgpt.js",
+    "dataset:jorgpt:govern": "node scripts/govern-dataset.js --input .downloads/jorgpt-18981627/governable-en.jsonl --source jorgpt_zenodo_18981627_en --out .downloads/jorgpt-18981627/governed --use evaluation --manifest evals/governed/external/jorgpt-18981627/manifest.json",
+    "annotations:gold": "node scripts/build-gold-dataset.js",
+    "annotations:workflow": "node scripts/annotation-workflow.js",
+    "annotations:workflow:demo": "node scripts/run-annotation-workflow-demo.js",
+    "model:prepare": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-model-candidate.ps1",
+    "model:select": "node scripts/run-model-selection.js",
+    "benchmark:jorgpt:rules": "node scripts/run-model-selection.js --dataset .downloads/jorgpt-18981627/governed/test.jsonl --source jorgpt_zenodo_18981627_en --candidate rules_alias --out evals/reports/jorgpt-rules-baseline.json",
+    "benchmark:jorgpt:4b:smoke": "node scripts/run-model-selection.js --dataset .downloads/jorgpt-18981627/governed/test.jsonl --source jorgpt_zenodo_18981627_en --candidate qwen3_4b --limit 3 --out evals/reports/jorgpt-qwen3_4b-smoke.json",
+    "model:compare": "node scripts/compare-model-selection.js",
+    "adversarial": "node scripts/run-adversarial.js",
+    "calibration": "node scripts/run-calibration-fairness.js",
+    "regression:local:v2": "node scripts/run-local-regression-v2.js",
+    "training:decision": "node scripts/check-fine-tuning-decision.js",
+    "pilot:freeze": "node scripts/build-pilot-package.js",
+    "audit:graduation": "node scripts/run-graduation-audit.js"
+  },
+  "dependencies": {
+    "csv-parse": "5.6.0"
   }
 }

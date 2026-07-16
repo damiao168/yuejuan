@@ -40,6 +40,7 @@ import {
   type ValidationResult
 } from "../api/papers";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
 
@@ -629,13 +630,12 @@ export function PaperRubricPage({
                 <p>{papers.length} 个版本</p>
               </div>
             </div>
-            <Table<PaperVersion>
+            <ResponsiveTable<PaperVersion>
               rowKey="id"
               dataSource={papers}
               columns={paperColumns}
               size="middle"
               pagination={false}
-              scroll={{ x: "max-content" }}
               locale={{ emptyText: <EmptyState title="暂无试卷文件" description="上传后会显示真实试卷版本。" /> }}
             />
           </section>
@@ -806,7 +806,7 @@ export function PaperRubricPage({
                   </Space>
                 </div>
                 {scoreMismatch ? <Alert type="error" showIcon message="Rubric 分值不匹配" description="采分点总分必须等于题目分值，当前不会提交后端。" /> : null}
-                <Table<RubricPoint> rowKey="id" dataSource={rubricPoints} columns={rubricColumns} pagination={false} scroll={{ x: "max-content" }} size="middle" />
+                <ResponsiveTable<RubricPoint> rowKey="id" dataSource={rubricPoints} columns={rubricColumns} pagination={false} size="middle" />
                 <div className="form-grid rubric-json-grid">
                   <label>
                     <span>扣分点 JSON</span>

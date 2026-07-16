@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
-import { Avatar, Breadcrumb, Button, ConfigProvider, Dropdown, Layout, Menu, Space, theme } from "antd";
-import { ArrowLeft, ChevronDown, UserRound } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Avatar, Breadcrumb, Button, ConfigProvider, Drawer, Dropdown, Grid, Layout, Menu, Segmented, Space, theme } from "antd";
+import { ArrowLeft, ChevronDown, Menu as MenuIcon, UserRound } from "lucide-react";
 import type { SessionUser } from "../auth/session";
 import type { AppRoute } from "../router/routes";
-import { hasRouteAccess, routeGroups, visibleRoutes } from "../router/routes";
+import { hasRouteAccess, routeGroups, routePresentation, visibleRoutes } from "../router/routes";
+import { experienceLabel, type ProductExperience } from "../router/experience";
 import { MockBadge } from "./MockBadge";
 
 const { Header, Sider, Content } = Layout;
@@ -11,28 +12,38 @@ const { Header, Sider, Content } = Layout;
 export function AppLayout({
   user,
   currentRoute,
+  experience,
+  availableExperiences,
   children,
   onNavigate,
+  onExperienceChange,
   onLogout,
   immersive = false
 }: {
   user: SessionUser;
   currentRoute: AppRoute;
+  experience: ProductExperience;
+  availableExperiences: ProductExperience[];
   children: ReactNode;
   onNavigate: (path: string) => void;
+  onExperienceChange: (experience: ProductExperience) => void;
   onLogout: () => void;
   immersive?: boolean;
 }) {
-  const permittedRoutes = visibleRoutes().filter((route) => hasRouteAccess(user, route));
+  const screens = Grid.useBreakpoint();
+  const desktopNavigation = Boolean(screens.lg);
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const permittedRoutes = visibleRoutes(experience).filter((route) => hasRouteAccess(user, route, experience));
   const selectedPath = currentRoute.key === "examWorkspace" ? "/exams" : currentRoute.path;
-  const menuItems = routeGroups()
+  const currentPresentation = routePresentation(currentRoute, experience);
+  const menuItems = routeGroups(experience)
     .map((group) => {
       const children = permittedRoutes
-        .filter((route) => route.group === group)
+        .filter((route) => routePresentation(route, experience).group === group)
         .map((route) => ({
-        key: route.path,
-        icon: route.icon,
-        label: route.title
+          key: route.path,
+          icon: route.icon,
+          label: routePresentation(route, experience).title
         }));
       return children.length > 0
         ? {
@@ -44,6 +55,36 @@ export function AppLayout({
         : null;
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
+  const navigation = (
+    <>
+      <button className="brand-block brand-button" onClick={() => { setNavigationOpen(false); onNavigate("/dashboard"); }} aria-label={`返回${experienceLabel(experience)}工作台`}>
+        <div className="brand-mark">E</div>
+        <div className="brand-copy">
+          <strong>EduGrade</strong>
+          <span>{experienceLabel(experience)}</span>
+        </div>
+      </button>
+      {availableExperiences.length > 1 ? (
+        <div className="experience-switcher">
+          <Segmented
+            block
+            size="small"
+            aria-label="切换产品端"
+            value={experience}
+            options={availableExperiences.map((value) => ({ value, label: experienceLabel(value) }))}
+            onChange={(value) => { setNavigationOpen(false); onExperienceChange(value as ProductExperience); }}
+          />
+        </div>
+      ) : null}
+      <Menu
+        mode="inline"
+        selectedKeys={[selectedPath]}
+        items={menuItems}
+        onClick={(item) => { setNavigationOpen(false); onNavigate(item.key); }}
+        className="side-menu"
+      />
+    </>
+  );
 
   return (
     <ConfigProvider
@@ -61,29 +102,28 @@ export function AppLayout({
       }}
     >
       <Layout className={immersive ? "app-frame immersive-frame" : "app-frame"}>
-        {!immersive ? <Sider width={244} className="sidebar" breakpoint="lg" collapsedWidth={72}>
-          <button className="brand-block brand-button" onClick={() => onNavigate("/dashboard")} aria-label="返回工作台">
-            <div className="brand-mark">E</div>
-            <div className="brand-copy">
-              <strong>EduGrade</strong>
-              <span>Enterprise</span>
-            </div>
-          </button>
-          <Menu
-            mode="inline"
-            selectedKeys={[selectedPath]}
-            items={menuItems}
-            onClick={(item) => onNavigate(item.key)}
-            className="side-menu"
-          />
-        </Sider> : null}
+        {!immersive && desktopNavigation ? <Sider width={244} className="sidebar">{navigation}</Sider> : null}
+        {!immersive && !desktopNavigation ? (
+          <Drawer
+            className="mobile-navigation"
+            title={null}
+            placement="left"
+            width={300}
+            open={navigationOpen}
+            onClose={() => setNavigationOpen(false)}
+            styles={{ body: { padding: 0 } }}
+          >
+            {navigation}
+          </Drawer>
+        ) : null}
         <Layout>
           <Header className={immersive ? "topbar immersive-topbar" : "topbar"}>
-            <div className="topbar-left">
+            <div className={!immersive && !desktopNavigation ? "topbar-left mobile" : "topbar-left"}>
+              {!immersive && !desktopNavigation ? <Button className="mobile-nav-button" type="text" icon={<MenuIcon size={20} />} aria-label="打开主导航" onClick={() => setNavigationOpen(true)} /> : null}
               {immersive ? <Space size="middle">
                 <Button type="text" icon={<ArrowLeft size={17} />} aria-label="退出阅卷" onClick={() => onNavigate("/dashboard")}>退出阅卷</Button>
-                <strong>{currentRoute.title}</strong>
-              </Space> : <Breadcrumb items={[{ title: user.school }, { title: currentRoute.title }]} />}
+                <strong>{experienceLabel(experience)} · {currentPresentation.title}</strong>
+              </Space> : <Breadcrumb items={[{ title: experienceLabel(experience) }, { title: user.school }, { title: currentPresentation.title }]} />}
               {currentRoute.mock ? <MockBadge compact={true} /> : null}
             </div>
             <Space className="topbar-actions">

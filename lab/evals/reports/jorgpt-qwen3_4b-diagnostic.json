@@ -1,0 +1,96 @@
+{
+  "schema_version": "model-selection-report-v1",
+  "generated_at": "2026-07-15T06:20:39.343Z",
+  "synthetic_only": false,
+  "evidence_scope": "external_real_benchmark",
+  "candidate_id": "qwen3_4b",
+  "model_info": {
+    "adapter": "local_llama_cpp",
+    "model_version": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+    "base_url": "http://127.0.0.1:8087/v1",
+    "mock": false
+  },
+  "dataset": {
+    "path": ".downloads/jorgpt-18981627/governed/test.jsonl",
+    "sha256": "2282050043acbc04f3561cb1fd5372a0179efff1f17eea3a1dcf6f36f226e928",
+    "total_samples": 1,
+    "source_total_samples": 452,
+    "source_sha256": "c98c75eb49e13d15da789890d8364794c2c3524e86734210c6301891aa80f441",
+    "complete_dataset": false,
+    "selection_method": "explicit_sample_id_diagnostic",
+    "source_id": "jorgpt_zenodo_18981627_en",
+    "evidence_scope": "external_real_benchmark",
+    "governance_passed": true
+  },
+  "quality": {
+    "sample_count": 1,
+    "mae": 1,
+    "rmse": 1,
+    "exact_agreement": 0,
+    "adjacent_agreement": 1,
+    "score_bias": -1,
+    "high_score_recall": 1,
+    "low_score_recall": 1,
+    "review_trigger_recall": 1,
+    "evidence_validity_rate": 0,
+    "rubric_compliance_rate": 0,
+    "schema_validity_rate": 1,
+    "prompt_injection_detection": 1,
+    "essay_discussion_review_rate": 1,
+    "ocr_low_confidence_review_rate": 1,
+    "no_score_above_max": true,
+    "mock_marked_rate": 0,
+    "evidence_verifier_ran": true
+  },
+  "quality_scope": "completed_samples_only",
+  "operations": {
+    "completed": 1,
+    "failed": 0,
+    "completion_rate": 1,
+    "first_pass_rate": 0,
+    "latency_ms_p50": 203253,
+    "latency_ms_p95": 203253,
+    "latency_ms_total": 203253
+  },
+  "results": [
+    {
+      "sample_id": "jorgpt-en-0007",
+      "expected_score": 7,
+      "suggested_score": 6,
+      "schema_valid": true,
+      "evidence_valid": false,
+      "verification_invalid_points": [
+        {
+          "rubric_point_id": "holistic_correctness",
+          "reason": "evidence_excerpt_not_in_answer"
+        }
+      ],
+      "verification_warnings": [],
+      "risk_flags": [
+        "SCORE_NEEDS_REVIEW",
+        "HUMAN_REVIEW_REQUIRED",
+        "SCHEMA_REPAIRED",
+        "INSUFFICIENT_EVIDENCE"
+      ],
+      "needs_human_review": true,
+      "matched_point_scores": [
+        {
+          "rubric_point_id": "holistic_correctness",
+          "score": 6
+        }
+      ],
+      "missing_point_ids": [],
+      "evidence_count": 3,
+      "latency_ms": 203253,
+      "adapter_run": {
+        "attempts": 2,
+        "repair_attempted": true,
+        "prior_error_codes": [
+          "TIMEOUT"
+        ],
+        "elapsed_ms": 203252
+      }
+    }
+  ],
+  "failures": []
+}

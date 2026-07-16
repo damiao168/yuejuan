@@ -24,11 +24,11 @@ export const PROMPT_REGISTRY = Object.freeze([
   },
   {
     prompt_id: "calculation",
-    prompt_version: "prompt-calculation-v1",
+    prompt_version: "prompt-calculation-v2",
     question_type: "calculation",
     file_path: "calculation_prompt.md",
     created_at: "2026-07-06",
-    changelog: "Adds step and unit evidence requirements."
+    changelog: "Adds explicit contradictory-result rejection alongside step and unit evidence."
   },
   {
     prompt_id: "essay",
@@ -45,6 +45,14 @@ export const PROMPT_REGISTRY = Object.freeze([
     file_path: "discussion_prompt.md",
     created_at: "2026-07-06",
     changelog: "Adds claim-evidence reasoning and mandatory human review."
+  },
+  {
+    prompt_id: "local_structured_grading",
+    prompt_version: "prompt-local-structured-v2",
+    question_type: "local_structured",
+    file_path: "local_structured_grading_prompt.md",
+    created_at: "2026-07-15",
+    changelog: "Adds semantic contradiction checks, strict-alias post-validation, and code-owned feedback."
   },
   {
     prompt_id: "evidence_verification",

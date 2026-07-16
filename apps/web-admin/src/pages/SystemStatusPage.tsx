@@ -4,6 +4,7 @@ import { Activity, Database, RefreshCw, ShieldCheck, Signal, TimerReset } from "
 import { ApiClientError } from "../api/client";
 import { getSystemStatus, type DependencyStatus, type SystemStatus } from "../api/system";
 import { ErrorState, LoadingState } from "../components/PageState";
+import { ResponsiveTable } from "../components/ResponsiveTable";
 
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
@@ -160,7 +161,7 @@ export function SystemStatusPage() {
                   </p>
                 </div>
               </div>
-              <Table rowKey="name" columns={columns} dataSource={status.dependencies} pagination={false} />
+              <ResponsiveTable rowKey="name" columns={columns} dataSource={status.dependencies} pagination={false} />
             </div>
 
             <div className="system-status-panel">

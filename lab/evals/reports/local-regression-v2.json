@@ -1,0 +1,93 @@
+{
+  "schema_version": "local-regression-v2",
+  "generated_at": "2026-07-15T03:48:16.896Z",
+  "synthetic_only": true,
+  "dataset_sha256": "4f80c0e3f62fe38031122679a507ef5df36e44af8a549cb960f6e3b549157f23",
+  "model_version": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+  "prompt_version": "prompt-local-structured-v2",
+  "baseline_failures": {
+    "contradictory_result_baseline_score": 3,
+    "contradictory_result_gold_score": 1,
+    "chinese_feedback_baseline_language": "inconsistent"
+  },
+  "total": 3,
+  "passed_count": 3,
+  "passed": true,
+  "results": [
+    {
+      "sample_id": "reg-v2-math-wrong",
+      "expected_score": 1,
+      "suggested_score": 1,
+      "score_exact": true,
+      "schema_valid": true,
+      "evidence_valid": true,
+      "feedback_language_valid": true,
+      "matched_points": [
+        "transform"
+      ],
+      "missing_points": [
+        {
+          "rubric_point_id": "solve",
+          "reason": "学生回答中没有正确解出x=3，而是算出x=4"
+        },
+        {
+          "rubric_point_id": "check",
+          "reason": "学生没有进行代入检验"
+        }
+      ],
+      "student_feedback": "已识别采分点：transform；待教师核查或补充：solve, check。最终结果以教师复核为准。",
+      "adapter_run": {
+        "attempts": 1,
+        "repair_attempted": false,
+        "prior_error_codes": [],
+        "elapsed_ms": 93526
+      },
+      "elapsed_ms": 93530
+    },
+    {
+      "sample_id": "reg-v2-math-full",
+      "expected_score": 4,
+      "suggested_score": 4,
+      "score_exact": true,
+      "schema_valid": true,
+      "evidence_valid": true,
+      "feedback_language_valid": true,
+      "matched_points": [
+        "transform",
+        "solve",
+        "check"
+      ],
+      "missing_points": [],
+      "student_feedback": "已识别采分点：transform, solve, check；待教师核查或补充：none。最终结果以教师复核为准。",
+      "adapter_run": {
+        "attempts": 1,
+        "repair_attempted": false,
+        "prior_error_codes": [],
+        "elapsed_ms": 86685
+      },
+      "elapsed_ms": 86685
+    },
+    {
+      "sample_id": "reg-v2-chinese-full",
+      "expected_score": 2,
+      "suggested_score": 2,
+      "score_exact": true,
+      "schema_valid": true,
+      "evidence_valid": true,
+      "feedback_language_valid": true,
+      "matched_points": [
+        "photosynthesis",
+        "energy"
+      ],
+      "missing_points": [],
+      "student_feedback": "已识别采分点：photosynthesis, energy；待教师核查或补充：none。最终结果以教师复核为准。",
+      "adapter_run": {
+        "attempts": 1,
+        "repair_attempted": false,
+        "prior_error_codes": [],
+        "elapsed_ms": 78190
+      },
+      "elapsed_ms": 78190
+    }
+  ]
+}

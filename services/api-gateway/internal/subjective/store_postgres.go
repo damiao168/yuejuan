@@ -21,6 +21,7 @@ func (s *PostgresStore) LoadContext(ctx context.Context, tenantID string, segmen
 	row := s.db.QueryRowContext(ctx, `
 SELECT
   seg.id::text, seg.submission_page_id::text, seg.bbox,
+  e.subject, COALESCE(cohort.grade_level, ''),
   q.id::text, q.tenant_id::text, q.exam_id::text, COALESCE(q.exam_paper_id::text, ''),
   q.question_no, q.question_type, q.score::float8, COALESCE(q.stem, ''),
   q.knowledge_points, q.answer_area, q.sort_order, q.status,
@@ -30,6 +31,18 @@ SELECT
   COALESCE(ans.id::text, ''), COALESCE(ans.answer_text, ''), ans.confidence::float8, ans.created_at
 FROM answer_segment seg
 JOIN question q ON q.tenant_id = seg.tenant_id AND q.id = seg.question_id
+JOIN exam e ON e.tenant_id = q.tenant_id AND e.id = q.exam_id AND e.deleted_at IS NULL
+LEFT JOIN LATERAL (
+  SELECT CASE
+    WHEN COUNT(DISTINCT g.level_no) = 1 AND MIN(g.level_no) BETWEEN 7 AND 9 THEN 'junior_middle'
+    WHEN COUNT(DISTINCT g.level_no) = 1 AND MIN(g.level_no) BETWEEN 10 AND 12 THEN 'senior_middle'
+    ELSE ''
+  END AS grade_level
+  FROM exam_class ec
+  JOIN school_class sc ON sc.tenant_id = ec.tenant_id AND sc.id = ec.class_id AND sc.deleted_at IS NULL
+  JOIN grade g ON g.tenant_id = sc.tenant_id AND g.id = sc.grade_id AND g.deleted_at IS NULL
+  WHERE ec.tenant_id = q.tenant_id AND ec.exam_id = q.exam_id AND ec.deleted_at IS NULL
+) cohort ON true
 LEFT JOIN LATERAL (
   SELECT qr.id, qr.question_id, qr.status, qr.max_score, qr.points, qr.deductions, qr.examples, qr.rubric_version_id
   FROM question_rubric qr
@@ -60,6 +73,8 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 		&out.SegmentID,
 		&submissionPageID,
 		&bboxRaw,
+		&out.Subject,
+		&out.GradeLevel,
 		&question.ID,
 		&question.TenantID,
 		&question.ExamID,
@@ -106,6 +121,7 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 	if answerID == "" {
 		return Context{}, ErrAnswerMissing
 	}
+	out.AnswerVersion = answerID
 	var bbox []float64
 	_ = json.Unmarshal(bboxRaw, &bbox)
 	out.Question = question
@@ -133,19 +149,25 @@ INSERT INTO ai_grade (
   grader_type, rule_version, suggested_score, max_score, confidence,
   matched_points, missing_points, evidence, risk_flags, needs_human_review,
   auto_pass, mock, raw_output, created_by, status, failure_reason,
-  model_version, prompt_version, student_feedback, teacher_note
+  model_version, prompt_version, student_feedback, teacher_note,
+  rubric_version, delivery_mode, capability_profile, adapter_request_id,
+  adapter_name, adapter_attempts, adapter_latency_ms, adapter_repair_attempted
 )
-VALUES ($1, $2, $3, $4, $5, 'subjective-ai', $6, 'llm-adapter', $7, $8, $9,
-  $10, $11, $12, $13, $14, false, $15, $16, $17, $18, NULLIF($19, ''),
-  $20, $21, $22, $23)
+VALUES ($1, $2, $3, $4, $5, $6, $7, 'llm-adapter', $8, $9, $10,
+  $11, $12, $13, $14, $15, false, $16, $17, $18, $19, NULLIF($20, ''),
+  $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
 RETURNING id::text, tenant_id::text, answer_segment_id::text, question_id::text, question_no, question_type,
-  grader_type, model_version, prompt_version, suggested_score::float8, max_score::float8, confidence::float8,
+  answer_version, grader_type, model_version, prompt_version, rubric_version, delivery_mode, capability_profile,
+  adapter_request_id, adapter_name, adapter_attempts, adapter_latency_ms, adapter_repair_attempted,
+  suggested_score::float8, max_score::float8, confidence::float8,
   matched_points, missing_points, evidence, risk_flags, needs_human_review, student_feedback, teacher_note,
   mock, status, COALESCE(failure_reason, ''), raw_output, created_by::text, created_at
 `, tenantID, grade.AnswerSegmentID, grade.QuestionID, grade.QuestionNo, grade.QuestionType,
-		grade.GraderType, grade.SuggestedScore, grade.MaxScore, grade.Confidence,
+		grade.AnswerVersion, grade.GraderType, grade.SuggestedScore, grade.MaxScore, grade.Confidence,
 		matched, missing, evidence, risks, grade.NeedsHumanReview, grade.Mock, raw, actorID,
-		grade.Status, grade.FailureReason, grade.ModelVersion, grade.PromptVersion, grade.StudentFeedback, grade.TeacherNote)
+		grade.Status, grade.FailureReason, grade.ModelVersion, grade.PromptVersion, grade.StudentFeedback, grade.TeacherNote,
+		grade.RubricVersion, grade.DeliveryMode, grade.CapabilityProfile, grade.AdapterRequestID,
+		grade.AdapterName, grade.AdapterAttempts, grade.AdapterLatencyMS, grade.AdapterRepairAttempted)
 	var out Grade
 	if err := scanGrade(row, &out); err != nil {
 		return Grade{}, err
@@ -166,9 +188,18 @@ func scanGrade(row gradeScanner, out *Grade) error {
 		&out.QuestionID,
 		&out.QuestionNo,
 		&out.QuestionType,
+		&out.AnswerVersion,
 		&out.GraderType,
 		&out.ModelVersion,
 		&out.PromptVersion,
+		&out.RubricVersion,
+		&out.DeliveryMode,
+		&out.CapabilityProfile,
+		&out.AdapterRequestID,
+		&out.AdapterName,
+		&out.AdapterAttempts,
+		&out.AdapterLatencyMS,
+		&out.AdapterRepairAttempted,
 		&out.SuggestedScore,
 		&out.MaxScore,
 		&out.Confidence,

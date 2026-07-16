@@ -67,21 +67,24 @@ RETURNING `+appealColumns()+`
 
 func (s *PostgresStore) ListAppeals(ctx context.Context, tenantID string, filter ListFilter) ([]Appeal, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT `+appealColumns()+`
-FROM appeal
-WHERE tenant_id = $1 AND deleted_at IS NULL
-  AND ($2 = '' OR exam_id::text = $2)
-  AND ($3 = '' OR student_id::text = $3)
-  AND ($4 = '' OR status = $4)
-ORDER BY created_at DESC
-`, tenantID, filter.ExamID, filter.StudentID, filter.Status)
+SELECT `+appealColumns("a")+`, e.name, e.subject, sg.anonymous_code
+FROM appeal a
+JOIN exam e ON e.tenant_id = a.tenant_id AND e.id = a.exam_id
+JOIN submission_grade sg ON sg.tenant_id = a.tenant_id AND sg.id = a.submission_grade_id
+WHERE a.tenant_id = $1 AND a.deleted_at IS NULL
+  AND ($2 = '' OR a.exam_id::text = $2)
+  AND ($3 = '' OR a.student_id::text = $3)
+  AND ($4 = '' OR a.status = $4)
+  AND ($5 = '' OR a.assigned_to::text = $5)
+ORDER BY a.created_at DESC
+`, tenantID, filter.ExamID, filter.StudentID, filter.Status, filter.AssignedTo)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Appeal{}
 	for rows.Next() {
-		item, err := scanAppeal(rows)
+		item, err := scanAppealSummary(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -97,6 +100,142 @@ FROM appeal
 WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 `, tenantID, id))
 	if err != nil {
+		return Appeal{}, err
+	}
+	return s.withDetails(ctx, item)
+}
+
+func (s *PostgresStore) AssignAppeal(ctx context.Context, tenantID string, id string, _ string, input AssignAppealInput) (Appeal, error) {
+	input.AssignedTo = strings.TrimSpace(input.AssignedTo)
+	if input.AssignedTo == "" {
+		return Appeal{}, ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Appeal{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var eligible bool
+	if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM app_user u
+  JOIN user_role ur ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id AND ur.deleted_at IS NULL
+  JOIN role_permission rp ON rp.tenant_id = ur.tenant_id AND rp.role_id = ur.role_id AND rp.deleted_at IS NULL
+  JOIN permission p ON p.tenant_id = rp.tenant_id AND p.id = rp.permission_id AND p.deleted_at IS NULL
+  WHERE u.tenant_id = $1 AND u.id::text = $2 AND u.status = 'active' AND u.deleted_at IS NULL
+    AND p.code = 'appeal:work'
+)
+`, tenantID, input.AssignedTo).Scan(&eligible); err != nil {
+		return Appeal{}, err
+	}
+	if !eligible {
+		return Appeal{}, ErrForbidden
+	}
+	item, err := scanAppeal(tx.QueryRowContext(ctx, `
+SELECT `+appealColumns()+`
+FROM appeal
+WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+FOR UPDATE
+`, tenantID, id))
+	if err != nil {
+		return Appeal{}, err
+	}
+	if isTerminalStatus(item.Status) {
+		return Appeal{}, ErrInvalidTransition
+	}
+	if item.FinalGradeID != "" {
+		var participated bool
+		if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM human_grade hg
+  JOIN final_grade fg ON fg.tenant_id = hg.tenant_id AND fg.answer_segment_id = hg.answer_segment_id
+  WHERE fg.tenant_id = $1 AND fg.id::text = $2 AND hg.reviewer_id::text = $3
+    AND fg.deleted_at IS NULL AND hg.deleted_at IS NULL
+)
+`, tenantID, item.FinalGradeID, input.AssignedTo).Scan(&participated); err != nil {
+			return Appeal{}, err
+		}
+		if participated {
+			return Appeal{}, ErrForbidden
+		}
+	}
+	item, err = scanAppeal(tx.QueryRowContext(ctx, `
+UPDATE appeal
+SET assigned_to = $3::uuid, status = 'under_review', updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+RETURNING `+appealColumns()+`
+`, tenantID, id, input.AssignedTo))
+	if err != nil {
+		return Appeal{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Appeal{}, err
+	}
+	return s.withDetails(ctx, item)
+}
+
+func (s *PostgresStore) SubmitRecommendation(ctx context.Context, tenantID string, id string, actorID string, input SubmitRecommendationInput) (Appeal, error) {
+	input = normalizeRecommendationInput(input)
+	if err := validateRecommendationInput(input); err != nil {
+		return Appeal{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Appeal{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	item, err := scanAppeal(tx.QueryRowContext(ctx, `
+SELECT `+appealColumns()+`
+FROM appeal
+WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+FOR UPDATE
+`, tenantID, id))
+	if err != nil {
+		return Appeal{}, err
+	}
+	if item.AssignedTo != actorID {
+		return Appeal{}, ErrForbidden
+	}
+	if isTerminalStatus(item.Status) {
+		return Appeal{}, ErrInvalidTransition
+	}
+	if input.RecommendedScore != nil {
+		if item.FinalGradeID == "" {
+			return Appeal{}, ErrInvalidInput
+		}
+		var maxScore float64
+		if err := tx.QueryRowContext(ctx, `
+SELECT max_score::float8
+FROM final_grade
+WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+		`, tenantID, item.FinalGradeID).Scan(&maxScore); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return Appeal{}, ErrInvalidInput
+			}
+			return Appeal{}, err
+		}
+		if *input.RecommendedScore > maxScore {
+			return Appeal{}, ErrInvalidInput
+		}
+	}
+	item, err = scanAppeal(tx.QueryRowContext(ctx, `
+UPDATE appeal
+SET status = 'under_review',
+    teacher_recommendation = $3,
+    teacher_recommendation_reason = $4,
+    teacher_recommended_score = $5,
+    teacher_recommendation_by = $6::uuid,
+    teacher_recommendation_at = now(),
+    updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+RETURNING `+appealColumns()+`
+`, tenantID, id, input.Recommendation, input.Reason, input.RecommendedScore, actorID))
+	if err != nil {
+		return Appeal{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Appeal{}, err
 	}
 	return s.withDetails(ctx, item)
@@ -323,6 +462,18 @@ WHERE tenant_id = $1 AND id::text = $2 AND submission_id::text = $3
 
 func (s *PostgresStore) withDetails(ctx context.Context, item Appeal) (Appeal, error) {
 	out := cloneAppeal(item)
+	if err := s.db.QueryRowContext(ctx, `
+SELECT e.name, e.subject, sg.anonymous_code
+FROM exam e
+JOIN submission_grade sg ON sg.tenant_id = e.tenant_id AND sg.exam_id = e.id
+WHERE e.tenant_id = $1 AND e.id::text = $2 AND sg.id::text = $3
+  AND e.deleted_at IS NULL AND sg.deleted_at IS NULL
+`, item.TenantID, item.ExamID, item.SubmissionGradeID).Scan(&out.ExamName, &out.Subject, &out.AnonymousCode); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Appeal{}, ErrNotFound
+		}
+		return Appeal{}, err
+	}
 	adjustments, err := s.listAdjustments(ctx, item.TenantID, item.ID)
 	if err != nil {
 		return Appeal{}, err
@@ -455,12 +606,18 @@ ORDER BY created_at DESC
 	return out, rows.Err()
 }
 
-func appealColumns() string {
-	return `id::text, tenant_id::text, exam_id::text, submission_id::text, submission_grade_id::text,
-  student_id::text, target_type, COALESCE(final_grade_id::text, ''), COALESCE(question_id::text, ''),
-  question_no, deduction_point_id, reason, attachment, status, result_reason,
-  COALESCE(assigned_to::text, ''), COALESCE(reviewed_by::text, ''), reviewed_at,
-  COALESCE(closed_by::text, ''), closed_at, created_by::text, created_at, updated_at`
+func appealColumns(aliases ...string) string {
+	prefix := ""
+	if len(aliases) > 0 && aliases[0] != "" {
+		prefix = aliases[0] + "."
+	}
+	return prefix + `id::text, ` + prefix + `tenant_id::text, ` + prefix + `exam_id::text, ` + prefix + `submission_id::text, ` + prefix + `submission_grade_id::text,
+  ` + prefix + `student_id::text, ` + prefix + `target_type, COALESCE(` + prefix + `final_grade_id::text, ''), COALESCE(` + prefix + `question_id::text, ''),
+  ` + prefix + `question_no, ` + prefix + `deduction_point_id, ` + prefix + `reason, ` + prefix + `attachment, ` + prefix + `status, ` + prefix + `result_reason,
+  COALESCE(` + prefix + `assigned_to::text, ''), ` + prefix + `teacher_recommendation, ` + prefix + `teacher_recommendation_reason,
+  ` + prefix + `teacher_recommended_score::float8, COALESCE(` + prefix + `teacher_recommendation_by::text, ''), ` + prefix + `teacher_recommendation_at,
+  COALESCE(` + prefix + `reviewed_by::text, ''), ` + prefix + `reviewed_at,
+  COALESCE(` + prefix + `closed_by::text, ''), ` + prefix + `closed_at, ` + prefix + `created_by::text, ` + prefix + `created_at, ` + prefix + `updated_at`
 }
 
 type scanner interface {
@@ -470,6 +627,8 @@ type scanner interface {
 func scanAppeal(row scanner) (Appeal, error) {
 	var out Appeal
 	var attachmentRaw []byte
+	var recommendedScore sql.NullFloat64
+	var recommendationAt sql.NullTime
 	var reviewedAt sql.NullTime
 	var closedAt sql.NullTime
 	if err := row.Scan(
@@ -489,6 +648,11 @@ func scanAppeal(row scanner) (Appeal, error) {
 		&out.Status,
 		&out.ResultReason,
 		&out.AssignedTo,
+		&out.Recommendation,
+		&out.RecommendationReason,
+		&recommendedScore,
+		&out.RecommendationBy,
+		&recommendationAt,
 		&out.ReviewedBy,
 		&reviewedAt,
 		&out.ClosedBy,
@@ -503,6 +667,75 @@ func scanAppeal(row scanner) (Appeal, error) {
 		return Appeal{}, err
 	}
 	_ = json.Unmarshal(attachmentRaw, &out.Attachment)
+	if recommendedScore.Valid {
+		out.RecommendedScore = &recommendedScore.Float64
+	}
+	if recommendationAt.Valid {
+		out.RecommendationAt = &recommendationAt.Time
+	}
+	if reviewedAt.Valid {
+		out.ReviewedAt = &reviewedAt.Time
+	}
+	if closedAt.Valid {
+		out.ClosedAt = &closedAt.Time
+	}
+	out.CreatedAt = out.CreatedAt.UTC()
+	out.UpdatedAt = out.UpdatedAt.UTC()
+	return out, nil
+}
+
+func scanAppealSummary(row scanner) (Appeal, error) {
+	var out Appeal
+	var attachmentRaw []byte
+	var recommendedScore sql.NullFloat64
+	var recommendationAt sql.NullTime
+	var reviewedAt sql.NullTime
+	var closedAt sql.NullTime
+	if err := row.Scan(
+		&out.ID,
+		&out.TenantID,
+		&out.ExamID,
+		&out.SubmissionID,
+		&out.SubmissionGradeID,
+		&out.StudentID,
+		&out.TargetType,
+		&out.FinalGradeID,
+		&out.QuestionID,
+		&out.QuestionNo,
+		&out.DeductionPointID,
+		&out.Reason,
+		&attachmentRaw,
+		&out.Status,
+		&out.ResultReason,
+		&out.AssignedTo,
+		&out.Recommendation,
+		&out.RecommendationReason,
+		&recommendedScore,
+		&out.RecommendationBy,
+		&recommendationAt,
+		&out.ReviewedBy,
+		&reviewedAt,
+		&out.ClosedBy,
+		&closedAt,
+		&out.CreatedBy,
+		&out.CreatedAt,
+		&out.UpdatedAt,
+		&out.ExamName,
+		&out.Subject,
+		&out.AnonymousCode,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Appeal{}, ErrNotFound
+		}
+		return Appeal{}, err
+	}
+	_ = json.Unmarshal(attachmentRaw, &out.Attachment)
+	if recommendedScore.Valid {
+		out.RecommendedScore = &recommendedScore.Float64
+	}
+	if recommendationAt.Valid {
+		out.RecommendationAt = &recommendationAt.Time
+	}
 	if reviewedAt.Valid {
 		out.ReviewedAt = &reviewedAt.Time
 	}

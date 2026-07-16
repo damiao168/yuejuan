@@ -1,0 +1,260 @@
+# Isolated STORY-060 acceptance environment. It has no fixed container names,
+# host database ports, or shared production volumes. Run it under a unique
+# Compose project and remove only that verified project after acceptance.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: edugrade
+      POSTGRES_USER: edugrade
+      POSTGRES_PASSWORD: story060_e2e_postgres_only
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edugrade -d edugrade"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: story060e2e
+      MINIO_ROOT_PASSWORD: story060_e2e_minio_only_secret
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  db-migrate:
+    image: postgres:16-alpine
+    environment:
+      EDUGRADE_POSTGRES_DSN: postgres://edugrade:story060_e2e_postgres_only@postgres:5432/edugrade?sslmode=disable
+    volumes:
+      - ../../services/api-gateway/migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        psql "$${EDUGRADE_POSTGRES_DSN}" -v ON_ERROR_STOP=1 -c "
+          CREATE TABLE IF NOT EXISTS schema_migration (
+            filename TEXT PRIMARY KEY,
+            checksum TEXT NOT NULL,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          )"
+        for file in /migrations/*.sql; do
+          filename="$$(basename "$${file}")"
+          checksum="$$(sha256sum "$${file}" | awk '{print $$1}')"
+          stored="$$(psql "$${EDUGRADE_POSTGRES_DSN}" -Atc "SELECT checksum FROM schema_migration WHERE filename = '$${filename}'")"
+          if [ -n "$${stored}" ]; then
+            if [ "$${stored}" != "$${checksum}" ]; then
+              echo "checksum mismatch for applied migration $${filename}" >&2
+              exit 43
+            fi
+            continue
+          fi
+          { cat "$${file}"; printf "\nINSERT INTO schema_migration (filename, checksum) VALUES ('%s', '%s');\n" "$${filename}" "$${checksum}"; } |
+            psql "$${EDUGRADE_POSTGRES_DSN}" -v ON_ERROR_STOP=1 -1
+        done
+    restart: "no"
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        mc alias set e2e http://minio:9000 story060e2e story060_e2e_minio_only_secret
+        mc mb --ignore-existing e2e/story060-e2e-files
+        mc anonymous set none e2e/story060-e2e-files
+    restart: "no"
+
+  bootstrap-admin:
+    build:
+      context: ../..
+      dockerfile: services/api-gateway/Dockerfile
+    entrypoint: ["api-gateway", "bootstrap-admin"]
+    environment:
+      EDUGRADE_ENV: test
+      EDUGRADE_LOG_LEVEL: error
+      EDUGRADE_POSTGRES_DSN: postgres://edugrade:story060_e2e_postgres_only@postgres:5432/edugrade?sslmode=disable
+      EDUGRADE_BOOTSTRAP_TENANT_CODE: platform
+      EDUGRADE_BOOTSTRAP_ROLE_CODE: platform_admin
+      EDUGRADE_BOOTSTRAP_USERNAME: platform_admin
+      EDUGRADE_BOOTSTRAP_DISPLAY_NAME: STORY-060 E2E Platform Admin
+      EDUGRADE_BOOTSTRAP_PASSWORD: ${EDUGRADE_E2E_ADMIN_PASSWORD:?set by the STORY-060 runner}
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  seed:
+    image: postgres:16-alpine
+    environment:
+      EDUGRADE_POSTGRES_DSN: postgres://edugrade:story060_e2e_postgres_only@postgres:5432/edugrade?sslmode=disable
+    volumes:
+      - ../../tests/e2e/fixtures/story060-grading-agent.sql:/fixture.sql:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command: ["psql \"$${EDUGRADE_POSTGRES_DSN}\" -v ON_ERROR_STOP=1 -f /fixture.sql"]
+    depends_on:
+      bootstrap-admin:
+        condition: service_completed_successfully
+    restart: "no"
+
+  grading-agent:
+    build:
+      context: ../..
+      dockerfile: ai-services/Dockerfile
+    environment:
+      EDUGRADE_GRADING_AGENT_TOKEN: ${EDUGRADE_E2E_GRADING_TOKEN:?set by the STORY-060 runner}
+      EDUGRADE_GRADING_MODEL_BASE_URL: http://host.docker.internal:8087/v1
+      EDUGRADE_GRADING_MODEL_API_KEY: ${EDUGRADE_E2E_MODEL_API_KEY:?set by the STORY-060 runner}
+      EDUGRADE_GRADING_MODEL_NAME: qwen3-4b-q4-k-m
+      EDUGRADE_GRADING_MODEL_VERSION: Qwen/Qwen3-4B-GGUF:Q4_K_M
+      EDUGRADE_GRADING_PROMPT_VERSION: subjective-local-structured-v2
+      EDUGRADE_GRADING_MODEL_TIMEOUT_SECONDS: "230"
+      EDUGRADE_GRADING_MODEL_MAX_OUTPUT_TOKENS: "384"
+      EDUGRADE_GRADING_MODEL_READY_TIMEOUT_SECONDS: "3"
+      EDUGRADE_GRADING_MODEL_QUEUE_TIMEOUT_SECONDS: "5"
+      EDUGRADE_GRADING_MODEL_MAX_RETRIES: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8100/health | grep -q healthy"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  api-gateway:
+    build:
+      context: ../..
+      dockerfile: services/api-gateway/Dockerfile
+    environment:
+      EDUGRADE_ENV: test
+      EDUGRADE_SERVICE_NAME: story060-e2e-api
+      EDUGRADE_HTTP_HOST: 0.0.0.0
+      EDUGRADE_HTTP_PORT: 8080
+      EDUGRADE_LOG_LEVEL: error
+      EDUGRADE_READINESS_TIMEOUT: 3s
+      EDUGRADE_SHUTDOWN_TIMEOUT: 5s
+      EDUGRADE_HTTP_READ_HEADER_TIMEOUT: 5s
+      EDUGRADE_HTTP_READ_TIMEOUT: 15s
+      EDUGRADE_HTTP_WRITE_TIMEOUT: 300s
+      EDUGRADE_HTTP_IDLE_TIMEOUT: 60s
+      EDUGRADE_SESSION_COOKIE_SECURE: "false"
+      EDUGRADE_POSTGRES_DSN: postgres://edugrade:story060_e2e_postgres_only@postgres:5432/edugrade?sslmode=disable
+      EDUGRADE_REDIS_ADDR: redis:6379
+      EDUGRADE_REDIS_PASSWORD: ""
+      EDUGRADE_REDIS_DB: "0"
+      EDUGRADE_MINIO_ENDPOINT: minio:9000
+      EDUGRADE_MINIO_ACCESS_KEY: story060e2e
+      EDUGRADE_MINIO_SECRET_KEY: story060_e2e_minio_only_secret
+      EDUGRADE_MINIO_USE_SSL: "false"
+      EDUGRADE_FILE_BUCKET: story060-e2e-files
+      EDUGRADE_FILE_MAX_UPLOAD_BYTES: "10485760"
+      EDUGRADE_FILE_ALLOWED_EXTENSIONS: .png,.pdf
+      EDUGRADE_BARCODE_ACTIVE_KEY_ID: e2e-v1
+      EDUGRADE_BARCODE_HMAC_KEYS: e2e-v1:story060-e2e-barcode-key-at-least-32-chars
+      EDUGRADE_QDRANT_URL: ""
+      EDUGRADE_AI_SERVICE_URL: http://grading-agent:8100
+      EDUGRADE_AI_SERVICE_TOKEN: ${EDUGRADE_E2E_GRADING_TOKEN:?set by the STORY-060 runner}
+      EDUGRADE_AI_SERVICE_TIMEOUT: 250s
+      EDUGRADE_AI_SERVICE_MAX_RETRIES: "1"
+      EDUGRADE_AI_MODEL_VERSION: Qwen/Qwen3-4B-GGUF:Q4_K_M
+      EDUGRADE_AI_PROMPT_VERSION: subjective-local-structured-v2
+      EDUGRADE_AI_MIN_CONFIDENCE: "0.8"
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+      grading-agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/health | grep -q healthy"]
+      interval: 2s
+      timeout: 2s
+      retries: 90
+
+  e2e-runner:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile.story060
+    environment:
+      EDUGRADE_E2E_API_BASE_URL: http://api-gateway:8080
+      EDUGRADE_E2E_AGENT_BASE_URL: http://grading-agent:8100
+      EDUGRADE_E2E_ADMIN_PASSWORD: ${EDUGRADE_E2E_ADMIN_PASSWORD:?set by the STORY-060 runner}
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    profiles: ["e2e"]
+
+  db-verify:
+    image: postgres:16-alpine
+    environment:
+      EDUGRADE_POSTGRES_DSN: postgres://edugrade:story060_e2e_postgres_only@postgres:5432/edugrade?sslmode=disable
+    volumes:
+      - ../../tests/e2e/fixtures/story060-grading-agent-verify.sql:/verify.sql:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command: ["psql \"$${EDUGRADE_POSTGRES_DSN}\" -v ON_ERROR_STOP=1 -f /verify.sql"]
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    profiles: ["e2e"]
+
+  web-admin:
+    build:
+      context: ../..
+      dockerfile: apps/web-admin/Dockerfile
+      args:
+        VITE_API_BASE_URL: ""
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/health | grep -q web-admin"]
+      interval: 2s
+      timeout: 2s
+      retries: 90
+    profiles: ["e2e"]
+
+  browser-gateway:
+    image: nginx:1.29-alpine
+    volumes:
+      - ./nginx/story060-e2e.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1::80"
+    depends_on:
+      web-admin:
+        condition: service_healthy
+      api-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/health | grep -q story060-browser-gateway"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+    profiles: ["e2e"]
+
+volumes:
+  postgres_data:
+  minio_data:

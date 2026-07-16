@@ -1,0 +1,179 @@
+{
+  "schema_version": "pilot-freeze-manifest-v1",
+  "freeze_id": "pilot-candidate-v1",
+  "generated_at": "2026-07-15T07:14:01.183Z",
+  "readiness_decision": "NOT_READY",
+  "suggestion_only": true,
+  "final_grade_publication_allowed": false,
+  "runtime": {
+    "name": "llama.cpp",
+    "release": "b10012",
+    "host": "127.0.0.1",
+    "concurrency": 1
+  },
+  "model": {
+    "candidate_id": "qwen3_4b",
+    "repository": "Qwen/Qwen3-4B-GGUF",
+    "revision": "master",
+    "file": "Qwen3-4B-Q4_K_M.gguf",
+    "path": ".models/Qwen3-4B-Q4_K_M.gguf",
+    "bytes": 2497280256,
+    "sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+    "integrity_verified": true
+  },
+  "prompts": [
+    {
+      "prompt_id": "base_grading",
+      "prompt_version": "prompt-base-v1",
+      "checksum": "3364b352554e1e51011418248ef548d0f28a18ed45133a0667d4efa467a4ba85"
+    },
+    {
+      "prompt_id": "short_answer",
+      "prompt_version": "prompt-short-answer-v1",
+      "checksum": "fd157977b147b334ac96c6ddb074603b63ae55e7334d0d4cd4f90003fc03e651"
+    },
+    {
+      "prompt_id": "calculation",
+      "prompt_version": "prompt-calculation-v2",
+      "checksum": "428087db654b54b65a532738038ce77365b8b332e71b55fa96a3320634d2afe7"
+    },
+    {
+      "prompt_id": "essay",
+      "prompt_version": "prompt-essay-v1",
+      "checksum": "f6f329017a3971ea480285fc0f0aeb6d4a5fddd7ded4aaa4a1e745d85e1cb24a"
+    },
+    {
+      "prompt_id": "discussion",
+      "prompt_version": "prompt-discussion-v1",
+      "checksum": "f426f9e0860300701039869cc29862117e84d8b7f90afa6c232aa5252b55e49b"
+    },
+    {
+      "prompt_id": "local_structured_grading",
+      "prompt_version": "prompt-local-structured-v2",
+      "checksum": "3a605a792227de47cedecab748dda70e88829443c837fca223d32cf70107bb65"
+    },
+    {
+      "prompt_id": "evidence_verification",
+      "prompt_version": "prompt-evidence-v1",
+      "checksum": "ae6c710a6258d37c1bddf0ed8d1cca5d00a283bda3f61b2366c7c6c0d1942249"
+    }
+  ],
+  "rubrics": [
+    {
+      "rubric_id": "reg-v2-math-r1",
+      "rubric_version": "reg-v2-rubric-v2",
+      "hash": "3a5b63f81ba1f800"
+    },
+    {
+      "rubric_id": "reg-v2-math-r2",
+      "rubric_version": "reg-v2-rubric-v2",
+      "hash": "4a42cea0ab5a950f"
+    },
+    {
+      "rubric_id": "reg-v2-chinese-r1",
+      "rubric_version": "reg-v2-rubric-v2",
+      "hash": "b80ee49e8a84a80e"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "config/capability-matrix.json",
+      "sha256": "15519fa785d3c42d5226403492da2c1c8a32e2cc79d1e2f88e901ca22c773c76"
+    },
+    {
+      "path": "config/local-runtime.json",
+      "sha256": "c2be6012d6e1633ccf51ab27aa6a464714397dda30db57564de6513f7b2b8673"
+    },
+    {
+      "path": "config/model-candidates.json",
+      "sha256": "d4faedf5cafad54c34a69247a89f3d77ef7d7abf5ea8bb96f6323d26041847b5"
+    },
+    {
+      "path": "config/annotation-policy.json",
+      "sha256": "b77f94c3c77e7341309f2ef4889b25cb8b5dd4ae9ba1d1fea7cce4ea29321d51"
+    },
+    {
+      "path": "config/release-gates.json",
+      "sha256": "41a54ba978e7ef033b5b1c5a13dbb37aaea4fd6c719c8be2af547f294870cfbc"
+    },
+    {
+      "path": "evals/regression/prompt-rubric-v2.jsonl",
+      "sha256": "4f80c0e3f62fe38031122679a507ef5df36e44af8a549cb960f6e3b549157f23"
+    },
+    {
+      "path": "evals/reports/local-runtime-benchmark.json",
+      "sha256": "504d260141c3cc0d4f44dc669b3780d3844c73c176a56806a8bcc857a0eeea25"
+    },
+    {
+      "path": "evals/reports/local-adapter-smoke.json",
+      "sha256": "a3b5cb3e80ef1c9598d16558ee43371b56e150004bfe19bcc31b962138cb50ae"
+    },
+    {
+      "path": "evals/reports/model-selection-decision.json",
+      "sha256": "25e56952a8aeb706331a2d85dd14ed3991d691d623d6f0eef3a4a914b7ac9c76"
+    },
+    {
+      "path": "evals/reports/local-regression-v2.json",
+      "sha256": "87f0da664e4bcb9bf6d73a57b1125899a5737f7eea3e69d56f5cb64f82688e05"
+    },
+    {
+      "path": "evals/reports/adversarial-suite.json",
+      "sha256": "170308b5ff967ba0e1f2e5cf2d8aabf5191b8e32d98c210599e1c339d60f4713"
+    },
+    {
+      "path": "evals/reports/annotation-reliability.json",
+      "sha256": "d19b45b9b1fcf6e36ddfc6631a9027c848ebd951e4f2818558af12612568204f"
+    },
+    {
+      "path": "evals/reports/annotation-workflow-demo.json",
+      "sha256": "80ab71e98a7e75c70f1861e50fd3deec2e041b3b01d55da7b9f366d76fe1b891"
+    },
+    {
+      "path": "evals/annotations/synthetic-roster.json",
+      "sha256": "3270dc4c26f942847d925e030fd4d961aba9d0ebef3d741e0b784317feea9696"
+    },
+    {
+      "path": "evals/reports/calibration-fairness.json",
+      "sha256": "385acd6c513378b71031b21562c6319070af7313f7f05ff1001440c74dc61145"
+    },
+    {
+      "path": "evals/reports/fine-tuning-decision.json",
+      "sha256": "4c9e120329b3501f0cf7890b8904c69da779de370620cfbe88171ee6894aca1b"
+    }
+  ],
+  "evidence_summary": {
+    "capability_boundary_safe": true,
+    "model_integrity_verified": true,
+    "local_regression_passed": true,
+    "real_dataset_governed": false,
+    "real_model_selection_passed": false,
+    "teacher_agreement_pilot_passed": false,
+    "adversarial_pilot_passed": true,
+    "calibration_fairness_pilot_passed": false,
+    "operational_latency_passed": true,
+    "details": {
+      "capability_boundary_safe": "local-pilot-v1",
+      "model_integrity_verified": "Qwen3-4B-Q4_K_M.gguf sha256=7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+      "local_regression_passed": "3/3",
+      "real_dataset_governed": "evals/gold/real/manifest.json is absent",
+      "real_model_selection_passed": [
+        "governed real Gold manifest is missing"
+      ],
+      "teacher_agreement_pilot_passed": [
+        "double_scored_count 3 < 500",
+        "normalized_mae 0.16666666666666666 > 0.08",
+        "point_agreement 0.8333333333333334 < 0.85"
+      ],
+      "adversarial_pilot_passed": [],
+      "calibration_fairness_pilot_passed": [
+        "evaluation_records 8 < 500",
+        "ece 0.12499999999999997 > 0.08",
+        "brier_score 0.125 > 0.12",
+        "8 slices are below minimum_records_per_slice 50"
+      ],
+      "operational_latency_passed": "p95=106768ms ceiling=120000ms"
+    }
+  },
+  "training_decision": "do_not_train",
+  "confidence_runtime_enabled": false
+}

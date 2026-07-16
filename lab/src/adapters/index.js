@@ -1,4 +1,5 @@
 import { MockGradingAdapter } from "./mockAdapter.js";
+import { LocalModelAdapter } from "./localModelAdapter.js";
 
 export class NotConfiguredError extends Error {
   constructor(message) {
@@ -34,12 +35,6 @@ export class OpenAICompatibleGradingAdapter {
   }
 }
 
-export class LocalModelAdapter {
-  constructor() {
-    throw new NotConfiguredError("Local model adapter is a placeholder and is not configured");
-  }
-}
-
 export function createAdapter(name = "mock", options = {}) {
   if (name === "mock") return new MockGradingAdapter(options);
   if (name === "openai_compatible") return new OpenAICompatibleGradingAdapter(options.env);
@@ -47,4 +42,4 @@ export function createAdapter(name = "mock", options = {}) {
   throw new Error(`Unsupported grading adapter: ${name}`);
 }
 
-export { MockGradingAdapter };
+export { LocalModelAdapter, MockGradingAdapter };

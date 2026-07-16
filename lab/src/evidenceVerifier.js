@@ -5,6 +5,7 @@ const CHINESE_PUNCTUATION = /[，。！？；：“”‘’（）【】《》�
 
 export function normalizeText(text) {
   return String(text ?? "")
+    .normalize("NFKC")
     .toLowerCase()
     .replace(CHINESE_PUNCTUATION, "")
     .replace(/[.,!?;:'"()[\]{}<>/\\|-]/g, "")
@@ -24,12 +25,18 @@ export function verifyEvidence(input, output) {
   const normalizedAnswer = normalizeText(answerText);
   const rubricPointIds = new Set(input.rubric.points.map((point) => point.id));
   const evidenceByRubricPoint = new Map();
+  const evidenceById = new Map();
   let validMatchedPoints = 0;
 
   for (const evidence of output.evidence ?? []) {
-    if (!evidenceByRubricPoint.has(evidence.rubric_point_id)) {
-      evidenceByRubricPoint.set(evidence.rubric_point_id, []);
+    if (evidenceById.has(evidence.evidence_id)) {
+      invalidPoints.push({ evidence_id: evidence.evidence_id, reason: "duplicate_evidence_id" });
     }
+    evidenceById.set(evidence.evidence_id, evidence);
+    if (!rubricPointIds.has(evidence.rubric_point_id)) {
+      invalidPoints.push({ rubric_point_id: evidence.rubric_point_id, reason: "evidence_rubric_point_not_found" });
+    }
+    if (!evidenceByRubricPoint.has(evidence.rubric_point_id)) evidenceByRubricPoint.set(evidence.rubric_point_id, []);
     evidenceByRubricPoint.get(evidence.rubric_point_id).push(evidence);
   }
 
@@ -63,6 +70,14 @@ export function verifyEvidence(input, output) {
       invalidPoints.push({ rubric_point_id: rubricPointId, reason: "required_evidence_missing" });
       continue;
     }
+    let idLinksValid = true;
+    for (const evidenceId of matchedPoint.evidence_ids ?? []) {
+      const linkedById = evidenceById.get(evidenceId);
+      if (!linkedById || linkedById.rubric_point_id !== rubricPointId) {
+        invalidPoints.push({ rubric_point_id: rubricPointId, evidence_id: evidenceId, reason: "evidence_id_link_invalid" });
+        idLinksValid = false;
+      }
+    }
     const evidenceIsValid = linkedEvidence.every((evidence) => {
       const excerpt = normalizeText(evidence.text_excerpt);
       return excerpt.length > 0 && normalizedAnswer.includes(excerpt);
@@ -71,7 +86,7 @@ export function verifyEvidence(input, output) {
       invalidPoints.push({ rubric_point_id: rubricPointId, reason: "evidence_excerpt_not_in_answer" });
       continue;
     }
-    validMatchedPoints += 1;
+    if (idLinksValid) validMatchedPoints += 1;
   }
 
   for (const missing of output.missing_points ?? []) {

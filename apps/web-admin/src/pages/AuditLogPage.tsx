@@ -5,6 +5,7 @@ import { ApiClientError } from "../api/client";
 import { exportAuditLogs, listAuditLogs, type AuditLog, type AuditLogFilter } from "../api/audit";
 import { listExams, type Exam } from "../api/exams";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 
 interface AuditLogPageProps {
@@ -348,13 +349,12 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
         {loading ? (
           <LoadingState label="正在读取审计日志" />
         ) : (
-          <Table
+          <ResponsiveTable
             rowKey="id"
             size="small"
             columns={columns}
             dataSource={filteredLogs}
             pagination={{ pageSize: 12 }}
-            scroll={{ x: 1080 }}
             onRow={(record) => ({ onClick: () => openDetail(record) })}
             locale={{ emptyText: <EmptyState title="暂无审计日志" description="当前筛选条件下没有真实审计记录。" /> }}
           />

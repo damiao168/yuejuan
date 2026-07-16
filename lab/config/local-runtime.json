@@ -1,0 +1,35 @@
+{
+  "schema_version": "local-runtime-v1",
+  "runtime": {
+    "name": "llama.cpp",
+    "release": "b10012",
+    "archive": "llama-b10012-bin-win-cpu-x64.zip",
+    "source_url": "https://github.com/ggml-org/llama.cpp/releases/download/b10012/llama-b10012-bin-win-cpu-x64.zip",
+    "url": "https://gh-proxy.com/https://github.com/ggml-org/llama.cpp/releases/download/b10012/llama-b10012-bin-win-cpu-x64.zip",
+    "expected_bytes": 18272064,
+    "expected_sha256": "08566bb86c4718c90d6ba65ef6c18f5cb3b10a1e579ea9886f6a8c329a1c5d86",
+    "install_dir": ".runtime/llama-b10012",
+    "server_binary": "llama-server.exe",
+    "benchmark_binary": "llama-bench.exe"
+  },
+  "model": {
+    "provider": "Qwen",
+    "repository": "Qwen/Qwen3-4B-GGUF",
+    "file": "Qwen3-4B-Q4_K_M.gguf",
+    "url": "https://modelscope.cn/models/Qwen/Qwen3-4B-GGUF/resolve/master/Qwen3-4B-Q4_K_M.gguf",
+    "expected_bytes": 2497280256,
+    "expected_sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+    "model_path": ".models/Qwen3-4B-Q4_K_M.gguf",
+    "quantization": "Q4_K_M",
+    "thinking_mode": "disabled_by_prompt"
+  },
+  "execution": {
+    "context_tokens": 4096,
+    "threads": 6,
+    "gpu_layers": 0,
+    "parallel_requests": 1,
+    "temperature": 0,
+    "seed": 42,
+    "max_output_tokens": 512
+  }
+}

@@ -1,6 +1,12 @@
 package subjective
 
-import "strings"
+import (
+	"math"
+	"strings"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
+)
 
 var supportedQuestionTypes = map[string]bool{
 	"short_answer": true,
@@ -31,8 +37,8 @@ func ValidatePolicy(policy ModelPolicy) error {
 	return nil
 }
 
-func ValidateOutput(output AdapterOutput, maxScore float64) error {
-	if output.SuggestedScore < 0 || output.SuggestedScore > maxScore {
+func ValidateOutput(output AdapterOutput, ctx Context) error {
+	if output.SuggestedScore < 0 || output.SuggestedScore > ctx.Question.Score {
 		return ErrInvalidModelOutput
 	}
 	if output.Confidence < 0 || output.Confidence > 1 {
@@ -41,7 +47,91 @@ func ValidateOutput(output AdapterOutput, maxScore float64) error {
 	if output.RawOutput == nil {
 		return ErrInvalidModelOutput
 	}
+	if output.Mock {
+		return nil
+	}
+	if strings.TrimSpace(output.RequestID) == "" || strings.TrimSpace(output.ModelVersion) == "" || strings.TrimSpace(output.PromptVersion) == "" || output.RubricVersion != ctx.Rubric.Version {
+		return ErrInvalidModelOutput
+	}
+	if output.DeliveryMode != "teacher_suggestion" && output.DeliveryMode != "shadow_only" {
+		return ErrInvalidModelOutput
+	}
+	if output.CapabilityProfile != "local-pilot-v1" || !output.NeedsHumanReview || strings.TrimSpace(output.StudentFeedback) == "" || strings.TrimSpace(output.TeacherNote) == "" {
+		return ErrInvalidModelOutput
+	}
+	if output.Telemetry.Adapter == "" || output.Telemetry.Attempts < 1 || output.Telemetry.Attempts > 2 || output.Telemetry.ElapsedMS < 0 {
+		return ErrInvalidModelOutput
+	}
+	rubricPoints := make(map[string]float64, len(ctx.Rubric.Points))
+	for _, point := range ctx.Rubric.Points {
+		if point.ID == "" || point.Score <= 0 {
+			return ErrInvalidModelOutput
+		}
+		rubricPoints[point.ID] = point.Score
+	}
+	classified := map[string]bool{}
+	matchedTotal := 0.0
+	for _, point := range output.MatchedPoints {
+		allowance, exists := rubricPoints[point.Code]
+		if !exists || classified[point.Code] || point.Score < 0 || point.Score > allowance || len(point.EvidenceIDs) == 0 {
+			return ErrInvalidModelOutput
+		}
+		classified[point.Code] = true
+		matchedTotal += point.Score
+	}
+	for _, point := range output.MissingPoints {
+		if _, exists := rubricPoints[point.Code]; !exists || classified[point.Code] || strings.TrimSpace(point.Reason) == "" {
+			return ErrInvalidModelOutput
+		}
+		classified[point.Code] = true
+	}
+	if len(classified) != len(rubricPoints) || math.Abs(matchedTotal-output.SuggestedScore) > 0.000001 {
+		return ErrInvalidModelOutput
+	}
+	evidenceByID := make(map[string]gradingEvidenceLink, len(output.Evidence))
+	normalizedAnswer := normalizeEvidenceText(ctx.AnswerText)
+	for _, evidence := range output.Evidence {
+		if evidence.EvidenceID == "" || evidence.RubricPointID == "" || evidence.Location != "answer_text" || evidence.Confidence < 0 || evidence.Confidence > 1 || strings.TrimSpace(evidence.AnswerText) == "" {
+			return ErrInvalidModelOutput
+		}
+		if _, exists := evidenceByID[evidence.EvidenceID]; exists {
+			return ErrInvalidModelOutput
+		}
+		if !strings.Contains(normalizedAnswer, normalizeEvidenceText(evidence.AnswerText)) {
+			return ErrInvalidModelOutput
+		}
+		evidenceByID[evidence.EvidenceID] = gradingEvidenceLink{rubricPointID: evidence.RubricPointID}
+	}
+	referenced := map[string]bool{}
+	for _, point := range output.MatchedPoints {
+		for _, evidenceID := range point.EvidenceIDs {
+			link, exists := evidenceByID[evidenceID]
+			if !exists || link.rubricPointID != point.Code || referenced[evidenceID] {
+				return ErrInvalidModelOutput
+			}
+			referenced[evidenceID] = true
+		}
+	}
+	if len(referenced) != len(evidenceByID) {
+		return ErrInvalidModelOutput
+	}
 	return nil
+}
+
+type gradingEvidenceLink struct {
+	rubricPointID string
+}
+
+func normalizeEvidenceText(value string) string {
+	value = strings.ToLower(norm.NFKC.String(value))
+	var builder strings.Builder
+	for _, current := range value {
+		if unicode.IsSpace(current) || unicode.IsPunct(current) {
+			continue
+		}
+		builder.WriteRune(current)
+	}
+	return builder.String()
 }
 
 func InspectPromptInjection(answerText string) PromptGuard {
@@ -120,6 +210,10 @@ func IsSupportedQuestionType(kind string) bool {
 }
 
 func ApplyReviewPolicy(output *AdapterOutput, ctx Context, policy ModelPolicy) {
+	if !output.Mock {
+		output.NeedsHumanReview = true
+		output.RiskFlags = appendFlag(output.RiskFlags, "human_review_required")
+	}
 	if output.Confidence < policy.MinConfidence {
 		output.NeedsHumanReview = true
 		output.RiskFlags = appendFlag(output.RiskFlags, "low_model_confidence")

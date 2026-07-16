@@ -127,8 +127,8 @@ func NewAIServiceChecker(cfg config.AIServiceConfig) Checker {
 	}
 	return HTTPChecker{
 		checkerName: "ai_service",
-		url:         strings.TrimRight(url, "/") + "/health",
-		detail:      "AI service /health",
+		url:         strings.TrimRight(url, "/") + "/ready",
+		detail:      "grading-agent model readiness /ready",
 	}
 }
 

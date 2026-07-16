@@ -1,0 +1,45 @@
+{
+  "schema_version": "dataset-source-lock-v1",
+  "source_id": "jorgpt_zenodo_18981627_en",
+  "provider": "Zenodo",
+  "concept_doi": "10.5281/zenodo.18369061",
+  "record_id": 18981627,
+  "record_doi": "10.5281/zenodo.18981627",
+  "publication_date": "2026-03-12",
+  "title": "A Multilingual Dataset of Student Answers, Human Grading, and Multi-LLM Evaluations for Automated Assessment Research using JorGPT",
+  "creators": ["Jorge, Cisneros-González", "Javier Sánchez-Soriano"],
+  "license": {
+    "id": "CC-BY-4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/"
+  },
+  "file": {
+    "name": "dataset_en.csv",
+    "url": "https://zenodo.org/api/records/18981627/files/dataset_en.csv/content",
+    "expected_bytes": 14558120,
+    "expected_md5": "196825ce723a632b1b117efc187b0147",
+    "expected_sha256": "1d5deb07247a415181f1999e66763c29a2a4df9130d0ad6e9bc813f64343653c"
+  },
+  "expected_columns": [
+    "entry_id",
+    "question_id",
+    "question_text",
+    "student_answer",
+    "ideal_answer",
+    "student_anom_id",
+    "deepseek_raw_json",
+    "deepseek_grade",
+    "qwen_raw_json",
+    "qwen_grade",
+    "gemini_raw_json",
+    "gemini_grade",
+    "judge_status",
+    "judge_raw_json",
+    "judge_grade",
+    "student_answer_length",
+    "teacher_grade",
+    "teacher_feedback",
+    "teacher_corrected_at",
+    "teacher_corrected"
+  ],
+  "attribution": "Cisneros-González and Sánchez-Soriano, JorGPT dataset, Zenodo record 18981627, licensed CC BY 4.0."
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { join } from "node:path";
-import { writeEvaluationReport, runEvaluation } from "../src/evaluators/runEval.js";
+import { writeEvaluationReport, runEvaluationAsync } from "../src/evaluators/runEval.js";
 
 function parseArgs(argv) {
   const args = {};
@@ -22,7 +22,7 @@ const filters = {
   tag: args.tag
 };
 
-const report = runEvaluation({ datasetPath, adapterName: adapter, filters });
+const report = await runEvaluationAsync({ datasetPath, adapterName: adapter, filters });
 writeEvaluationReport(
   report,
   join("evals", "reports", "latest-report.json"),

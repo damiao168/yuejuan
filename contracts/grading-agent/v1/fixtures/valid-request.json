@@ -1,0 +1,56 @@
+{
+  "schema_version": "grading-agent-v1",
+  "request_id": "subjective-grade-0001",
+  "subject": "chinese",
+  "grade_level": "junior_middle",
+  "question_id": "question-001",
+  "answer_segment_id": "segment-001",
+  "question_type": "short_answer",
+  "question_text": "请概括文中主人公选择留下的原因。",
+  "max_score": 4,
+  "answer_text": "因为他对家乡有责任感，也希望帮助村里的孩子继续读书。",
+  "ocr_confidence": 0.96,
+  "rubric_version": "rubric-v3",
+  "prompt_version": "subjective-local-structured-v2",
+  "rubric": {
+    "rubric_id": "rubric-001",
+    "rubric_version": "rubric-v3",
+    "question_type": "short_answer",
+    "max_score": 4,
+    "allow_partial_total": false,
+    "points": [
+      {
+        "id": "p1",
+        "description": "指出主人公对家乡有责任感",
+        "score": 2,
+        "required": true,
+        "aliases": ["责任感", "责任"],
+        "evidence_required": true,
+        "match_policy": "semantic"
+      },
+      {
+        "id": "p2",
+        "description": "指出主人公希望帮助孩子继续读书",
+        "score": 2,
+        "required": true,
+        "aliases": ["帮助孩子", "继续读书"],
+        "evidence_required": true,
+        "match_policy": "semantic"
+      }
+    ],
+    "deductions": [],
+    "equivalent_answers": [],
+    "examples": [],
+    "scoring_notes": []
+  },
+  "model_policy": {
+    "mode": "shadow",
+    "model_version": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+    "min_confidence": 0.8
+  },
+  "prompt_guard": {
+    "student_answer_is_untrusted": true,
+    "suspected_injection": false,
+    "signals": []
+  }
+}

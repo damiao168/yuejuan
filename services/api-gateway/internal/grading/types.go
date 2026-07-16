@@ -43,17 +43,23 @@ type RecordAnswerInput struct {
 }
 
 type PointResult struct {
-	Code  string  `json:"code"`
-	Label string  `json:"label"`
-	Score float64 `json:"score"`
+	Code        string   `json:"code"`
+	Label       string   `json:"label"`
+	Score       float64  `json:"score"`
+	EvidenceIDs []string `json:"evidence_ids,omitempty"`
+	Reason      string   `json:"reason,omitempty"`
 }
 
 type Evidence struct {
 	Type           string    `json:"type"`
+	EvidenceID     string    `json:"evidence_id,omitempty"`
+	RubricPointID  string    `json:"rubric_point_id,omitempty"`
 	AnswerSegment  string    `json:"answer_segment_id,omitempty"`
 	AnswerText     string    `json:"answer_text,omitempty"`
 	StandardAnswer string    `json:"standard_answer,omitempty"`
 	Rule           string    `json:"rule,omitempty"`
+	Location       string    `json:"location,omitempty"`
+	Confidence     float64   `json:"confidence,omitempty"`
 	BBox           []float64 `json:"bbox,omitempty"`
 }
 

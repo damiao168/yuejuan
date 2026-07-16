@@ -1,0 +1,60 @@
+{
+  "schema_version": "annotation-workflow-demo-report-v1",
+  "generated_at": "2026-07-15T07:13:43.307Z",
+  "synthetic_only": true,
+  "plan": {
+    "plan_id": "synthetic-workflow-demo-v1",
+    "dataset_sha256": "23b1c8a43c311516979ff7ae76588b0748b117d4556adaee14340a3e6ed0895d",
+    "roster_sha256": "3270dc4c26f942847d925e030fd4d961aba9d0ebef3d741e0b784317feea9696",
+    "samples": 3,
+    "assignments": 6,
+    "workloads": {
+      "teacher-a": 3,
+      "teacher-b": 3
+    },
+    "pair_counts": {
+      "teacher-a+teacher-b": 3
+    },
+    "teacher_packet_hashes_valid": true,
+    "teacher_packets_blind": true
+  },
+  "merge": {
+    "teacher_submissions": 6,
+    "pending_teacher_assignments": 0,
+    "completed_without_adjudication": 2,
+    "adjudication_assignments": 1,
+    "independent_adjudicators": true,
+    "adjudicator_packet_hashes_valid": true
+  },
+  "final": {
+    "state": "complete",
+    "bundles": 3,
+    "adjudicated": 1,
+    "all_bundles_valid": true,
+    "gold_records": 3,
+    "agreement_metrics": {
+      "double_scored_count": 3,
+      "qwk": 0.8,
+      "exact_agreement": 0.6666666666666666,
+      "adjacent_agreement": 0.6666666666666666,
+      "normalized_mae": 0.16666666666666666,
+      "normalized_score_bias_label2_minus_label1": 0.16666666666666666,
+      "point_agreement": 0.8333333333333334,
+      "adjudication_rate": 0.3333333333333333
+    },
+    "dev_gate": {
+      "level": "dev",
+      "passed": true,
+      "reasons": []
+    },
+    "pilot_gate": {
+      "level": "pilot",
+      "passed": false,
+      "reasons": [
+        "double_scored_count 3 < 500",
+        "normalized_mae 0.16666666666666666 > 0.08",
+        "point_agreement 0.8333333333333334 < 0.85"
+      ]
+    }
+  }
+}
