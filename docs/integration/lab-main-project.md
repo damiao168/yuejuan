@@ -1,9 +1,16 @@
 # Lab-to-main-project integration
 
-The grading-agent Lab is now connected to the main repository as an offline
-quality boundary. The connection is intentionally one-way: Lab evaluation results
-can block a verification run, but Lab code cannot publish grades or bypass the Go
-API gateway's review and finalization workflow.
+The Lab is connected to the main repository in two layers:
+
+1. The offline Lab quality boundary validates capabilities, prompts, evidence,
+   model candidates, datasets, calibration and release gates.
+2. The governed `grading-agent` service promotes the Lab contract and local
+   llama.cpp adapter behind the Go API Gateway. It accepts identity-free requests
+   and returns teacher suggestions only.
+
+The connection is intentionally one-way for authority: Lab evaluation results can
+block a verification run, but neither Lab code nor the grading-agent can publish
+grades or bypass the Go API gateway's review and finalization workflow.
 
 Run the integrated check from the repository root:
 
@@ -29,6 +36,7 @@ The gate must keep these properties true:
 - Pilot readiness remains `NOT_READY` until governed in-domain data, teacher
   agreement, calibration/fairness, and real model-selection evidence exist
 
-This integration does not implement STORY-057, STORY-058, or STORY-059. Those
-stories remain paused; no grading-agent service, browser-to-model call, or real
-model rollout is enabled by this gate.
+The service-level contract, Python grading-agent, Go HTTP adapter, persistence
+metadata, Compose wiring and opt-in real-model adapter E2E are implemented in
+STORY-057 through STORY-059. A Docker Compose end-to-end run is still an
+environment-dependent verification step and requires a running Docker daemon.

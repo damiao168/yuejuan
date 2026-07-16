@@ -1,106 +1,238 @@
 # EduGrade Enterprise
 
-企业级多智能体智能阅卷与学情诊断平台。
+EduGrade Enterprise 是面向学校和教育机构的企业级智能阅卷与学情分析平台。项目采用 monorepo 组织，覆盖试卷配置、答卷采集、OCR、切题、客观题评分、主观题智能阅卷、人工复核、仲裁、成绩发布、申诉和学习分析。
 
-当前仓库按 Story 分步推进，已建立 monorepo、PRD、架构、数据库设计和 Go API Gateway，并逐步交付后端核心业务能力。后续功能仍按 `docs/stories` 中的 Story 顺序逐步实现、测试和审批。
+当前主线已经接入 Lab 的智能体阅卷能力，但仍遵守“建议优先、人工决策”的产品边界：模型输出只能作为教师建议，不能直接发布为最终成绩。
 
 ## 产品边界
 
-EduGrade Enterprise 的目标形态是：
+- Web 管理后台负责考试、试卷、Rubric、答卷、阅卷、成绩和运营配置。
+- Go API Gateway 是所有生产业务请求和评分结果落库的唯一入口。
+- Python `grading-agent` 只处理去身份化的主观题评分请求，返回带证据的教师建议。
+- Lab 是模型、提示词、证据验证和质量门禁的离线边界，不直接访问生产数据库，也不能发布成绩。
+- 最终成绩必须经过教师复核、必要时的双评/仲裁，并由平台显式发布和锁定。
 
-- Web 管理后台
-- Windows EXE 客户端
-- 后端 API 服务
-- AI Agent 服务
-- OCR 服务接口
-- 报告服务
-- 审计服务
-- Docker Compose 私有化部署
-- 文档与验收体系
+## 核心链路
 
-AI 阅卷只提供建议分，必须保留人工确认、复核、仲裁和审计链路。尚未实现的能力必须明确标注为待实现、stub 或 mock，不允许冒充真实能力。
+```mermaid
+flowchart LR
+  A[考试/试卷/Rubric 配置] --> B[答卷文件上传与采集]
+  B --> C[OCR 与页面质量检查]
+  C --> D[答案切题与版本化]
+  D --> E{评分类型}
+  E -->|客观题| F[Go 规则评分]
+  E -->|主观题| G[Go Subjective API]
+  G --> H[内部 grading-agent]
+  H --> I[Lab 评测契约与本地 llama.cpp]
+  I --> J[答案证据与采分点建议]
+  J --> K[教师复核/双评/仲裁]
+  F --> K
+  K --> L[最终成绩确认、发布与审计]
+```
 
-## 当前状态
+主观题链路的关键约束：
 
-> 2026-07-10 快照：STORY-001～STORY-052 已按现有范围完成交付。本轮完成多租户、文件关系、任务租约、成绩状态机、生产配置、Worker 异常恢复和 Web 生产界面加固，并在真实 Docker 环境完成 8 服务 healthy、`000001`～`000024` migration、MinIO private bucket、管理员登录、重复初始化、PostgreSQL/MinIO 备份与隔离恢复验证。当前可用于受控联调和试点准备；正式上线仍需真实密钥/TLS、生产规模迁移窗口、OCR/quality 业务 E2E、性能和安全门禁。
+| 能力 | 当前行为 |
+| --- | --- |
+| 短答题、计算题 | 可生成 `teacher_suggestion`，必须人工复核 |
+| 作文、论述题 | 仅保存 `shadow_only` 影子结果 |
+| 证据 | 必须来自学生答案文本，服务端重新校验 |
+| 分数 | 服务端根据匹配采分点重新计算，不信任模型总分 |
+| 置信度 | 当前固定为 `0`，表示尚未完成生产校准 |
+| 最终成绩 | AI 不具备发布权限，`final_grade` 只能由业务流程确认 |
 
-- 已建立企业级 monorepo 骨架。
-- 已建立 Story 分步交付规则。
-- 已实现 Go API Gateway 基础服务、健康检查、依赖检查、session 认证、RBAC 中间件、组织管理基础 API、考试管理 API、试卷文件元数据登记、题目配置、Rubric 版本管理、私有文件上传/下载 API、答卷采集 Submission API、OCR 任务/结果接口、answer_segment 元数据生成、多智能体 Orchestrator 控制面、客观题/填空题规则判分、主观题 AI 评分接口层、规则级证据校验 Agent、人工复核/阅卷任务后端 API、双评策略、双评会话、仲裁任务、`final_grade` 后端写入、最终成绩汇总、确认、发布、锁定、学生已发布成绩查询、CSV 导出、学生申诉创建/处理/改分留痕/关闭/统计后端 API，以及学情报告、班级报告、题目分析、阅卷质量分析和报告 CSV 导出后端 API。
-- 已实现 `apps/web-admin` 的 Web 管理后台基础框架：React + TypeScript + Vite + Ant Design，包含登录页、主布局、导航、权限路由、API Client、统一状态组件、表格/表单封装和清晰标注的 mock 框架页；考试管理页面、试卷与 Rubric 配置页面、答卷采集页面、阅卷工作台、双评仲裁页面、成绩管理与发布页面、学情报告页面、申诉中心页面、审计日志页面已对接真实后端 API，并在缺少真实 token 时显示明确错误状态，不回退 mock 数据。其他业务页面仍按后续 Story 对接真实 API。
-- 已建立 `apps/desktop-client` 的 Windows EXE 客户端骨架：Tauri 2 + React + TypeScript，包含服务端配置、真实登录 API、真实复核任务列表 API、扫描工作站、离线阅卷基础工作台、同步队列、系统诊断、本地日志和清晰标注的“未配置/待接入”本地能力状态。扫描工作站已支持真实考试选择、批量 PDF/图片预览、本地质量检查、可恢复队列元数据、断网检测、联网后续传当前会话文件、失败重试、真实文件上传 API、submission page 关联和服务端质量门禁入口。离线阅卷基础工作台已支持获取当前教师任务、聚合真实任务包 API、当前会话答案图片预览、Rubric/AI/OCR 展示、Web Crypto 加密草稿、同步前冲突检测、真实人工评分提交入口、同步状态和过期缓存清理。
-- 已实现 PostgreSQL 驱动的 Agent Worker Runtime 和语言无关 HTTP Worker 协议，覆盖 claim、lease/heartbeat、幂等完成、失败重试、超时恢复、死信、取消、人工重投、指标和审计；OCR 与图像质量任务已接入该运行时。River、Temporal 等未引入。
-- 已实现独立 Python OCR Worker，可从私有文件接口读取输入、调用配置的 OCR 引擎并回写 text、bbox、confidence、引擎/模型/配置版本。PaddleOCR 是当前本地部署候选，但是否达到生产效果仍需用本项目已授权真实试卷样本评测，不能只凭接口跑通判定。
-- 已实现独立 Python 图像质量 Worker，覆盖模糊、曝光、倾斜、缺边/空白等质量指标、输入尺寸上限、标准化 RGB PNG、不可变 quality run、租约重试和确定性错误终止；低质量页面可在 OCR 前被质量门禁拦截。
-- 已提供 `infra/docker-compose` 私有化演示部署配置，包含 API Gateway、Web Admin、PostgreSQL、Redis、MinIO、Qdrant、AI services 占位、Nginx，以及可选 Prometheus/Grafana；提供 `.env.example`、迁移服务、MinIO bucket 初始化、初始化脚本、备份/恢复脚本和部署 README。
-- 已完成 STORY-052 预生产部署闭环：配置预检、可替换基础镜像、migration filename/SHA-256 tracking、旧库显式 baseline、可重复初始化、匿名/登录冒烟、二进制安全备份、manifest/hash、隔离数据库恢复和 MinIO 对象恢复。操作见 [预生产部署 Runbook](docs/deployment/preproduction-runbook.md)。
-- 真实主观题模型推理、语义/视觉证据核验、图片裁剪/自动版面切分、真实扫描仪驱动、完整离线阅卷、自动更新服务、学生端页面等能力尚未实现；现有主观题 AI、证据和部分桌面能力只提供接口边界、规则能力或明确的待接入状态，不得作为真实生产能力宣传。
-- 本轮优化的改动、验证证据、未执行项和剩余风险见 [已完成范围系统性优化报告](docs/reviews/completed-system-optimization-report.md)。
+## 当前已接入能力
 
-## 目录结构
+- Go API Gateway：认证、租户隔离、RBAC、考试/试卷/答卷、OCR 任务、切题、评分、复核、仲裁、成绩和报表 API。
+- Web Admin：React 19、TypeScript、Vite、Ant Design，包含考试工作区、试卷与 Rubric、答卷采集、阅卷工作台、仲裁、成绩、申诉、审计和阅卷运营页面。
+- Desktop Client：Tauri 2 + React + TypeScript，提供扫描工作站、离线阅卷基础能力、同步队列和本地诊断入口。
+- AI 服务：`ai-services/grading_agent` 提供内部认证、幂等、模型就绪检查、输出校验、证据校验和隐私安全遥测。
+- Lab：本地模型适配器、能力矩阵、提示词注册、合成评测、对抗样本、校准/公平性检查和发布门禁。
+- 私有化部署：Docker Compose 包含 API、Web、PostgreSQL、Redis、MinIO、Qdrant、内部 `grading-agent`、Nginx，以及可选的迁移、OCR、质量和可观测性服务。
+
+## 技术栈
+
+- 前端：React 19、TypeScript、Vite、Ant Design、Recharts、Framer Motion。
+- 后端：Go 1.24、PostgreSQL、Redis、MinIO、Qdrant。
+- Agent 服务：Python 3.11+、标准库 HTTP 服务、OpenAI-compatible llama.cpp API。
+- 本地模型验证：Lab 固定候选模型与提示词版本，当前本地验证使用 Qwen3-4B GGUF。
+- 桌面端：Tauri 2、Rust、React、TypeScript。
+- 部署：Docker Compose、Nginx、PowerShell 运维脚本。
+
+## 仓库结构
 
 ```text
 apps/
-  web-admin/             Web 管理后台
-  desktop-client/        Windows EXE 客户端
-  teacher-portal/        教师 Web 端，预留
-  student-portal/        学生端，预留
-services/                后端服务边界
-ai-services/             AI/OCR/Agent 服务边界
-packages/                共享类型、SDK、UI、设计 token
-infra/                   私有化部署、Kubernetes、监控、脚本
-docs/                    PRD、架构、API、数据库、安全、UI、部署
-tests/                   e2e、load、security、ai-evaluation
+  web-admin/                 Web 管理后台
+  desktop-client/            Windows/Tauri 客户端
+  teacher-portal/            教师端预留边界
+  student-portal/            学生端预留边界
+services/
+  api-gateway/               Go API、业务流程、数据库迁移和 Worker Runtime
+ai-services/
+  grading_agent/             内部智能体阅卷服务
+  prompts/                   版本化提示词及 manifest
+contracts/
+  grading-agent/v1/          跨服务请求、响应和错误契约
+lab/
+  config/                    能力、数据集、模型和发布门禁配置
+  src/                       评测、模型适配器、证据和质量逻辑
+  evals/                     受治理数据、报告和回归样本
+infra/docker-compose/        私有化部署、预检、初始化、备份和恢复
+docs/                        PRD、架构、API、数据库、安全、部署和 Story
+tests/                       E2E、负载、安全和容器验收测试
+scripts/                    主项目与 Lab 集成门禁脚本
 ```
 
-## Story 工作流
+## 本地开发
 
-每次只执行一个 Story。Story 完成后由 Codex 按该 Story 的验收标准自审自批，再进入下一个 Story。
+### 环境要求
 
-当前顺序见 [docs/stories/README.md](docs/stories/README.md)。
+- Node.js 20+ 和 npm。
+- Go 1.24。
+- Python 3.11+。
+- Docker Desktop（运行 Compose 和容器 E2E 时需要）。
+- 构建桌面端还需要 Rust、Cargo 以及 Tauri 的 Windows 打包依赖。
 
-## 开发命令
+### 安装依赖与启动 Web
 
-当前 Web 管理后台基础框架已可构建。常用命令：
-
-```bash
+```powershell
 npm.cmd install
 npm.cmd run typecheck
 npm.cmd run build
 npm.cmd run dev
 ```
 
-桌面客户端常用命令：
+默认 Web 管理后台地址为 `http://127.0.0.1:5173`（以 Vite 输出为准）。
 
-```bash
+桌面端命令：
+
+```powershell
 npm.cmd --workspace apps/desktop-client run dev
 npm.cmd --workspace apps/desktop-client run build
 npm.cmd --workspace apps/desktop-client run tauri:dev
 npm.cmd --workspace apps/desktop-client run tauri:build
 ```
 
-`tauri:dev` 和 `tauri:build` 需要本机安装 Rust/Cargo 以及 Windows 打包依赖。
+### Go API 与 Agent 测试
 
-Docker Compose 私有化演示：
+```powershell
+Set-Location services/api-gateway
+go test ./... -count=1
 
-```bash
-cd infra/docker-compose
-copy .env.example .env
-docker compose --env-file .env -f docker-compose.yml config
-powershell -ExecutionPolicy Bypass -File .\scripts\init.ps1
+Set-Location ../..
+$env:PYTHONPATH = "ai-services"
+python -m unittest discover -s ai-services/tests -p "test_*.py"
 ```
 
-## Lab quality gate
+## Lab 与真实模型验证
 
-The `lab/` directory is part of the main-project verification flow, while remaining
-an offline evaluation boundary. It does not publish grades or enable a real model in
-the platform runtime. Run the integrated preflight from the repository root:
+Lab 的集成检查从仓库根目录执行：
 
-```bash
+```powershell
 npm.cmd run check:lab-integration
+npm.cmd run check:story057
 ```
 
-The check runs Lab unit tests, the synthetic evaluation, the development release
-gate, and the Go objective-grading tests. It also fails closed if the Lab artifacts
-stop declaring suggestion-only behavior or if Pilot readiness is reported as ready
-without real-data evidence. Stories 57-59 remain outside this integration gate.
+该检查会运行 Lab 单测、合成评测、开发级发布门禁、主项目客观题测试，以及能力边界、证据、分数上限、Mock 标记和 Pilot readiness 检查。
+
+需要验证本地 Qwen3-4B 模型时：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File lab\scripts\prepare-local-runtime.ps1
+powershell -ExecutionPolicy Bypass -File lab\scripts\start-local-server.ps1 -Candidate qwen3_4b
+```
+
+llama.cpp 默认监听 `127.0.0.1:8087`。模型和运行时文件位于 `lab/.runtime`，不会提交到 Git。
+
+## Docker Compose 私有化部署
+
+先准备配置：
+
+```powershell
+Set-Location infra\docker-compose
+Copy-Item .env.example .env
+```
+
+在 `.env` 中替换数据库、Redis、MinIO、Grafana 密码，以及长度不少于 32 个字符的 `EDUGRADE_AI_SERVICE_TOKEN`。不要把真实密钥写入仓库。
+
+如果使用 Lab 本地模型，启动模型后同步 API key：
+
+```powershell
+.\scripts\sync-local-grading-model-key.ps1
+.\scripts\preflight.ps1
+.\scripts\init.ps1
+docker compose --env-file .env -f docker-compose.yml up -d --build
+```
+
+`grading-agent` 只监听 Compose 内网 `8100`，不映射宿主机端口，也不经过 Nginx 暴露。它通过 `host.docker.internal:8087` 访问宿主机上的 llama.cpp。
+
+常用地址：
+
+- Web：`http://127.0.0.1:8088`
+- API：`http://127.0.0.1:8080`
+- MinIO Console：`http://127.0.0.1:9001`
+- Qdrant：`http://127.0.0.1:6333`
+
+容器健康检查：
+
+```powershell
+docker compose --env-file .env -f docker-compose.yml ps
+docker compose --env-file .env -f docker-compose.yml exec grading-agent wget -q -O - http://127.0.0.1:8100/health
+docker compose --env-file .env -f docker-compose.yml exec grading-agent wget -q -O - http://127.0.0.1:8100/ready
+```
+
+更多备份、恢复、升级和隔离验收步骤见 [`infra/docker-compose/README.md`](infra/docker-compose/README.md) 和 [`docs/deployment/preproduction-runbook.md`](docs/deployment/preproduction-runbook.md)。
+
+## 质量门禁与验证命令
+
+常用检查：
+
+```powershell
+npm.cmd run typecheck
+npm.cmd run build
+npm.cmd run check:lab-integration
+npm.cmd run check:story057
+Set-Location services/api-gateway; go test ./... -count=1
+```
+
+Compose 配置检查：
+
+```powershell
+docker compose --env-file infra\docker-compose\.env.example `
+  -f infra\docker-compose\docker-compose.yml config -q
+```
+
+真实模型适配器 E2E 是显式 opt-in 的长耗时测试，需要先启动本地 Agent 和 llama.cpp：
+
+```powershell
+Set-Location services/api-gateway
+$env:EDUGRADE_REAL_GRADING_AGENT_URL = "http://127.0.0.1:18100"
+$env:EDUGRADE_REAL_GRADING_AGENT_TOKEN = "<local-service-token>"
+go test ./internal/subjective -run TestHTTPAdapterRealLocalAgent -count=1 -v
+```
+
+## 当前状态与未完成项
+
+- Lab 到主项目的真实请求链路已经接入并通过本地模型验证。
+- AI 阅卷仍是影子建议，不具备自动发布最终成绩的权限。
+- `confidence=0` 是有意的治理信号，生产 Pilot 前还需要真实受治理数据、教师一致性、校准、公平性和模型选择证据。
+- 作文和论述题当前只允许 `shadow_only`。
+- Docker 容器级验收依赖本机 Docker Desktop 守护进程；没有可用 Docker 时，只能完成服务级和本地模型验证。
+- GGUF 模型、llama.cpp 二进制、运行时 API key、数据库密码和 `.env` 永远不应提交到 Git。
+
+## 重要文档
+
+- [主项目与 Lab 集成说明](docs/integration/lab-main-project.md)
+- [主观题阅卷 API](docs/api/subjective-grading.md)
+- [Grading Agent 生产契约](docs/stories/STORY-057-grading-agent-production-contract.md)
+- [Grading Agent 服务](docs/stories/STORY-058-grading-agent-service.md)
+- [平台接入与落库](docs/stories/STORY-059-platform-grading-agent-integration.md)
+- [私有化部署说明](infra/docker-compose/README.md)
+- [预生产部署 Runbook](docs/deployment/preproduction-runbook.md)
+- [Lab 使用说明](lab/README.md)
+- [Story 与验收文档](docs/stories)
+
+## Story 工作方式
+
+项目按 Story 推进。每个 Story 应明确范围、数据边界、失败语义、验收命令和未完成项；实现完成后先运行对应门禁，再更新 Story 文档和验证证据。不要用占位接口、Mock 数据或“接口能通”替代真实业务能力，也不要绕过人工复核和审计链路。
