@@ -1,0 +1,33 @@
+.git
+.gotmp
+.playwright-cli
+
+# Never send local credentials or private keys to BuildKit. Runtime
+# configuration is injected by Compose and does not belong in image contexts.
+.env
+.env.*
+**/.env
+**/.env.*
+**/secrets/**
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+
+**/node_modules
+**/dist
+**/coverage
+**/.pytest_cache
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+bin
+services/api-gateway/bin
+tmp
+output
+lab
+
+*.log
+*.test
+*.exe

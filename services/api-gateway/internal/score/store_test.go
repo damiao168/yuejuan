@@ -95,6 +95,16 @@ func TestConfirmPublishStudentLookupAndCSVExport(t *testing.T) {
 	if published.Status != "published" || !published.SubmissionGrades[0].Locked {
 		t.Fatalf("published grade mismatch: %#v", published)
 	}
+	if status := store.ExamStatusForTest("exam-1"); status != "published" {
+		t.Fatalf("exam status after publish = %q, want published", status)
+	}
+	quality, err := store.CheckQuality(context.Background(), tenantID, "exam-1", true)
+	if err != nil {
+		t.Fatalf("check quality after publish: %v", err)
+	}
+	if !quality.Passed {
+		t.Fatalf("published grades must remain quality-passed: %#v", quality)
+	}
 	studentGrade, err := store.GetStudentGrade(context.Background(), tenantID, "student-1", "exam-1")
 	if err != nil {
 		t.Fatalf("student lookup: %v", err)
@@ -133,6 +143,40 @@ func TestGradeStateTransitionsCannotMoveBackwardOrRepeat(t *testing.T) {
 	}
 	if _, err := store.PublishGrades(context.Background(), tenantID, "exam-1", "admin-1", PublishInput{Reason: "repeat"}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("repeated publish must be rejected, got %v", err)
+	}
+}
+
+func TestPublishRejectsInvalidExamStateWithoutLockingGrades(t *testing.T) {
+	store := seededScoreStore()
+	if _, err := store.FinalizeExam(context.Background(), tenantID, "exam-1", "manager-1"); err != nil {
+		t.Fatalf("finalize exam: %v", err)
+	}
+	if _, err := store.ConfirmGrades(context.Background(), tenantID, "exam-1", "leader-1", ConfirmInput{Reason: "checked"}); err != nil {
+		t.Fatalf("confirm grades: %v", err)
+	}
+	store.SetExamStatusForTest("exam-1", "archived")
+	if _, err := store.PublishGrades(context.Background(), tenantID, "exam-1", "admin-1", PublishInput{Reason: "release"}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("publish from archived exam must be rejected, got %v", err)
+	}
+	grades, err := store.ListExamGrades(context.Background(), tenantID, "exam-1")
+	if err != nil {
+		t.Fatalf("list grades: %v", err)
+	}
+	if len(grades) != 1 || grades[0].Status != "confirmed" || grades[0].Locked {
+		t.Fatalf("failed publish must preserve confirmed unlocked grades: %#v", grades)
+	}
+}
+
+func TestExamStatesEligibleForQualityGatedPublish(t *testing.T) {
+	for _, status := range []string{"draft", "configured", "ready", "collecting", "grading", "reviewing", "finalized"} {
+		if !canPublishExamStatus(status) {
+			t.Errorf("active exam status %q should be eligible for quality-gated publish", status)
+		}
+	}
+	for _, status := range []string{"", "published", "archived"} {
+		if canPublishExamStatus(status) {
+			t.Errorf("terminal or unknown exam status %q must not be publishable", status)
+		}
 	}
 }
 

@@ -88,12 +88,25 @@ export interface ReviewWorkspace {
     rubric?: Question["rubric"];
     raw_answer: string;
     ocr_text: string;
-    ai_suggestion: Record<string, unknown>;
+    ai_suggestion: AiGrade | null;
+    automation_result?: AutomationResult;
   };
   segment_image_url: string;
   original_image_url?: string;
   segment_status: string;
   segment_confidence?: number;
+}
+
+export interface AutomationResult {
+  source?: string;
+  recognized_answer?: string;
+  confidence?: number;
+  decision?: string;
+  standard_answer?: unknown;
+  rule_type?: string;
+  score?: number;
+  max_score?: number;
+  grade_source?: string;
 }
 
 export interface FinalGrade {
@@ -171,6 +184,8 @@ export interface AiGrade {
   rule_version?: string;
   model_version?: string;
   prompt_version?: string;
+  rubric_version?: string;
+  delivery_mode?: "teacher_review" | "teacher_suggestion" | "shadow_only";
   suggested_score: number;
   max_score: number;
   confidence: number;
@@ -219,6 +234,7 @@ export interface EvidenceJob {
 export interface ReviewTaskFilter {
   status?: string;
   assigned_to?: string;
+  exam_id?: string;
 }
 
 export interface ScoringRun {
@@ -255,7 +271,17 @@ export interface ScoringRunItem {
   question_id: string;
   question_no: string;
   question_type: string;
+  anonymous_code: string;
   state: string;
+  recognition_source?: string;
+  recognized_answer?: string;
+  recognition_decision?: string;
+  recognition_confidence?: number;
+  standard_answer?: unknown;
+  rule_type?: string;
+  score?: number;
+  max_score?: number;
+  grade_source?: string;
   omr_run_id?: string;
   runtime_task_id?: string;
   runtime_status?: string;
@@ -267,6 +293,10 @@ export interface ScoringRunItem {
 
 export interface ScoringRunDetail {
   scoring_run: ScoringRun;
+  items: ScoringRunItem[];
+}
+
+export interface ExamAutomationResults {
   items: ScoringRunItem[];
 }
 
@@ -324,13 +354,16 @@ export interface SubmitArbitrationResult {
   final_grade: FinalGrade;
 }
 
-function queryString(filter: { status?: string; assigned_to?: string }) {
+function queryString(filter: { status?: string; assigned_to?: string; exam_id?: string }) {
   const params = new URLSearchParams();
   if (filter.status) {
     params.set("status", filter.status);
   }
   if (filter.assigned_to) {
     params.set("assigned_to", filter.assigned_to);
+  }
+  if (filter.exam_id) {
+    params.set("exam_id", filter.exam_id);
   }
   const query = params.toString();
   return query ? `?${query}` : "";
@@ -346,6 +379,20 @@ export async function getReviewTask(id: string) {
 
 export async function getReviewWorkspace(id: string) {
   return apiClient.request<{ workspace: ReviewWorkspace }>(`/api/v1/review-tasks/${encodeURIComponent(id)}/workspace`);
+}
+
+export async function assignReviewTask(id: string, assignedTo: string) {
+  return apiClient.request<{ task: ReviewTask }>(`/api/v1/review-tasks/${encodeURIComponent(id)}/assign`, {
+    method: "POST",
+    body: JSON.stringify({ assigned_to: assignedTo })
+  });
+}
+
+export async function batchAssignReviewTasks(taskIds: string[], assignedTo: string) {
+  return apiClient.request<{ tasks: ReviewTask[] }>("/api/v1/review-tasks/batch-assign", {
+    method: "POST",
+    body: JSON.stringify({ task_ids: taskIds, assigned_to: assignedTo })
+  });
 }
 
 export async function downloadReviewWorkspaceImage(path: string) {
@@ -462,8 +509,16 @@ export async function getScoringSummary(examId: string) {
   return apiClient.request<{ scoring_summary: ScoringSummary }>(`/api/v1/exams/${encodeURIComponent(examId)}/scoring-summary`);
 }
 
+export async function getExamAutomationResults(examId: string) {
+  return apiClient.request<ExamAutomationResults>(`/api/v1/exams/${encodeURIComponent(examId)}/automation-results`);
+}
+
 export async function getScoringRun(runId: string) {
   return apiClient.request<ScoringRunDetail>(`/api/v1/scoring-runs/${encodeURIComponent(runId)}`);
+}
+
+export async function downloadScoringResultImage(segmentId: string) {
+  return apiClient.requestBlob(`/api/v1/answer-segments/${encodeURIComponent(segmentId)}/image`);
 }
 
 export async function cancelScoringRun(runId: string) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -109,6 +110,31 @@ func TestLoginMeLogout(t *testing.T) {
 	router.ServeHTTP(afterLogoutRec, afterLogout)
 	if afterLogoutRec.Code != http.StatusUnauthorized {
 		t.Fatalf("me after logout expected 401, got %d", afterLogoutRec.Code)
+	}
+}
+
+func TestInactiveTenantBlocksLoginAndExistingSession(t *testing.T) {
+	store := newTestStore(t)
+	router := newTestRouter(store)
+	token := login(t, router, "demo", "teacher", "ChangeMe123!")
+
+	store.SetTenantStatus("t-1", "inactive")
+
+	meReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	meReq.Header.Set("Authorization", "Bearer "+token)
+	meRec := httptest.NewRecorder()
+	router.ServeHTTP(meRec, meReq)
+	if meRec.Code != http.StatusUnauthorized {
+		t.Fatalf("inactive tenant session expected 401, got %d: %s", meRec.Code, meRec.Body.String())
+	}
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{
+		"tenant_code":"demo","username":"teacher","password":"ChangeMe123!"
+	}`))
+	loginRec := httptest.NewRecorder()
+	router.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusUnauthorized || !strings.Contains(loginRec.Body.String(), `"code":"invalid_credentials"`) {
+		t.Fatalf("inactive tenant login expected generic 401, got %d: %s", loginRec.Code, loginRec.Body.String())
 	}
 }
 
@@ -318,6 +344,50 @@ func TestLoginFailureRateLimited(t *testing.T) {
 	if !found {
 		t.Fatalf("expected auth.login_rate_limited audit, got %#v", audits)
 	}
+}
+
+func TestLoginStoreFailureReturnsUnavailableWithoutRateLimiting(t *testing.T) {
+	base := newTestStore(t)
+	store := &loginErrorStore{Store: base, err: errors.New("postgres is starting up")}
+	handler := auth.NewHandler(store, time.Hour, auth.HandlerOptions{
+		LoginFailureLimit:  1,
+		LoginFailureWindow: time.Hour,
+	})
+
+	for attempt := 0; attempt < 2; attempt++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"tenant_code":"demo","username":"teacher","password":"ChangeMe123!"}`))
+		rec := httptest.NewRecorder()
+		handler.Login(rec, req)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("attempt %d expected 503, got %d: %s", attempt+1, rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get("Retry-After") != "" {
+			t.Fatalf("dependency failure must not set login limiter Retry-After: %s", rec.Header().Get("Retry-After"))
+		}
+	}
+	if audits := base.Audits(); len(audits) != 0 {
+		t.Fatalf("dependency failure must not create invalid-login audits: %#v", audits)
+	}
+
+	store.err = nil
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"tenant_code":"demo","username":"teacher","password":"ChangeMe123!"}`))
+	rec := httptest.NewRecorder()
+	handler.Login(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid login after dependency recovery expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+type loginErrorStore struct {
+	auth.Store
+	err error
+}
+
+func (s *loginErrorStore) FindUserByLogin(ctx context.Context, tenantCode string, username string) (auth.UserWithPassword, error) {
+	if s.err != nil {
+		return auth.UserWithPassword{}, s.err
+	}
+	return s.Store.FindUserByLogin(ctx, tenantCode, username)
 }
 
 func TestListAuditsFiltersByTarget(t *testing.T) {

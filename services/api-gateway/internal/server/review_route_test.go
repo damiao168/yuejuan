@@ -29,6 +29,10 @@ const reviewGraderID = "00000000-0000-0000-0000-000000000602"
 const reviewSecondGraderID = "00000000-0000-0000-0000-000000000603"
 const reviewArbitratorID = "00000000-0000-0000-0000-000000000604"
 const reviewOtherArbitratorID = "00000000-0000-0000-0000-000000000605"
+const reviewInactiveGraderID = "00000000-0000-0000-0000-000000000606"
+const reviewInactiveArbitratorID = "00000000-0000-0000-0000-000000000607"
+const reviewCrossTenantUserID = "00000000-0000-0000-0000-000000000608"
+const reviewTeacherID = "00000000-0000-0000-0000-000000000609"
 
 func TestReviewTaskRoutesCreateAssignSubmitAndAudit(t *testing.T) {
 	authStore := reviewAuthStore(t, []string{"review:manage"})
@@ -67,6 +71,13 @@ func TestReviewTaskRoutesCreateAssignSubmitAndAudit(t *testing.T) {
 		t.Fatalf("assign review task expected assigned, got %d %s", rec.Code, rec.Body.String())
 	}
 
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/return", `{"reason":"needs second look"}`, managerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"returned"`) || !strings.Contains(rec.Body.String(), `"return_reason":"needs second look"`) {
+		t.Fatalf("return before submission expected returned task, got %d %s", rec.Code, rec.Body.String())
+	}
+
 	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/submit", `{"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"clear","reason":"manual review"}`, graderToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -74,17 +85,39 @@ func TestReviewTaskRoutesCreateAssignSubmitAndAudit(t *testing.T) {
 		t.Fatalf("submit human grade expected submitted grade, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/return", `{"reason":"needs second look"}`, managerToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/return", `{"reason":"must not invalidate committed grade"}`, managerToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"returned"`) || !strings.Contains(rec.Body.String(), `"return_reason":"needs second look"`) {
-		t.Fatalf("return review task expected returned, got %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "invalid_review_transition") {
+		t.Fatalf("submitted task return expected 409 without grade mutation, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	reviewAssertAuditAction(t, authStore, "review.task_created")
 	reviewAssertAuditAction(t, authStore, "review.task_assigned")
 	reviewAssertAuditAction(t, authStore, "review.human_grade_submitted")
 	reviewAssertAuditAction(t, authStore, "review.task_returned")
+}
+
+func TestReviewSubmitRejectsInconsistentRubric(t *testing.T) {
+	authStore := reviewAuthStore(t, []string{"review:manage"})
+	reviewStore := review.NewMemoryStore()
+	reviewStore.AddContext(reviewTenantID, "segment-1", reviewRouteContext())
+	router := reviewRouter(authStore, reviewStore)
+	managerToken := reviewLogin(t, router, "review_manager")
+	graderToken := reviewLogin(t, router, "review_grader")
+	taskID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "manual_sample")
+	assignReviewTaskForRoute(t, router, managerToken, taskID, reviewGraderID)
+
+	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/submit", `{"score":4,"rubric_selections":[{"point_id":"p1","score":3}]}`, graderToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_review_input") {
+		t.Fatalf("rubric total mismatch expected 400, got %d %s", rec.Code, rec.Body.String())
+	}
+	unchanged, err := reviewStore.GetTask(t.Context(), reviewTenantID, taskID)
+	if err != nil || unchanged.Status != "assigned" {
+		t.Fatalf("rejected grade must leave task assigned, task=%#v err=%v", unchanged, err)
+	}
 }
 
 func TestReviewTaskRoutesRequirePermission(t *testing.T) {
@@ -122,7 +155,13 @@ func TestReviewWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 		"review_grader":           {"review:work"},
 		"review_second_grader":    {"review:work"},
 		"review_arbitrator":       {"arbitration:work"},
-		"review_other_arbitrator": {"arbitration:work"},
+		"review_other_arbitrator": {"evidence:manage"},
+	})
+	addReviewManagedUser(t, authStore, auth.User{
+		ID: reviewTeacherID, TenantID: reviewTenantID, TenantCode: "demo", Username: "review_teacher",
+		DisplayName: "Review Teacher", Status: "active", Roles: []string{"teacher"}, Permissions: []string{
+			"review:manage", "arbitration:manage", "segment:manage", "grading:manage", "evidence:manage",
+		},
 	})
 	reviewStore := review.NewMemoryStore()
 	reviewStore.AddContext(reviewTenantID, "segment-1", reviewRouteContext())
@@ -130,6 +169,8 @@ func TestReviewWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 	router := reviewRouter(authStore, reviewStore)
 	managerToken := reviewLogin(t, router, "review_manager")
 	graderToken := reviewLogin(t, router, "review_grader")
+	evidenceOnlyToken := reviewLogin(t, router, "review_other_arbitrator")
+	teacherToken := reviewLogin(t, router, "review_teacher")
 
 	firstID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "manual_sample")
 	secondID := createReviewTaskForRoute(t, router, managerToken, "segment-2", "score_anomaly")
@@ -157,11 +198,95 @@ func TestReviewWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 		t.Fatalf("review worker should not get another assignee task, got %d %s", rec.Code, rec.Body.String())
 	}
 
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks", "", teacherToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), firstID) || strings.Contains(rec.Body.String(), secondID) {
+		t.Fatalf("teacher with review:manage must still see only assigned tasks, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+firstID, "", teacherToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("teacher with review:manage must not read another reviewer's task, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+secondID+"/assign", `{"assigned_to":"`+reviewGraderID+`"}`, teacherToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("teacher with review:manage must not assign review tasks, got %d %s", rec.Code, rec.Body.String())
+	}
+
 	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+secondID+"/assign", `{"assigned_to":"`+reviewGraderID+`"}`, graderToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("review worker should not assign tasks, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+firstID+"/draft", "", managerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("review manager must not read the assigned reviewer's draft, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPut, "/api/v1/review-tasks/"+firstID+"/draft", `{"score":1,"rubric_selections":[],"viewer_state":{},"expected_revision":0}`, managerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("review manager must not write the assigned reviewer's draft, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+firstID+"/draft", "", graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("assigned reviewer should read their own draft, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/answer-segments/segment-1/image", "", graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("review worker should use task-scoped image route, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/answer-segments/segment-1/image", "", teacherToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin teacher must not bypass task scoping through the generic segment image route, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/answer-segments/segment-1/evidence", "", teacherToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin teacher must not read arbitrary segment evidence, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+firstID+"/original-image", "", graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("review worker must not access the identity-bearing original image, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+firstID+"/original-image", "", managerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("review manager should pass original-image authorization, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+firstID+"/original-image", "", evidenceOnlyToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin evidence manager must not access the original image, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+firstID+"/submit", `{"score":4,"rubric_selections":[{"point_id":"p1","score":4}]}`, graderToken)
@@ -176,6 +301,134 @@ func TestReviewWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("review worker should not return tasks, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReviewTaskClaimNextNeverImplicitlyAssignsPendingTask(t *testing.T) {
+	authStore := reviewAuthStoreByUser(t, map[string][]string{
+		"review_manager": {"review:manage"},
+		"review_grader":  {"review:work"},
+	})
+	reviewStore := review.NewMemoryStore()
+	reviewStore.AddContext(reviewTenantID, "segment-1", reviewRouteContext())
+	reviewStore.AddContext(reviewTenantID, "segment-2", reviewRouteContext())
+	router := reviewRouter(authStore, reviewStore)
+	managerToken := reviewLogin(t, router, "review_manager")
+	graderToken := reviewLogin(t, router, "review_grader")
+
+	pendingID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "manual_sample")
+	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/next", `{}`, graderToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("review worker must not claim an unassigned task, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/next", `{"allow_unassigned":true}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("claim permission must not be client-controlled, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/next", `{}`, managerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("review manager must explicitly assign a pending task instead of self-claiming it, got %d %s", rec.Code, rec.Body.String())
+	}
+	pendingTask, err := reviewStore.GetTask(t.Context(), reviewTenantID, pendingID)
+	if err != nil || pendingTask.Status != "pending" || pendingTask.AssignedTo != "" {
+		t.Fatalf("denied implicit claim must leave the pending task unchanged, task=%#v err=%v", pendingTask, err)
+	}
+
+	assignedID := createReviewTaskForRoute(t, router, managerToken, "segment-2", "manual_sample")
+	assignReviewTaskForRoute(t, router, managerToken, assignedID, reviewGraderID)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/next", `{}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), assignedID) {
+		t.Fatalf("review worker should continue an explicitly assigned task, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReviewTaskReleaseKeepsAssignmentAndAllowsResume(t *testing.T) {
+	authStore := reviewAuthStoreByUser(t, map[string][]string{
+		"review_manager":       {"review:manage"},
+		"review_grader":        {"review:work"},
+		"review_second_grader": {"review:work"},
+	})
+	reviewStore := review.NewMemoryStore()
+	reviewStore.AddContext(reviewTenantID, "segment-1", reviewRouteContext())
+	router := reviewRouter(authStore, reviewStore)
+	managerToken := reviewLogin(t, router, "review_manager")
+	graderToken := reviewLogin(t, router, "review_grader")
+	secondGraderToken := reviewLogin(t, router, "review_second_grader")
+	taskID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "manual_sample")
+	assignReviewTaskForRoute(t, router, managerToken, taskID, reviewGraderID)
+
+	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/next", `{}`, graderToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), taskID) {
+		t.Fatalf("assigned reviewer should claim task before release, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/release", `{}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"assigned"`) || !strings.Contains(rec.Body.String(), `"assigned_to":"`+reviewGraderID+`"`) {
+		t.Fatalf("release should keep assignment and status, got %d %s", rec.Code, rec.Body.String())
+	}
+	stored, err := reviewStore.GetTask(t.Context(), reviewTenantID, taskID)
+	if err != nil || stored.AssignedTo != reviewGraderID || stored.Status != "assigned" {
+		t.Fatalf("release must preserve durable assignment, task=%#v err=%v", stored, err)
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks", ``, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), taskID) {
+		t.Fatalf("released task must remain in assigned reviewer's queue, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/release", `{}`, secondGraderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("different reviewer must not release assigned task, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/next", `{}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), taskID) {
+		t.Fatalf("assigned reviewer should resume task after release, got %d %s", rec.Code, rec.Body.String())
+	}
+	reviewAssertAuditAction(t, authStore, "review.task_released")
+}
+
+func TestReviewTaskListFiltersByExam(t *testing.T) {
+	authStore := reviewAuthStore(t, []string{"review:manage"})
+	reviewStore := review.NewMemoryStore()
+	reviewStore.AddContext(reviewTenantID, "segment-1", reviewRouteContext())
+	secondContext := reviewRouteContext()
+	secondContext.ExamID = "exam-2"
+	secondContext.SubmissionID = "submission-2"
+	secondContext.Question.ID = "question-2"
+	secondContext.Question.ExamID = "exam-2"
+	secondContext.Question.QuestionNo = "Q2"
+	reviewStore.AddContext(reviewTenantID, "segment-2", secondContext)
+	router := reviewRouter(authStore, reviewStore)
+	managerToken := reviewLogin(t, router, "review_manager")
+
+	firstID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "manual_sample")
+	secondID := createReviewTaskForRoute(t, router, managerToken, "segment-2", "manual_sample")
+	req := reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks?exam_id=exam-2", "", managerToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), firstID) || !strings.Contains(rec.Body.String(), secondID) {
+		t.Fatalf("exam-scoped task list should contain only the matching exam, got %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -200,6 +453,175 @@ func TestReviewTaskBatchAssignRoute(t *testing.T) {
 	reviewAssertAuditAction(t, authStore, "review.tasks_batch_assigned")
 }
 
+func TestReviewTaskAssignmentRequiresActiveGrader(t *testing.T) {
+	authStore := reviewAuthStoreByUser(t, map[string][]string{
+		"review_manager":    {"review:manage"},
+		"review_grader":     {"review:work"},
+		"review_arbitrator": {"arbitration:work"},
+	})
+	reviewStore := review.NewMemoryStore()
+	reviewStore.AddContext(reviewTenantID, "segment-1", reviewRouteContext())
+	router := reviewRouter(authStore, reviewStore)
+	managerToken := reviewLogin(t, router, "review_manager")
+	taskID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "ocr_low_confidence")
+
+	for _, target := range []string{reviewManagerID, reviewArbitratorID, reviewOtherArbitratorID} {
+		req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/assign", `{"assigned_to":"`+target+`"}`, managerToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("non-grader %s must not receive review task, got %d %s", target, rec.Code, rec.Body.String())
+		}
+	}
+
+	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/assign", `{"assigned_to":"`+reviewGraderID+`"}`, managerToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"assigned_to":"`+reviewGraderID+`"`) {
+		t.Fatalf("active grader should receive review task, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReviewOriginalImageRequiresAdministratorRole(t *testing.T) {
+	authStore := reviewAuthStoreByUser(t, map[string][]string{
+		"review_manager": {"review:manage"},
+	})
+	users := []auth.User{
+		{ID: reviewTeacherID, TenantID: reviewTenantID, TenantCode: "demo", Username: "privileged_teacher", DisplayName: "Privileged Teacher", Status: "active", Roles: []string{"teacher"}, Permissions: []string{"review:manage", "evidence:manage", "tenant:manage"}},
+		{ID: "00000000-0000-0000-0000-000000000610", TenantID: reviewTenantID, TenantCode: "demo", Username: "privileged_grader", DisplayName: "Privileged Grader", Status: "active", Roles: []string{"grader"}, Permissions: []string{"review:manage", "evidence:manage", "tenant:manage"}},
+		{ID: "00000000-0000-0000-0000-000000000611", TenantID: reviewTenantID, TenantCode: "demo", Username: "platform_admin", DisplayName: "Platform Admin", Status: "active", Roles: []string{"platform_admin"}, Permissions: []string{"review:manage"}},
+		{ID: "00000000-0000-0000-0000-000000000612", TenantID: reviewTenantID, TenantCode: "demo", Username: "tenant_admin", DisplayName: "Tenant Admin", Status: "active", Roles: []string{"tenant_admin"}, Permissions: []string{"evidence:manage"}},
+		{ID: "00000000-0000-0000-0000-000000000613", TenantID: reviewTenantID, TenantCode: "demo", Username: "school_admin", DisplayName: "School Admin", Status: "active", Roles: []string{"school_admin"}, Permissions: []string{"tenant:manage"}},
+	}
+	for _, user := range users {
+		addReviewManagedUser(t, authStore, user)
+	}
+	reviewStore := review.NewMemoryStore()
+	reviewStore.AddContext(reviewTenantID, "segment-1", reviewRouteContext())
+	router := reviewRouter(authStore, reviewStore)
+	managerToken := reviewLogin(t, router, "review_manager")
+	taskID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "manual_sample")
+
+	for _, username := range []string{"privileged_teacher", "privileged_grader"} {
+		t.Run("deny "+username, func(t *testing.T) {
+			token := reviewLogin(t, router, username)
+			req := reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+taskID+"/original-image", "", token)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("%s must not access an original review image despite management permissions, got %d %s", username, rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	for _, username := range []string{"platform_admin", "tenant_admin", "school_admin"} {
+		t.Run("allow "+username, func(t *testing.T) {
+			token := reviewLogin(t, router, username)
+			req := reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+taskID+"/original-image", "", token)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("%s should pass original-image authorization, got %d %s", username, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestDoubleMarkSessionRequiresActiveSameTenantGraders(t *testing.T) {
+	authStore := reviewAuthStoreByUser(t, map[string][]string{
+		"review_manager":       {"review:manage"},
+		"review_grader":        {"review:work"},
+		"review_second_grader": {"review:work"},
+	})
+	addReviewManagedUser(t, authStore, auth.User{
+		ID: reviewInactiveGraderID, TenantID: reviewTenantID, TenantCode: "demo",
+		Username: "review_inactive_grader", DisplayName: "Inactive Grader", Status: "inactive", Roles: []string{"grader"},
+	})
+	addReviewManagedUser(t, authStore, auth.User{
+		ID: reviewCrossTenantUserID, TenantID: "00000000-0000-0000-0000-000000000099", TenantCode: "other",
+		Username: "review_cross_tenant_grader", DisplayName: "Cross Tenant Grader", Status: "active", Roles: []string{"grader"},
+	})
+	reviewStore := review.NewMemoryStore()
+	reviewStore.AddContext(reviewTenantID, "segment-1", reviewRouteContext())
+	router := reviewRouter(authStore, reviewStore)
+	managerToken := reviewLogin(t, router, "review_manager")
+
+	req := reviewAuthedRequest(http.MethodPut, "/api/v1/exams/exam-1/double-mark-policy", `{"enabled":true,"threshold":1,"resolution_strategy":"average"}`, managerToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set double mark policy expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	for name, reviewers := range map[string][2]string{
+		"manager role":        {reviewManagerID, reviewSecondGraderID},
+		"arbitrator role":     {reviewGraderID, reviewArbitratorID},
+		"inactive grader":     {reviewGraderID, reviewInactiveGraderID},
+		"cross tenant grader": {reviewGraderID, reviewCrossTenantUserID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"answer_segment_id":"segment-1","first_reviewer_id":"` + reviewers[0] + `","second_reviewer_id":"` + reviewers[1] + `"}`
+			req := reviewAuthedRequest(http.MethodPost, "/api/v1/double-mark-sessions", body, managerToken)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("invalid double-mark reviewers expected 403, got %d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	body := `{"answer_segment_id":"segment-1","first_reviewer_id":"` + reviewGraderID + `","second_reviewer_id":"` + reviewSecondGraderID + `"}`
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/double-mark-sessions", body, managerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("two active same-tenant graders expected 201, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestArbitrationTaskCreateRequiresActiveSameTenantArbitrator(t *testing.T) {
+	authStore := reviewAuthStoreByUser(t, map[string][]string{
+		"review_manager":    {"arbitration:manage"},
+		"review_grader":     {"review:work"},
+		"review_arbitrator": {"arbitration:work"},
+	})
+	addReviewManagedUser(t, authStore, auth.User{
+		ID: reviewInactiveArbitratorID, TenantID: reviewTenantID, TenantCode: "demo",
+		Username: "review_inactive_arbitrator", DisplayName: "Inactive Arbitrator", Status: "inactive", Roles: []string{"arbitrator"},
+	})
+	addReviewManagedUser(t, authStore, auth.User{
+		ID: reviewCrossTenantUserID, TenantID: "00000000-0000-0000-0000-000000000099", TenantCode: "other",
+		Username: "review_cross_tenant_arbitrator", DisplayName: "Cross Tenant Arbitrator", Status: "active", Roles: []string{"arbitrator"},
+	})
+	router := reviewRouter(authStore, review.NewMemoryStore())
+	managerToken := reviewLogin(t, router, "review_manager")
+
+	for name, assigneeID := range map[string]string{
+		"manager role":            reviewManagerID,
+		"grader role":             reviewGraderID,
+		"inactive arbitrator":     reviewInactiveArbitratorID,
+		"cross tenant arbitrator": reviewCrossTenantUserID,
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"double_mark_session_id":"missing-session","assigned_to":"` + assigneeID + `"}`
+			req := reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks", body, managerToken)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("invalid arbitration assignee expected 403, got %d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	body := `{"double_mark_session_id":"missing-session","assigned_to":"` + reviewArbitratorID + `"}`
+	req := reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks", body, managerToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("active same-tenant arbitrator should pass role validation, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestArbitrationWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 	authStore := reviewAuthStoreByUser(t, map[string][]string{
 		"review_manager":          {"review:manage", "arbitration:manage"},
@@ -207,6 +629,18 @@ func TestArbitrationWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 		"review_second_grader":    {"review:manage"},
 		"review_arbitrator":       {"arbitration:work"},
 		"review_other_arbitrator": {"arbitration:work"},
+	})
+	addReviewManagedUser(t, authStore, auth.User{
+		ID: reviewTeacherID, TenantID: reviewTenantID, TenantCode: "demo", Username: "review_teacher",
+		DisplayName: "Review Teacher", Status: "active", Roles: []string{"teacher"}, Permissions: []string{"arbitration:manage"},
+	})
+	addReviewManagedUser(t, authStore, auth.User{
+		ID: reviewInactiveArbitratorID, TenantID: reviewTenantID, TenantCode: "demo",
+		Username: "review_inactive_arbitrator", DisplayName: "Inactive Arbitrator", Status: "inactive", Roles: []string{"arbitrator"},
+	})
+	addReviewManagedUser(t, authStore, auth.User{
+		ID: reviewCrossTenantUserID, TenantID: "00000000-0000-0000-0000-000000000099", TenantCode: "other",
+		Username: "review_cross_tenant_arbitrator", DisplayName: "Cross Tenant Arbitrator", Status: "active", Roles: []string{"arbitrator"},
 	})
 	reviewStore := review.NewMemoryStore()
 	reviewStore.AddContext(reviewTenantID, "segment-1", reviewRouteContext())
@@ -216,6 +650,7 @@ func TestArbitrationWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 	secondToken := reviewLogin(t, router, "review_second_grader")
 	arbitratorToken := reviewLogin(t, router, "review_arbitrator")
 	otherArbitratorToken := reviewLogin(t, router, "review_other_arbitrator")
+	teacherToken := reviewLogin(t, router, "review_teacher")
 
 	req := reviewAuthedRequest(http.MethodPut, "/api/v1/exams/exam-1/double-mark-policy", `{"enabled":true,"threshold":1,"resolution_strategy":"average"}`, managerToken)
 	rec := httptest.NewRecorder()
@@ -247,12 +682,48 @@ func TestArbitrationWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 		t.Fatalf("submit second mark expected 201, got %d %s", rec.Code, rec.Body.String())
 	}
 	arbitrationID := decodeArbitrationIDFromSubmit(t, rec.Body.Bytes())
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/submit", `{"final_score":3,"reason":"manager must assign an arbitrator first"}`, managerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("manager must not implicitly self-assign an arbitration task while submitting, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	for name, assigneeID := range map[string]string{
+		"manager role":            reviewManagerID,
+		"grader role":             reviewGraderID,
+		"inactive arbitrator":     reviewInactiveArbitratorID,
+		"cross tenant arbitrator": reviewCrossTenantUserID,
+	} {
+		t.Run("reject assignment to "+name, func(t *testing.T) {
+			req := reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+assigneeID+`"}`, managerToken)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("invalid arbitration assignee expected 403, got %d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
 
 	req = reviewAuthedRequest(http.MethodGet, "/api/v1/arbitration-tasks/"+arbitrationID, "", arbitratorToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("unassigned arbitration worker should not get task, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/arbitration-tasks/"+arbitrationID, "", teacherToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("teacher with arbitration:manage must not read an unassigned arbitration task, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewArbitratorID+`"}`, teacherToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("teacher with arbitration:manage must not assign arbitration tasks, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewArbitratorID+`"}`, managerToken)
@@ -339,25 +810,25 @@ func TestDoubleMarkAndArbitrationRoutes(t *testing.T) {
 	}
 	arbitrationID := decodeArbitrationIDFromSubmit(t, rec.Body.Bytes())
 
-	req = reviewAuthedRequest(http.MethodGet, "/api/v1/arbitration-tasks/"+arbitrationID, "", arbitratorToken)
-	rec = httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"first_score":4`) || !strings.Contains(rec.Body.String(), `"second_score":1`) || !strings.Contains(rec.Body.String(), `"raw_answer":"student wrote the main idea"`) {
-		t.Fatalf("arbitration detail expected scores and context, got %d %s", rec.Code, rec.Body.String())
-	}
-
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewGraderID+`"}`, arbitratorToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewGraderID+`"}`, managerToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("first reviewer should not be assignable as arbitrator by default, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewArbitratorID+`"}`, arbitratorToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewArbitratorID+`"}`, managerToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"assigned"`) {
 		t.Fatalf("assign arbitration expected assigned, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/arbitration-tasks/"+arbitrationID, "", arbitratorToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"first_score":4`) || !strings.Contains(rec.Body.String(), `"second_score":1`) || !strings.Contains(rec.Body.String(), `"raw_answer":"student wrote the main idea"`) {
+		t.Fatalf("arbitration detail expected scores and context, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/submit", `{"final_score":3,"reason":"rubric evidence supports middle score","student_feedback":"Final score after arbitration."}`, arbitratorToken)
@@ -423,7 +894,7 @@ func reviewAuthStoreByUser(t *testing.T, permissionsByUsername map[string][]stri
 			Username:    "review_manager",
 			DisplayName: "Review Manager",
 			Status:      "active",
-			Roles:       []string{"teacher"},
+			Roles:       []string{"school_admin"},
 			DataScope:   map[string]any{"scope": "school"},
 		},
 		{
@@ -475,6 +946,15 @@ func reviewAuthStoreByUser(t *testing.T, permissionsByUsername map[string][]stri
 		store.AddUser(auth.UserWithPassword{User: user, PasswordHash: hash})
 	}
 	return store
+}
+
+func addReviewManagedUser(t *testing.T, store *auth.MemoryStore, user auth.User) {
+	t.Helper()
+	hash, err := auth.HashPassword("ChangeMe123!")
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	store.AddUser(auth.UserWithPassword{User: user, PasswordHash: hash})
 }
 
 func reviewLogin(t *testing.T, router http.Handler, username string) string {

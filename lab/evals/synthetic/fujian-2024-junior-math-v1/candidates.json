@@ -1,0 +1,689 @@
+[
+  {
+    "candidate_no": "SIM-FJ2024-001",
+    "profile": "清晰、完整、答案正确；客观题与填空题应自动通过。",
+    "scan": {
+      "angle": -0.25,
+      "noise": 1.2,
+      "contrast": 0.99
+    },
+    "answers": {
+      "Q1": {
+        "text": "D",
+        "confidence": 0.985,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q2": {
+        "text": "C",
+        "confidence": 0.985,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q3": {
+        "text": "C",
+        "confidence": 0.985,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q4": {
+        "text": "A",
+        "confidence": 0.985,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q5": {
+        "text": "B",
+        "confidence": 0.985,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q6": {
+        "text": "B",
+        "confidence": 0.985,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q7": {
+        "text": "A",
+        "confidence": 0.985,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q8": {
+        "text": "A",
+        "confidence": 0.985,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q9": {
+        "text": "B",
+        "confidence": 0.985,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q10": {
+        "text": "C",
+        "confidence": 0.985,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q11": {
+        "text": "x(x+1)",
+        "confidence": 0.965,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q12": {
+        "text": "x<1",
+        "confidence": 0.965,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q13": {
+        "text": "90",
+        "confidence": 0.965,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q14": {
+        "text": "2",
+        "confidence": 0.965,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q15": {
+        "text": "(2,1)",
+        "confidence": 0.965,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q16": {
+        "text": "128",
+        "confidence": 0.965,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q17": {
+        "text": "1+5-2=4",
+        "confidence": 0.94,
+        "route": "subjective_agent_review",
+        "expected_score": 8,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q18": {
+        "text": "AB=AD，∠B=∠D；又∠AEB=∠AFD，故△ABE≌△ADF，所以BE=DF。",
+        "confidence": 0.89,
+        "route": "subjective_agent_review",
+        "expected_score": 8,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q19": {
+        "text": "两边同乘(x+2)(x-2)：3(x-2)+(x+2)(x-2)=x(x+2)，x=10，检验成立。",
+        "confidence": 0.91,
+        "route": "subjective_agent_review",
+        "expected_score": 8,
+        "needs_human_review": true,
+        "synthetic": true
+      }
+    },
+    "synthetic": true,
+    "contains_real_student_identity": false,
+    "training_allowed": false,
+    "page_files": [
+      "answer-sheets/SIM-FJ2024-001-page-1.png",
+      "answer-sheets/SIM-FJ2024-001-page-2.png"
+    ],
+    "pdf_file": "answer-sheets/SIM-FJ2024-001.pdf"
+  },
+  {
+    "candidate_no": "SIM-FJ2024-002",
+    "profile": "字迹清晰但存在确定性错误，用于验证自动评分不是“自动判对”。",
+    "scan": {
+      "angle": 0.35,
+      "noise": 1.8,
+      "contrast": 0.97
+    },
+    "answers": {
+      "Q1": {
+        "text": "D",
+        "confidence": 0.975,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q2": {
+        "text": "C",
+        "confidence": 0.975,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q3": {
+        "text": "C",
+        "confidence": 0.975,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q4": {
+        "text": "A",
+        "confidence": 0.975,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q5": {
+        "text": "A",
+        "confidence": 0.975,
+        "route": "auto_confirm",
+        "expected_score": 0,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q6": {
+        "text": "B",
+        "confidence": 0.975,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q7": {
+        "text": "A",
+        "confidence": 0.975,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q8": {
+        "text": "A",
+        "confidence": 0.975,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q9": {
+        "text": "D",
+        "confidence": 0.975,
+        "route": "auto_confirm",
+        "expected_score": 0,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q10": {
+        "text": "C",
+        "confidence": 0.975,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q11": {
+        "text": "x(x+1)",
+        "confidence": 0.96,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q12": {
+        "text": "x≤1",
+        "confidence": 0.95,
+        "route": "auto_confirm",
+        "expected_score": 0,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q13": {
+        "text": "90",
+        "confidence": 0.97,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q14": {
+        "text": "2",
+        "confidence": 0.96,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q15": {
+        "text": "(1,2)",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 0,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q16": {
+        "text": "128",
+        "confidence": 0.96,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q17": {
+        "text": "1+5-2=4",
+        "confidence": 0.94,
+        "route": "subjective_agent_review",
+        "expected_score": 8,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q18": {
+        "text": "∠AEB=∠AFD，所以△ABE≌△ADF，所以BE=DF。",
+        "confidence": 0.91,
+        "route": "subjective_agent_review",
+        "expected_score": 4,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q19": {
+        "text": "3(x-2)+(x+2)(x-2)=x(x+2)，算得x=8。",
+        "confidence": 0.9,
+        "route": "subjective_agent_review",
+        "expected_score": 2,
+        "needs_human_review": true,
+        "synthetic": true
+      }
+    },
+    "synthetic": true,
+    "contains_real_student_identity": false,
+    "training_allowed": false,
+    "page_files": [
+      "answer-sheets/SIM-FJ2024-002-page-1.png",
+      "answer-sheets/SIM-FJ2024-002-page-2.png"
+    ],
+    "pdf_file": "answer-sheets/SIM-FJ2024-002.pdf"
+  },
+  {
+    "candidate_no": "SIM-FJ2024-003",
+    "profile": "含涂改、多选、空答和模糊字迹，必须进入人工复核。",
+    "scan": {
+      "angle": -0.7,
+      "noise": 3.0,
+      "contrast": 0.94
+    },
+    "answers": {
+      "Q1": {
+        "text": "D",
+        "confidence": 0.97,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q2": {
+        "text": "C",
+        "confidence": 0.97,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q3": {
+        "text": "C",
+        "confidence": 0.97,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q4": {
+        "text": [
+          "A",
+          "C"
+        ],
+        "confidence": 0.51,
+        "route": "omr_review",
+        "expected_score": null,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q5": {
+        "text": "B",
+        "confidence": 0.97,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q6": {
+        "text": "B",
+        "confidence": 0.97,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q7": {
+        "text": "A",
+        "confidence": 0.97,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q8": {
+        "text": "A",
+        "confidence": 0.97,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q9": {
+        "text": "B",
+        "confidence": 0.97,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q10": {
+        "text": "C",
+        "confidence": 0.97,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q11": {
+        "text": "x(x+1)",
+        "confidence": 0.72,
+        "route": "rule_grade_review",
+        "expected_score": 4,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q12": {
+        "text": "x<1",
+        "confidence": 0.95,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q13": {
+        "text": "90",
+        "confidence": 0.96,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q14": {
+        "text": "",
+        "confidence": 0.2,
+        "route": "rule_grade_review",
+        "expected_score": 0,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q15": {
+        "text": "(2,1)",
+        "confidence": 0.93,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q16": {
+        "text": "128",
+        "confidence": 0.68,
+        "route": "rule_grade_review",
+        "expected_score": 4,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q17": {
+        "text": "1+5-√4=4",
+        "confidence": 0.82,
+        "route": "subjective_agent_review",
+        "expected_score": 8,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q18": {
+        "text": "AB=AD，∠B=∠D，且∠AEB=∠AFD，△ABE≌△ADF，BE=DF。",
+        "confidence": 0.76,
+        "route": "subjective_agent_review",
+        "expected_score": 8,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q19": {
+        "text": "去分母后整理得x=10。",
+        "confidence": 0.73,
+        "route": "subjective_agent_review",
+        "expected_score": 5,
+        "needs_human_review": true,
+        "synthetic": true
+      }
+    },
+    "synthetic": true,
+    "contains_real_student_identity": false,
+    "training_allowed": false,
+    "page_files": [
+      "answer-sheets/SIM-FJ2024-003-page-1.png",
+      "answer-sheets/SIM-FJ2024-003-page-2.png"
+    ],
+    "pdf_file": "answer-sheets/SIM-FJ2024-003.pdf"
+  },
+  {
+    "candidate_no": "SIM-FJ2024-004",
+    "profile": "扫描倾斜且局部压缩，混合高低置信度，用于批量OCR分流。",
+    "scan": {
+      "angle": 0.95,
+      "noise": 4.2,
+      "contrast": 0.91
+    },
+    "answers": {
+      "Q1": {
+        "text": "D",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q2": {
+        "text": "C",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q3": {
+        "text": "B",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 0,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q4": {
+        "text": "A",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q5": {
+        "text": "B",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q6": {
+        "text": "B",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q7": {
+        "text": "A",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q8": {
+        "text": "A",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q9": {
+        "text": "B",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q10": {
+        "text": "C",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q11": {
+        "text": "x²+x?",
+        "confidence": 0.84,
+        "route": "rule_grade_review",
+        "expected_score": 0,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q12": {
+        "text": "x<1",
+        "confidence": 0.91,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q13": {
+        "text": "90",
+        "confidence": 0.94,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q14": {
+        "text": "2",
+        "confidence": 0.95,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q15": {
+        "text": "(2,1)",
+        "confidence": 0.91,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q16": {
+        "text": "128",
+        "confidence": 0.93,
+        "route": "auto_confirm",
+        "expected_score": 4,
+        "needs_human_review": false,
+        "synthetic": true
+      },
+      "Q17": {
+        "text": "(-1)⁰+5-2=4",
+        "confidence": 0.88,
+        "route": "subjective_agent_review",
+        "expected_score": 8,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q18": {
+        "text": "菱形有AB=AD。两角相等，所以两个三角形全等，BE=DF。",
+        "confidence": 0.81,
+        "route": "subjective_agent_review",
+        "expected_score": 6,
+        "needs_human_review": true,
+        "synthetic": true
+      },
+      "Q19": {
+        "text": "3(x-2)+(x+2)(x-2)=x(x+2)，x=10。",
+        "confidence": 0.87,
+        "route": "subjective_agent_review",
+        "expected_score": 7,
+        "needs_human_review": true,
+        "synthetic": true
+      }
+    },
+    "synthetic": true,
+    "contains_real_student_identity": false,
+    "training_allowed": false,
+    "page_files": [
+      "answer-sheets/SIM-FJ2024-004-page-1.png",
+      "answer-sheets/SIM-FJ2024-004-page-2.png"
+    ],
+    "pdf_file": "answer-sheets/SIM-FJ2024-004.pdf"
+  }
+]

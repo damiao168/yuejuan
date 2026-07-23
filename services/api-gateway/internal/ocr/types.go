@@ -7,11 +7,12 @@ import (
 )
 
 var (
-	ErrNotFound           = errors.New("ocr task not found")
-	ErrInvalidInput       = errors.New("invalid ocr input")
-	ErrInvalidTransition  = errors.New("invalid ocr task status transition")
-	ErrSubmissionNotReady = errors.New("submission is not ready for ocr")
-	ErrResultConflict     = errors.New("ocr result conflicts with completed task")
+	ErrNotFound            = errors.New("ocr task not found")
+	ErrInvalidInput        = errors.New("invalid ocr input")
+	ErrInvalidTransition   = errors.New("invalid ocr task status transition")
+	ErrSubmissionNotReady  = errors.New("submission is not ready for ocr")
+	ErrResultConflict      = errors.New("ocr result conflicts with completed task")
+	ErrIdempotencyConflict = errors.New("ocr idempotency key conflicts with another request")
 )
 
 type Task struct {
@@ -58,9 +59,10 @@ type Result struct {
 }
 
 type CreateTaskInput struct {
-	Engine        string  `json:"engine"`
-	EngineVersion string  `json:"engine_version"`
-	MinConfidence float64 `json:"min_confidence"`
+	Engine         string  `json:"engine"`
+	EngineVersion  string  `json:"engine_version"`
+	MinConfidence  float64 `json:"min_confidence"`
+	IdempotencyKey string  `json:"idempotency_key"`
 }
 
 type ResultInput struct {

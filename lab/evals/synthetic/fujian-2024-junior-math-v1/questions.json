@@ -1,0 +1,173 @@
+[
+  {
+    "question_no": "Q1",
+    "question_type": "single_choice",
+    "score": 4,
+    "stem": "下列实数中，无理数是（ ）",
+    "standard_answer": "D",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q2",
+    "question_type": "single_choice",
+    "score": 4,
+    "stem": "用科学记数法表示 69610。",
+    "standard_answer": "C",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q3",
+    "question_type": "single_choice",
+    "score": 4,
+    "stem": "判断所给几何体的左视图。",
+    "standard_answer": "C",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q4",
+    "question_type": "single_choice",
+    "score": 4,
+    "stem": "根据平行线与角的关系求角度。",
+    "standard_answer": "A",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q5",
+    "question_type": "single_choice",
+    "score": 4,
+    "stem": "计算幂的乘除。",
+    "standard_answer": "B",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q6",
+    "question_type": "single_choice",
+    "score": 4,
+    "stem": "从三个相同小球中随机抽取，求指定事件概率。",
+    "standard_answer": "B",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q7",
+    "question_type": "single_choice",
+    "score": 4,
+    "stem": "根据圆与三角形关系求角度。",
+    "standard_answer": "A",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q8",
+    "question_type": "single_choice",
+    "score": 4,
+    "stem": "根据一次函数图象判断方程组的解。",
+    "standard_answer": "A",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q9",
+    "question_type": "single_choice",
+    "score": 4,
+    "stem": "判断蝴蝶图案中轴对称推断不正确的一项。",
+    "standard_answer": "B",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q10",
+    "question_type": "single_choice",
+    "score": 4,
+    "stem": "判断关于二次方程的两个说法。",
+    "standard_answer": "C",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q11",
+    "question_type": "fill_blank",
+    "score": 4,
+    "stem": "分解因式：x²+x=____。",
+    "standard_answer": "x(x+1)",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q12",
+    "question_type": "fill_blank",
+    "score": 4,
+    "stem": "不等式的解集为____。",
+    "standard_answer": "x<1",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q13",
+    "question_type": "fill_blank",
+    "score": 4,
+    "stem": "求一组数据的中位数。",
+    "standard_answer": "90",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q14",
+    "question_type": "fill_blank",
+    "score": 4,
+    "stem": "求坐标系中阴影图形面积。",
+    "standard_answer": "2",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q15",
+    "question_type": "fill_blank",
+    "score": 4,
+    "stem": "反比例函数与圆交于 A、B，已知 A(1,2)，求 B 坐标。",
+    "standard_answer": "(2,1)",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q16",
+    "question_type": "fill_blank",
+    "score": 4,
+    "stem": "根据帆船受力模型求 f₂ 的大小（N）。",
+    "standard_answer": "128",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q17",
+    "question_type": "calculation",
+    "score": 8,
+    "stem": "计算：(-1)⁰+|-5|-√4。",
+    "standard_answer": "原式=1+5-2=4。",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q18",
+    "question_type": "calculation",
+    "score": 8,
+    "stem": "菱形 ABCD 中，E、F 分别在 BC、CD 上，且∠AEB=∠AFD。证明 BE=DF。",
+    "standard_answer": "因为四边形ABCD是菱形，所以AB=AD，∠B=∠D。又∠AEB=∠AFD，因此△ABE≌△ADF，所以BE=DF。",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  },
+  {
+    "question_no": "Q19",
+    "question_type": "calculation",
+    "score": 8,
+    "stem": "解方程：3/(x+2)+1=x/(x-2)。",
+    "standard_answer": "方程两边同乘(x+2)(x-2)，得3(x-2)+(x+2)(x-2)=x(x+2)，解得x=10；检验成立。",
+    "synthetic": false,
+    "source": "official_fujian_2024_junior_high_math"
+  }
+]

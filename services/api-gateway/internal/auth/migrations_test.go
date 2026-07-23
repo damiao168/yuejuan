@@ -93,6 +93,67 @@ func TestCompletedScopeHardeningAddsFileSubmissionIntegrity(t *testing.T) {
 	}
 }
 
+func TestOCRAvailabilityMigrationRevokesFullSystemReadFromReviewRoles(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000047_remove_teacher_grader_system_read.sql"))
+	if err != nil {
+		t.Fatalf("read OCR availability permission migration: %v", err)
+	}
+	sqlText := compactMigrationSQL(string(raw))
+	for _, want := range []string{
+		"UPDATE role_permission AS rp",
+		"rp.deleted_at IS NULL",
+		"r.code IN ('teacher', 'grader')",
+		"p.code = 'system:read'",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("OCR availability permission migration must contain %q", want)
+		}
+	}
+}
+
+func TestOCRRuntimeAtomicityMigrationAddsIdempotencyAndCanonicalEscaping(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000048_ocr_runtime_atomicity.sql"))
+	if err != nil {
+		t.Fatalf("read OCR runtime atomicity migration: %v", err)
+	}
+	sqlText := compactMigrationSQL(string(raw))
+	for _, want := range []string{
+		"ADD COLUMN IF NOT EXISTS idempotency_key TEXT",
+		"ALTER COLUMN idempotency_key SET NOT NULL",
+		"uq_ocr_task_active_idempotency",
+		"CREATE OR REPLACE FUNCTION pg_temp.go_json_string",
+		`E'\\u0026'`,
+		`E'\\u003c'`,
+		`E'\\u003e'`,
+		"chr(8232)",
+		"chr(8233)",
+		"canonical_hash_input",
+		"encode(digest(source.canonical_hash_input, 'sha256'), 'hex')",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("OCR runtime atomicity migration must contain %q", want)
+		}
+	}
+}
+
+func TestTeacherRoleDoesNotRetainReviewManagementPermissions(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000049_remove_teacher_review_management.sql"))
+	if err != nil {
+		t.Fatalf("read teacher review permission migration: %v", err)
+	}
+	sqlText := compactMigrationSQL(string(raw))
+	for _, want := range []string{
+		"UPDATE role_permission AS rp",
+		"rp.deleted_at IS NULL",
+		"r.code = 'teacher'",
+		"p.code IN ('review:manage', 'arbitration:manage')",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("teacher review permission migration must contain %q", want)
+		}
+	}
+}
+
 func compactMigrationSQL(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }

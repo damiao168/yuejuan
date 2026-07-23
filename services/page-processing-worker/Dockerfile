@@ -1,6 +1,10 @@
 ARG PAGE_PROCESSING_PYTHON_IMAGE=python:3.11-slim
 FROM ${PAGE_PROCESSING_PYTHON_IMAGE}
 
+# Custom runtime bases may default to an unprivileged user. Package
+# installation must run as root; the final process is dropped back to nobody.
+USER root
+
 # Wheel downloads for the image-processing stack are sizeable. Keep failures
 # visible, but tolerate transient slow reads from the package index in CI and
 # developer Docker environments.

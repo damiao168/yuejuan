@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -42,15 +43,21 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	db := e2eOpenPostgresTestDB(t, dsn)
 	e2eApplyPostgresMigrations(t, db)
-	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin", "teacher", "arbitrator", "student"})
+	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin", "teacher", "grader", "arbitrator", "student"})
 	e2eActivatePostgresUsers(t, db, "platform", []string{"platform_admin"})
 	router := e2ePostgresRouter(db)
 	suffix := time.Now().UTC().Format("20060102150405.000000000")
 
 	platformToken := e2eLoginWithTenant(t, router, "platform", "platform_admin", "ChangeMe123!")
 	adminToken := e2eLoginWithTenant(t, router, "demo", "tenant_admin", "ChangeMe123!")
-	teacherID := e2eLookupUserID(t, db, "demo", "teacher")
 	teacherToken := e2eLoginWithTenant(t, router, "demo", "teacher", "ChangeMe123!")
+	teacherID := e2eLookupUserID(t, db, "demo", "teacher")
+	graderID := e2eLookupUserID(t, db, "demo", "grader")
+	var demoTenantID string
+	if err := db.QueryRow(`SELECT id::text FROM tenant WHERE code='demo' AND deleted_at IS NULL`).Scan(&demoTenantID); err != nil {
+		t.Fatalf("lookup demo tenant: %v", err)
+	}
+	graderToken := e2eLoginWithTenant(t, router, "demo", "grader", "ChangeMe123!")
 	appealReviewerID := e2eLookupUserID(t, db, "demo", "arbitrator")
 	appealReviewerToken := e2eLoginWithTenant(t, router, "demo", "arbitrator", "ChangeMe123!")
 
@@ -96,9 +103,20 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 
 	ocrTask := e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/ocr-tasks", adminToken, `{"engine":"mock_ocr","engine_version":"story041-synthetic","min_confidence":0.8}`, http.StatusCreated)["task"].(map[string]any)
 	ocrTaskID := e2eString(t, ocrTask, "id")
+	runtimeClaim := e2ePostJSON(t, router, http.MethodPost, "/api/v1/internal/worker/tasks/claim", adminToken, `{"queue_name":"ocr","worker_service":"story041-e2e","worker_instance_id":"story041-e2e-1","limit":1,"lease_seconds":300}`, http.StatusOK)
+	runtimeTasks := runtimeClaim["tasks"].([]any)
+	if len(runtimeTasks) != 1 {
+		t.Fatalf("expected one OCR runtime task, got %#v", runtimeTasks)
+	}
+	runtimeTask := runtimeTasks[0].(map[string]any)
+	if e2eString(t, runtimeTask, "source_id") != ocrTaskID {
+		t.Fatalf("runtime task does not reference OCR source: %#v", runtimeTask)
+	}
+	runtimeTaskID := e2eString(t, runtimeTask, "id")
+	runtimeLeaseToken := e2eString(t, runtimeTask, "lease_token")
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/ocr-tasks/"+ocrTaskID+"/start", adminToken, `{}`, http.StatusOK)
 	answerText := "Story 041 synthetic answer mentions sunlight and plant energy."
-	ocrDone := e2ePostJSON(t, router, http.MethodPost, "/api/v1/ocr-tasks/"+ocrTaskID+"/results", adminToken, `{"results":[{"submission_page_id":"`+pageID+`","text":"`+answerText+`","bbox":[0.1,0.2,0.6,0.2],"confidence":0.76,"source_image_file_id":"`+answerFileID+`"}]}`, http.StatusOK)["task"].(map[string]any)
+	ocrDone := e2ePostJSON(t, router, http.MethodPost, "/api/v1/ocr-tasks/"+ocrTaskID+"/results", adminToken, `{"worker_id":"story041-e2e-1","model_version":"mock-ocr-story041","config_hash":"story041-config","input_hash":"story041-input","duration_ms":12,"preprocess_profile":"story041-synthetic","runtime_task_id":"`+runtimeTaskID+`","runtime_lease_token":"`+runtimeLeaseToken+`","results":[{"submission_page_id":"`+pageID+`","text":"`+answerText+`","bbox":[0.1,0.2,0.6,0.2],"confidence":0.76,"source_image_file_id":"`+answerFileID+`"}]}`, http.StatusOK)["task"].(map[string]any)
 	if ocrDone["status"] != "completed" {
 		t.Fatalf("ocr task should complete in test database workflow: %#v", ocrDone)
 	}
@@ -122,9 +140,37 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	reviewTask := e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks", adminToken, `{"answer_segment_id":"`+segmentID+`","source":"evidence_verification_failed","priority":5}`, http.StatusCreated)["task"].(map[string]any)
 	reviewTaskID := e2eString(t, reviewTask, "id")
 	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/publish", adminToken, `{"reason":"too early"}`, http.StatusConflict)
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/assign", adminToken, `{"assigned_to":"`+teacherID+`"}`, http.StatusOK)
-	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", teacherToken, `{"score":6,"rubric_selections":[{"point_id":"p1","score":6}],"comments":"over max"}`, http.StatusBadRequest)
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", teacherToken, `{"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"story041 synthetic human grade","reason":"manual review after mock AI"}`, http.StatusCreated)
+	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/assign", teacherToken, `{"assigned_to":"`+graderID+`"}`, http.StatusForbidden)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/assign", adminToken, `{"assigned_to":"`+graderID+`"}`, http.StatusOK)
+	e2eExpectStatus(t, router, http.MethodGet, "/api/v1/review-tasks/"+reviewTaskID+"/original-image", teacherToken, "", http.StatusForbidden)
+	draftStore := review.NewPostgresStore(db)
+	draft, err := draftStore.SaveDraft(context.Background(), demoTenantID, reviewTaskID, graderID, review.SaveDraftInput{
+		Comments:         "grader-owned draft",
+		RubricSelections: []review.RubricSelection{},
+		ViewerState: map[string]any{
+			"mode": "segment",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save PostgreSQL review draft: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE review_task SET assigned_to=$3::uuid,updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`, demoTenantID, reviewTaskID, teacherID); err != nil {
+		t.Fatalf("simulate review task reassignment: %v", err)
+	}
+	if _, err := draftStore.GetDraft(context.Background(), demoTenantID, reviewTaskID, graderID); !errors.Is(err, review.ErrNotFound) {
+		t.Fatalf("former reviewer must not read draft after reassignment, got %v", err)
+	}
+	if _, err := draftStore.SaveDraft(context.Background(), demoTenantID, reviewTaskID, graderID, review.SaveDraftInput{
+		Comments:         "stale reviewer overwrite",
+		ExpectedRevision: draft.Revision,
+	}); !errors.Is(err, review.ErrForbidden) {
+		t.Fatalf("former reviewer must not write draft after reassignment, got %v", err)
+	}
+	if _, err := db.Exec(`UPDATE review_task SET assigned_to=$3::uuid,updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`, demoTenantID, reviewTaskID, graderID); err != nil {
+		t.Fatalf("restore review task assignment: %v", err)
+	}
+	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", graderToken, `{"score":6,"rubric_selections":[{"point_id":"p1","score":6}],"comments":"over max"}`, http.StatusBadRequest)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", graderToken, `{"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"story041 synthetic human grade","reason":"manual review after mock AI"}`, http.StatusCreated)
 
 	finalized := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/finalize", adminToken, `{}`, http.StatusCreated)
 	if finalized["status"] != "pending_confirmation" || e2eFloat(t, finalized, "created_finals") != 1 {
@@ -133,6 +179,14 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/publish", adminToken, `{"reason":"before confirmation"}`, http.StatusConflict)
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/confirm-grades", adminToken, `{"reason":"story041 synthetic confirmation"}`, http.StatusOK)
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/publish", adminToken, `{"reason":"story041 synthetic publish"}`, http.StatusOK)
+	publishedExam := e2eGetJSON(t, router, "/api/v1/exams/"+examID, adminToken, http.StatusOK)["exam"].(map[string]any)
+	if publishedExam["status"] != "published" {
+		t.Fatalf("publishing grades must advance the exam to published: %#v", publishedExam)
+	}
+	publishedQuality := e2eGetJSON(t, router, "/api/v1/exams/"+examID+"/grades/quality?stage=publish", adminToken, http.StatusOK)
+	if publishedQuality["can_publish"] != true {
+		t.Fatalf("published grades must remain quality-passed: %#v", publishedQuality)
+	}
 	studentGrade := e2eGetJSON(t, router, "/api/v1/students/"+studentID+"/exams/"+examID+"/grade", studentToken, http.StatusOK)["grade"].(map[string]any)
 	if studentGrade["total_score"] != float64(4) || studentGrade["status"] != "published" {
 		t.Fatalf("student should see own published grade in test database workflow: %#v", studentGrade)

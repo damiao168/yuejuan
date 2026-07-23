@@ -17,6 +17,7 @@ const experience = read("src/router/experience.ts");
 const teacherDashboard = read("src/pages/TeacherDashboardPage.tsx");
 const responsiveTable = read("src/components/ResponsiveTable.tsx");
 const examWorkspace = read("src/pages/ExamWorkspacePage.tsx");
+const examManagement = read("src/pages/ExamManagementPage.tsx");
 const appealCenter = read("src/pages/AppealCenterPage.tsx");
 const appealApi = read("src/api/appeals.ts");
 const styles = read("src/styles.css");
@@ -146,6 +147,44 @@ assert(
 const allUiSource = sourceFiles("src").join("\n");
 assert(!/scroll=\{\{\s*x\s*:/.test(allUiSource), "Production tables must not enable horizontal scrolling.");
 assert(!/overflow-x:\s*(?:auto|scroll|hidden|clip)/.test(styles), "CSS must not create or conceal horizontal overflow.");
+
+assert(
+  /\.immersive-workspace \.grading-inspector\s*\{[\s\S]*?overflow-y:\s*auto;/.test(styles)
+    && /@media \(min-width: 1100px\) and \(max-height: 820px\)[\s\S]*?\.immersive-frame,[\s\S]*?height:\s*auto;[\s\S]*?\.immersive-workspace\s*\{[\s\S]*?overflow:\s*visible;/.test(styles),
+  "Immersive grading must keep the scoring inspector scrollable and restore document flow on short desktops."
+);
+
+const reviewerProgress = grading.match(/const reviewerProgress[\s\S]*?\n  \}, \[[^\n]+\]\);/)?.[0] ?? "";
+assert(
+  /tasks\.forEach/.test(reviewerProgress) && !/filteredTasks/.test(reviewerProgress),
+  "Reviewer progress must use every assigned task, independent of the current queue filter."
+);
+
+assert(
+  /loadTaskContext\(task: ReviewTask, allowOriginalImage: boolean\)/.test(grading)
+    && /originalImageUrl: allowOriginalImage \? workspace\.original_image_url : undefined/.test(grading)
+    && /canViewOriginalImage=\{experience === "admin"\}/.test(app)
+    && /viewerMode === "original" && \(!canViewOriginalImage/.test(grading)
+    && /options=\{canViewOriginalImage/.test(grading),
+  "Teacher grading must neither retain nor request the original answer-sheet image."
+);
+
+assert(
+  /candidate\.delivery_mode === "shadow_only"/.test(grading)
+    && /selectedGrade\.delivery_mode === "shadow_only"/.test(grading),
+  "Shadow-only AI results must be hidden and impossible to adopt."
+);
+
+assert(
+  /result\.grade_source === "rule_confirmed"/.test(grading)
+    && /未生效 · 转人工/.test(grading),
+  "Automatic scoring labels must require the rule_confirmed grade source."
+);
+
+assert(
+  /function nextStatus\(status: string\) \{[\s\S]*?status === "finalized"[\s\S]*?return null;/.test(examManagement),
+  "The generic exam status action must stop at finalized instead of publishing scores."
+);
 
 assert(
   /currentRoute\.mock/.test(appLayout) && !/<MockBadge compact \/>/.test(appLayout),

@@ -2,6 +2,8 @@ import type { AuthUser } from "../api/auth";
 
 export interface SessionUser {
   id: string;
+  username: string;
+  displayName: string;
   name: string;
   role: string;
   roles: string[];
@@ -24,9 +26,12 @@ export function hasAnyPermission(user: SessionUser | null, permissions: string[]
 
 export function sessionFromAuthUser(user: AuthUser): SessionUser {
   const role = user.roles[0] ?? "user";
+  const displayName = normalizeDisplayName(user.display_name);
   return {
     id: user.id,
-    name: user.display_name || user.username,
+    username: user.username,
+    displayName,
+    name: displayNameOrUsername(user.display_name, user.username),
     role,
     roles: user.roles,
     tenant: user.tenant_code,
@@ -34,6 +39,18 @@ export function sessionFromAuthUser(user: AuthUser): SessionUser {
     currentExam: "未选择考试",
     permissions: user.permissions
   };
+}
+
+export function displayNameOrUsername(displayName: unknown, username: string): string {
+  return normalizeDisplayName(displayName) || username.trim() || "未命名用户";
+}
+
+function normalizeDisplayName(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  return trimmed && !/^[?？]+$/.test(trimmed) && !trimmed.includes("\uFFFD") ? trimmed : "";
 }
 
 function schoolLabelFromScope(scope: Record<string, unknown>, tenantCode: string): string {

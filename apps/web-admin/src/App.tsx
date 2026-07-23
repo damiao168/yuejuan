@@ -190,7 +190,7 @@ function App() {
       case "processing":
         return <SubmissionCapturePage canManage={hasEveryPermission(user, ["submission:manage", "file:manage", "ocr:manage", "segment:manage"])} canReadStudentNames={hasEveryPermission(user, ["org:manage"])} initialExamId={examId} />;
       case "grading":
-        return <GradingWorkbenchPage canWork={hasAnyPermission(user, ["review:manage", "review:work"])} canGrade={experience === "admin" && hasEveryPermission(user, ["grading:manage"])} canVerifyEvidence={experience === "admin" && hasEveryPermission(user, ["evidence:manage"])} canReturn={experience === "admin" && hasEveryPermission(user, ["review:manage"])} currentUserId={user.id} initialExamId={examId} personalScope={experience === "teacher"} />;
+        return <GradingWorkbenchPage canWork={hasAnyPermission(user, ["review:manage", "review:work"])} canManageTasks={experience === "admin" && hasEveryPermission(user, ["review:manage"])} canViewOriginalImage={experience === "admin"} canGrade={experience === "admin" && hasEveryPermission(user, ["grading:manage"])} canVerifyEvidence={experience === "admin" && hasEveryPermission(user, ["evidence:manage"])} canReturn={experience === "admin" && hasEveryPermission(user, ["review:manage"])} currentUserId={user.id} initialExamId={examId} personalScope={experience === "teacher"} />;
       case "quality":
         return <ArbitrationPage canAssign={experience === "admin" && hasEveryPermission(user, ["arbitration:manage"])} canWork={hasAnyPermission(user, ["arbitration:manage", "arbitration:work"])} canReadAudit={experience === "admin" && hasEveryPermission(user, ["audit:read"])} canReadExams={hasEveryPermission(user, ["exam:manage"])} currentUser={user} initialExamId={examId} personalScope={experience === "teacher"} />;
       case "scores":
@@ -230,6 +230,8 @@ function App() {
       experience === "admin" ? <AdminGradingOperationsPage onNavigate={navigate} /> : (
         <GradingWorkbenchPage
           canWork={hasAnyPermission(user, ["review:manage", "review:work"])}
+          canManageTasks={false}
+          canViewOriginalImage={false}
           canGrade={false}
           canVerifyEvidence={false}
           canReturn={false}
@@ -284,7 +286,7 @@ function App() {
         onNavigate={navigate}
         onExperienceChange={changeExperience}
         onLogout={logout}
-        immersive={(experience === "teacher" && route.path === "/grading") || examWorkspace?.section === "grading"}
+        immersive={experience === "teacher" && (route.path === "/grading" || examWorkspace?.section === "grading")}
       >
         <Suspense fallback={<LoadingState label="正在加载页面" />}>{content}</Suspense>
       </AppLayout>

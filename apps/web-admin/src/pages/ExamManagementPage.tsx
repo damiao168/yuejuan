@@ -125,7 +125,7 @@ function statusTone(status: string): StatusTone {
 }
 
 function nextStatus(status: string) {
-  if (status === "configured" || status === "ready") {
+  if (status === "configured" || status === "ready" || status === "finalized") {
     return null;
   }
   const index = statusFlow.indexOf(status);

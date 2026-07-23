@@ -124,12 +124,23 @@ func TestCoreWorkflowE2EWithSyntheticMemoryStores(t *testing.T) {
 	if ocrResp["status"] != "queued" {
 		t.Fatalf("ocr task should be queued: %#v", ocrResp)
 	}
+	runtimeClaim := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/internal/worker/tasks/claim", adminToken, `{"queue_name":"ocr","worker_service":"story041-memory-e2e","worker_instance_id":"story041-memory-e2e-1","limit":1,"lease_seconds":300}`, http.StatusOK)
+	runtimeTasks := runtimeClaim["tasks"].([]any)
+	if len(runtimeTasks) != 1 {
+		t.Fatalf("expected one OCR runtime task, got %#v", runtimeTasks)
+	}
+	runtimeTask := runtimeTasks[0].(map[string]any)
+	if e2eString(t, runtimeTask, "source_id") != ocrTaskID {
+		t.Fatalf("runtime task does not reference OCR source: %#v", runtimeTask)
+	}
+	runtimeTaskID := e2eString(t, runtimeTask, "id")
+	runtimeLeaseToken := e2eString(t, runtimeTask, "lease_token")
 	startedOCR := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/ocr-tasks/"+ocrTaskID+"/start", adminToken, `{}`, http.StatusOK)["task"].(map[string]any)
 	if startedOCR["status"] != "processing" {
 		t.Fatalf("ocr task should be processing: %#v", startedOCR)
 	}
 	answerText := "Synthetic answer: photosynthesis uses sunlight to help plants make energy."
-	completedOCR := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/ocr-tasks/"+ocrTaskID+"/results", adminToken, `{"results":[{"submission_page_id":"`+pageID+`","text":"`+answerText+`","bbox":[0.1,0.2,0.6,0.2],"confidence":0.76,"source_image_file_id":"`+answerFileID+`"}]}`, http.StatusOK)["task"].(map[string]any)
+	completedOCR := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/ocr-tasks/"+ocrTaskID+"/results", adminToken, `{"worker_id":"story041-memory-e2e-1","model_version":"mock-ocr-story041","config_hash":"story041-config","input_hash":"story041-input","duration_ms":12,"preprocess_profile":"story041-synthetic","runtime_task_id":"`+runtimeTaskID+`","runtime_lease_token":"`+runtimeLeaseToken+`","results":[{"submission_page_id":"`+pageID+`","text":"`+answerText+`","bbox":[0.1,0.2,0.6,0.2],"confidence":0.76,"source_image_file_id":"`+answerFileID+`"}]}`, http.StatusOK)["task"].(map[string]any)
 	if completedOCR["status"] != "completed" || completedOCR["requires_human_review"] != true {
 		t.Fatalf("ocr task should complete with low-confidence review requirement: %#v", completedOCR)
 	}
@@ -419,8 +430,8 @@ func e2eAuthStore(t *testing.T) *auth.MemoryStore {
 			Username:    "e2e_teacher",
 			DisplayName: "Synthetic E2E Teacher",
 			Status:      "active",
-			Roles:       []string{"teacher"},
-			Permissions: []string{"review:manage", "appeal:read", "appeal:manage"},
+			Roles:       []string{"teacher", "grader"},
+			Permissions: []string{"review:manage", "review:work", "appeal:read", "appeal:manage"},
 			DataScope:   map[string]any{"scope": "school", "synthetic": true},
 		},
 		{

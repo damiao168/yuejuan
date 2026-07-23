@@ -23,6 +23,7 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv("EDUGRADE_SERVICE_NAME", "test-service")
 	t.Setenv("EDUGRADE_HTTP_PORT", "18080")
 	t.Setenv("EDUGRADE_MINIO_USE_SSL", "true")
+	t.Setenv("EDUGRADE_WORKER_HEARTBEAT_STALE_AFTER", "45s")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -36,6 +37,9 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	}
 	if !cfg.MinIO.UseSSL {
 		t.Fatal("expected MinIO SSL to be true")
+	}
+	if cfg.Observability.WorkerHeartbeatStaleAfter != 45*time.Second {
+		t.Fatalf("unexpected worker heartbeat stale threshold: %s", cfg.Observability.WorkerHeartbeatStaleAfter)
 	}
 }
 

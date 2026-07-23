@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Button, Descriptions, Space, Table, Tag, type TableColumnsType } from "antd";
-import { Activity, Database, RefreshCw, ShieldCheck, Signal, TimerReset } from "lucide-react";
+import { Activity, Database, RefreshCw, ScanText, ShieldCheck, Signal, TimerReset } from "lucide-react";
 import { ApiClientError } from "../api/client";
 import { getSystemStatus, type DependencyStatus, type SystemStatus } from "../api/system";
 import { ErrorState, LoadingState } from "../components/PageState";
@@ -81,6 +81,10 @@ export function SystemStatusPage() {
       error: items.filter((item) => item.status === "error").length
     };
   }, [status]);
+  const ocrWorker = useMemo(
+    () => status?.worker_services?.find((item) => item.name === "ocr_worker"),
+    [status?.worker_services]
+  );
 
   const columns: TableColumnsType<DependencyStatus> = [
     {
@@ -147,6 +151,40 @@ export function SystemStatusPage() {
               <small>生成 {formatTime(status.generated_at)}</small>
             </div>
           </section>
+
+          {ocrWorker ? (
+            <section className={`system-worker-status ${ocrWorker.availability}`}>
+              <div className="system-worker-heading">
+                <div>
+                  <Space>
+                    <ScanText size={18} />
+                    <h2>OCR 自动处理</h2>
+                  </Space>
+                  <p>{ocrWorker.worker_service} · {ocrWorker.queue_name} 队列 · 失联阈值 {ocrWorker.stale_after_sec} 秒</p>
+                </div>
+                <Tag color={ocrWorker.automation_available ? "success" : ocrWorker.availability === "stale" ? "warning" : "error"}>
+                  {ocrWorker.automation_available ? "在线" : ocrWorker.availability === "stale" ? "心跳失联" : "不可用"}
+                </Tag>
+              </div>
+              <div className="system-worker-metrics">
+                <span>在线实例<strong>{ocrWorker.fresh_instances}</strong></span>
+                <span>失联实例<strong>{ocrWorker.stale_instances}</strong></span>
+                <span>待处理<strong>{ocrWorker.queued_tasks}</strong></span>
+                <span>处理中<strong>{ocrWorker.in_flight_tasks}</strong></span>
+                <span>近一小时失败<strong>{ocrWorker.failed_last_hour}</strong></span>
+                <span>死信<strong>{ocrWorker.dead_letter_tasks}</strong></span>
+              </div>
+              <Alert
+                type={ocrWorker.automation_available ? "success" : ocrWorker.availability === "stale" ? "warning" : "error"}
+                showIcon
+                message={ocrWorker.impact}
+                description={`处理建议：${ocrWorker.action}${ocrWorker.last_seen_at ? ` 最近心跳：${formatTime(ocrWorker.last_seen_at)}` : ""}`}
+                action={!ocrWorker.automation_available ? <Button size="small" href="#/capture">进入答卷处理</Button> : undefined}
+              />
+            </section>
+          ) : (
+            <Alert type="warning" showIcon message="未返回 OCR Worker 状态" description="请确认 API Gateway 与 Worker Runtime 已升级并连通。" />
+          )}
 
           <section className="system-status-grid">
             <div className="system-status-panel">

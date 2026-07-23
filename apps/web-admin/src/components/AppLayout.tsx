@@ -130,7 +130,8 @@ export function AppLayout({
               <Dropdown
                 menu={{
                   items: [
-                    { key: "profile", label: user.name },
+                    { key: "account", label: `账号：${user.username}`, disabled: true },
+                    ...(user.displayName && user.displayName !== user.username ? [{ key: "display-name", label: `姓名：${user.displayName}`, disabled: true }] : []),
                     { key: "logout", label: "退出" }
                   ],
                   onClick: ({ key }) => {
@@ -142,7 +143,7 @@ export function AppLayout({
               >
                 <Button className="user-button">
                   <Avatar size={24} icon={<UserRound size={15} />} />
-                  <span>{user.name}</span>
+                  <span>{user.username}</span>
                   <ChevronDown size={14} />
                 </Button>
               </Dropdown>

@@ -55,22 +55,36 @@ type ScoringSummary struct {
 // It intentionally contains no student identity; the grading workspace remains
 // the only place that resolves an anonymous task to protected answer assets.
 type ScoringRunItem struct {
-	AnswerSegmentID string `json:"answer_segment_id"`
-	QuestionID      string `json:"question_id"`
-	QuestionNo      string `json:"question_no"`
-	QuestionType    string `json:"question_type"`
-	State           string `json:"state"`
-	OMRRunID        string `json:"omr_run_id,omitempty"`
-	RuntimeTaskID   string `json:"runtime_task_id,omitempty"`
-	RuntimeStatus   string `json:"runtime_status,omitempty"`
-	ReviewTaskID    string `json:"review_task_id,omitempty"`
-	ReviewStatus    string `json:"review_status,omitempty"`
-	ReasonCode      string `json:"reason_code,omitempty"`
-	ErrorCode       string `json:"error_code,omitempty"`
+	AnswerSegmentID       string   `json:"answer_segment_id"`
+	QuestionID            string   `json:"question_id"`
+	QuestionNo            string   `json:"question_no"`
+	QuestionType          string   `json:"question_type"`
+	AnonymousCode         string   `json:"anonymous_code"`
+	State                 string   `json:"state"`
+	RecognitionSource     string   `json:"recognition_source,omitempty"`
+	RecognizedAnswer      string   `json:"recognized_answer,omitempty"`
+	RecognitionDecision   string   `json:"recognition_decision,omitempty"`
+	RecognitionConfidence *float64 `json:"recognition_confidence,omitempty"`
+	StandardAnswer        any      `json:"standard_answer,omitempty"`
+	RuleType              string   `json:"rule_type,omitempty"`
+	Score                 *float64 `json:"score,omitempty"`
+	MaxScore              *float64 `json:"max_score,omitempty"`
+	GradeSource           string   `json:"grade_source,omitempty"`
+	OMRRunID              string   `json:"omr_run_id,omitempty"`
+	RuntimeTaskID         string   `json:"runtime_task_id,omitempty"`
+	RuntimeStatus         string   `json:"runtime_status,omitempty"`
+	ReviewTaskID          string   `json:"review_task_id,omitempty"`
+	ReviewStatus          string   `json:"review_status,omitempty"`
+	ReasonCode            string   `json:"reason_code,omitempty"`
+	ErrorCode             string   `json:"error_code,omitempty"`
 }
 
 type ScoringRunDetail struct {
 	Run   ScoringRun       `json:"run"`
+	Items []ScoringRunItem `json:"items"`
+}
+
+type ExamAutomationResults struct {
 	Items []ScoringRunItem `json:"items"`
 }
 
@@ -146,6 +160,7 @@ type ScoringRunStore interface {
 // caller cannot accidentally invoke recovery behavior through a basic store.
 type ScoringRecoveryStore interface {
 	GetScoringRunDetail(context.Context, string, string) (ScoringRunDetail, error)
+	GetExamAutomationResults(context.Context, string, string) (ExamAutomationResults, error)
 	BeginScoringRunCancellation(context.Context, string, string) (ScoringRun, []string, error)
 	FinalizeScoringRunCancellation(context.Context, string, string) (ScoringRun, error)
 	ListFailedOMRTasks(context.Context, string, string) ([]FailedOMRTask, error)
@@ -528,21 +543,38 @@ func (s *PostgresStore) GetScoringRunDetail(ctx context.Context, tenantID, runID
 	}
 	detail := ScoringRunDetail{Run: run, Items: []ScoringRunItem{}}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT seg.id::text,q.id::text,q.question_no,q.question_type,
+SELECT seg.id::text,q.id::text,q.question_no,q.question_type,COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),
+  COALESCE(ac.source,''),COALESCE(ac.display_text,''),COALESCE(ac.decision,''),ac.confidence::float8,
+  COALESCE(ak.standard_answer,'null'::jsonb),COALESCE(sr.rule_type,''),g.score::float8,g.max_score::float8,COALESCE(g.source,''),
   COALESCE(o.id::text,''),COALESCE(o.status,''),COALESCE(o.runtime_task_id::text,''),COALESCE(wt.status,''),COALESCE(o.error_code,''),
   COALESCE(rt.id::text,''),COALESCE(rt.status,''),COALESCE(rt.reason_code,''),COALESCE(g.id::text,'')
 FROM answer_segment seg
 JOIN submission sub ON sub.tenant_id=seg.tenant_id AND sub.id=seg.submission_id AND sub.deleted_at IS NULL
 JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id AND q.deleted_at IS NULL
 LEFT JOIN omr_run o ON o.tenant_id=seg.tenant_id AND o.scoring_run_id=$3::uuid AND o.answer_segment_id=seg.id AND o.deleted_at IS NULL
-LEFT JOIN agent_worker_task wt ON wt.tenant_id=o.tenant_id AND wt.id=o.runtime_task_id
+LEFT JOIN agent_worker_task wt ON wt.tenant_id=seg.tenant_id AND wt.id=o.runtime_task_id
+LEFT JOIN LATERAL (
+  SELECT source,display_text,decision,confidence FROM answer_candidate
+  WHERE tenant_id=seg.tenant_id AND scoring_run_id=$3::uuid AND answer_segment_id=seg.id AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) ac ON true
+LEFT JOIN LATERAL (
+  SELECT standard_answer FROM question_answer_key
+  WHERE tenant_id=q.tenant_id AND question_id=q.id AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) ak ON true
+LEFT JOIN LATERAL (
+  SELECT rule_type FROM scoring_rule
+  WHERE tenant_id=q.tenant_id AND question_id=q.id AND status='published' AND deleted_at IS NULL
+  ORDER BY version DESC LIMIT 1
+) sr ON true
 LEFT JOIN LATERAL (
   SELECT id::text,status,reason_code FROM review_task
   WHERE tenant_id=seg.tenant_id AND scoring_run_id=$3::uuid AND answer_segment_id=seg.id AND deleted_at IS NULL
   ORDER BY created_at DESC LIMIT 1
 ) rt ON true
 LEFT JOIN LATERAL (
-  SELECT id::text FROM question_grade
+  SELECT id::text,source,score,max_score FROM question_grade
   WHERE tenant_id=seg.tenant_id AND scoring_run_id=$3::uuid AND answer_segment_id=seg.id AND is_current AND deleted_at IS NULL
   ORDER BY created_at DESC LIMIT 1
 ) g ON true
@@ -559,17 +591,120 @@ ORDER BY q.sort_order,seg.created_at`, tenantID, run.ExamID, runID)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var item ScoringRunItem
-		var gradeID string
-		if err := rows.Scan(&item.AnswerSegmentID, &item.QuestionID, &item.QuestionNo, &item.QuestionType,
-			&item.OMRRunID, &item.State, &item.RuntimeTaskID, &item.RuntimeStatus, &item.ErrorCode,
-			&item.ReviewTaskID, &item.ReviewStatus, &item.ReasonCode, &gradeID); err != nil {
-			return ScoringRunDetail{}, err
+		item, scanErr := scanScoringRunItem(rows, run.Status)
+		if scanErr != nil {
+			return ScoringRunDetail{}, scanErr
 		}
-		item.State = scoringItemState(run.Status, item.State, item.ReviewStatus, gradeID)
 		detail.Items = append(detail.Items, item)
 	}
 	return detail, rows.Err()
+}
+
+// GetExamAutomationResults returns the current, exam-wide objective grading
+// facts independently of a particular orchestration run. This is the operator
+// view: a rerun is process history, while the latest recognition and grade are
+// the facts that must be auditable during live marking.
+func (s *PostgresStore) GetExamAutomationResults(ctx context.Context, tenantID, examID string) (ExamAutomationResults, error) {
+	out := ExamAutomationResults{Items: []ScoringRunItem{}}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT seg.id::text,q.id::text,q.question_no,q.question_type,COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),
+  COALESCE(NULLIF(ac.source,''),ans.source,''),COALESCE(NULLIF(ac.display_text,''),ans.answer_text,''),
+  COALESCE(NULLIF(ac.decision,''),CASE WHEN ans.id IS NOT NULL THEN 'confirmed' ELSE '' END),COALESCE(ac.confidence,ans.confidence)::float8,
+  COALESCE(ak.standard_answer,'null'::jsonb),COALESCE(sr.rule_type,q.question_type),
+  COALESCE(g.score,ag.suggested_score)::float8,COALESCE(g.max_score,ag.max_score)::float8,
+  COALESCE(g.source,CASE WHEN ag.id IS NOT NULL THEN 'ai_suggestion' ELSE '' END),
+  COALESCE(o.id::text,''),COALESCE(o.status,CASE WHEN ag.status='failed' THEN 'terminal_error' ELSE '' END),
+  COALESCE(o.runtime_task_id::text,''),COALESCE(wt.status,''),
+  COALESCE(o.error_code,CASE WHEN ag.status='failed' THEN ag.failure_reason ELSE '' END,''),
+  COALESCE(rt.id::text,''),COALESCE(rt.status,''),COALESCE(rt.reason_code,''),COALESCE(g.id::text,'')
+FROM answer_segment seg
+JOIN submission sub ON sub.tenant_id=seg.tenant_id AND sub.id=seg.submission_id AND sub.deleted_at IS NULL
+JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id AND q.deleted_at IS NULL
+LEFT JOIN LATERAL (
+  SELECT id,source,display_text,decision,confidence FROM answer_candidate
+  WHERE tenant_id=seg.tenant_id AND answer_segment_id=seg.id AND is_current AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) ac ON true
+LEFT JOIN LATERAL (
+  SELECT id,source,answer_text,confidence FROM answer_segment_answer
+  WHERE tenant_id=seg.tenant_id AND answer_segment_id=seg.id AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) ans ON true
+LEFT JOIN LATERAL (
+  SELECT standard_answer FROM question_answer_key
+  WHERE tenant_id=q.tenant_id AND question_id=q.id AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) ak ON true
+LEFT JOIN LATERAL (
+  SELECT rule_type FROM scoring_rule
+  WHERE tenant_id=q.tenant_id AND question_id=q.id AND status='published' AND deleted_at IS NULL
+  ORDER BY version DESC LIMIT 1
+) sr ON true
+LEFT JOIN LATERAL (
+  SELECT id,source,score,max_score FROM question_grade
+  WHERE tenant_id=seg.tenant_id AND answer_segment_id=seg.id AND is_current AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) g ON true
+LEFT JOIN LATERAL (
+  SELECT id,suggested_score,max_score,status,failure_reason FROM ai_grade
+  WHERE tenant_id=seg.tenant_id AND answer_segment_id=seg.id AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) ag ON true
+LEFT JOIN LATERAL (
+  SELECT id,status,runtime_task_id,error_code FROM omr_run
+  WHERE tenant_id=seg.tenant_id AND answer_segment_id=seg.id AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) o ON true
+LEFT JOIN agent_worker_task wt ON wt.tenant_id=seg.tenant_id AND wt.id=o.runtime_task_id
+LEFT JOIN LATERAL (
+  SELECT id,status,reason_code FROM review_task
+  WHERE tenant_id=seg.tenant_id AND answer_segment_id=seg.id AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) rt ON true
+WHERE seg.tenant_id=$1::uuid AND sub.exam_id=$2::uuid AND seg.deleted_at IS NULL
+  AND q.question_type IN ('single_choice','multiple_choice','true_false','fill_blank','numeric')
+ORDER BY COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),q.sort_order,seg.created_at`, tenantID, examID)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		item, scanErr := scanScoringRunItem(rows, "")
+		if scanErr != nil {
+			return ExamAutomationResults{}, scanErr
+		}
+		out.Items = append(out.Items, item)
+	}
+	return out, rows.Err()
+}
+
+func scanScoringRunItem(row ruleScanner, runStatus string) (ScoringRunItem, error) {
+	var item ScoringRunItem
+	var recognitionConfidence, score, maxScore sql.NullFloat64
+	var standardAnswerRaw []byte
+	var gradeID string
+	if err := row.Scan(&item.AnswerSegmentID, &item.QuestionID, &item.QuestionNo, &item.QuestionType, &item.AnonymousCode,
+		&item.RecognitionSource, &item.RecognizedAnswer, &item.RecognitionDecision, &recognitionConfidence,
+		&standardAnswerRaw, &item.RuleType, &score, &maxScore, &item.GradeSource,
+		&item.OMRRunID, &item.State, &item.RuntimeTaskID, &item.RuntimeStatus, &item.ErrorCode,
+		&item.ReviewTaskID, &item.ReviewStatus, &item.ReasonCode, &gradeID); err != nil {
+		return ScoringRunItem{}, err
+	}
+	if recognitionConfidence.Valid {
+		value := recognitionConfidence.Float64
+		item.RecognitionConfidence = &value
+	}
+	if score.Valid {
+		value := score.Float64
+		item.Score = &value
+	}
+	if maxScore.Valid {
+		value := maxScore.Float64
+		item.MaxScore = &value
+	}
+	_ = json.Unmarshal(standardAnswerRaw, &item.StandardAnswer)
+	item.State = scoringItemState(runStatus, item.State, item.ReviewStatus, gradeID)
+	return item, nil
 }
 
 func scoringItemState(runStatus, omrStatus, reviewStatus, gradeID string) string {

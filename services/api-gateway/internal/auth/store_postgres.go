@@ -38,6 +38,8 @@ LEFT JOIN role_permission rp ON rp.tenant_id = u.tenant_id AND rp.role_id = r.id
 LEFT JOIN permission p ON p.tenant_id = u.tenant_id AND p.id = rp.permission_id AND p.deleted_at IS NULL
 WHERE t.code = $1
   AND u.username = $2
+  AND t.status = 'active'
+  AND t.deleted_at IS NULL
   AND u.deleted_at IS NULL
 GROUP BY u.id, t.code
 `, tenantCode, username)
@@ -92,6 +94,8 @@ LEFT JOIN permission p ON p.tenant_id = u.tenant_id AND p.id = rp.permission_id 
 WHERE s.token_hash = $1
   AND s.expires_at > $2
   AND s.revoked_at IS NULL
+  AND t.status = 'active'
+  AND t.deleted_at IS NULL
   AND u.deleted_at IS NULL
 GROUP BY u.id, t.code
 `, tokenHash, now)

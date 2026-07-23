@@ -6,7 +6,9 @@ import (
 	"errors"
 )
 
-func (s *PostgresStore) ClaimNextTask(ctx context.Context, tenantID, reviewerID string, input NextTaskInput) (ReviewTask, error) {
+var _ WorkbenchStore = (*PostgresStore)(nil)
+
+func (s *PostgresStore) ClaimNextTask(ctx context.Context, tenantID, reviewerID string, input NextTaskInput, options ClaimTaskOptions) (ReviewTask, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ReviewTask{}, err
@@ -14,7 +16,7 @@ func (s *PostgresStore) ClaimNextTask(ctx context.Context, tenantID, reviewerID 
 	defer tx.Rollback()
 	var id string
 	err = tx.QueryRowContext(ctx, `SELECT id::text FROM review_task WHERE tenant_id=$1::uuid AND assigned_to=$2::uuid AND status IN ('assigned','in_progress','returned') AND deleted_at IS NULL AND ($3='' OR exam_id::text=$3) AND ($4='' OR question_id::text=$4) ORDER BY last_opened_at DESC NULLS LAST,priority DESC,created_at LIMIT 1 FOR UPDATE SKIP LOCKED`, tenantID, reviewerID, input.ExamID, input.QuestionID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) && options.AllowUnassigned {
 		err = tx.QueryRowContext(ctx, `SELECT id::text FROM review_task WHERE tenant_id=$1::uuid AND ((assigned_to IS NULL AND status='pending') OR (status IN ('assigned','in_progress') AND claim_expires_at<now())) AND deleted_at IS NULL AND ($2='' OR exam_id::text=$2) AND ($3='' OR question_id::text=$3) ORDER BY priority DESC,created_at LIMIT 1 FOR UPDATE SKIP LOCKED`, tenantID, input.ExamID, input.QuestionID).Scan(&id)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
@@ -43,15 +45,19 @@ func (s *PostgresStore) GetWorkspace(ctx context.Context, tenantID, taskID strin
 	if err != nil {
 		return Workspace{}, err
 	}
-	var originalID, status string
+	var originalID, status, cropHash string
 	var confidence sql.NullFloat64
-	err = s.db.QueryRowContext(ctx, `SELECT COALESCE(sp.file_asset_id::text,''),seg.processing_status,seg.confidence FROM answer_segment seg LEFT JOIN submission_page sp ON sp.tenant_id=seg.tenant_id AND sp.id=seg.submission_page_id WHERE seg.tenant_id=$1::uuid AND seg.id=$2::uuid AND seg.deleted_at IS NULL`, tenantID, task.AnswerSegmentID).Scan(&originalID, &status, &confidence)
+	err = s.db.QueryRowContext(ctx, `SELECT COALESCE(sp.file_asset_id::text,''),seg.processing_status,seg.confidence,COALESCE(seg.crop_sha256,'') FROM answer_segment seg LEFT JOIN submission_page sp ON sp.tenant_id=seg.tenant_id AND sp.id=seg.submission_page_id WHERE seg.tenant_id=$1::uuid AND seg.id=$2::uuid AND seg.deleted_at IS NULL`, tenantID, task.AnswerSegmentID).Scan(&originalID, &status, &confidence, &cropHash)
 	if err != nil {
 		return Workspace{}, err
 	}
-	out := Workspace{Task: task, Context: contextValue, SegmentImageURL: "/api/v1/answer-segments/" + task.AnswerSegmentID + "/image", SegmentStatus: status}
+	out := Workspace{Task: task, Context: contextValue, SegmentImageURL: "/api/v1/review-tasks/" + task.ID + "/segment-image", SegmentStatus: status}
+	if cropHash != "" {
+		out.SegmentImageURL += "?v=" + cropHash
+	}
 	if originalID != "" {
-		out.OriginalImageURL = "/api/v1/files/" + originalID + "/download"
+		out.OriginalImageURL = "/api/v1/review-tasks/" + task.ID + "/original-image"
+		out.OriginalFileID = originalID
 	}
 	if confidence.Valid {
 		value := confidence.Float64
@@ -61,7 +67,7 @@ func (s *PostgresStore) GetWorkspace(ctx context.Context, tenantID, taskID strin
 }
 
 func (s *PostgresStore) RenewTaskClaim(ctx context.Context, tenantID, taskID, reviewerID string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE review_task SET claim_expires_at=now()+interval '30 minutes',last_opened_at=now(),updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid AND assigned_to=$3::uuid AND status IN ('assigned','in_progress','returned') AND deleted_at IS NULL`, tenantID, taskID, reviewerID)
+	result, err := s.db.ExecContext(ctx, `UPDATE review_task SET claimed_at=COALESCE(claimed_at,now()),claim_expires_at=now()+interval '30 minutes',last_opened_at=now(),updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid AND assigned_to=$3::uuid AND status IN ('assigned','in_progress','returned') AND deleted_at IS NULL`, tenantID, taskID, reviewerID)
 	if err != nil {
 		return err
 	}
@@ -72,10 +78,13 @@ func (s *PostgresStore) RenewTaskClaim(ctx context.Context, tenantID, taskID, re
 	return nil
 }
 
+// ReleaseTaskClaim ends the short-lived workbench lease. assigned_to is the
+// durable manager assignment used for queue visibility and progress totals, so
+// releasing a browser session must not return the task to the pending pool.
 func (s *PostgresStore) ReleaseTaskClaim(ctx context.Context, tenantID, taskID, reviewerID string) (ReviewTask, error) {
 	task, err := scanTask(s.db.QueryRowContext(ctx, `
 UPDATE review_task
-SET assigned_to=NULL,status='pending',claimed_at=NULL,claim_expires_at=NULL,last_opened_at=now(),revision=revision+1,updated_at=now()
+SET claimed_at=NULL,claim_expires_at=NULL,last_opened_at=now(),revision=revision+1,updated_at=now()
 WHERE tenant_id=$1::uuid AND id=$2::uuid AND assigned_to=$3::uuid
   AND status IN ('assigned','in_progress','returned') AND deleted_at IS NULL
 RETURNING id::text,tenant_id::text,exam_id::text,question_id::text,question_no,

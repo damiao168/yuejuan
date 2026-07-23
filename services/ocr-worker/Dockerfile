@@ -2,6 +2,9 @@ ARG OCR_PYTHON_IMAGE=python:3.11-slim
 FROM ${OCR_PYTHON_IMAGE}
 
 ARG INSTALL_PADDLEOCR=true
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG DEBIAN_MIRROR=http://deb.debian.org/debian
+ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -12,10 +15,27 @@ COPY services/ocr-worker/pyproject.toml ./pyproject.toml
 COPY services/ocr-worker/ocr_worker ./ocr_worker
 
 RUN if [ "$INSTALL_PADDLEOCR" = "true" ]; then \
-      pip install --no-cache-dir ".[paddle]"; \
+      pip install --no-cache-dir --index-url "$PIP_INDEX_URL" ".[paddle]"; \
     else \
-      pip install --no-cache-dir .; \
+      pip install --no-cache-dir --index-url "$PIP_INDEX_URL" .; \
     fi
+
+RUN sed -i \
+      -e "s|http://deb.debian.org/debian-security|$DEBIAN_SECURITY_MIRROR|g" \
+      -e "s|http://deb.debian.org/debian|$DEBIAN_MIRROR|g" \
+      /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN install -d -o nobody -g nogroup /home/ocr-worker/.paddlex /home/ocr-worker/.modelscope
+
+# PaddleX initializes its cache while importing PaddleOCR. The runtime user is
+# intentionally non-root, so give it a stable writable cache location. Keep
+# these runtime-only variables after dependency installation so changing them
+# does not invalidate the large Paddle image layer.
+ENV HOME=/home/ocr-worker
+ENV PADDLE_PDX_CACHE_HOME=/home/ocr-worker/.paddlex
 
 USER nobody
 

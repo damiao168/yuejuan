@@ -1,0 +1,35 @@
+{
+  "dataset_id": "fujian-2024-junior-math-v1",
+  "exam_id": "8d4c089f-c88b-40ae-ac77-a14c89c7c7f0",
+  "exam_name": "2024福建中考数学真实流程仿真（Q1-Q19）",
+  "exam_status": "collecting",
+  "teacher_username": "test_grader",
+  "teacher_user_id": "3d9ab094-d5f2-4329-9d7e-a1f7bd1f6962",
+  "candidate_count": 4,
+  "page_count": 8,
+  "question_count": 19,
+  "answer_segment_count": 76,
+  "completed_ocr_task_count": 4,
+  "seeded_ocr_result_count": 35,
+  "auto_confirmed_grade_count": 59,
+  "assigned_review_task_count": 17,
+  "subjective_ai_suggestion_ids": [
+    "30bdd991-aa8f-43cd-a12f-747b449d590e"
+  ],
+  "source_asset_ids": {
+    "blank_answer_sheet": "16c953ad-de5f-4ea5-9307-e9fce73030c8",
+    "official_answers": "1c9f383d-d6ad-4879-993b-327cbd2a83f5",
+    "official_questions": "46841dd1-05f8-4e16-b159-0b851699b0e0"
+  },
+  "synthetic": true,
+  "simulation_only": true,
+  "training_allowed": false,
+  "contains_real_student_identity": false,
+  "automation_disclosure": {
+    "objective": "高置信度选择题/填空题已通过确定性规则形成 confirmed question_grade。",
+    "ocr": "4个双页OCR任务已完成，但文本由 simulation-importer 按标注真值写入；这验证流程分流，不等同于验证真实OCR模型精度。",
+    "privacy": "候选人、字迹、条码与扫描噪声均为匿名仿真，不含真实未成年人身份。",
+    "subjective": "首份答题卡已有1条真实受治理智能体建议；所有主观题仍分配给教师确认。"
+  },
+  "created_at": "2026-07-16T19:57:45+08:00"
+}

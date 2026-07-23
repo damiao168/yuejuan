@@ -46,6 +46,7 @@ type MemoryStore struct {
 	humanGrades  map[string]GradeSeed
 	ruleGrades   map[string]GradeSeed
 	submissions  map[string]SubmissionGrade
+	examStatuses map[string]string
 	reviewTasks  []TaskSeed
 	arbTasks     []TaskSeed
 	ocrTasks     []TaskSeed
@@ -54,13 +55,14 @@ type MemoryStore struct {
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		next:        1,
-		segments:    map[string]SegmentSeed{},
-		finals:      map[string]FinalGrade{},
-		finalBySeg:  map[string]string{},
-		humanGrades: map[string]GradeSeed{},
-		ruleGrades:  map[string]GradeSeed{},
-		submissions: map[string]SubmissionGrade{},
+		next:         1,
+		segments:     map[string]SegmentSeed{},
+		finals:       map[string]FinalGrade{},
+		finalBySeg:   map[string]string{},
+		humanGrades:  map[string]GradeSeed{},
+		ruleGrades:   map[string]GradeSeed{},
+		submissions:  map[string]SubmissionGrade{},
+		examStatuses: map[string]string{},
 	}
 }
 
@@ -71,6 +73,21 @@ func (s *MemoryStore) AddSegment(seed SegmentSeed) {
 		seed.AnonymousCode = seed.SubmissionID
 	}
 	s.segments[seed.AnswerSegmentID] = seed
+	if _, exists := s.examStatuses[seed.ExamID]; !exists {
+		s.examStatuses[seed.ExamID] = "collecting"
+	}
+}
+
+func (s *MemoryStore) SetExamStatusForTest(examID string, status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.examStatuses[examID] = status
+}
+
+func (s *MemoryStore) ExamStatusForTest(examID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.examStatuses[examID]
 }
 
 func (s *MemoryStore) AddFinalGrade(seed GradeSeed) {
@@ -265,6 +282,9 @@ func (s *MemoryStore) PublishGrades(_ context.Context, tenantID string, examID s
 	if !quality.Passed {
 		return PublishResult{Status: "blocked", Quality: quality}, ErrQualityGateFailed
 	}
+	if !canPublishExamStatus(s.examStatuses[examID]) {
+		return PublishResult{}, ErrInvalidTransition
+	}
 	now := time.Now().UTC()
 	for id, grade := range s.submissions {
 		if grade.ExamID != examID {
@@ -288,6 +308,7 @@ func (s *MemoryStore) PublishGrades(_ context.Context, tenantID string, examID s
 		grade.TenantID = tenantID
 		s.finals[id] = grade
 	}
+	s.examStatuses[examID] = "published"
 	return PublishResult{
 		Status:           "published",
 		SubmissionGrades: s.listSubmissionGradesLocked(examID, true),
@@ -420,7 +441,7 @@ func (s *MemoryStore) qualityLocked(examID string, requirePendingPublish bool) Q
 	if requirePendingPublish {
 		unconfirmed := 0
 		for _, grade := range s.submissions {
-			if grade.ExamID == examID && grade.Status != "confirmed" && grade.Status != "pending_publish" {
+			if grade.ExamID == examID && grade.Status != "confirmed" && grade.Status != "pending_publish" && grade.Status != "published" && grade.Status != "locked" {
 				unconfirmed++
 			}
 		}
@@ -429,6 +450,15 @@ func (s *MemoryStore) qualityLocked(examID string, requirePendingPublish bool) Q
 		}
 	}
 	return QualityReport{Passed: len(issues) == 0, Issues: issues}
+}
+
+func canPublishExamStatus(status string) bool {
+	switch status {
+	case "draft", "configured", "ready", "collecting", "grading", "reviewing", "finalized":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *MemoryStore) sortedSegmentsLocked(examID string) []SegmentSeed {

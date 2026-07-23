@@ -52,6 +52,7 @@ import {
   type SubmissionPage
 } from "../api/submissions";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { OcrWorkerAlert } from "../components/OcrWorkerAlert";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
@@ -748,6 +749,8 @@ export function SubmissionCapturePage({
           </Upload>
         </Space>
       </section>
+
+      <OcrWorkerAlert enabled={canManage} />
 
       {!hasSession ? (
         <Alert

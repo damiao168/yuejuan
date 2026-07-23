@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            lab/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix lab
+      - run: npm run typecheck
+      - run: npm --workspace apps/web-admin run check:production-routes
+      - run: npm --prefix lab test
+
+  go:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: edugrade_e2e
+          POSTGRES_USER: edugrade
+          POSTGRES_PASSWORD: edugrade
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U edugrade -d edugrade_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    defaults:
+      run:
+        working-directory: services/api-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache-dependency-path: services/api-gateway/go.sum
+      - run: go test ./... -count=1
+      - run: go vet ./...
+      - name: PostgreSQL workflows
+        env:
+          EDUGRADE_E2E_DATABASE_URL: postgres://edugrade:edugrade@127.0.0.1:5432/edugrade_e2e?sslmode=disable
+        run: go test ./internal/server -run 'PostgresTestDatabase|Story056.*E2E' -count=1 -v
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            services/ocr-worker/pyproject.toml
+            services/image-quality-worker/pyproject.toml
+            services/page-processing-worker/pyproject.toml
+      - run: >-
+          python -m pip install pytest
+          -e services/ocr-worker
+          -e services/image-quality-worker
+          -e services/page-processing-worker
+      - name: OCR worker tests
+        run: python -m pytest -q services/ocr-worker/tests
+      - name: Image quality worker tests
+        run: python -m pytest -q services/image-quality-worker/tests
+      - name: Page processing worker tests
+        run: python -m pytest -q services/page-processing-worker/tests
+      - run: PYTHONPATH=ai-services python -m unittest discover -s ai-services/tests -p 'test_*.py'
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: >-
+          docker compose
+          --env-file infra/docker-compose/.env.example
+          -f infra/docker-compose/docker-compose.yml
+          --profile tools
+          --profile ocr
+          --profile quality
+          --profile processing
+          --profile observability
+          config -q

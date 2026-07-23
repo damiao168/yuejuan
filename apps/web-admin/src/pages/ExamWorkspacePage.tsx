@@ -122,6 +122,8 @@ export function ExamWorkspacePage({ examId, section, experience, currentUser, mo
     if (status === "collecting") return { label: "继续采集", section: "capture" };
     if (status === "grading" || status === "reviewing") return { label: "继续阅卷", section: "grading" };
     if (status === "finalized") return { label: "发布检查", section: "scores" };
+    if (status === "published") return { label: "查看已发布成绩", section: "scores" };
+    if (status === "archived") return { label: "查看归档成绩", section: "scores" };
     return { label: "查看概览", section: "overview" };
   }, [data?.exam.status, experience]);
 
@@ -142,7 +144,7 @@ export function ExamWorkspacePage({ examId, section, experience, currentUser, mo
           <h1>{data.exam.name}</h1>
           <Space size="small"><StatusTag tone={data.exam.status === "published" ? "success" : "processing"}>{statusLabels[data.exam.status] ?? data.exam.status}</StatusTag><span>负责人：{data.exam.created_by === currentUser.id ? currentUser.name : "已授权人员"}</span></Space>
         </div>
-        <div className="exam-context-progress"><span>总体进度</span><Progress percent={progressByStatus[data.exam.status] ?? 0} size="small" /></div>
+        <div className="exam-context-progress"><span>总体进度</span><Progress percent={progressByStatus[data.exam.status] ?? 0} size="small" format={(percent) => `${percent ?? 0}%`} /></div>
         <Space><Button icon={<RefreshCw size={16} />} loading={loading} onClick={() => setNonce((value) => value + 1)} aria-label="刷新考试工作区" /><Button type="primary" onClick={() => onNavigate(`/exams/${encodeURIComponent(examId)}/${nextAction.section}`)}>{nextAction.label}</Button></Space>
       </header>
 
@@ -163,7 +165,7 @@ export function ExamWorkspacePage({ examId, section, experience, currentUser, mo
           <div className="exam-overview-grid">
             <section className="workspace-section readiness-section">
               <div className="section-head"><div><h2>当前下一步</h2><p>按考试状态和准备情况生成</p></div></div>
-              {readyIssues.length ? <div className="readiness-list">{readyIssues.map((issue) => <button key={issue.code} onClick={() => onNavigate(`/exams/${encodeURIComponent(examId)}/${issue.section}`)}><CircleAlert size={17} /><span>{issue.label}：{issue.message}</span><ArrowRight size={16} /></button>)}</div> : <div className="ready-line"><CheckCircle2 size={18} /><span>{data.readiness?.confirmed ? "开考准备已经确认" : "基础配置已通过，可以进行开考确认"}</span></div>}
+              {readyIssues.length ? <div className="readiness-list">{readyIssues.map((issue) => <button key={issue.code} onClick={() => onNavigate(`/exams/${encodeURIComponent(examId)}/${issue.section}`)}><CircleAlert size={17} /><span>{issue.label}：{issue.message}</span><ArrowRight size={16} /></button>)}</div> : <div className="ready-line"><CheckCircle2 size={18} /><span>{data.exam.status === "published" ? "成绩已经发布，可进入成绩页查看发布结果" : data.exam.status === "archived" ? "考试已经归档，成绩保持只读" : data.readiness?.confirmed ? "开考准备已经确认" : "基础配置已通过，可以进行开考确认"}</span></div>}
             </section>
             <section className="workspace-section risk-section">
               <div className="section-head"><div><h2>需要关注</h2><p>需要人工确认的业务事项</p></div><strong>{data.reviewRequiredCount}</strong></div>

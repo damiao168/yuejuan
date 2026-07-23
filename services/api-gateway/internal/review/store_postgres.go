@@ -58,8 +58,9 @@ WHERE tenant_id = $1
   AND deleted_at IS NULL
   AND ($2 = '' OR status = $2)
   AND ($3 = '' OR assigned_to::text = $3)
+  AND ($4 = '' OR exam_id::text = $4)
 ORDER BY priority DESC, created_at ASC
-`, tenantID, filter.Status, filter.AssignedTo)
+`, tenantID, filter.Status, filter.AssignedTo, filter.ExamID)
 	if err != nil {
 		return nil, err
 	}
@@ -270,21 +271,40 @@ func (s *PostgresStore) ReturnTask(ctx context.Context, tenantID string, id stri
 	if input.Reason == "" {
 		return ReviewTask{}, ErrInvalidInput
 	}
-	row := s.db.QueryRowContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ReviewTask{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	task, err := scanTask(tx.QueryRowContext(ctx, `
+SELECT id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
+  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
+  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
+FROM review_task
+WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+FOR UPDATE
+`, tenantID, id))
+	if err != nil {
+		return ReviewTask{}, err
+	}
+	if !canReturnTask(task.Status) {
+		return ReviewTask{}, ErrInvalidTransition
+	}
+	task, err = scanTask(tx.QueryRowContext(ctx, `
 UPDATE review_task
 SET status = 'returned', return_reason = $3, updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL AND status <> 'completed'
+WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
   answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
   COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
-`, tenantID, id, input.Reason)
-	task, err := scanTask(row)
-	if errors.Is(err, ErrNotFound) {
-		if _, getErr := s.GetTask(ctx, tenantID, id); getErr == nil {
-			return ReviewTask{}, ErrInvalidTransition
-		}
+`, tenantID, id, input.Reason))
+	if err != nil {
+		return ReviewTask{}, err
 	}
-	return task, err
+	if err := tx.Commit(); err != nil {
+		return ReviewTask{}, err
+	}
+	return task, nil
 }
 
 func (s *PostgresStore) SetExamDoubleMarkPolicy(ctx context.Context, tenantID string, examID string, actorID string, input SetDoubleMarkPolicyInput) (DoubleMarkPolicy, error) {
@@ -637,7 +657,7 @@ FOR UPDATE
 	if task.Status == "submitted" {
 		return ArbitrationTask{}, FinalGrade{}, ErrInvalidTransition
 	}
-	if task.AssignedTo != "" && task.AssignedTo != arbitratorID {
+	if task.AssignedTo == "" || task.AssignedTo != arbitratorID {
 		return ArbitrationTask{}, FinalGrade{}, ErrForbidden
 	}
 	if !arbitratorAllowed(task, arbitratorID) {
@@ -713,7 +733,7 @@ SELECT
   COALESCE(qr.status, ''), COALESCE(qr.max_score::float8, 0), COALESCE(qr.points, '[]'::jsonb),
   COALESCE(qr.deductions, '[]'::jsonb), COALESCE(qr.examples, '[]'::jsonb),
   COALESCE(ans.answer_text, ''), COALESCE(ans.source, ''),
-  COALESCE(ag.ai_suggestion, '{}'::jsonb)
+  COALESCE(ag.ai_suggestion, 'null'::jsonb)
 FROM answer_segment seg
 JOIN submission sub ON sub.tenant_id = seg.tenant_id AND sub.id = seg.submission_id
 JOIN question q ON q.tenant_id = seg.tenant_id AND q.id = seg.question_id
@@ -734,12 +754,36 @@ LEFT JOIN LATERAL (
 ) ans ON true
 LEFT JOIN LATERAL (
   SELECT jsonb_build_object(
+    'id', id::text,
     'ai_grade_id', id::text,
+    'tenant_id', tenant_id::text,
+    'answer_segment_id', answer_segment_id::text,
+    'question_id', question_id::text,
+    'question_no', question_no,
+    'question_type', question_type,
+    'answer_version', answer_version,
+    'grader_type', grader_type,
+    'rule_version', rule_version,
+    'model_version', model_version,
+    'prompt_version', prompt_version,
+    'rubric_version', rubric_version,
+    'delivery_mode', delivery_mode,
     'suggested_score', suggested_score,
+    'max_score', max_score,
     'confidence', confidence,
+    'matched_points', matched_points,
+    'missing_points', missing_points,
+    'evidence', evidence,
     'risk_flags', risk_flags,
+    'needs_human_review', needs_human_review,
+    'auto_pass', auto_pass,
     'mock', mock,
-    'status', status
+    'status', status,
+    'failure_reason', COALESCE(failure_reason, ''),
+    'student_feedback', student_feedback,
+    'teacher_note', teacher_note,
+    'created_by', created_by::text,
+    'created_at', created_at
   ) AS ai_suggestion
   FROM ai_grade
   WHERE tenant_id = seg.tenant_id AND answer_segment_id = seg.id AND deleted_at IS NULL
@@ -800,9 +844,90 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL AND su
 		out.OCRText = out.RawAnswer
 	}
 	_ = json.Unmarshal(aiSuggestionRaw, &out.AISuggestion)
+	if automationResult, loadErr := loadAutomationResult(ctx, q, tenantID, segmentID); loadErr != nil {
+		return Context{}, loadErr
+	} else {
+		out.AutomationResult = automationResult
+	}
 	out.Question = question
 	out.Rubric = rubric
 	return out, nil
+}
+
+func loadAutomationResult(ctx context.Context, q queryer, tenantID, segmentID string) (*AutomationResult, error) {
+	row := q.QueryRowContext(ctx, `
+SELECT
+  COALESCE(NULLIF(ac.source,''),ans.source,''),
+  COALESCE(NULLIF(ac.display_text,''),ans.answer_text,''),
+  COALESCE(ac.confidence,ans.confidence)::float8,
+  COALESCE(ac.decision,''),
+  COALESCE(ak.id::text,''),COALESCE(ak.standard_answer,'null'::jsonb),
+  COALESCE(sr.rule_type,''),g.score::float8,g.max_score::float8,COALESCE(g.source,'')
+FROM (SELECT 1) seed
+LEFT JOIN LATERAL (
+  SELECT source,display_text,confidence,decision
+  FROM answer_candidate
+  WHERE tenant_id=$1::uuid AND answer_segment_id=$2::uuid AND is_current AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) ac ON true
+LEFT JOIN LATERAL (
+  SELECT source,answer_text,confidence
+  FROM answer_segment_answer
+  WHERE tenant_id=$1::uuid AND answer_segment_id=$2::uuid AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) ans ON true
+LEFT JOIN LATERAL (
+  SELECT id,standard_answer
+  FROM question_answer_key
+  WHERE tenant_id=$1::uuid AND question_id=(
+    SELECT question_id FROM answer_segment WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL
+  ) AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) ak ON true
+LEFT JOIN LATERAL (
+  SELECT rule_type
+  FROM scoring_rule
+  WHERE tenant_id=$1::uuid AND question_id=(
+    SELECT question_id FROM answer_segment WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL
+  ) AND status='published' AND deleted_at IS NULL
+  ORDER BY version DESC LIMIT 1
+) sr ON true
+LEFT JOIN LATERAL (
+  SELECT score,max_score,source
+  FROM question_grade
+  WHERE tenant_id=$1::uuid AND answer_segment_id=$2::uuid AND is_current AND deleted_at IS NULL
+  ORDER BY created_at DESC LIMIT 1
+) g ON true`, tenantID, segmentID)
+
+	var out AutomationResult
+	var confidence, score, maxScore sql.NullFloat64
+	var answerKeyID string
+	var standardAnswerRaw []byte
+	if err := row.Scan(
+		&out.Source, &out.RecognizedAnswer, &confidence, &out.Decision,
+		&answerKeyID, &standardAnswerRaw, &out.RuleType, &score, &maxScore, &out.GradeSource,
+	); err != nil {
+		return nil, err
+	}
+	if confidence.Valid {
+		value := confidence.Float64
+		out.Confidence = &value
+	}
+	if score.Valid {
+		value := score.Float64
+		out.Score = &value
+	}
+	if maxScore.Valid {
+		value := maxScore.Float64
+		out.MaxScore = &value
+	}
+	if answerKeyID != "" {
+		_ = json.Unmarshal(standardAnswerRaw, &out.StandardAnswer)
+	}
+	if out.Source == "" && out.RecognizedAnswer == "" && out.RuleType == "" && answerKeyID == "" {
+		return nil, nil
+	}
+	return &out, nil
 }
 
 type taskScanner interface {

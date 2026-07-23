@@ -62,7 +62,6 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		writeRuntimeError(w, r, err)
 		return
 	}
-	h.auditTask(r, "worker.task_running", task, "worker task heartbeat")
 	httpx.JSON(w, http.StatusOK, map[string]any{"task": task})
 }
 

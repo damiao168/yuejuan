@@ -200,7 +200,7 @@ export function ScoreManagementPage({
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
   const summary = useMemo(() => createSummary(submissions, grades, quality), [grades, quality, submissions]);
   const scoreAuditLogs = useMemo(() => auditLogs.filter((item) => item.action.startsWith("score.")), [auditLogs]);
-  const publishedOrLocked = grades.length > 0 && grades.every((grade) => grade.locked || grade.status === "published" || grade.status === "locked");
+  const publishedOrLocked = selectedExam?.status === "published" || (grades.length > 0 && grades.every((grade) => grade.locked || grade.status === "published" || grade.status === "locked"));
 
   const filteredGrades = useMemo(() => {
     const text = keyword.trim().toLowerCase();
@@ -369,6 +369,7 @@ export function ScoreManagementPage({
           "publish",
           async () => {
             await publishExamGrades(selectedExamId, publishReason.trim());
+            await loadExamList();
           },
           "成绩已发布"
         )
@@ -478,8 +479,8 @@ export function ScoreManagementPage({
         <div className="score-quality-pass">
           <ShieldCheck size={22} />
           <div>
-            <strong>发布前质量检查通过</strong>
-            <span>当前成绩已满足发布闸门。</span>
+            <strong>{publishedOrLocked ? "成绩已发布，质量校验通过" : "发布前质量检查通过"}</strong>
+            <span>{publishedOrLocked ? "成绩已发布并锁定，发布前阻断项均已处理。" : "当前成绩已满足发布闸门。"}</span>
           </div>
         </div>
       );
@@ -590,8 +591,8 @@ export function ScoreManagementPage({
           <strong>{summary.anomalies}</strong>
         </div>
         <div>
-          <span>{mode === "teacher" ? "当前状态" : "是否可发布"}</span>
-          <StatusTag tone={mode === "teacher" ? "neutral" : summary.canPublish ? "success" : "danger"}>{mode === "teacher" ? (selectedExam ? statusLabels[selectedExam.status] ?? selectedExam.status : "未选择") : summary.canPublish ? "可发布" : "不可发布"}</StatusTag>
+          <span>{mode === "teacher" ? "当前状态" : publishedOrLocked ? "发布状态" : "是否可发布"}</span>
+          <StatusTag tone={mode === "teacher" ? "neutral" : publishedOrLocked || summary.canPublish ? "success" : "danger"}>{mode === "teacher" ? (selectedExam ? statusLabels[selectedExam.status] ?? selectedExam.status : "未选择") : publishedOrLocked ? "已发布" : summary.canPublish ? "可发布" : "不可发布"}</StatusTag>
         </div>
       </section>
 
@@ -603,7 +604,7 @@ export function ScoreManagementPage({
                 <h2>发布前质量检查</h2>
                 <p>{selectedExam ? selectedExam.name : "未选择考试"}</p>
               </div>
-              <Progress type="circle" size={58} percent={quality ? (quality.quality.passed ? 100 : Math.max(0, Math.round((1 - quality.quality.issues.length / 6) * 100))) : 0} status={quality?.quality.passed ? "success" : "exception"} />
+              <Progress type="circle" size={58} percent={quality ? (quality.quality.passed ? 100 : Math.max(0, Math.round((1 - quality.quality.issues.length / 6) * 100))) : 0} status={quality?.quality.passed ? "success" : "exception"} format={(percent) => `${percent ?? 0}%`} />
             </div>
             {loadingScores ? <LoadingState label="正在读取质量检查" /> : renderQuality()}
           </section>

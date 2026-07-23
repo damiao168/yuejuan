@@ -45,8 +45,7 @@ var allowedTransitions = map[string]map[string]bool{
 		"archived":  true,
 	},
 	"finalized": {
-		"published": true,
-		"archived":  true,
+		"archived": true,
 	},
 	"published": {
 		"archived": true,
@@ -62,6 +61,11 @@ func IsValidGradingMode(mode string) bool {
 }
 
 func CanTransition(from string, to string) bool {
+	// Grade publication is guarded by the score quality and confirmation
+	// workflow. The generic exam status API must never publish an exam.
+	if to == "published" {
+		return false
+	}
 	if from == to {
 		return true
 	}

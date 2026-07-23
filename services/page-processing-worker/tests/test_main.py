@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from page_processing.api import APIError
 from page_processing.config import Config
 import page_processing.__main__ as worker_main
 
@@ -30,6 +31,18 @@ class FakeRunner:
 
     def run_forever(self) -> None:
         self.forever_called = True
+
+
+class SequencedLoginClient:
+    def __init__(self, outcomes: list[APIError | None]) -> None:
+        self.outcomes = list(outcomes)
+        self.login_calls = 0
+
+    def login(self) -> None:
+        self.login_calls += 1
+        outcome = self.outcomes.pop(0)
+        if outcome is not None:
+            raise outcome
 
 
 def _config(*, username: str = "worker", password: str = "secret") -> Config:
@@ -86,3 +99,60 @@ def test_credentials_are_required_before_client_or_runner_start(monkeypatch: pyt
 
     with pytest.raises(SystemExit, match="credentials are required"):
         worker_main.main(["--once"])
+
+
+def test_login_retries_temporary_failures_with_bounded_exponential_backoff() -> None:
+    client = SequencedLoginClient(
+        [
+            APIError("api_request_failed:503", status_code=503),
+            APIError("api_request_failed:401", status_code=401),
+            None,
+        ]
+    )
+    sleeps: list[float] = []
+
+    worker_main.login_with_retry(
+        client,  # type: ignore[arg-type]
+        max_attempts=5,
+        initial_backoff=1.0,
+        max_backoff=2.0,
+        sleep=sleeps.append,
+    )
+
+    assert client.login_calls == 3
+    assert sleeps == [1.0, 2.0]
+
+
+def test_login_retry_honors_retry_after() -> None:
+    client = SequencedLoginClient(
+        [APIError("api_request_failed:429", status_code=429, retry_after=17.0), None]
+    )
+    sleeps: list[float] = []
+
+    worker_main.login_with_retry(client, sleep=sleeps.append)  # type: ignore[arg-type]
+
+    assert client.login_calls == 2
+    assert sleeps == [17.0]
+
+
+def test_login_retry_stops_at_attempt_limit() -> None:
+    client = SequencedLoginClient(
+        [
+            APIError("api_request_failed:401", status_code=401),
+            APIError("api_request_failed:401", status_code=401),
+            APIError("api_request_failed:401", status_code=401),
+        ]
+    )
+    sleeps: list[float] = []
+
+    with pytest.raises(APIError, match="api_request_failed:401"):
+        worker_main.login_with_retry(
+            client,  # type: ignore[arg-type]
+            max_attempts=3,
+            initial_backoff=1.0,
+            max_backoff=2.0,
+            sleep=sleeps.append,
+        )
+
+    assert client.login_calls == 3
+    assert sleeps == [1.0, 2.0]

@@ -176,6 +176,9 @@ WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL
 `, tenantID, examID); err != nil {
 		return PublishResult{}, err
 	}
+	if err := publishExamTx(ctx, tx, tenantID, examID); err != nil {
+		return PublishResult{}, err
+	}
 	grades, err := s.listGradesTx(ctx, tx, tenantID, examID, true)
 	if err != nil {
 		return PublishResult{}, err
@@ -423,7 +426,7 @@ AND NOT EXISTS (
 			issues = append(issues, QualityIssue{Code: "no_submission_grades", Message: "there are no submission grades to publish", Blocking: true, Count: 1})
 		}
 		unconfirmed, err := scalarCountTx(ctx, tx, `SELECT COUNT(*) FROM submission_grade
-WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND status NOT IN ('confirmed', 'pending_publish')`, tenantID, examID)
+WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND status NOT IN ('confirmed', 'pending_publish', 'published', 'locked')`, tenantID, examID)
 		if err != nil {
 			return QualityReport{}, err
 		}
@@ -534,6 +537,37 @@ WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL
 func lockExamTx(ctx context.Context, tx *sql.Tx, tenantID string, examID string) error {
 	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, tenantID, examID)
 	return err
+}
+
+func publishExamTx(ctx context.Context, tx *sql.Tx, tenantID string, examID string) error {
+	result, err := tx.ExecContext(ctx, `
+UPDATE exam
+SET status = 'published', updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+  AND status IN ('draft', 'configured', 'ready', 'collecting', 'grading', 'reviewing', 'finalized')
+`, tenantID, examID)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated == 1 {
+		return nil
+	}
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM exam WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+)
+`, tenantID, examID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	return ErrInvalidTransition
 }
 
 func scalarCountTx(ctx context.Context, tx *sql.Tx, query string, args ...any) (int, error) {

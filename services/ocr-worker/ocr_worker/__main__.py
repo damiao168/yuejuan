@@ -13,22 +13,28 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     log = logging.getLogger("edugrade.ocr_worker")
     settings = load_settings()
+    engine = PaddleOCREngine(device=settings.device, model_version=settings.model_version)
+    log.info("initializing OCR engine before worker registration")
+    engine.initialize()
+    log.info("OCR engine ready: model=%s device=%s", engine.model_version, engine.device)
     client = EduGradeClient(
         base_url=settings.api_base_url,
         tenant_code=settings.tenant_code,
         username=settings.username,
         password=settings.password,
     )
-    engine = PaddleOCREngine(device=settings.device, model_version=settings.model_version)
     runner = OCRRunner(
         api=client,
         engine=engine,
         config=WorkerConfig(
             worker_id=settings.worker_id,
             batch_size=settings.batch_size,
-            model_version=settings.model_version,
+            engine=settings.engine,
+            engine_version=settings.engine_version,
             preprocess_profile=settings.preprocess_profile,
             lease_seconds=settings.lease_seconds,
+            heartbeat_interval=settings.heartbeat_interval,
+            heartbeat_timeout=settings.heartbeat_timeout,
         ),
     )
     while True:

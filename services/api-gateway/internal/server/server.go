@@ -177,6 +177,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 			}
 		}
 	}
+	h.WithWorkerRuntimeStore(workerRuntimeStore)
 	orchestratorHandler := orchestrator.NewHandler(orchestratorStore, authStore)
 	ocrHandler := ocrpkg.NewHandler(ocrStore, ocrQueue, submissionStore, authStore, workerRuntimeStore)
 	imageQualityHandler := imagequality.NewHandler(imageQualityStore, submissionStore, fileStore, authStore, workerRuntimeStore).WithCaptureStore(captureStore)
@@ -198,7 +199,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	}
 	subjectiveHandler := subjective.NewHandler(subjectiveStore, subjectiveAdapter, authStore)
 	evidenceHandler := evidence.NewHandler(evidenceStore, evidence.NewEngine(), authStore)
-	reviewHandler := review.NewHandler(reviewStore, authStore)
+	reviewHandler := review.NewHandler(reviewStore, authStore, segmentHandler.GetImage, fileHandler.Download)
 	scoreHandler := score.NewHandler(scoreStore, authStore)
 	appealHandler := appeal.NewHandler(appealStore, authStore)
 	reportHandler := report.NewHandler(reportStore, authStore)
@@ -231,7 +232,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 		return requireAuth(auth.RequirePermission("segment:manage")(handler))
 	}
 	requireSegmentEvidenceRead := func(handler http.HandlerFunc) http.Handler {
-		return requireAuth(auth.RequireAnyPermission("segment:manage", "ocr:manage", "grading:manage", "evidence:manage", "review:manage", "review:work", "arbitration:manage", "arbitration:work")(handler))
+		return requireAuth(auth.RequireAnyRole("platform_admin", "tenant_admin", "school_admin")(
+			auth.RequireAnyPermission("segment:manage", "ocr:manage", "grading:manage", "evidence:manage", "review:manage", "arbitration:manage")(handler),
+		))
 	}
 	requireOrchestratorManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("orchestrator:manage")(handler))
@@ -247,6 +250,11 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	}
 	requireReviewWork := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequireAnyPermission("review:manage", "review:work")(handler))
+	}
+	requireOriginalReviewImage := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequireAnyRole("platform_admin", "tenant_admin", "school_admin")(
+			auth.RequireAnyPermission("review:manage", "evidence:manage", "tenant:manage")(handler),
+		))
 	}
 	requireArbitrationManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("arbitration:manage")(handler))
@@ -287,6 +295,17 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	requireSystemRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("system:read")(handler))
 	}
+	requireOCRAvailabilityRead := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequireAnyPermission(
+			"review:work",
+			"review:manage",
+			"submission:manage",
+			"capture:manage",
+			"ocr:manage",
+			"grading:manage",
+			"system:read",
+		)(handler))
+	}
 	requireWorkerExecute := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequireAnyPermission("ocr:manage", "orchestrator:manage")(handler))
 	}
@@ -298,6 +317,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /ready", requireSystemRead(h.Ready))
 	mux.Handle("GET /api/v1/system/info", requireSystemRead(h.SystemInfo))
 	mux.Handle("GET /api/v1/system/status", requireSystemRead(h.SystemStatus))
+	mux.Handle("GET /api/v1/ocr/availability", requireOCRAvailabilityRead(h.OCRAvailability))
 	mux.HandleFunc("POST /api/v1/auth/login", authHandler.Login)
 	mux.Handle("POST /api/v1/auth/logout", requireAuth(http.HandlerFunc(authHandler.Logout)))
 	mux.Handle("GET /api/v1/auth/me", requireAuth(http.HandlerFunc(authHandler.Me)))
@@ -453,6 +473,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/omr-calibrations/{id}/discard", requireGradingManage(gradingHandler.DiscardOMRCalibration))
 	mux.Handle("POST /api/v1/exams/{examId}/scoring-runs", requireGradingManage(gradingHandler.StartScoringRun))
 	mux.Handle("GET /api/v1/exams/{examId}/scoring-summary", requireGradingManage(gradingHandler.GetScoringSummary))
+	mux.Handle("GET /api/v1/exams/{examId}/automation-results", requireGradingManage(gradingHandler.GetExamAutomationResults))
 	mux.Handle("GET /api/v1/scoring-runs/{runId}", requireGradingManage(gradingHandler.GetScoringRun))
 	mux.Handle("POST /api/v1/scoring-runs/{runId}/cancel", requireGradingManage(gradingHandler.CancelScoringRun))
 	mux.Handle("POST /api/v1/scoring-runs/{runId}/retry-failed", requireGradingManage(gradingHandler.RetryFailedScoringRun))
@@ -497,6 +518,8 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/review-tasks/batch-assign", requireReviewManage(reviewHandler.BatchAssignTasks))
 	mux.Handle("GET /api/v1/review-tasks/{id}", requireReviewWork(reviewHandler.GetTask))
 	mux.Handle("GET /api/v1/review-tasks/{id}/workspace", requireReviewWork(reviewHandler.GetWorkspace))
+	mux.Handle("GET /api/v1/review-tasks/{id}/segment-image", requireReviewWork(reviewHandler.GetWorkspaceSegmentImage))
+	mux.Handle("GET /api/v1/review-tasks/{id}/original-image", requireOriginalReviewImage(reviewHandler.GetWorkspaceOriginalImage))
 	mux.Handle("POST /api/v1/review-tasks/{id}/renew", requireReviewWork(reviewHandler.RenewTaskClaim))
 	mux.Handle("POST /api/v1/review-tasks/{id}/release", requireReviewWork(reviewHandler.ReleaseTaskClaim))
 	mux.Handle("POST /api/v1/review-tasks/{id}/assign", requireReviewManage(reviewHandler.AssignTask))

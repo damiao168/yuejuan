@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -39,13 +40,14 @@ func TestCreateStartCompleteOCRTaskWithLowConfidence(t *testing.T) {
 	token := login(t, router)
 
 	task := createTask(t, router, token, page.SubmissionID)
-	if len(queue.Tasks()) != 1 {
-		t.Fatalf("expected task to be enqueued, got %d", len(queue.Tasks()))
+	if len(queue.Tasks()) != 0 {
+		t.Fatalf("runtime-backed OCR must not use the legacy in-memory queue, got %d entries", len(queue.Tasks()))
 	}
 	runtimeTask, err := runtimeStore.GetBySource(context.Background(), tenantID, "ocr_task", task.ID)
 	if err != nil || runtimeTask.Status != workerruntime.StatusQueued {
 		t.Fatalf("ocr creation should enqueue runtime task: %v %#v", err, runtimeTask)
 	}
+	runtimeTask = claimRuntimeTask(t, runtimeStore, task.ID)
 
 	req := authedRequest(http.MethodPost, "/api/v1/ocr-tasks/"+task.ID+"/start", nil, token)
 	rec := httptest.NewRecorder()
@@ -54,7 +56,7 @@ func TestCreateStartCompleteOCRTaskWithLowConfidence(t *testing.T) {
 		t.Fatalf("start expected processing, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	body := `{"results":[{"submission_page_id":"` + page.ID + `","text":"Synthetic OCR text","bbox":[10,20,100,40],"confidence":0.52}]}`
+	body := withRuntime(`{"results":[{"submission_page_id":"`+page.ID+`","text":"Synthetic OCR text","bbox":[10,20,100,40],"confidence":0.52}]}`, runtimeTask)
 	req = authedRequest(http.MethodPost, "/api/v1/ocr-tasks/"+task.ID+"/results", bytes.NewBufferString(body), token)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -89,11 +91,13 @@ func TestCompleteBeforeStartRejected(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"ocr:manage"})
 	submissionStore := submission.NewMemoryStore()
 	page := readySubmission(t, submissionStore)
-	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue())
+	runtimeStore := workerruntime.NewMemoryStore()
+	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), runtimeStore)
 	token := login(t, router)
 	task := createTask(t, router, token, page.SubmissionID)
+	runtimeTask := claimRuntimeTask(t, runtimeStore, task.ID)
 
-	body := `{"results":[{"submission_page_id":"` + page.ID + `","text":"Synthetic OCR text","bbox":[10,20,100,40],"confidence":0.9}]}`
+	body := withRuntime(`{"results":[{"submission_page_id":"`+page.ID+`","text":"Synthetic OCR text","bbox":[10,20,100,40],"confidence":0.9}]}`, runtimeTask)
 	req := authedRequest(http.MethodPost, "/api/v1/ocr-tasks/"+task.ID+"/results", bytes.NewBufferString(body), token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -106,11 +110,13 @@ func TestOCRTaskFail(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"ocr:manage"})
 	submissionStore := submission.NewMemoryStore()
 	page := readySubmission(t, submissionStore)
-	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue())
+	runtimeStore := workerruntime.NewMemoryStore()
+	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), runtimeStore)
 	token := login(t, router)
 	task := createTask(t, router, token, page.SubmissionID)
+	runtimeTask := claimRuntimeTask(t, runtimeStore, task.ID)
 
-	req := authedRequest(http.MethodPost, "/api/v1/ocr-tasks/"+task.ID+"/fail", bytes.NewBufferString(`{"error_message":"worker timeout"}`), token)
+	req := authedRequest(http.MethodPost, "/api/v1/ocr-tasks/"+task.ID+"/fail", bytes.NewBufferString(withRuntime(`{"error_message":"worker timeout"}`, runtimeTask)), token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"failed"`) {
@@ -171,7 +177,8 @@ func TestOCRTaskInputOmitsStudentIdentityAndIncludesPages(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"ocr:manage"})
 	submissionStore := submission.NewMemoryStore()
 	page := readySubmission(t, submissionStore)
-	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue())
+	runtimeStore := workerruntime.NewMemoryStore()
+	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), runtimeStore)
 	token := login(t, router)
 	task := createTask(t, router, token, page.SubmissionID)
 
@@ -194,9 +201,11 @@ func TestCompleteOCRTaskRejectsInvalidBBoxSchema(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"ocr:manage"})
 	submissionStore := submission.NewMemoryStore()
 	page := readySubmission(t, submissionStore)
-	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue())
+	runtimeStore := workerruntime.NewMemoryStore()
+	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), runtimeStore)
 	token := login(t, router)
 	task := createTask(t, router, token, page.SubmissionID)
+	runtimeTask := claimRuntimeTask(t, runtimeStore, task.ID)
 	req := authedRequest(http.MethodPost, "/api/v1/ocr-tasks/"+task.ID+"/start", nil, token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -204,7 +213,7 @@ func TestCompleteOCRTaskRejectsInvalidBBoxSchema(t *testing.T) {
 		t.Fatalf("start expected 200, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	body := `{"results":[{"submission_page_id":"` + page.ID + `","text":"bad bbox","bbox":[-1,20,100,40],"confidence":0.9}]}`
+	body := withRuntime(`{"results":[{"submission_page_id":"`+page.ID+`","text":"bad bbox","bbox":[-1,20,100,40],"confidence":0.9}]}`, runtimeTask)
 	req = authedRequest(http.MethodPost, "/api/v1/ocr-tasks/"+task.ID+"/results", bytes.NewBufferString(body), token)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -217,9 +226,11 @@ func TestCompleteOCRTaskPersistsWorkerMetadata(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"ocr:manage"})
 	submissionStore := submission.NewMemoryStore()
 	page := readySubmission(t, submissionStore)
-	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue())
+	runtimeStore := workerruntime.NewMemoryStore()
+	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), runtimeStore)
 	token := login(t, router)
 	task := createTask(t, router, token, page.SubmissionID)
+	runtimeTask := claimRuntimeTask(t, runtimeStore, task.ID)
 	req := authedRequest(http.MethodPost, "/api/v1/ocr-tasks/"+task.ID+"/start", nil, token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -227,7 +238,7 @@ func TestCompleteOCRTaskPersistsWorkerMetadata(t *testing.T) {
 		t.Fatalf("start expected 200, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	body := `{"model_version":"ppocr-v5-server","config_hash":"cfg123","input_hash":"input123","duration_ms":42,"worker_id":"worker-a","preprocess_profile":"default","results":[{"submission_page_id":"` + page.ID + `","text":"Real OCR text","bbox":[10,20,100,40],"confidence":0.91}]}`
+	body := withRuntime(`{"model_version":"ppocr-v5-server","config_hash":"cfg123","input_hash":"input123","duration_ms":42,"worker_id":"worker-a","preprocess_profile":"default","results":[{"submission_page_id":"`+page.ID+`","text":"Real OCR text","bbox":[10,20,100,40],"confidence":0.91}]}`, runtimeTask)
 	req = authedRequest(http.MethodPost, "/api/v1/ocr-tasks/"+task.ID+"/results", bytes.NewBufferString(body), token)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -246,9 +257,11 @@ func TestCompleteOCRTaskIsIdempotentForSamePayload(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"ocr:manage"})
 	submissionStore := submission.NewMemoryStore()
 	page := readySubmission(t, submissionStore)
-	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue())
+	runtimeStore := workerruntime.NewMemoryStore()
+	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), runtimeStore)
 	token := login(t, router)
 	task := createTask(t, router, token, page.SubmissionID)
+	runtimeTask := claimRuntimeTask(t, runtimeStore, task.ID)
 
 	req := authedRequest(http.MethodPost, "/api/v1/ocr-tasks/"+task.ID+"/start", nil, token)
 	rec := httptest.NewRecorder()
@@ -256,7 +269,7 @@ func TestCompleteOCRTaskIsIdempotentForSamePayload(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("start expected 200, got %d %s", rec.Code, rec.Body.String())
 	}
-	body := `{"model_version":"ppocr-v5-server","config_hash":"cfg","input_hash":"input","duration_ms":42,"worker_id":"worker-a","preprocess_profile":"default","results":[{"submission_page_id":"` + page.ID + `","text":"OCR text","bbox":[10,20,100,40],"confidence":0.91}]}`
+	body := withRuntime(`{"model_version":"ppocr-v5-server","config_hash":"cfg","input_hash":"input","duration_ms":42,"worker_id":"worker-a","preprocess_profile":"default","results":[{"submission_page_id":"`+page.ID+`","text":"OCR text","bbox":[10,20,100,40],"confidence":0.91}]}`, runtimeTask)
 	for attempt := 0; attempt < 2; attempt++ {
 		req = authedRequest(http.MethodPost, "/api/v1/ocr-tasks/"+task.ID+"/results", bytes.NewBufferString(body), token)
 		rec = httptest.NewRecorder()
@@ -368,6 +381,28 @@ func createTask(t *testing.T, router http.Handler, token string, submissionID st
 
 func validTaskJSON() string {
 	return `{"engine":"paddleocr","engine_version":"pp-ocrv5","min_confidence":0.8}`
+}
+
+func claimRuntimeTask(t *testing.T, store *workerruntime.MemoryStore, sourceTaskID string) workerruntime.Task {
+	t.Helper()
+	tasks, err := store.Claim(context.Background(), tenantID, workerruntime.ClaimInput{
+		QueueName: "ocr", WorkerService: "ocr-worker", WorkerInstanceID: "ocr-test-1",
+		Limit: 1, LeaseSeconds: 300,
+	})
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("claim OCR runtime task: %v %#v", err, tasks)
+	}
+	if tasks[0].SourceType != "ocr_task" || tasks[0].SourceID != sourceTaskID {
+		t.Fatalf("claimed runtime task does not belong to source %s: %#v", sourceTaskID, tasks[0])
+	}
+	return tasks[0]
+}
+
+func withRuntime(body string, task workerruntime.Task) string {
+	return strings.TrimSuffix(body, "}") + fmt.Sprintf(
+		`,"runtime_task_id":%q,"runtime_lease_token":%q}`,
+		task.ID, task.LeaseToken,
+	)
 }
 
 func authedRequest(method string, path string, body *bytes.Buffer, token string) *http.Request {

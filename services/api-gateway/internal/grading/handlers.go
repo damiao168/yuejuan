@@ -289,6 +289,21 @@ func (h *Handler) GetScoringSummary(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"scoring_summary": summary})
 }
 
+func (h *Handler) GetExamAutomationResults(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	store, ok := h.scoringRecoveryStore()
+	if !ok {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "scoring_results_unavailable", "scoring results are unavailable")
+		return
+	}
+	results, err := store.GetExamAutomationResults(r.Context(), user.TenantID, r.PathValue("examId"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, results)
+}
+
 func (h *Handler) GetScoringRun(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	store, ok := h.scoringRecoveryStore()

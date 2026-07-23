@@ -55,7 +55,7 @@ func TestHandlerClaimHeartbeatCompleteAndAudit(t *testing.T) {
 	}
 
 	audits := audit.Audits()
-	if len(audits) != 3 || audits[0].Action != "worker.task_claimed" || audits[2].Action != "worker.task_completed" {
+	if len(audits) != 2 || audits[0].Action != "worker.task_claimed" || audits[1].Action != "worker.task_completed" {
 		t.Fatalf("unexpected runtime audits: %#v", audits)
 	}
 }

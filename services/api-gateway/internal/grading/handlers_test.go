@@ -127,8 +127,20 @@ func TestScoringRecoveryEndpointsCoordinateWorkerRuntime(t *testing.T) {
 	req := authedRequest(http.MethodGet, "/api/v1/scoring-runs/run-1", nil, token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"answer_segment_id":"segment-1"`) || strings.Contains(rec.Body.String(), "student_id") {
+	if rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"answer_segment_id":"segment-1"`) ||
+		!strings.Contains(rec.Body.String(), `"anonymous_code":"SIM-001"`) ||
+		!strings.Contains(rec.Body.String(), `"recognized_answer":"A"`) ||
+		!strings.Contains(rec.Body.String(), `"standard_answer":"A"`) ||
+		!strings.Contains(rec.Body.String(), `"grade_source":"rule_confirmed"`) ||
+		strings.Contains(rec.Body.String(), "student_id") {
 		t.Fatalf("scoring run detail should be anonymous and available, got %d %s", rec.Code, rec.Body.String())
+	}
+	req = authedRequest(http.MethodGet, "/api/v1/exams/exam-1/automation-results", nil, token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"recognized_answer":"A"`) {
+		t.Fatalf("exam automation results expected 200, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	req = authedRequest(http.MethodPost, "/api/v1/scoring-runs/run-1/cancel", nil, token)
@@ -200,11 +212,14 @@ type scoringRecoveryTestStore struct {
 
 func newScoringRecoveryTestStore() *scoringRecoveryTestStore {
 	run := grading.ScoringRun{ID: "run-1", TenantID: tenantID, ExamID: "exam-1", Status: "processing", TotalCount: 1, QueuedCount: 1}
+	confidence, score, maxScore := 0.99, 5.0, 5.0
 	return &scoringRecoveryTestStore{
 		MemoryStore: grading.NewMemoryStore(),
 		run:         run,
 		detail: grading.ScoringRunDetail{Run: run, Items: []grading.ScoringRunItem{{
-			AnswerSegmentID: "segment-1", QuestionID: "question-1", QuestionNo: "Q1", QuestionType: "single_choice", State: "processing",
+			AnswerSegmentID: "segment-1", QuestionID: "question-1", QuestionNo: "Q1", QuestionType: "single_choice", AnonymousCode: "SIM-001", State: "confirmed",
+			RecognitionSource: "omr", RecognizedAnswer: "A", RecognitionDecision: "confirmed", RecognitionConfidence: &confidence,
+			StandardAnswer: "A", RuleType: "single_choice", Score: &score, MaxScore: &maxScore, GradeSource: "rule_confirmed",
 		}}},
 	}
 }
@@ -240,6 +255,10 @@ func (s *scoringRecoveryTestStore) ProcessRuleCandidates(_ context.Context, _ st
 func (s *scoringRecoveryTestStore) GetScoringRunDetail(_ context.Context, _ string, _ string) (grading.ScoringRunDetail, error) {
 	s.detail.Run = s.run
 	return s.detail, nil
+}
+
+func (s *scoringRecoveryTestStore) GetExamAutomationResults(_ context.Context, _ string, _ string) (grading.ExamAutomationResults, error) {
+	return grading.ExamAutomationResults{Items: append([]grading.ScoringRunItem{}, s.detail.Items...)}, nil
 }
 
 func (s *scoringRecoveryTestStore) BeginScoringRunCancellation(_ context.Context, _ string, _ string) (grading.ScoringRun, []string, error) {

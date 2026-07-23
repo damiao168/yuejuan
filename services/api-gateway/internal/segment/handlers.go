@@ -170,7 +170,10 @@ func (h *Handler) GetImage(w http.ResponseWriter, r *http.Request) {
 	}
 	etag := `"sha256:` + evidence.CropSHA256 + `"`
 	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	// The segment URL is stable while its crop evidence may be replaced after a
+	// registration correction. Revalidate the private cache so graders never
+	// keep seeing an obsolete crop under the same URL.
+	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.Header.Get("If-None-Match") == etag {
 		w.WriteHeader(http.StatusNotModified)

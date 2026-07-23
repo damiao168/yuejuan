@@ -96,7 +96,8 @@ type FileConfig struct {
 }
 
 type ObservabilityConfig struct {
-	SlowRequestThreshold time.Duration
+	SlowRequestThreshold      time.Duration
+	WorkerHeartbeatStaleAfter time.Duration
 }
 
 type BarcodeConfig struct {
@@ -130,7 +131,7 @@ func Load(envFile string) (Config, error) {
 			ShutdownTimeout:   getEnvDuration("EDUGRADE_SHUTDOWN_TIMEOUT", 10*time.Second),
 			ReadHeaderTimeout: getEnvDuration("EDUGRADE_HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
 			ReadTimeout:       getEnvDuration("EDUGRADE_HTTP_READ_TIMEOUT", 15*time.Second),
-			WriteTimeout:      getEnvDuration("EDUGRADE_HTTP_WRITE_TIMEOUT", 300*time.Second),
+			WriteTimeout:      getEnvDuration("EDUGRADE_HTTP_WRITE_TIMEOUT", 780*time.Second),
 			IdleTimeout:       getEnvDuration("EDUGRADE_HTTP_IDLE_TIMEOUT", 60*time.Second),
 		},
 		Auth: AuthConfig{
@@ -168,8 +169,8 @@ func Load(envFile string) (Config, error) {
 		AIService: AIServiceConfig{
 			URL:           getEnv("EDUGRADE_AI_SERVICE_URL", ""),
 			Token:         getEnv("EDUGRADE_AI_SERVICE_TOKEN", ""),
-			Timeout:       getEnvDuration("EDUGRADE_AI_SERVICE_TIMEOUT", 250*time.Second),
-			MaxRetries:    getEnvInt("EDUGRADE_AI_SERVICE_MAX_RETRIES", 1),
+			Timeout:       getEnvDuration("EDUGRADE_AI_SERVICE_TIMEOUT", 750*time.Second),
+			MaxRetries:    getEnvInt("EDUGRADE_AI_SERVICE_MAX_RETRIES", 0),
 			ModelVersion:  getEnv("EDUGRADE_AI_MODEL_VERSION", "Qwen/Qwen3-4B-GGUF:Q4_K_M"),
 			PromptVersion: getEnv("EDUGRADE_AI_PROMPT_VERSION", "subjective-local-structured-v2"),
 			MinConfidence: getEnvFloat("EDUGRADE_AI_MIN_CONFIDENCE", 0.8),
@@ -180,7 +181,8 @@ func Load(envFile string) (Config, error) {
 			AllowedExtensions: splitCSV(getEnv("EDUGRADE_FILE_ALLOWED_EXTENSIONS", ".pdf,.png,.jpg,.jpeg,.csv,.docx")),
 		},
 		Observability: ObservabilityConfig{
-			SlowRequestThreshold: getEnvDuration("EDUGRADE_SLOW_REQUEST_THRESHOLD", 2*time.Second),
+			SlowRequestThreshold:      getEnvDuration("EDUGRADE_SLOW_REQUEST_THRESHOLD", 2*time.Second),
+			WorkerHeartbeatStaleAfter: getEnvDuration("EDUGRADE_WORKER_HEARTBEAT_STALE_AFTER", 30*time.Second),
 		},
 		Barcode: BarcodeConfig{
 			ActiveKeyID: getEnv("EDUGRADE_BARCODE_ACTIVE_KEY_ID", "local-v1"),

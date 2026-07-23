@@ -12,6 +12,9 @@ func TestCanTransition(t *testing.T) {
 	if CanTransition("configured", "collecting") || CanTransition("ready", "collecting") {
 		t.Fatal("collection must only start through the readiness gate")
 	}
+	if CanTransition("finalized", "published") {
+		t.Fatal("publication must only be performed by the score publish workflow")
+	}
 	if !CanTransition("published", "archived") {
 		t.Fatal("expected published -> archived to be allowed")
 	}

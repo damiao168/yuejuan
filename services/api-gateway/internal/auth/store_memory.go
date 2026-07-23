@@ -8,13 +8,14 @@ import (
 )
 
 type MemoryStore struct {
-	mu       sync.RWMutex
-	users    map[string]UserWithPassword
-	roles    map[string]map[string]AssignableRole
-	sessions map[string]memorySession
-	audits   []AuditRecord
-	auditSeq int
-	userSeq  int
+	mu             sync.RWMutex
+	users          map[string]UserWithPassword
+	roles          map[string]map[string]AssignableRole
+	tenantStatuses map[string]string
+	sessions       map[string]memorySession
+	audits         []AuditRecord
+	auditSeq       int
+	userSeq        int
 }
 
 type memorySession struct {
@@ -25,10 +26,11 @@ type memorySession struct {
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		users:    map[string]UserWithPassword{},
-		roles:    map[string]map[string]AssignableRole{},
-		sessions: map[string]memorySession{},
-		audits:   []AuditRecord{},
+		users:          map[string]UserWithPassword{},
+		roles:          map[string]map[string]AssignableRole{},
+		tenantStatuses: map[string]string{},
+		sessions:       map[string]memorySession{},
+		audits:         []AuditRecord{},
 	}
 }
 
@@ -36,6 +38,9 @@ func (s *MemoryStore) AddUser(user UserWithPassword) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.users[user.TenantCode+"|"+user.Username] = user
+	if _, exists := s.tenantStatuses[user.TenantID]; !exists {
+		s.tenantStatuses[user.TenantID] = "active"
+	}
 	if s.roles[user.TenantID] == nil {
 		s.roles[user.TenantID] = map[string]AssignableRole{}
 	}
@@ -44,6 +49,15 @@ func (s *MemoryStore) AddUser(user UserWithPassword) {
 			s.roles[user.TenantID][code] = AssignableRole{Code: code, Name: code, ScopeType: "tenant"}
 		}
 	}
+}
+
+// SetTenantStatus supports tenant lifecycle checks in the in-memory runtime
+// and tests. Users and sessions remain stored, but inactive tenants cannot
+// authenticate or use an existing session.
+func (s *MemoryStore) SetTenantStatus(tenantID, status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tenantStatuses[tenantID] = status
 }
 
 func (s *MemoryStore) AddRole(tenantID string, role AssignableRole) {
@@ -59,7 +73,7 @@ func (s *MemoryStore) FindUserByLogin(_ context.Context, tenantCode string, user
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	user, ok := s.users[tenantCode+"|"+username]
-	if !ok || user.Status != "active" {
+	if !ok || user.Status != "active" || s.tenantStatuses[user.TenantID] != "active" {
 		return UserWithPassword{}, ErrInvalidCredentials
 	}
 	return user, nil
@@ -80,7 +94,7 @@ func (s *MemoryStore) FindUserBySession(_ context.Context, tokenHash string, now
 		return User{}, ErrUnauthenticated
 	}
 	for _, user := range s.users {
-		if user.ID == session.UserID && user.TenantID == session.TenantID && user.Status == "active" {
+		if user.ID == session.UserID && user.TenantID == session.TenantID && user.Status == "active" && s.tenantStatuses[user.TenantID] == "active" {
 			return user.User, nil
 		}
 	}

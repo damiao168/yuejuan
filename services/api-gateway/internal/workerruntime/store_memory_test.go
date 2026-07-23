@@ -128,6 +128,141 @@ func TestExpiredLeaseCanBeReclaimedAndRejectsLateComplete(t *testing.T) {
 	}
 }
 
+func TestExpiredLeaseAtAttemptLimitIsAtomicallyDeadLettered(t *testing.T) {
+	store := workerruntime.NewMemoryStore()
+	input := imageQualityTaskInput()
+	input.MaxAttempts = 1
+	task, err := store.CreateTask(context.Background(), runtimeTenantID, "actor-1", input)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	_ = mustClaim(t, store)
+	store.ForceExpireLeaseForTest(task.ID)
+
+	var claimedCount atomic.Int32
+	var wg sync.WaitGroup
+	for worker := 0; worker < 16; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			claimed, claimErr := store.Claim(context.Background(), runtimeTenantID, workerruntime.ClaimInput{
+				QueueName: "image-quality", WorkerService: "image-quality-worker", WorkerInstanceID: "worker-limit", Limit: 1, LeaseSeconds: 300,
+			})
+			if claimErr != nil {
+				t.Errorf("claim %d: %v", worker, claimErr)
+				return
+			}
+			claimedCount.Add(int32(len(claimed)))
+		}(worker)
+	}
+	wg.Wait()
+	if claimedCount.Load() != 0 {
+		t.Fatalf("expired task at max attempts must not be re-leased, got %d claims", claimedCount.Load())
+	}
+
+	stored, err := store.Get(context.Background(), runtimeTenantID, task.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if stored.Status != workerruntime.StatusDeadLetter || stored.AttemptCount != 1 || stored.AttemptCount > stored.MaxAttempts {
+		t.Fatalf("unexpected exhausted task: %#v", stored)
+	}
+	if stored.CompletedAt == nil || stored.LeaseToken != "" || stored.LeaseExpiresAt != nil {
+		t.Fatalf("dead-lettered task must be terminal without an active lease: %#v", stored)
+	}
+	if len(stored.Attempts) != 1 || stored.Attempts[0].Status != "lease_expired" || stored.Attempts[0].CompletedAt == nil {
+		t.Fatalf("expired attempt must be closed exactly once: %#v", stored.Attempts)
+	}
+}
+
+func TestExhaustedTaskDoesNotBlockNextClaimableTask(t *testing.T) {
+	store := workerruntime.NewMemoryStore()
+	firstInput := imageQualityTaskInput()
+	firstInput.MaxAttempts = 1
+	first, _ := store.CreateTask(context.Background(), runtimeTenantID, "actor-1", firstInput)
+	secondInput := imageQualityTaskInput()
+	secondInput.SourceID = "quality-run-2"
+	secondInput.IdempotencyKey = "image-quality-run:quality-run-2"
+	second, _ := store.CreateTask(context.Background(), runtimeTenantID, "actor-1", secondInput)
+	_ = mustClaim(t, store)
+	store.ForceExpireLeaseForTest(first.ID)
+
+	claimed, err := store.Claim(context.Background(), runtimeTenantID, workerruntime.ClaimInput{
+		QueueName: "image-quality", WorkerService: "image-quality-worker", WorkerInstanceID: "worker-b", Limit: 1, LeaseSeconds: 300,
+	})
+	if err != nil || len(claimed) != 1 || claimed[0].ID != second.ID {
+		t.Fatalf("claim behind exhausted task: %v %#v", err, claimed)
+	}
+	dead, _ := store.Get(context.Background(), runtimeTenantID, first.ID)
+	if dead.Status != workerruntime.StatusDeadLetter {
+		t.Fatalf("first task should be dead-lettered: %#v", dead)
+	}
+}
+
+func TestRunAtomicRollsBackRuntimeMutations(t *testing.T) {
+	store := workerruntime.NewMemoryStore()
+	wantErr := errors.New("source mutation failed")
+	err := store.RunAtomic(func(tx *workerruntime.MemoryTx) error {
+		if _, createErr := tx.CreateTask(context.Background(), runtimeTenantID, "actor-1", imageQualityTaskInput()); createErr != nil {
+			return createErr
+		}
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("atomic callback error: %v", err)
+	}
+	if _, err := store.GetBySource(context.Background(), runtimeTenantID, "image_quality_run", "quality-run-1"); !errors.Is(err, workerruntime.ErrNotFound) {
+		t.Fatalf("rolled-back task must not remain visible, got %v", err)
+	}
+
+	var created workerruntime.Task
+	if err := store.RunAtomic(func(tx *workerruntime.MemoryTx) error {
+		var createErr error
+		created, createErr = tx.CreateTask(context.Background(), runtimeTenantID, "actor-1", imageQualityTaskInput())
+		return createErr
+	}); err != nil {
+		t.Fatalf("commit atomic create: %v", err)
+	}
+	if created.ID != "worker-task-1" {
+		t.Fatalf("rollback must restore deterministic memory identifiers, got %s", created.ID)
+	}
+}
+
+func TestCreateSucceededTaskIsIdempotentAndHashChecked(t *testing.T) {
+	store := workerruntime.NewMemoryStore()
+	complete := workerruntime.CompleteInput{ResultSchemaVersion: "import.v1", Result: map[string]any{"b": 2, "a": 1}, DurationMS: 12}
+	first, err := store.CreateSucceededTask(context.Background(), runtimeTenantID, "actor-1", imageQualityTaskInput(), complete)
+	if err != nil || first.Status != workerruntime.StatusSucceeded || first.AttemptCount != 0 {
+		t.Fatalf("seed succeeded task: %v %#v", err, first)
+	}
+	second, err := store.CreateSucceededTask(context.Background(), runtimeTenantID, "actor-1", imageQualityTaskInput(), workerruntime.CompleteInput{
+		ResultSchemaVersion: "import.v1", Result: map[string]any{"a": 1, "b": 2}, DurationMS: 99,
+	})
+	if err != nil || second.ID != first.ID {
+		t.Fatalf("idempotent seed: %v %#v", err, second)
+	}
+	_, err = store.CreateSucceededTask(context.Background(), runtimeTenantID, "actor-1", imageQualityTaskInput(), workerruntime.CompleteInput{
+		ResultSchemaVersion: "import.v1", Result: map[string]any{"a": 3},
+	})
+	if !errors.Is(err, workerruntime.ErrConflict) {
+		t.Fatalf("changed trusted result must conflict, got %v", err)
+	}
+}
+
+func TestCanonicalResultHashIgnoresMapInsertionOrder(t *testing.T) {
+	first, err := workerruntime.ResultPayloadHash("v1", map[string]any{"z": 2, "a": map[string]any{"y": true, "x": 1}})
+	if err != nil {
+		t.Fatalf("first hash: %v", err)
+	}
+	second, err := workerruntime.ResultPayloadHash("v1", map[string]any{"a": map[string]any{"x": 1, "y": true}, "z": 2})
+	if err != nil {
+		t.Fatalf("second hash: %v", err)
+	}
+	if first != second {
+		t.Fatalf("canonical result hash changed with map order: %s != %s", first, second)
+	}
+}
+
 func TestCancelAndMetrics(t *testing.T) {
 	store := workerruntime.NewMemoryStore()
 	first, _ := store.CreateTask(context.Background(), runtimeTenantID, "actor-1", imageQualityTaskInput())
@@ -143,6 +278,25 @@ func TestCancelAndMetrics(t *testing.T) {
 	metrics, err := store.Metrics(context.Background(), runtimeTenantID)
 	if err != nil || len(metrics.Queues) != 1 || metrics.Queues[0].Queued != 1 || metrics.Queues[0].Cancelled != 1 {
 		t.Fatalf("unexpected metrics: %v %#v", err, metrics)
+	}
+}
+
+func TestEmptyClaimReportsIdleWorkerPresence(t *testing.T) {
+	store := workerruntime.NewMemoryStore()
+	claimed, err := store.Claim(context.Background(), runtimeTenantID, workerruntime.ClaimInput{
+		QueueName: "ocr", WorkerService: "ocr-worker", WorkerInstanceID: "ocr-1", Limit: 1, LeaseSeconds: 300,
+	})
+	if err != nil || len(claimed) != 0 {
+		t.Fatalf("empty claim: %v %#v", err, claimed)
+	}
+
+	metrics, err := store.Metrics(context.Background(), runtimeTenantID)
+	if err != nil || len(metrics.Workers) != 1 {
+		t.Fatalf("idle worker presence missing: %v %#v", err, metrics.Workers)
+	}
+	worker := metrics.Workers[0]
+	if worker.WorkerService != "ocr-worker" || worker.WorkerInstanceID != "ocr-1" || worker.QueueName != "ocr" || worker.Metadata["state"] != "polling" {
+		t.Fatalf("unexpected idle worker presence: %#v", worker)
 	}
 }
 

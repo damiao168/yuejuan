@@ -16,6 +16,10 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 	return &PostgresStore{db: db}
 }
 
+type taskQueryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 const taskColumns = `
 id::text, tenant_id::text, task_type, queue_name, source_type, source_id::text,
 status, priority, payload, payload_schema_version, result,
@@ -27,12 +31,25 @@ started_at, completed_at, cancelled_at, COALESCE(duration_ms, 0),
 COALESCE(error_code, ''), error_detail, COALESCE(created_by::text, ''), created_at, updated_at`
 
 func (s *PostgresStore) CreateTask(ctx context.Context, tenantID string, actorID string, input CreateTaskInput) (Task, error) {
+	return createTask(ctx, s.db, tenantID, actorID, input)
+}
+
+// CreateTaskInTx creates an idempotent Worker Runtime task inside the caller's
+// PostgreSQL transaction.
+func CreateTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, actorID string, input CreateTaskInput) (Task, error) {
+	if tx == nil {
+		return Task{}, ErrInvalidInput
+	}
+	return createTask(ctx, tx, tenantID, actorID, input)
+}
+
+func createTask(ctx context.Context, queryer taskQueryRower, tenantID string, actorID string, input CreateTaskInput) (Task, error) {
 	input = normalizeCreateInput(input)
 	if tenantID == "" || validateCreateInput(input) != nil {
 		return Task{}, ErrInvalidInput
 	}
 	payload, _ := json.Marshal(input.Payload)
-	row := s.db.QueryRowContext(ctx, `
+	row := queryer.QueryRowContext(ctx, `
 INSERT INTO agent_worker_task (
   tenant_id, task_type, queue_name, source_type, source_id, priority, payload,
   payload_schema_version, idempotency_key, dedupe_key, max_attempts,
@@ -48,6 +65,45 @@ RETURNING `+taskColumns,
 	return scanTask(row)
 }
 
+// CreateSucceededTaskInTx seeds a trusted, already-completed task without
+// manufacturing a worker lease. It is intentionally stricter than Complete:
+// only a never-attempted queued task may be promoted, while an identical
+// succeeded task is returned idempotently.
+func CreateSucceededTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, actorID string, create CreateTaskInput, complete CompleteInput) (Task, error) {
+	if tx == nil || complete.ResultSchemaVersion == "" || complete.DurationMS < 0 {
+		return Task{}, ErrInvalidInput
+	}
+	hash, err := ResultPayloadHash(complete.ResultSchemaVersion, complete.Result)
+	if err != nil {
+		return Task{}, ErrInvalidInput
+	}
+	task, err := CreateTaskInTx(ctx, tx, tenantID, actorID, create)
+	if err != nil {
+		return Task{}, err
+	}
+	if task.Status == StatusSucceeded {
+		if task.ResultPayloadHash != hash {
+			return Task{}, ErrConflict
+		}
+		return task, nil
+	}
+	if task.Status != StatusQueued || task.AttemptCount != 0 {
+		return Task{}, ErrInvalidTransition
+	}
+	result, err := json.Marshal(complete.Result)
+	if err != nil {
+		return Task{}, ErrInvalidInput
+	}
+	row := tx.QueryRowContext(ctx, `
+UPDATE agent_worker_task
+SET status = 'succeeded', result = $3, result_schema_version = $4,
+  result_payload_hash = $5, duration_ms = $6, completed_at = now(), updated_at = now(),
+  error_code = NULL, error_detail = '{}'
+WHERE tenant_id = $1 AND id = $2::uuid AND status = 'queued' AND attempt_count = 0
+RETURNING `+taskColumns, tenantID, task.ID, result, complete.ResultSchemaVersion, hash, complete.DurationMS)
+	return scanTask(row)
+}
+
 func (s *PostgresStore) Claim(ctx context.Context, tenantID string, input ClaimInput) ([]Task, error) {
 	input = normalizeClaimInput(input)
 	if validateClaimInput(input) != nil {
@@ -58,56 +114,126 @@ func (s *PostgresStore) Claim(ctx context.Context, tenantID string, input ClaimI
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `
-SELECT id::text
+	dbNow, err := databaseNow(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := upsertWorkerHeartbeat(ctx, tx, tenantID, input.WorkerService, input.WorkerInstanceID, input.QueueName, dbNow, map[string]any{"state": "polling"}); err != nil {
+		return nil, err
+	}
+	exhaustedRows, err := tx.QueryContext(ctx, `
+SELECT id::text, status
 FROM agent_worker_task
 WHERE tenant_id = $1
   AND queue_name = $2
   AND (
-    (status = 'queued' AND (not_before IS NULL OR not_before <= now()))
-    OR (status IN ('leased', 'running') AND lease_expires_at < now())
+    (status = 'queued' AND (not_before IS NULL OR not_before <= $4))
+    OR (status IN ('leased', 'running') AND lease_expires_at < $4)
   )
-ORDER BY priority ASC, created_at ASC
-FOR UPDATE SKIP LOCKED
+  AND attempt_count >= max_attempts
+ORDER BY priority ASC, created_at ASC, id ASC
 LIMIT $3
-`, tenantID, input.QueueName, input.Limit)
+FOR UPDATE SKIP LOCKED
+`, tenantID, input.QueueName, input.Limit, dbNow)
 	if err != nil {
 		return nil, err
 	}
-	ids := []string{}
+	type exhaustedTask struct {
+		id     string
+		status string
+	}
+	exhausted := make([]exhaustedTask, 0)
+	for exhaustedRows.Next() {
+		var item exhaustedTask
+		if err := exhaustedRows.Scan(&item.id, &item.status); err != nil {
+			exhaustedRows.Close()
+			return nil, err
+		}
+		exhausted = append(exhausted, item)
+	}
+	if err := exhaustedRows.Close(); err != nil {
+		return nil, err
+	}
+	for _, item := range exhausted {
+		errorCode := "max_attempts_exhausted"
+		if item.status == StatusLeased || item.status == StatusRunning {
+			errorCode = "lease_expired"
+		}
+		if _, err := tx.ExecContext(ctx, `
+UPDATE agent_worker_task_attempt
+SET status = 'lease_expired', completed_at = $3, error_code = 'lease_expired',
+  error_detail = '{"reason":"max_attempts_exhausted"}'::jsonb
+WHERE tenant_id = $1 AND task_id = $2::uuid AND completed_at IS NULL
+`, tenantID, item.id, dbNow); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+UPDATE agent_worker_task
+SET status = 'dead_letter', max_attempts = GREATEST(max_attempts, attempt_count),
+  lease_token = NULL, lease_expires_at = NULL, leased_by = NULL,
+  error_code = $3, error_detail = '{"reason":"max_attempts_exhausted"}'::jsonb,
+  completed_at = $4, updated_at = $4
+WHERE tenant_id = $1 AND id = $2::uuid
+`, tenantID, item.id, errorCode, dbNow); err != nil {
+			return nil, err
+		}
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+SELECT id::text, status
+FROM agent_worker_task
+WHERE tenant_id = $1
+  AND queue_name = $2
+  AND (
+    (status = 'queued' AND (not_before IS NULL OR not_before <= $4))
+    OR (status IN ('leased', 'running') AND lease_expires_at < $4)
+  )
+  AND attempt_count < max_attempts
+ORDER BY priority ASC, created_at ASC, id ASC
+LIMIT $3
+FOR UPDATE SKIP LOCKED
+`, tenantID, input.QueueName, input.Limit, dbNow)
+	if err != nil {
+		return nil, err
+	}
+	type claimableTask struct {
+		id     string
+		status string
+	}
+	claimable := make([]claimableTask, 0, input.Limit)
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var item claimableTask
+		if err := rows.Scan(&item.id, &item.status); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		ids = append(ids, id)
+		claimable = append(claimable, item)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
-	out := make([]Task, 0, len(ids))
-	for _, id := range ids {
-		_, err = tx.ExecContext(ctx, `
+	out := make([]Task, 0, len(claimable))
+	for _, item := range claimable {
+		if item.status == StatusLeased || item.status == StatusRunning {
+			if _, err := tx.ExecContext(ctx, `
 UPDATE agent_worker_task_attempt
-SET status = 'lease_expired', completed_at = now(), error_code = 'lease_expired'
+SET status = 'lease_expired', completed_at = $3, error_code = 'lease_expired'
 WHERE tenant_id = $1 AND task_id = $2::uuid AND completed_at IS NULL
-`, tenantID, id)
-		if err != nil {
-			return nil, err
+`, tenantID, item.id, dbNow); err != nil {
+				return nil, err
+			}
 		}
 		token := newLeaseToken()
-		expires := now.Add(time.Duration(input.LeaseSeconds) * time.Second)
+		expires := dbNow.Add(time.Duration(input.LeaseSeconds) * time.Second)
 		row := tx.QueryRowContext(ctx, `
 UPDATE agent_worker_task
 SET status = 'leased', attempt_count = attempt_count + 1, not_before = NULL,
   lease_token = $3, lease_expires_at = $4, leased_by = $5,
-  worker_service = $6, worker_instance_id = $7, updated_at = now()
-WHERE tenant_id = $1 AND id = $2::uuid
+  worker_service = $6, worker_instance_id = $7, updated_at = $8
+WHERE tenant_id = $1 AND id = $2::uuid AND attempt_count < max_attempts
 RETURNING `+taskColumns,
-			tenantID, id, token, expires, input.WorkerService+":"+input.WorkerInstanceID,
-			input.WorkerService, input.WorkerInstanceID)
+			tenantID, item.id, token, expires, input.WorkerService+":"+input.WorkerInstanceID,
+			input.WorkerService, input.WorkerInstanceID, dbNow)
 		task, err := scanTask(row)
 		if err != nil {
 			return nil, err
@@ -117,7 +243,7 @@ INSERT INTO agent_worker_task_attempt (
   tenant_id, task_id, attempt_no, worker_service, worker_instance_id, lease_token, status, started_at
 )
 VALUES ($1, $2::uuid, $3, $4, $5, $6, 'leased', $7)
-`, tenantID, id, task.AttemptCount, input.WorkerService, input.WorkerInstanceID, token, now)
+`, tenantID, item.id, task.AttemptCount, input.WorkerService, input.WorkerInstanceID, token, dbNow)
 		if err != nil {
 			return nil, err
 		}
@@ -139,11 +265,15 @@ func (s *PostgresStore) Heartbeat(ctx context.Context, tenantID string, taskID s
 		return Task{}, err
 	}
 	defer tx.Rollback()
+	dbNow, err := databaseNow(ctx, tx)
+	if err != nil {
+		return Task{}, err
+	}
 	task, err := getTaskForUpdate(ctx, tx, tenantID, taskID)
 	if err != nil {
 		return Task{}, err
 	}
-	if err := validateTaskLease(task, input.LeaseToken); err != nil {
+	if err := validateTaskLeaseAt(task, input.LeaseToken, dbNow); err != nil {
 		return Task{}, err
 	}
 	if task.Status != StatusLeased && task.Status != StatusRunning {
@@ -152,35 +282,42 @@ func (s *PostgresStore) Heartbeat(ctx context.Context, tenantID string, taskID s
 	if task.WorkerService != input.WorkerService || task.WorkerInstanceID != input.WorkerInstanceID {
 		return Task{}, ErrLeaseMismatch
 	}
-	metadata, _ := json.Marshal(input.Progress)
+	metadataValue := cloneMap(input.Progress)
+	metadataValue["state"] = StatusRunning
+	expires := dbNow.Add(time.Duration(input.LeaseSeconds) * time.Second)
 	row := tx.QueryRowContext(ctx, `
 UPDATE agent_worker_task
-SET status = 'running', started_at = COALESCE(started_at, now()),
-  lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
+SET status = 'running', started_at = COALESCE(started_at, $3),
+  lease_expires_at = $4, updated_at = $3
 WHERE tenant_id = $1 AND id = $2::uuid
-RETURNING `+taskColumns, tenantID, taskID, input.LeaseSeconds)
+RETURNING `+taskColumns, tenantID, taskID, dbNow, expires)
 	task, err = scanTask(row)
 	if err != nil {
 		return Task{}, err
 	}
 	_, err = tx.ExecContext(ctx, `
 UPDATE agent_worker_task_attempt
-SET status = 'running', heartbeat_at = now()
+SET status = 'running', heartbeat_at = $4
 WHERE tenant_id = $1 AND task_id = $2::uuid AND attempt_no = $3
-`, tenantID, taskID, task.AttemptCount)
+`, tenantID, taskID, task.AttemptCount, dbNow)
 	if err != nil {
 		return Task{}, err
 	}
-	_, err = tx.ExecContext(ctx, `
-INSERT INTO agent_worker_heartbeat (tenant_id, worker_service, worker_instance_id, queue_name, last_seen_at, metadata)
-VALUES ($1, $2, $3, $4, now(), $5)
-ON CONFLICT (tenant_id, worker_service, worker_instance_id, queue_name)
-DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at, metadata = EXCLUDED.metadata
-`, tenantID, input.WorkerService, input.WorkerInstanceID, task.QueueName, metadata)
-	if err != nil {
+	if err := upsertWorkerHeartbeat(ctx, tx, tenantID, input.WorkerService, input.WorkerInstanceID, task.QueueName, dbNow, metadataValue); err != nil {
 		return Task{}, err
 	}
 	return task, tx.Commit()
+}
+
+func upsertWorkerHeartbeat(ctx context.Context, tx *sql.Tx, tenantID string, workerService string, workerInstanceID string, queueName string, seenAt time.Time, metadataValue map[string]any) error {
+	metadata, _ := json.Marshal(metadataValue)
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO agent_worker_heartbeat (tenant_id, worker_service, worker_instance_id, queue_name, last_seen_at, metadata)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (tenant_id, worker_service, worker_instance_id, queue_name)
+DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at, metadata = EXCLUDED.metadata
+`, tenantID, workerService, workerInstanceID, queueName, seenAt, metadata)
+	return err
 }
 
 func (s *PostgresStore) Complete(ctx context.Context, tenantID string, taskID string, input CompleteInput) (Task, error) {
@@ -200,7 +337,7 @@ func (s *PostgresStore) Complete(ctx context.Context, tenantID string, taskID st
 // caller's PostgreSQL transaction. Source adapters use it when the task result
 // and source-domain facts must commit together.
 func CompleteTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, taskID string, input CompleteInput) (Task, error) {
-	if input.LeaseToken == "" || input.ResultSchemaVersion == "" || input.DurationMS < 0 {
+	if tx == nil || input.LeaseToken == "" || input.ResultSchemaVersion == "" || input.DurationMS < 0 {
 		return Task{}, ErrInvalidInput
 	}
 	hash := payloadHash(input.ResultSchemaVersion, input.Result)
@@ -217,7 +354,11 @@ func CompleteTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, taskID s
 		}
 		return task, nil
 	}
-	if err := validateTaskLease(task, input.LeaseToken); err != nil {
+	dbNow, err := databaseNow(ctx, tx)
+	if err != nil {
+		return Task{}, err
+	}
+	if err := validateTaskLeaseAt(task, input.LeaseToken, dbNow); err != nil {
 		return Task{}, err
 	}
 	if task.Status != StatusLeased && task.Status != StatusRunning {
@@ -227,19 +368,19 @@ func CompleteTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, taskID s
 	row := tx.QueryRowContext(ctx, `
 UPDATE agent_worker_task
 SET status = 'succeeded', result = $3, result_schema_version = $4,
-  result_payload_hash = $5, duration_ms = $6, completed_at = now(), updated_at = now()
+  result_payload_hash = $5, duration_ms = $6, completed_at = $7, updated_at = $7
   , error_code = NULL, error_detail = '{}'
 WHERE tenant_id = $1 AND id = $2::uuid
-RETURNING `+taskColumns, tenantID, taskID, result, input.ResultSchemaVersion, hash, input.DurationMS)
+RETURNING `+taskColumns, tenantID, taskID, result, input.ResultSchemaVersion, hash, input.DurationMS, dbNow)
 	task, err = scanTask(row)
 	if err != nil {
 		return Task{}, err
 	}
 	_, err = tx.ExecContext(ctx, `
 UPDATE agent_worker_task_attempt
-SET status = 'succeeded', duration_ms = $4, completed_at = now(), error_code = NULL, error_detail = '{}'
+SET status = 'succeeded', duration_ms = $4, completed_at = $5, error_code = NULL, error_detail = '{}'
 WHERE tenant_id = $1 AND task_id = $2::uuid AND attempt_no = $3
-`, tenantID, taskID, task.AttemptCount, input.DurationMS)
+`, tenantID, taskID, task.AttemptCount, input.DurationMS, dbNow)
 	if err != nil {
 		return Task{}, err
 	}
@@ -247,19 +388,36 @@ WHERE tenant_id = $1 AND task_id = $2::uuid AND attempt_no = $3
 }
 
 func (s *PostgresStore) Fail(ctx context.Context, tenantID string, taskID string, input FailInput) (Task, error) {
-	if input.LeaseToken == "" || input.ErrorCode == "" || input.DurationMS < 0 {
-		return Task{}, ErrInvalidInput
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Task{}, err
 	}
 	defer tx.Rollback()
+	task, err := FailTaskInTx(ctx, tx, tenantID, taskID, input)
+	if err != nil {
+		return Task{}, err
+	}
+	return task, tx.Commit()
+}
+
+// FailTaskInTx validates and fails (or schedules a retry for) a Worker Runtime
+// task inside the caller's PostgreSQL transaction.
+func FailTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, taskID string, input FailInput) (Task, error) {
+	if input.LeaseToken == "" || input.ErrorCode == "" || input.DurationMS < 0 {
+		return Task{}, ErrInvalidInput
+	}
+	if tx == nil {
+		return Task{}, ErrInvalidInput
+	}
 	task, err := getTaskForUpdate(ctx, tx, tenantID, taskID)
 	if err != nil {
 		return Task{}, err
 	}
-	if err := validateTaskLease(task, input.LeaseToken); err != nil {
+	dbNow, err := databaseNow(ctx, tx)
+	if err != nil {
+		return Task{}, err
+	}
+	if err := validateTaskLeaseAt(task, input.LeaseToken, dbNow); err != nil {
 		return Task{}, err
 	}
 	if task.Status != StatusLeased && task.Status != StatusRunning {
@@ -269,7 +427,7 @@ func (s *PostgresStore) Fail(ctx context.Context, tenantID string, taskID string
 	var notBefore any
 	if input.Retryable && task.AttemptCount < task.MaxAttempts {
 		status = StatusQueued
-		notBefore = time.Now().UTC().Add(retryDelay(task.RetryBackoffSeconds, task.AttemptCount))
+		notBefore = dbNow.Add(retryDelay(task.RetryBackoffSeconds, task.AttemptCount))
 	} else if input.Retryable {
 		status = StatusDeadLetter
 	}
@@ -280,23 +438,23 @@ SET status = $3, not_before = $4, lease_token = CASE WHEN $3 = 'queued' THEN NUL
   lease_expires_at = CASE WHEN $3 = 'queued' THEN NULL ELSE lease_expires_at END,
   leased_by = CASE WHEN $3 = 'queued' THEN NULL ELSE leased_by END,
   error_code = $5, error_detail = $6, duration_ms = $7,
-  completed_at = CASE WHEN $3 IN ('failed', 'dead_letter') THEN now() ELSE NULL END,
-  updated_at = now()
+  completed_at = CASE WHEN $3 IN ('failed', 'dead_letter') THEN $8::timestamptz ELSE NULL END,
+  updated_at = $8
 WHERE tenant_id = $1 AND id = $2::uuid
-RETURNING `+taskColumns, tenantID, taskID, status, notBefore, input.ErrorCode, detail, input.DurationMS)
+RETURNING `+taskColumns, tenantID, taskID, status, notBefore, input.ErrorCode, detail, input.DurationMS, dbNow)
 	task, err = scanTask(row)
 	if err != nil {
 		return Task{}, err
 	}
 	_, err = tx.ExecContext(ctx, `
 UPDATE agent_worker_task_attempt
-SET status = 'failed', duration_ms = $4, error_code = $5, error_detail = $6, completed_at = now()
+SET status = 'failed', duration_ms = $4, error_code = $5, error_detail = $6, completed_at = $7
 WHERE tenant_id = $1 AND task_id = $2::uuid AND attempt_no = $3
-`, tenantID, taskID, task.AttemptCount, input.DurationMS, input.ErrorCode, detail)
+`, tenantID, taskID, task.AttemptCount, input.DurationMS, input.ErrorCode, detail, dbNow)
 	if err != nil {
 		return Task{}, err
 	}
-	return task, tx.Commit()
+	return task, nil
 }
 
 func (s *PostgresStore) Cancel(ctx context.Context, tenantID string, taskID string) (Task, error) {
@@ -448,11 +606,19 @@ func getTaskForUpdate(ctx context.Context, tx *sql.Tx, tenantID string, taskID s
 	return scanTask(row)
 }
 
-func validateTaskLease(task Task, token string) error {
+func databaseNow(ctx context.Context, tx *sql.Tx) (time.Time, error) {
+	var now time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT transaction_timestamp()`).Scan(&now); err != nil {
+		return time.Time{}, err
+	}
+	return now.UTC(), nil
+}
+
+func validateTaskLeaseAt(task Task, token string, now time.Time) error {
 	if token == "" || task.LeaseToken != token {
 		return ErrLeaseMismatch
 	}
-	if task.LeaseExpiresAt == nil || task.LeaseExpiresAt.Before(time.Now().UTC()) {
+	if task.LeaseExpiresAt == nil || task.LeaseExpiresAt.Before(now) {
 		return ErrLeaseExpired
 	}
 	return nil

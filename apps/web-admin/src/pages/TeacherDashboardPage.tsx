@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Button, Space } from "antd";
+import { Alert, Button, Progress, Space } from "antd";
 import { ArrowRight, BookOpenCheck, ClipboardList, FileText, Gavel, RefreshCw } from "lucide-react";
 import { listExams, type Exam } from "../api/exams";
 import { listArbitrationTasks, listReviewTasks, type ArbitrationTask, type ReviewTask } from "../api/review";
@@ -93,6 +93,8 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
   const activeArbitrations = useMemo(() => (data?.arbitrationTasks ?? []).filter((task) => activeArbitrationStatuses.includes(task.status)), [data?.arbitrationTasks]);
   const activeExams = useMemo(() => (data?.exams ?? []).filter((exam) => !["archived", "published"].includes(exam.status)), [data?.exams]);
   const completedReviews = (data?.reviewTasks ?? []).filter((task) => ["submitted", "completed"].includes(task.status)).length;
+  const reviewTotal = data?.reviewTasks.length ?? 0;
+  const reviewProgress = reviewTotal > 0 ? Math.round((completedReviews / reviewTotal) * 100) : 0;
 
   const tasks = useMemo<PersonalTask[]>(() => [
     ...activeReviews.map((task) => ({
@@ -143,6 +145,17 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
         <div><span>待复核</span><strong>{activeArbitrations.length}</strong></div>
         <div><span>已提交阅卷</span><strong>{completedReviews}</strong></div>
         <div><span>进行中考试</span><strong>{activeExams.length}</strong></div>
+      </section>
+
+      <section className="reviewer-progress-panel" aria-label="我的阅卷进度">
+        <div className="reviewer-progress-head">
+          <div>
+            <h2>我的阅卷进度</h2>
+            <p>已完成 / 已分配总任务</p>
+          </div>
+          <strong>{completedReviews} / {reviewTotal} 题</strong>
+        </div>
+        <Progress percent={reviewProgress} status={reviewProgress === 100 ? "success" : "active"} />
       </section>
 
       {primary ? (

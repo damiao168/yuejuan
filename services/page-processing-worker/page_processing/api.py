@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib import error, request
 
 
 class APIError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
 
 
 @dataclass
@@ -111,7 +117,13 @@ class Client:
             with request.urlopen(req, timeout=120) as response:
                 raw = response.read()
         except error.HTTPError as exc:
-            raise APIError(f"api_request_failed:{exc.code}") from exc
+            raise APIError(
+                f"api_request_failed:{exc.code}",
+                status_code=exc.code,
+                retry_after=_retry_after_seconds(exc.headers),
+            ) from exc
+        except (error.URLError, OSError, TimeoutError) as exc:
+            raise APIError("api_request_failed:transport") from exc
         return json.loads(raw.decode("utf-8")) if raw else {}
 
     def _request(self, method: str, path: str, body: bytes | None, auth: bool = True) -> request.Request:
@@ -128,3 +140,28 @@ def _multipart(boundary: str, fields: dict[str, str], filename: str, data: bytes
         chunks.extend([f"--{boundary}\r\n".encode(), f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(), value.encode(), b"\r\n"])
     chunks.extend([f"--{boundary}\r\n".encode(), f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode(), b"Content-Type: image/png\r\n\r\n", data, b"\r\n", f"--{boundary}--\r\n".encode()])
     return b"".join(chunks)
+
+
+def _retry_after_seconds(headers: Any) -> float | None:
+    """Parse Retry-After as either delta seconds or an HTTP date."""
+    if headers is None:
+        return None
+    raw = headers.get("Retry-After")
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        seconds = math.nan
+    if math.isfinite(seconds) and seconds >= 0:
+        return seconds
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())

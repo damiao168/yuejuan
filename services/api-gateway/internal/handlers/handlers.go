@@ -1,22 +1,51 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
+	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/config"
 	"edugrade-enterprise/services/api-gateway/internal/deps"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
+	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
 
 type Handlers struct {
 	cfg       config.Config
 	checkers  []deps.Checker
 	startedAt time.Time
+	runtime   workerruntime.Store
 }
 
 func New(cfg config.Config, checkers []deps.Checker) *Handlers {
 	return &Handlers{cfg: cfg, checkers: checkers, startedAt: time.Now().UTC()}
+}
+
+func (h *Handlers) WithWorkerRuntimeStore(store workerruntime.Store) *Handlers {
+	h.runtime = store
+	return h
+}
+
+type WorkerServiceStatus struct {
+	Name                string `json:"name"`
+	WorkerService       string `json:"worker_service"`
+	QueueName           string `json:"queue_name"`
+	Status              string `json:"status"`
+	Availability        string `json:"availability"`
+	AutomationAvailable bool   `json:"automation_available"`
+	FreshInstances      int    `json:"fresh_instances"`
+	StaleInstances      int    `json:"stale_instances"`
+	LastSeenAt          string `json:"last_seen_at,omitempty"`
+	StaleAfterSec       int64  `json:"stale_after_sec"`
+	QueuedTasks         int    `json:"queued_tasks"`
+	InFlightTasks       int    `json:"in_flight_tasks"`
+	DeadLetterTasks     int    `json:"dead_letter_tasks"`
+	FailedLastHour      int    `json:"failed_last_hour"`
+	ImpactCode          string `json:"impact_code"`
+	Impact              string `json:"impact"`
+	Action              string `json:"action"`
 }
 
 func (h *Handlers) Health(w http.ResponseWriter, _ *http.Request) {
@@ -43,20 +72,36 @@ func (h *Handlers) Ready(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) SystemStatus(w http.ResponseWriter, r *http.Request) {
 	results, ok := deps.CheckAll(r.Context(), h.cfg.Service.ReadinessTimeout, h.checkers)
+	now := time.Now().UTC()
+	workerServices := make([]WorkerServiceStatus, 0, 1)
+	workerCheckStartedAt := time.Now()
+	workerStatus, workerErr := h.ocrWorkerStatus(r, now)
+	workerServices = append(workerServices, workerStatus)
+	workerDependency := deps.CheckResult{
+		Name:       workerStatus.Name,
+		Status:     workerStatus.Status,
+		Detail:     workerStatusDetail(workerStatus, workerErr),
+		DurationMS: time.Since(workerCheckStartedAt).Milliseconds(),
+		CheckedAt:  now.Format(time.RFC3339),
+	}
+	results = append(results, workerDependency)
+	if workerStatus.Status != "ok" {
+		ok = false
+	}
 	overall := "healthy"
 	if !ok {
 		overall = "degraded"
 	}
-	now := time.Now().UTC()
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"status":       overall,
-		"service":      h.cfg.Service.Name,
-		"environment":  h.cfg.Service.Environment,
-		"version":      "0.1.0",
-		"started_at":   h.startedAt.Format(time.RFC3339),
-		"generated_at": now.Format(time.RFC3339),
-		"uptime_sec":   int64(now.Sub(h.startedAt).Seconds()),
-		"dependencies": results,
+		"status":          overall,
+		"service":         h.cfg.Service.Name,
+		"environment":     h.cfg.Service.Environment,
+		"version":         "0.1.0",
+		"started_at":      h.startedAt.Format(time.RFC3339),
+		"generated_at":    now.Format(time.RFC3339),
+		"uptime_sec":      int64(now.Sub(h.startedAt).Seconds()),
+		"dependencies":    results,
+		"worker_services": workerServices,
 		"observability": map[string]any{
 			"log_format":                "json",
 			"system_log_stream":         "stdout",
@@ -68,6 +113,89 @@ func (h *Handlers) SystemStatus(w http.ResponseWriter, r *http.Request) {
 			"sensitive_log_policy":      "普通系统日志脱敏 answer、student、score、token、secret 等字段；审计日志记录业务动作但不替代答卷内容存储。",
 		},
 	})
+}
+
+// OCRAvailability exposes only the tenant-scoped OCR automation state needed by
+// capture and review workflows. Detailed dependency and observability data stay
+// behind the system:read-protected SystemStatus endpoint.
+func (h *Handlers) OCRAvailability(w http.ResponseWriter, r *http.Request) {
+	now := time.Now().UTC()
+	workerStatus, _ := h.ocrWorkerStatus(r, now)
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"generated_at": now.Format(time.RFC3339),
+		"worker":       workerStatus,
+	})
+}
+
+func (h *Handlers) ocrWorkerStatus(r *http.Request, now time.Time) (WorkerServiceStatus, error) {
+	staleAfter := h.cfg.Observability.WorkerHeartbeatStaleAfter
+	if staleAfter <= 0 {
+		staleAfter = 30 * time.Second
+	}
+	if h.runtime == nil {
+		return buildWorkerServiceStatus(workerruntime.Metrics{}, "ocr_worker", "ocr-worker", "ocr", now, staleAfter), fmt.Errorf("worker runtime store is unavailable")
+	}
+	user, _ := auth.UserFromContext(r.Context())
+	metrics, err := h.runtime.Metrics(r.Context(), user.TenantID)
+	if err != nil {
+		return buildWorkerServiceStatus(workerruntime.Metrics{}, "ocr_worker", "ocr-worker", "ocr", now, staleAfter), err
+	}
+	return buildWorkerServiceStatus(metrics, "ocr_worker", "ocr-worker", "ocr", now, staleAfter), nil
+}
+
+func buildWorkerServiceStatus(metrics workerruntime.Metrics, name string, workerService string, queueName string, now time.Time, staleAfter time.Duration) WorkerServiceStatus {
+	status := WorkerServiceStatus{
+		Name: name, WorkerService: workerService, QueueName: queueName,
+		Status: "error", Availability: "unavailable", StaleAfterSec: int64(staleAfter.Seconds()),
+		ImpactCode: "ocr_automation_unavailable",
+		Impact:     "新 OCR 任务不会被自动处理；选择题 OMR 不受影响，依赖 OCR 的填空题自动批阅暂停，任务会保留在队列并可转人工处理。",
+		Action:     "启动或恢复 OCR Worker，检查服务账号与 API 连通性；恢复后队列会自动继续处理。",
+	}
+	var latest time.Time
+	for _, worker := range metrics.Workers {
+		if worker.WorkerService != workerService || worker.QueueName != queueName {
+			continue
+		}
+		if worker.LastSeenAt.After(latest) {
+			latest = worker.LastSeenAt
+		}
+		if now.Sub(worker.LastSeenAt) <= staleAfter {
+			status.FreshInstances++
+		} else {
+			status.StaleInstances++
+		}
+	}
+	for _, queue := range metrics.Queues {
+		if queue.QueueName != queueName {
+			continue
+		}
+		status.QueuedTasks = queue.Queued
+		status.InFlightTasks = queue.Leased + queue.Running
+		status.DeadLetterTasks = queue.DeadLetter
+		status.FailedLastHour = queue.FailedLastHour
+	}
+	if !latest.IsZero() {
+		status.LastSeenAt = latest.UTC().Format(time.RFC3339)
+	}
+	if status.FreshInstances > 0 {
+		status.Status = "ok"
+		status.Availability = "online"
+		status.AutomationAvailable = true
+		status.ImpactCode = "ocr_automation_available"
+		status.Impact = "OCR 图像识别可处理新任务；自动判分仍受置信度阈值与评分规则控制，低置信度结果继续进入人工复核。"
+		status.Action = "无需处理。"
+	} else if status.StaleInstances > 0 {
+		status.Availability = "stale"
+	}
+	return status
+}
+
+func workerStatusDetail(status WorkerServiceStatus, statusErr error) string {
+	detail := fmt.Sprintf("%s；影响：%s；处理：%s", status.Availability, status.Impact, status.Action)
+	if statusErr != nil {
+		return detail + "；状态读取错误：" + statusErr.Error()
+	}
+	return detail
 }
 
 func (h *Handlers) SystemInfo(w http.ResponseWriter, _ *http.Request) {

@@ -62,6 +62,28 @@ func TestInvalidStatusTransitionRejected(t *testing.T) {
 	}
 }
 
+func TestFinalizedExamCannotPublishThroughStatusRoute(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
+	store := exam.NewMemoryStore()
+	router := testRouter(authStore, store)
+	token := login(t, router)
+	created := createExam(t, router, token)
+	if err := store.SetStatusForTest("tenant-exam", created.ID, "finalized"); err != nil {
+		t.Fatalf("seed finalized exam: %v", err)
+	}
+
+	req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/status", bytes.NewBufferString(`{"status":"published"}`), token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "invalid_status_transition") {
+		t.Fatalf("generic status route must not bypass score publication workflow, got %d %s", rec.Code, rec.Body.String())
+	}
+	unchanged, err := store.GetExam(t.Context(), "tenant-exam", created.ID)
+	if err != nil || unchanged.Status != "finalized" {
+		t.Fatalf("rejected publication must leave exam finalized, exam=%#v err=%v", unchanged, err)
+	}
+}
+
 func TestPublishedExamCannotBeModified(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
 	store := exam.NewMemoryStore()

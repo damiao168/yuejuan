@@ -95,6 +95,13 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := h.store.FindUserByLogin(r.Context(), req.TenantCode, req.Username)
+	// Only an explicit credential miss is an authentication failure.  A
+	// database/network error must not poison the login limiter or be reported
+	// as a bad password, otherwise a dependency outage turns into a 429 lockout.
+	if err != nil && !errors.Is(err, ErrInvalidCredentials) {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "auth_service_unavailable", "authentication service temporarily unavailable")
+		return
+	}
 	if err != nil || !CheckPassword(user.PasswordHash, req.Password) {
 		_, retryAfter, blocked := h.loginLimiter.RegisterFailure(limiterKey, time.Now().UTC())
 		tenantID := user.TenantID
@@ -452,9 +459,37 @@ func RequireAnyPermission(permissions ...string) func(http.Handler) http.Handler
 	}
 }
 
+func RequireAnyRole(roles ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, ok := UserFromContext(r.Context())
+			if !ok {
+				httpx.Error(w, r, http.StatusUnauthorized, "unauthenticated", "authentication required")
+				return
+			}
+			for _, role := range roles {
+				if HasRole(user, role) {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			httpx.Error(w, r, http.StatusForbidden, "forbidden", "missing required role")
+		})
+	}
+}
+
 func HasPermission(user User, permission string) bool {
 	for _, current := range user.Permissions {
 		if current == permission {
+			return true
+		}
+	}
+	return false
+}
+
+func HasRole(user User, role string) bool {
+	for _, current := range user.Roles {
+		if current == role {
 			return true
 		}
 	}

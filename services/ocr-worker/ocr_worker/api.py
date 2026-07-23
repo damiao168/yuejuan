@@ -58,7 +58,14 @@ class EduGradeClient:
         tasks = response.get("tasks", [])
         return tasks if isinstance(tasks, list) else []
 
-    def heartbeat_task(self, runtime_task_id: str, lease_token: str, worker_instance_id: str) -> None:
+    def heartbeat_task(
+        self,
+        runtime_task_id: str,
+        lease_token: str,
+        worker_instance_id: str,
+        lease_seconds: int,
+        timeout_seconds: float,
+    ) -> None:
         self._request(
             "POST",
             f"/api/v1/internal/worker/tasks/{runtime_task_id}/heartbeat",
@@ -67,7 +74,9 @@ class EduGradeClient:
                 "worker_service": "ocr-worker",
                 "worker_instance_id": worker_instance_id,
                 "state": "running",
+                "lease_seconds": lease_seconds,
             },
+            timeout=timeout_seconds,
         )
 
     def start_task(self, task_id: str) -> None:
@@ -103,10 +112,17 @@ class EduGradeClient:
         except OSError as exc:
             raise APIError("download failed") from exc
 
-    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None, require_auth: bool = True) -> dict[str, Any]:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        require_auth: bool = True,
+        timeout: float = 60,
+    ) -> dict[str, Any]:
         req = self._build_request(method, path, payload if method != "GET" else None, require_auth=require_auth)
         try:
-            with request.urlopen(req, timeout=60) as response:
+            with request.urlopen(req, timeout=timeout) as response:
                 raw = response.read()
         except error.HTTPError as exc:
             if exc.code in (401, 403):

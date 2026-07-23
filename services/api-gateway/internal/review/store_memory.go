@@ -15,6 +15,7 @@ type MemoryStore struct {
 	next          int
 	contexts      map[string]Context
 	tasks         map[string]ReviewTask
+	drafts        map[string]ReviewDraft
 	grades        map[string][]HumanGrade
 	policies      map[string]DoubleMarkPolicy
 	sessions      map[string]DoubleMarkSession
@@ -28,6 +29,7 @@ func NewMemoryStore() *MemoryStore {
 		next:          1,
 		contexts:      map[string]Context{},
 		tasks:         map[string]ReviewTask{},
+		drafts:        map[string]ReviewDraft{},
 		grades:        map[string][]HumanGrade{},
 		policies:      map[string]DoubleMarkPolicy{},
 		sessions:      map[string]DoubleMarkSession{},
@@ -71,6 +73,9 @@ func (s *MemoryStore) ListTasks(_ context.Context, tenantID string, filter ListF
 			continue
 		}
 		if filter.AssignedTo != "" && task.AssignedTo != filter.AssignedTo {
+			continue
+		}
+		if filter.ExamID != "" && task.ExamID != filter.ExamID {
 			continue
 		}
 		out = append(out, cloneTask(task))
@@ -214,7 +219,7 @@ func (s *MemoryStore) ReturnTask(_ context.Context, tenantID string, id string, 
 	if !ok {
 		return ReviewTask{}, ErrNotFound
 	}
-	if task.Status == "completed" {
+	if !canReturnTask(task.Status) {
 		return ReviewTask{}, ErrInvalidTransition
 	}
 	task.Status = "returned"
@@ -485,7 +490,7 @@ func (s *MemoryStore) SubmitArbitration(_ context.Context, tenantID string, id s
 	if task.Status == "submitted" {
 		return ArbitrationTask{}, FinalGrade{}, ErrInvalidTransition
 	}
-	if task.AssignedTo != "" && task.AssignedTo != arbitratorID {
+	if task.AssignedTo == "" || task.AssignedTo != arbitratorID {
 		return ArbitrationTask{}, FinalGrade{}, ErrForbidden
 	}
 	if !arbitratorAllowed(task, arbitratorID) {
@@ -762,24 +767,51 @@ func validatePolicyInput(input SetDoubleMarkPolicyInput) error {
 }
 
 func validateSubmit(input SubmitGradeInput, ctx Context) error {
-	if input.Score < 0 || input.Score > ctx.Question.Score {
+	if !validScore(input.Score) || !validScore(ctx.Question.Score) || input.Score > ctx.Question.Score {
 		return ErrInvalidInput
 	}
-	rubricPoints := map[string]bool{}
+	hasRubric := ctx.Rubric.ID != "" || len(ctx.Rubric.Points) > 0
+	if hasRubric && (!validScore(ctx.Rubric.MaxScore) || input.Score > ctx.Rubric.MaxScore) {
+		return ErrInvalidInput
+	}
+	rubricPoints := map[string]float64{}
 	for _, point := range ctx.Rubric.Points {
-		if point.ID != "" {
-			rubricPoints[point.ID] = true
+		if point.ID == "" || !validScore(point.Score) {
+			return ErrInvalidInput
+		}
+		if _, duplicate := rubricPoints[point.ID]; duplicate {
+			return ErrInvalidInput
+		}
+		rubricPoints[point.ID] = point.Score
+	}
+	seenPoints := map[string]bool{}
+	selectedScore := 0.0
+	for _, selection := range input.RubricSelections {
+		if selection.PointID == "" || !validScore(selection.Score) {
+			return ErrInvalidInput
+		}
+		pointMax, ok := rubricPoints[selection.PointID]
+		if len(rubricPoints) == 0 || !ok || selection.Score > pointMax || seenPoints[selection.PointID] {
+			return ErrInvalidInput
+		}
+		seenPoints[selection.PointID] = true
+		selectedScore += selection.Score
+		if math.IsInf(selectedScore, 0) {
+			return ErrInvalidInput
 		}
 	}
-	for _, selection := range input.RubricSelections {
-		if selection.PointID == "" || selection.Score < 0 {
-			return ErrInvalidInput
-		}
-		if len(rubricPoints) == 0 || !rubricPoints[selection.PointID] {
-			return ErrInvalidInput
-		}
+	if hasRubric && math.Abs(input.Score-selectedScore) > 0.0001 {
+		return ErrInvalidInput
 	}
 	return nil
+}
+
+func validScore(score float64) bool {
+	return !math.IsNaN(score) && !math.IsInf(score, 0) && score >= 0
+}
+
+func canReturnTask(status string) bool {
+	return status != "submitted" && status != "completed"
 }
 
 func validSource(source string) bool {

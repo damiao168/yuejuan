@@ -9,23 +9,36 @@ import (
 )
 
 type MemoryStore struct {
-	mu      sync.RWMutex
-	next    int
-	tasks   map[string]Task
-	results map[string][]Result
+	mu         sync.RWMutex
+	next       int
+	tasks      map[string]Task
+	results    map[string][]Result
+	idempotent map[string]string
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{next: 1, tasks: map[string]Task{}, results: map[string][]Result{}}
+	return &MemoryStore{next: 1, tasks: map[string]Task{}, results: map[string][]Result{}, idempotent: map[string]string{}}
 }
 
-func (s *MemoryStore) CreateTask(_ context.Context, tenantID string, submissionID string, actorID string, input CreateTaskInput) (Task, error) {
-	input = NormalizeCreateInput(input)
-	if err := ValidateCreateInput(input); err != nil {
-		return Task{}, err
-	}
+func (s *MemoryStore) CreateTask(ctx context.Context, tenantID string, submissionID string, actorID string, input CreateTaskInput) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createTaskLocked(ctx, tenantID, submissionID, actorID, input)
+}
+
+func (s *MemoryStore) createTaskLocked(_ context.Context, tenantID string, submissionID string, actorID string, input CreateTaskInput) (Task, error) {
+	input, err := PrepareCreateInput(submissionID, input)
+	if err != nil {
+		return Task{}, err
+	}
+	key := tenantID + "|" + input.IdempotencyKey
+	if id := s.idempotent[key]; id != "" {
+		task := s.tasks[id]
+		if !sameCreateRequest(task, submissionID, input) {
+			return Task{}, ErrIdempotencyConflict
+		}
+		return cloneOCRTask(task), nil
+	}
 	task := Task{
 		ID:            s.id("ocr-task"),
 		TenantID:      tenantID,
@@ -38,6 +51,7 @@ func (s *MemoryStore) CreateTask(_ context.Context, tenantID string, submissionI
 		CreatedAt:     time.Now().UTC(),
 	}
 	s.tasks[task.ID] = task
+	s.idempotent[key] = task.ID
 	return task, nil
 }
 
@@ -76,12 +90,16 @@ func (s *MemoryStore) ListBySubmission(_ context.Context, tenantID string, submi
 func (s *MemoryStore) GetTask(_ context.Context, tenantID string, id string) (Task, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.getTaskLocked(tenantID, id)
+}
+
+func (s *MemoryStore) getTaskLocked(tenantID string, id string) (Task, error) {
 	task, ok := s.tasks[id]
 	if !ok || task.TenantID != tenantID {
 		return Task{}, ErrNotFound
 	}
-	task.Results = append([]Result{}, s.results[id]...)
-	return task, nil
+	task.Results = cloneOCRResults(s.results[id])
+	return cloneOCRTask(task), nil
 }
 
 func (s *MemoryStore) StartTask(_ context.Context, tenantID string, id string) (Task, error) {
@@ -91,22 +109,38 @@ func (s *MemoryStore) StartTask(_ context.Context, tenantID string, id string) (
 	if !ok || task.TenantID != tenantID {
 		return Task{}, ErrNotFound
 	}
+	if IsStarted(task.Status) {
+		return task, nil
+	}
 	if !CanStart(task.Status) {
 		return Task{}, ErrInvalidTransition
 	}
 	now := time.Now().UTC()
 	task.Status = "processing"
 	task.StartedAt = &now
+	task.CompletedAt = nil
+	task.ErrorMessage = ""
 	s.tasks[id] = task
 	return task, nil
 }
 
-func (s *MemoryStore) CompleteTask(_ context.Context, tenantID string, id string, input CompleteTaskInput) (Task, error) {
+func (s *MemoryStore) CompleteTask(ctx context.Context, tenantID string, id string, input CompleteTaskInput) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.completeTaskLocked(ctx, tenantID, id, input)
+}
+
+func (s *MemoryStore) completeTaskLocked(_ context.Context, tenantID string, id string, input CompleteTaskInput) (Task, error) {
 	task, ok := s.tasks[id]
 	if !ok || task.TenantID != tenantID {
 		return Task{}, ErrNotFound
+	}
+	if task.Status == "completed" {
+		task.Results = cloneOCRResults(s.results[id])
+		if sameCompletion(task, input) {
+			return cloneOCRTask(task), nil
+		}
+		return Task{}, ErrResultConflict
 	}
 	if !CanComplete(task.Status) {
 		return Task{}, ErrInvalidTransition
@@ -156,12 +190,16 @@ func (s *MemoryStore) CompleteTask(_ context.Context, tenantID string, id string
 	task.Results = results
 	s.tasks[id] = task
 	s.results[id] = results
-	return task, nil
+	return cloneOCRTask(task), nil
 }
 
-func (s *MemoryStore) FailTask(_ context.Context, tenantID string, id string, errorMessage string) (Task, error) {
+func (s *MemoryStore) FailTask(ctx context.Context, tenantID string, id string, errorMessage string) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.failTaskLocked(ctx, tenantID, id, errorMessage)
+}
+
+func (s *MemoryStore) failTaskLocked(_ context.Context, tenantID string, id string, errorMessage string) (Task, error) {
 	task, ok := s.tasks[id]
 	if !ok || task.TenantID != tenantID {
 		return Task{}, ErrNotFound
@@ -174,7 +212,7 @@ func (s *MemoryStore) FailTask(_ context.Context, tenantID string, id string, er
 	task.ErrorMessage = errorMessage
 	task.CompletedAt = &now
 	s.tasks[id] = task
-	return task, nil
+	return cloneOCRTask(task), nil
 }
 
 func (s *MemoryStore) id(prefix string) string {

@@ -16,22 +16,60 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 }
 
 func (s *PostgresStore) CreateTask(ctx context.Context, tenantID string, submissionID string, actorID string, input CreateTaskInput) (Task, error) {
-	input = NormalizeCreateInput(input)
-	if err := ValidateCreateInput(input); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return Task{}, err
 	}
-	row := s.db.QueryRowContext(ctx, `
-INSERT INTO ocr_task (tenant_id, submission_id, status, engine, engine_version, min_confidence, requested_by)
-VALUES ($1, $2, 'queued', $3, $4, $5, $6)
+	defer tx.Rollback()
+	task, err := createSourceTaskInTx(ctx, tx, tenantID, submissionID, actorID, input)
+	if err != nil {
+		return Task{}, err
+	}
+	return task, tx.Commit()
+}
+
+func createSourceTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, submissionID string, actorID string, input CreateTaskInput) (Task, error) {
+	if tx == nil || tenantID == "" || submissionID == "" || actorID == "" {
+		return Task{}, ErrInvalidInput
+	}
+	input, err := PrepareCreateInput(submissionID, input)
+	if err != nil {
+		return Task{}, err
+	}
+	row := tx.QueryRowContext(ctx, `
+INSERT INTO ocr_task (
+  tenant_id, submission_id, status, engine, engine_version, min_confidence,
+  requested_by, idempotency_key
+)
+VALUES ($1, $2, 'queued', $3, $4, $5, $6, $7)
+ON CONFLICT (tenant_id, idempotency_key) WHERE deleted_at IS NULL DO NOTHING
 RETURNING id::text, tenant_id::text, submission_id::text, status, engine, engine_version,
   COALESCE(model_version, ''), COALESCE(config_hash, ''), COALESCE(input_hash, ''),
   COALESCE(duration_ms, 0), COALESCE(worker_id, ''), attempt_count,
   min_confidence::float8, result_count, requires_human_review, COALESCE(error_message, ''),
   requested_by::text, started_at, completed_at, created_at
-`, tenantID, submissionID, input.Engine, input.EngineVersion, input.MinConfidence, actorID)
+`, tenantID, submissionID, input.Engine, input.EngineVersion, input.MinConfidence, actorID, input.IdempotencyKey)
 	var task Task
+	if err := scanTask(row, &task); err == nil {
+		return task, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return Task{}, err
+	}
+	row = tx.QueryRowContext(ctx, `
+SELECT id::text, tenant_id::text, submission_id::text, status, engine, engine_version,
+  COALESCE(model_version, ''), COALESCE(config_hash, ''), COALESCE(input_hash, ''),
+  COALESCE(duration_ms, 0), COALESCE(worker_id, ''), attempt_count,
+  min_confidence::float8, result_count, requires_human_review, COALESCE(error_message, ''),
+  requested_by::text, started_at, completed_at, created_at
+FROM ocr_task
+WHERE tenant_id = $1 AND idempotency_key = $2 AND deleted_at IS NULL
+FOR UPDATE
+`, tenantID, input.IdempotencyKey)
 	if err := scanTask(row, &task); err != nil {
 		return Task{}, err
+	}
+	if !sameCreateRequest(task, submissionID, input) {
+		return Task{}, ErrIdempotencyConflict
 	}
 	return task, nil
 }
@@ -106,17 +144,11 @@ func (s *PostgresStore) GetTask(ctx context.Context, tenantID string, id string)
 }
 
 func (s *PostgresStore) StartTask(ctx context.Context, tenantID string, id string) (Task, error) {
-	task, err := s.getTask(ctx, tenantID, id)
-	if err != nil {
-		return Task{}, err
-	}
-	if !CanStart(task.Status) {
-		return Task{}, ErrInvalidTransition
-	}
 	row := s.db.QueryRowContext(ctx, `
 UPDATE ocr_task
-SET status = 'processing', started_at = now(), updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+SET status = 'processing', started_at = now(), completed_at = NULL,
+  error_message = NULL, updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND status IN ('queued', 'failed') AND deleted_at IS NULL
 RETURNING id::text, tenant_id::text, submission_id::text, status, engine, engine_version,
   COALESCE(model_version, ''), COALESCE(config_hash, ''), COALESCE(input_hash, ''),
   COALESCE(duration_ms, 0), COALESCE(worker_id, ''), attempt_count,
@@ -124,28 +156,59 @@ RETURNING id::text, tenant_id::text, submission_id::text, status, engine, engine
   requested_by::text, started_at, completed_at, created_at
 `, tenantID, id)
 	var out Task
-	if err := scanTask(row, &out); err != nil {
+	if err := scanTask(row, &out); err == nil {
+		return out, nil
+	} else if !errors.Is(err, ErrNotFound) {
 		return Task{}, err
 	}
-	return out, nil
-}
 
-func (s *PostgresStore) CompleteTask(ctx context.Context, tenantID string, id string, input CompleteTaskInput) (Task, error) {
+	// A second worker runtime lease may legitimately resume a source task that
+	// is already processing after the previous lease expired. Do not rewrite
+	// timestamps or any result metadata in that idempotent case.
 	task, err := s.getTask(ctx, tenantID, id)
 	if err != nil {
 		return Task{}, err
 	}
-	if !CanComplete(task.Status) {
-		return Task{}, ErrInvalidTransition
+	if IsStarted(task.Status) {
+		return task, nil
 	}
-	if len(input.Results) == 0 {
-		return Task{}, ErrInvalidInput
-	}
+	return Task{}, ErrInvalidTransition
+}
+
+func (s *PostgresStore) CompleteTask(ctx context.Context, tenantID string, id string, input CompleteTaskInput) (Task, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Task{}, err
 	}
 	defer tx.Rollback()
+	out, err := completeSourceTaskInTx(ctx, tx, tenantID, id, input)
+	if err != nil {
+		return Task{}, err
+	}
+	return out, tx.Commit()
+}
+
+func completeSourceTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, id string, input CompleteTaskInput) (Task, error) {
+	if tx == nil || len(input.Results) == 0 || input.DurationMS < 0 {
+		return Task{}, ErrInvalidInput
+	}
+	task, err := getSourceTaskForUpdate(ctx, tx, tenantID, id)
+	if err != nil {
+		return Task{}, err
+	}
+	if task.Status == "completed" {
+		task.Results, err = resultsFrom(ctx, tx, tenantID, id)
+		if err != nil {
+			return Task{}, err
+		}
+		if sameCompletion(task, input) {
+			return task, nil
+		}
+		return Task{}, ErrResultConflict
+	}
+	if !CanComplete(task.Status) {
+		return Task{}, ErrInvalidTransition
+	}
 	requiresReview := false
 	resultCount := 0
 	for _, item := range input.Results {
@@ -197,10 +260,7 @@ RETURNING id::text, tenant_id::text, submission_id::text, status, engine, engine
 	if err := scanTask(row, &out); err != nil {
 		return Task{}, err
 	}
-	if err := tx.Commit(); err != nil {
-		return Task{}, err
-	}
-	results, err := s.results(ctx, tenantID, id)
+	results, err := resultsFrom(ctx, tx, tenantID, id)
 	if err != nil {
 		return Task{}, err
 	}
@@ -209,17 +269,36 @@ RETURNING id::text, tenant_id::text, submission_id::text, status, engine, engine
 }
 
 func (s *PostgresStore) FailTask(ctx context.Context, tenantID string, id string, errorMessage string) (Task, error) {
-	task, err := s.getTask(ctx, tenantID, id)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Task{}, err
+	}
+	defer tx.Rollback()
+	out, err := failSourceTaskInTx(ctx, tx, tenantID, id, errorMessage)
+	if err != nil {
+		return Task{}, err
+	}
+	return out, tx.Commit()
+}
+
+func failSourceTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, id string, errorMessage string) (Task, error) {
+	if tx == nil || errorMessage == "" {
+		return Task{}, ErrInvalidInput
+	}
+	task, err := getSourceTaskForUpdate(ctx, tx, tenantID, id)
+	if err != nil {
+		return Task{}, err
+	}
+	if task.Status == "failed" && task.ErrorMessage == errorMessage {
+		return task, nil
 	}
 	if !CanFail(task.Status) {
 		return Task{}, ErrInvalidTransition
 	}
-	row := s.db.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, `
 UPDATE ocr_task
 SET status = 'failed', error_message = $3, completed_at = now(), updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+WHERE tenant_id = $1 AND id::text = $2 AND status IN ('queued', 'processing') AND deleted_at IS NULL
 RETURNING id::text, tenant_id::text, submission_id::text, status, engine, engine_version,
   COALESCE(model_version, ''), COALESCE(config_hash, ''), COALESCE(input_hash, ''),
   COALESCE(duration_ms, 0), COALESCE(worker_id, ''), attempt_count,
@@ -250,8 +329,34 @@ WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 	return task, nil
 }
 
+func getSourceTaskForUpdate(ctx context.Context, tx *sql.Tx, tenantID string, id string) (Task, error) {
+	row := tx.QueryRowContext(ctx, `
+SELECT id::text, tenant_id::text, submission_id::text, status, engine, engine_version,
+  COALESCE(model_version, ''), COALESCE(config_hash, ''), COALESCE(input_hash, ''),
+  COALESCE(duration_ms, 0), COALESCE(worker_id, ''), attempt_count,
+  min_confidence::float8, result_count, requires_human_review, COALESCE(error_message, ''),
+  requested_by::text, started_at, completed_at, created_at
+FROM ocr_task
+WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+FOR UPDATE
+`, tenantID, id)
+	var task Task
+	if err := scanTask(row, &task); err != nil {
+		return Task{}, err
+	}
+	return task, nil
+}
+
 func (s *PostgresStore) results(ctx context.Context, tenantID string, taskID string) ([]Result, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return resultsFrom(ctx, s.db, tenantID, taskID)
+}
+
+type resultQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func resultsFrom(ctx context.Context, queryer resultQueryer, tenantID string, taskID string) ([]Result, error) {
+	rows, err := queryer.QueryContext(ctx, `
 SELECT id::text, tenant_id::text, ocr_task_id::text, submission_id::text, submission_page_id::text,
   text, bbox, confidence::float8, ocr_engine, ocr_version,
   COALESCE(model_version, ''), COALESCE(config_hash, ''), COALESCE(input_hash, ''),

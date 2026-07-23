@@ -69,6 +69,13 @@ func TestScoreRoutesFinalizeConfirmPublishStudentLookupAndExport(t *testing.T) {
 		t.Fatalf("publish expected published locked grades, got %d %s", rec.Code, rec.Body.String())
 	}
 
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/exams/exam-1/grades/quality?stage=publish", "", token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"can_publish":true`) || strings.Contains(rec.Body.String(), `"grades_not_confirmed"`) {
+		t.Fatalf("quality after publish expected passed terminal state, got %d %s", rec.Code, rec.Body.String())
+	}
+
 	req = reviewAuthedRequest(http.MethodGet, "/api/v1/students/student-1/exams/exam-1/grade", "", token)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)

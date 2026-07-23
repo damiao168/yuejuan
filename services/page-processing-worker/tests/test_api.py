@@ -3,7 +3,9 @@ import json
 from urllib import error
 from unittest.mock import patch
 
-from page_processing.api import Client
+import pytest
+
+from page_processing.api import APIError, Client
 
 
 def test_upload_page_reuses_authorized_duplicate_asset() -> None:
@@ -15,3 +17,33 @@ def test_upload_page_reuses_authorized_duplicate_asset() -> None:
 
     with patch("page_processing.api.request.urlopen", side_effect=conflict):
         assert client.upload_page(task, 2, b"png") == existing
+
+
+def test_login_error_preserves_status_and_retry_after() -> None:
+    response = io.BytesIO(b'{"error":{"code":"login_rate_limited"}}')
+    limited = error.HTTPError(
+        "http://api/api/v1/auth/login",
+        429,
+        "Too Many Requests",
+        {"Retry-After": "17"},
+        response,
+    )
+    client = Client("http://api", "demo", "worker", "secret")
+
+    with patch("page_processing.api.request.urlopen", side_effect=limited):
+        with pytest.raises(APIError, match="api_request_failed:429") as caught:
+            client.login()
+
+    assert caught.value.status_code == 429
+    assert caught.value.retry_after == 17.0
+
+
+def test_login_transport_error_is_exposed_as_retryable_api_error() -> None:
+    client = Client("http://api", "demo", "worker", "secret")
+
+    with patch("page_processing.api.request.urlopen", side_effect=error.URLError("connection refused")):
+        with pytest.raises(APIError, match="api_request_failed:transport") as caught:
+            client.login()
+
+    assert caught.value.status_code is None
+    assert caught.value.retry_after is None

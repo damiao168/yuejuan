@@ -115,6 +115,75 @@ func TestSegmentPermissionDenied(t *testing.T) {
 	}
 }
 
+func TestSegmentImageRequiresCacheRevalidation(t *testing.T) {
+	fileStore := files.NewMemoryStore()
+	asset, err := fileStore.Create(context.Background(), files.CreateAssetInput{
+		TenantID:      tenantID,
+		ExamID:        "exam-1",
+		OwnerType:     "answer_segment_crop",
+		OwnerID:       "registration-1",
+		OriginalName:  "q1-crop.png",
+		ContentType:   "image/png",
+		SizeBytes:     3,
+		HashSHA256:    "crop-hash",
+		StorageBucket: "answers",
+		StorageKey:    "q1-crop.png",
+	})
+	if err != nil {
+		t.Fatalf("create crop asset: %v", err)
+	}
+	store := evidenceStore{evidence: segment.SegmentEvidence{
+		SegmentID:          "segment-1",
+		ExamID:             "exam-1",
+		RegistrationRunID:  "registration-1",
+		CropFileAssetID:    asset.ID,
+		CropSHA256:         "crop-hash",
+		ProcessingStatus:   "completed",
+		RegistrationStatus: "completed",
+	}}
+	handler := segment.NewHandler(store, nil, nil, auth.NewMemoryStore(), fileStore, files.NewMemoryObjectStorage())
+	req := httptest.NewRequest(http.MethodHead, "/api/v1/answer-segments/segment-1/image", nil)
+	req.SetPathValue("id", "segment-1")
+	req = req.WithContext(auth.WithUser(req.Context(), auth.User{ID: userID, TenantID: tenantID}))
+	rec := httptest.NewRecorder()
+
+	handler.GetImage(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "private, no-cache" {
+		t.Fatalf("Cache-Control = %q, want private revalidation", got)
+	}
+}
+
+type evidenceStore struct {
+	evidence segment.SegmentEvidence
+}
+
+func (s evidenceStore) CreateSegments(context.Context, []segment.CreateSegmentInput) ([]segment.Segment, error) {
+	return nil, segment.ErrNotFound
+}
+
+func (s evidenceStore) ListBySubmission(context.Context, string, string) ([]segment.Segment, error) {
+	return nil, segment.ErrNotFound
+}
+
+func (s evidenceStore) Update(context.Context, string, string, string, segment.UpdateSegmentInput) (segment.Segment, error) {
+	return segment.Segment{}, segment.ErrNotFound
+}
+
+func (s evidenceStore) GetEvidence(_ context.Context, tenantID string, id string) (segment.SegmentEvidence, error) {
+	if tenantID != s.evidenceTenantID() || id != s.evidence.SegmentID {
+		return segment.SegmentEvidence{}, segment.ErrNotFound
+	}
+	return s.evidence, nil
+}
+
+func (s evidenceStore) evidenceTenantID() string {
+	return tenantID
+}
+
 func testRouter(authStore *auth.MemoryStore, paperStore paper.Store, submissionStore submission.Store, segmentStore segment.Store) http.Handler {
 	cfg := config.Config{
 		Service: config.ServiceConfig{Name: "test", Environment: "test", ReadinessTimeout: time.Millisecond},

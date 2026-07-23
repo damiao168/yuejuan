@@ -51,10 +51,12 @@ func TestStory056ObjectiveScoringRecoveryE2EWithPostgresTestDatabase(t *testing.
 
 	db := e2eOpenPostgresTestDB(t, dsn)
 	e2eApplyPostgresMigrations(t, db)
-	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin"})
+	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin", "grader"})
 	router := e2ePostgresRouter(db)
 	suffix := time.Now().UTC().Format("20060102150405.000000000")
 	adminToken := e2eLoginWithTenant(t, router, "demo", "tenant_admin", "ChangeMe123!")
+	graderID := e2eLookupUserID(t, db, "demo", "grader")
+	graderToken := e2eLoginWithTenant(t, router, "demo", "grader", "ChangeMe123!")
 	fixture := e2eCreateStory056AcceptanceFixture(t, db, router, adminToken, suffix)
 	e2eSeedStory056AcceptanceAnswers(t, db, fixture, suffix)
 
@@ -148,7 +150,7 @@ func TestStory056ObjectiveScoringRecoveryE2EWithPostgresTestDatabase(t *testing.
 	reviewRun := reviewDetail["scoring_run"].(map[string]any)
 	e2eAssertStory056Run(t, reviewRun, "needs_review", story056AcceptanceAnswerCount, 0, story056AcceptanceAutoConfirmedCount, 0, story056AcceptanceHumanReviewCount, 0)
 	e2eAssertStory056ItemStates(t, e2eStory056RunItems(t, reviewDetail), story056AcceptanceAutoConfirmedCount, story056AcceptanceHumanReviewCount)
-	e2eCompleteStory056HumanReviews(t, router, adminToken, fixture, story056AcceptanceHumanReviewCount)
+	e2eCompleteStory056HumanReviews(t, db, router, adminToken, graderToken, graderID, fixture, story056AcceptanceHumanReviewCount)
 
 	completedDetail := e2eGetJSON(t, router, "/api/v1/scoring-runs/"+runID, adminToken, http.StatusOK)
 	completedRun := completedDetail["scoring_run"].(map[string]any)
@@ -518,21 +520,78 @@ func e2eAssertStory056ItemStates(t *testing.T, items []map[string]any, wantConfi
 	}
 }
 
-func e2eCompleteStory056HumanReviews(t *testing.T, router http.Handler, adminToken string, fixture story056AcceptanceFixture, count int) {
+func e2eCompleteStory056HumanReviews(t *testing.T, db *sql.DB, router http.Handler, adminToken, graderToken, graderID string, fixture story056AcceptanceFixture, count int) {
 	t.Helper()
+	taskResponse := e2eGetJSON(t, router, "/api/v1/review-tasks?exam_id="+fixture.ExamID, adminToken, http.StatusOK)
+	tasks := taskResponse["tasks"].([]any)
+	pendingTaskIDs := make([]string, 0, count)
+	for _, rawTask := range tasks {
+		task := rawTask.(map[string]any)
+		if task["status"] == "pending" && task["source"] == "omr_ambiguous" && task["question_id"] == fixture.QuestionIDs["multiple_choice"] {
+			pendingTaskIDs = append(pendingTaskIDs, e2eString(t, task, "id"))
+		}
+	}
+	if len(pendingTaskIDs) != count {
+		t.Fatalf("expected %d pending OMR review tasks for explicit assignment, got %d", count, len(pendingTaskIDs))
+	}
+	for _, taskID := range pendingTaskIDs {
+		e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+taskID+"/assign", adminToken, story056JSON(t, map[string]any{
+			"assigned_to": graderID,
+		}), http.StatusOK)
+	}
 	for index := 0; index < count; index++ {
-		claim := e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/next", adminToken, story056JSON(t, map[string]any{
+		claim := e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/next", graderToken, story056JSON(t, map[string]any{
 			"exam_id": fixture.ExamID, "question_id": fixture.QuestionIDs["multiple_choice"],
 		}), http.StatusOK)
 		task := claim["task"].(map[string]any)
 		if task["source"] != "omr_ambiguous" || task["status"] != "assigned" {
 			t.Fatalf("human review claim has unexpected state: %#v", task)
 		}
-		submitted := e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+e2eString(t, task, "id")+"/submit", adminToken, story056JSON(t, map[string]any{
+		taskID := e2eString(t, task, "id")
+		submitted := e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+taskID+"/submit", graderToken, story056JSON(t, map[string]any{
 			"score": 1, "rubric_selections": []any{}, "comments": "STORY-056 multi-select verification", "reason": "confirmed against answer key",
 		}), http.StatusCreated)
 		if submitted["question_grade_id"] == nil || submitted["task"].(map[string]any)["status"] != "submitted" {
 			t.Fatalf("human review must create a durable question grade: %#v", submitted)
+		}
+
+		type submittedState struct {
+			Status              string
+			CurrentGradeID      string
+			HumanGradeCount     int
+			ReviewCount         int
+			HumanConfirmedCount int
+			FailedCount         int
+		}
+		readState := func() submittedState {
+			var state submittedState
+			if err := db.QueryRow(`
+SELECT rt.status, COALESCE(rt.current_grade_id::text, ''), count(hg.id)::int,
+  sr.review_count, sr.human_confirmed_count, sr.failed_count
+FROM review_task rt
+JOIN scoring_run sr ON sr.tenant_id=rt.tenant_id AND sr.id=rt.scoring_run_id
+LEFT JOIN human_grade hg ON hg.tenant_id=rt.tenant_id AND hg.review_task_id=rt.id AND hg.deleted_at IS NULL
+WHERE rt.tenant_id=$1::uuid AND rt.id=$2::uuid AND rt.deleted_at IS NULL
+GROUP BY rt.status, rt.current_grade_id, sr.review_count, sr.human_confirmed_count, sr.failed_count
+`, fixture.TenantID, taskID).Scan(
+				&state.Status,
+				&state.CurrentGradeID,
+				&state.HumanGradeCount,
+				&state.ReviewCount,
+				&state.HumanConfirmedCount,
+				&state.FailedCount,
+			); err != nil {
+				t.Fatalf("read submitted review state: %v", err)
+			}
+			return state
+		}
+		beforeReturn := readState()
+		if beforeReturn.Status != "submitted" || beforeReturn.CurrentGradeID == "" || beforeReturn.HumanGradeCount != 1 {
+			t.Fatalf("submitted review state is incomplete: %#v", beforeReturn)
+		}
+		e2eExpectStatus(t, router, http.MethodPost, "/api/v1/review-tasks/"+taskID+"/return", adminToken, `{"reason":"must not invalidate a submitted grade"}`, http.StatusConflict)
+		if afterReturn := readState(); afterReturn != beforeReturn {
+			t.Fatalf("rejected return mutated task, grade, or scoring progress: before=%#v after=%#v", beforeReturn, afterReturn)
 		}
 	}
 }

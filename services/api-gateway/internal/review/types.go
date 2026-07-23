@@ -17,15 +17,31 @@ var (
 )
 
 type Context struct {
-	ExamID          string         `json:"exam_id"`
-	SubmissionID    string         `json:"submission_id"`
-	AnswerSegmentID string         `json:"answer_segment_id"`
-	AnonymousCode   string         `json:"anonymous_code"`
-	Question        paper.Question `json:"question"`
-	Rubric          paper.Rubric   `json:"rubric"`
-	RawAnswer       string         `json:"raw_answer"`
-	OCRText         string         `json:"ocr_text"`
-	AISuggestion    map[string]any `json:"ai_suggestion"`
+	ExamID           string            `json:"exam_id"`
+	SubmissionID     string            `json:"submission_id"`
+	AnswerSegmentID  string            `json:"answer_segment_id"`
+	AnonymousCode    string            `json:"anonymous_code"`
+	Question         paper.Question    `json:"question"`
+	Rubric           paper.Rubric      `json:"rubric"`
+	RawAnswer        string            `json:"raw_answer"`
+	OCRText          string            `json:"ocr_text"`
+	AISuggestion     map[string]any    `json:"ai_suggestion"`
+	AutomationResult *AutomationResult `json:"automation_result,omitempty"`
+}
+
+// AutomationResult exposes only the task-scoped recognition and rule-grading
+// facts a reviewer needs to resolve an exception. It deliberately omits model
+// administration data and any student identity beyond the task's anonymous code.
+type AutomationResult struct {
+	Source           string   `json:"source,omitempty"`
+	RecognizedAnswer string   `json:"recognized_answer,omitempty"`
+	Confidence       *float64 `json:"confidence,omitempty"`
+	Decision         string   `json:"decision,omitempty"`
+	StandardAnswer   any      `json:"standard_answer,omitempty"`
+	RuleType         string   `json:"rule_type,omitempty"`
+	Score            *float64 `json:"score,omitempty"`
+	MaxScore         *float64 `json:"max_score,omitempty"`
+	GradeSource      string   `json:"grade_source,omitempty"`
 }
 
 type ReviewTask struct {
@@ -136,17 +152,22 @@ type NextTaskInput struct {
 	QuestionID string `json:"question_id"`
 }
 
+type ClaimTaskOptions struct {
+	AllowUnassigned bool
+}
+
 type Workspace struct {
 	Task              ReviewTask `json:"task"`
 	Context           Context    `json:"context"`
 	SegmentImageURL   string     `json:"segment_image_url"`
 	OriginalImageURL  string     `json:"original_image_url,omitempty"`
+	OriginalFileID    string     `json:"-"`
 	SegmentStatus     string     `json:"segment_status"`
 	SegmentConfidence *float64   `json:"segment_confidence,omitempty"`
 }
 
 type WorkbenchStore interface {
-	ClaimNextTask(context.Context, string, string, NextTaskInput) (ReviewTask, error)
+	ClaimNextTask(context.Context, string, string, NextTaskInput, ClaimTaskOptions) (ReviewTask, error)
 	GetWorkspace(context.Context, string, string) (Workspace, error)
 	RenewTaskClaim(context.Context, string, string, string) error
 	ReleaseTaskClaim(context.Context, string, string, string) (ReviewTask, error)
@@ -164,6 +185,7 @@ type SubmitResult struct {
 type ListFilter struct {
 	Status     string
 	AssignedTo string
+	ExamID     string
 }
 
 type DoubleMarkPolicy struct {

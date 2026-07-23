@@ -20,10 +20,12 @@ class Settings:
     preprocess_profile: str = "default"
     worker_id: str = "ocr-worker"
     lease_seconds: int = 300
+    heartbeat_interval: float = 10.0
+    heartbeat_timeout: float = 3.0
 
 
 def load_settings() -> Settings:
-    return Settings(
+    settings = Settings(
         api_base_url=os.environ["EDUGRADE_API_BASE_URL"].rstrip("/"),
         tenant_code=os.environ["EDUGRADE_OCR_WORKER_TENANT_CODE"],
         username=os.environ["EDUGRADE_OCR_WORKER_USERNAME"],
@@ -38,4 +40,25 @@ def load_settings() -> Settings:
         preprocess_profile=os.environ.get("EDUGRADE_OCR_PREPROCESS_PROFILE", "default"),
         worker_id=os.environ.get("EDUGRADE_OCR_WORKER_ID", "ocr-worker"),
         lease_seconds=int(os.environ.get("EDUGRADE_OCR_LEASE_SECONDS", "300")),
+        heartbeat_interval=float(os.environ.get("EDUGRADE_OCR_HEARTBEAT_INTERVAL", "10")),
+        heartbeat_timeout=float(os.environ.get("EDUGRADE_OCR_HEARTBEAT_TIMEOUT", "3")),
     )
+    _validate_settings(settings)
+    return settings
+
+
+def _validate_settings(settings: Settings) -> None:
+    # OCR processing is sequential. Claiming more than one task would leave
+    # later tasks without a heartbeat while the first model inference runs.
+    if settings.batch_size != 1:
+        raise ValueError("EDUGRADE_OCR_BATCH_SIZE must be 1 for the sequential OCR worker")
+    if settings.lease_seconds < 30 or settings.lease_seconds > 3600:
+        raise ValueError("EDUGRADE_OCR_LEASE_SECONDS must be between 30 and 3600")
+    if settings.heartbeat_interval <= 0:
+        raise ValueError("EDUGRADE_OCR_HEARTBEAT_INTERVAL must be greater than 0")
+    if settings.heartbeat_timeout <= 0:
+        raise ValueError("EDUGRADE_OCR_HEARTBEAT_TIMEOUT must be greater than 0")
+    if settings.heartbeat_interval >= settings.lease_seconds:
+        raise ValueError("EDUGRADE_OCR_HEARTBEAT_INTERVAL must be shorter than the lease")
+    if settings.heartbeat_interval + settings.heartbeat_timeout >= settings.lease_seconds:
+        raise ValueError("OCR heartbeat interval plus timeout must be shorter than the lease")

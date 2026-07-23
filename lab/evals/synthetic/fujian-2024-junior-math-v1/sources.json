@@ -1,0 +1,23 @@
+{
+  "synthetic": true,
+  "training_allowed": false,
+  "official_exam": {
+    "title": "2024年福建省初中学业水平考试试题、参考答案（数学）",
+    "publisher_page": "https://jyj.quanzhou.gov.cn/wsbs/bgxz/202406/t20240621_3049176.htm",
+    "attachment": "https://jyj.quanzhou.gov.cn/wsbs/bgxz/202406/P020240621550310585717.pdf",
+    "publisher": "泉州市教育局（页面注明来源：福建省教育考试院）",
+    "retrieved_on": "2026-07-16",
+    "local_source_sha256": "73ecead0e2070db5306362b0dbb129350e936bb05c8912bd5f2749f7bb56f846",
+    "use": "非商业产品流程仿真与人工验证；保留来源，不作为训练语料。"
+  },
+  "real_handwriting_reference": {
+    "url": "https://blog.csdn.net/QQ_1309399183/article/details/149368962",
+    "license_notice": "页面标注 CC BY-SA 4.0",
+    "imported": false,
+    "reason": "样本含身份字段且并非同一试卷，仅用于观察真实扫描、手写和版式难度。"
+  },
+  "answer_sheet_rules": {
+    "url": "https://www.bjeea.cn/html/ksb/zhongyaoxinwen/2024/0716/85579.html",
+    "use": "参考答题区域、2B铅笔选择题与黑色签字笔作答等真实流程约束。"
+  }
+}
