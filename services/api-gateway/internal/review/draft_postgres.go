@@ -80,8 +80,12 @@ func scanDraft(row draftScanner) (ReviewDraft, error) {
 		v := score.Float64
 		out.Score = &v
 	}
-	_ = json.Unmarshal(rubric, &out.RubricSelections)
-	_ = json.Unmarshal(viewer, &out.ViewerState)
+	if err := decodeJSONB(rubric, &out.RubricSelections, "review_draft.rubric_selections"); err != nil {
+		return out, err
+	}
+	if err := decodeJSONB(viewer, &out.ViewerState, "review_draft.viewer_state"); err != nil {
+		return out, err
+	}
 	if out.RubricSelections == nil {
 		out.RubricSelections = []RubricSelection{}
 	}

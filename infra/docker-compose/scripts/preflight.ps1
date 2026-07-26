@@ -51,6 +51,12 @@ foreach ($key in $requiredKeys) {
     throw "Required deployment setting is missing: $key"
   }
 }
+# Qdrant ships without authentication unless an API key is set on both sides.
+# Only required when Qdrant is actually wired up.
+if (-not [string]::IsNullOrWhiteSpace($envValues["EDUGRADE_QDRANT_URL"]) -and
+    [string]::IsNullOrWhiteSpace($envValues["EDUGRADE_QDRANT_API_KEY"])) {
+  throw "EDUGRADE_QDRANT_API_KEY is required when EDUGRADE_QDRANT_URL is set. Existing .env files predate this setting; see infra/docker-compose/README.md upgrade notes."
+}
 if ($envValues["EDUGRADE_AI_SERVICE_TOKEN"].Length -lt 32) {
   throw "EDUGRADE_AI_SERVICE_TOKEN must contain at least 32 characters."
 }
@@ -64,6 +70,8 @@ if ($productionLike) {
   if ($envValues["EDUGRADE_POSTGRES_DSN"] -match "sslmode=disable|change_me|edugrade_dev") { $problems += "PostgreSQL DSN is not production-safe" }
   if ($envValues["EDUGRADE_MINIO_ACCESS_KEY"] -eq "edugrade" -or $envValues["EDUGRADE_MINIO_SECRET_KEY"] -match "change_me|edugrade_dev") { $problems += "MinIO example credentials must be replaced" }
   if ($envValues["EDUGRADE_CORS_ALLOWED_ORIGINS"] -match "localhost|127\.0\.0\.1") { $problems += "local CORS origins are not allowed" }
+  if ($envValues["EDUGRADE_QDRANT_API_KEY"] -match "change_me") { $problems += "Qdrant example API key must be replaced" }
+  if ($envValues.ContainsKey("EDUGRADE_INTERNAL_BIND_HOST") -and $envValues["EDUGRADE_INTERNAL_BIND_HOST"] -eq "0.0.0.0") { $problems += "internal service ports must not bind to 0.0.0.0 in production" }
   if ($problems.Count -gt 0) { throw "Production preflight rejected unsafe configuration: $($problems -join '; ')" }
 } elseif (
   $envValues["EDUGRADE_POSTGRES_PASSWORD"] -match "change_me" -or

@@ -53,7 +53,7 @@ flowchart LR
 ## 技术栈
 
 - 前端：React 19、TypeScript、Vite、Ant Design、Recharts、Framer Motion。
-- 后端：Go 1.24、PostgreSQL、Redis、MinIO、Qdrant。
+- 后端：Go 1.26、PostgreSQL、Redis、MinIO、Qdrant。
 - Agent 服务：Python 3.11+、标准库 HTTP 服务、OpenAI-compatible llama.cpp API。
 - 本地模型验证：Lab 固定候选模型与提示词版本，当前本地验证使用 Qwen3-4B GGUF。
 - 桌面端：Tauri 2、Rust、React、TypeScript。
@@ -89,7 +89,7 @@ scripts/                    主项目与 Lab 集成门禁脚本
 ### 环境要求
 
 - Node.js 20+ 和 npm。
-- Go 1.24。
+- Go 1.26。
 - Python 3.11+。
 - Docker Desktop（运行 Compose 和容器 E2E 时需要）。
 - 构建桌面端还需要 Rust、Cargo 以及 Tauri 的 Windows 打包依赖。

@@ -129,6 +129,45 @@ def test_runner_uses_verified_template_reference_for_difference_profile() -> Non
     assert result["measurements"][0]["foreground_delta"] == 0
 
 
+def test_runner_aligns_minor_reference_crop_rounding_difference() -> None:
+    source = _sheet("B", printed="A")
+    with Image.open(io.BytesIO(_sheet(None, printed="A"))) as image:
+        wider = image.resize((image.width + 1, image.height))
+        output = io.BytesIO()
+        wider.save(output, "PNG")
+        reference = output.getvalue()
+    client = FakeClient(source, reference)
+    runner = Runner(client, Config("http://api", "demo", "worker", "secret", "worker-1"))
+    task = {
+        "id": "task-1", "lease_token": "lease-1", "task_type": "omr_extract",
+        "payload": {
+            "exam_id": "exam-1", "omr_run_id": "run-1",
+            "source_download_url": "/api/v1/answer-segments/segment-1/image",
+            "profile_hash": "sha256:template-difference-test-profile",
+            "profile": {
+                "mode": "template_difference", "version": "opencv-template-difference-bubble-v1",
+                "marked_threshold": 0.12, "ambiguous_threshold": 0.04, "minimum_margin": 0.04,
+                "border_fraction": 0.12, "reference_mask_dilation_pixels": 1,
+            },
+            "reference": {
+                "file_asset_id": "reference-1", "download_url": "/api/v1/files/reference-1/download",
+                "sha256": hashlib.sha256(reference).hexdigest(), "content_type": "image/png", "page_no": 1,
+                "question_region": {"x": 0, "y": 0, "width": 1, "height": 1},
+            },
+            "option_regions": [
+                {"label": "A", "x": 20, "y": 20, "width": 28, "height": 28},
+                {"label": "B", "x": 70, "y": 20, "width": 28, "height": 28},
+                {"label": "C", "x": 120, "y": 20, "width": 28, "height": 28},
+            ],
+        },
+    }
+
+    runner._process_omr(task)
+
+    assert client.completed is not None
+    assert client.completed[1]["selected"] == ["B"]
+
+
 def test_runner_rejects_template_reference_hash_mismatch() -> None:
     client = FakeClient(_sheet("B"), _sheet(None))
     runner = Runner(client, Config("http://api", "demo", "worker", "secret", "worker-1"))

@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine
+FROM golang:1.26-alpine
 
 WORKDIR /src
 COPY services/api-gateway/go.mod services/api-gateway/go.sum ./

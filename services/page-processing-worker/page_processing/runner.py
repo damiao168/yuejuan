@@ -2,14 +2,30 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
+import threading
 import time
+import traceback
 
-from page_processing.api import Client
+from page_processing.api import APIError, Client
 from page_processing.barcode import detect_barcodes
 from page_processing.config import Config
 from page_processing.decoder import DecodeError, decode_document
 from page_processing.registration import RegistrationError, crop_regions, register_page, register_page_manual
 from page_processing.omr import OMRExtractionError, OMRProfile, extract_marks
+
+
+class _NullHeartbeat:
+    """No-op stand-in so handlers can run without a live lease (direct calls in tests)."""
+
+    def raise_if_failed(self) -> None:
+        return None
+
+    def stop(self, raise_on_error: bool = True) -> None:
+        return None
+
+
+_NULL_HEARTBEAT = _NullHeartbeat()
 
 
 class Runner:
@@ -19,20 +35,42 @@ class Runner:
 
     def run_once(self) -> int:
         tasks = self.client.claim(self.config.worker_id, self.config.batch_size, self.config.lease_seconds)
+        handlers = {
+            "capture_file_decode": self._process_capture,
+            "page_registration": self._process_registration,
+            "page_registration_correction_preview": self._process_correction,
+            "omr_extract": self._process_omr,
+        }
         for task in tasks:
             try:
-                if task.get("task_type") == "capture_file_decode":
-                    self._process_capture(task)
-                elif task.get("task_type") == "page_registration":
-                    self._process_registration(task)
-                elif task.get("task_type") == "page_registration_correction_preview":
-                    self._process_correction(task)
-                elif task.get("task_type") == "omr_extract":
-                    self._process_omr(task)
-                else:
+                handler = handlers.get(str(task.get("task_type") or ""))
+                if handler is None:
                     self.client.fail_task(task, "unsupported_page_processing_task", {"task_type": task.get("task_type")})
+                    continue
+                with _LeaseHeartbeat(
+                    client=self.client,
+                    task=task,
+                    worker_id=self.config.worker_id,
+                    interval=self.config.heartbeat_interval,
+                    lease_seconds=self.config.lease_seconds,
+                    request_timeout=self.config.heartbeat_timeout,
+                ) as heartbeat:
+                    handler(task, heartbeat)
             except Exception as exc:
-                self._fail(task, exc)
+                try:
+                    self._fail(task, exc)
+                except Exception as fail_exc:
+                    # A lost lease or gateway outage must not crash the worker loop:
+                    # the runtime re-assigns the task once the lease expires. Log
+                    # the original failure too — it is the only remaining record
+                    # of why the task failed, since the report never landed.
+                    print(
+                        f"page-processing task {task.get('id')} failed: {type(exc).__name__}: {exc}; "
+                        f"fail-report also failed: {type(fail_exc).__name__}: {fail_exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    traceback.print_exception(exc, file=sys.stderr)
         return len(tasks)
 
     def run_forever(self) -> None:
@@ -40,11 +78,11 @@ class Runner:
             if self.run_once() == 0:
                 time.sleep(self.config.poll_interval)
 
-    def _process_capture(self, task: dict) -> None:
+    def _process_capture(self, task: dict, heartbeat: _LeaseHeartbeat | _NullHeartbeat = _NULL_HEARTBEAT) -> None:
         started = time.perf_counter()
         payload = task.get("payload") or {}
-        self.client.heartbeat(task, self.config.worker_id, self.config.lease_seconds)
         source = self.client.download(str(payload["download_url"]))
+        heartbeat.raise_if_failed()
         pages, detected_type = decode_document(
             source,
             str(payload.get("content_type") or ""),
@@ -53,19 +91,22 @@ class Runner:
             max_page_pixels=self.config.max_page_pixels,
             max_total_pixels=self.config.max_total_pixels,
         )
+        heartbeat.raise_if_failed()
         page_results = []
         for page in pages:
+            heartbeat.raise_if_failed()
             uploaded = self.client.upload_page(task, page.index, page.png)
             page_results.append({"source_index": page.index, "file_asset_id": uploaded["id"], "sha256": uploaded["hash_sha256"], "width": page.width, "height": page.height, "barcodes": detect_barcodes(page.png)})
         result_version = "sha256:" + hashlib.sha256(json.dumps(page_results, sort_keys=True).encode("utf-8")).hexdigest()
+        heartbeat.stop(raise_on_error=False)
         self.client.complete(str(payload["capture_file_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "result_version": result_version, "duration_ms": int((time.perf_counter() - started) * 1000), "decoder_profile": "pdfium-pillow-v1", "pages": page_results, "original_page_count": len(pages), "detected_content_type": detected_type})
 
-    def _process_registration(self, task: dict) -> None:
+    def _process_registration(self, task: dict, heartbeat: _LeaseHeartbeat | _NullHeartbeat = _NULL_HEARTBEAT) -> None:
         started = time.perf_counter()
         payload = task.get("payload") or {}
-        self.client.heartbeat(task, self.config.worker_id, self.config.lease_seconds)
         source = self.client.download(str(payload["source_download_url"]))
         template = self.client.download(str(payload["template_download_url"]))
+        heartbeat.raise_if_failed()
         output = register_page(
             source,
             str(payload.get("source_content_type") or "image/png"),
@@ -78,10 +119,12 @@ class Runner:
         registered = self.client.upload_asset(task, "page_registration_output", run_id, "registered.png", output.registered_png)
         segments = []
         for index, crop in enumerate(crop_regions(output.registered_png, list(payload.get("question_regions") or [])), start=1):
+            heartbeat.raise_if_failed()
             asset = self.client.upload_asset(task, "answer_segment_crop", run_id, f"segment-{index:04d}.png", crop.pop("png"))
             segments.append({**crop, "file_asset_id": asset["id"], "sha256": asset["hash_sha256"]})
         evidence = output.evidence
         result_version = "sha256:" + hashlib.sha256(json.dumps({"registered": registered["hash_sha256"], "segments": segments}, sort_keys=True).encode()).hexdigest()
+        heartbeat.stop(raise_on_error=False)
         self.client.complete_registration(run_id, {
             "task_id": task["id"], "lease_token": task["lease_token"], "result_version": result_version,
             "duration_ms": int((time.perf_counter() - started) * 1000), "registered_file_asset_id": registered["id"],
@@ -92,12 +135,12 @@ class Runner:
             "segments": segments,
         })
 
-    def _process_correction(self, task: dict) -> None:
+    def _process_correction(self, task: dict, heartbeat: _LeaseHeartbeat | _NullHeartbeat = _NULL_HEARTBEAT) -> None:
         started = time.perf_counter()
         payload = task.get("payload") or {}
-        self.client.heartbeat(task, self.config.worker_id, self.config.lease_seconds)
         source = self.client.download(str(payload["source_download_url"]))
         template = self.client.download(str(payload["template_download_url"]))
+        heartbeat.raise_if_failed()
         output = register_page_manual(
             source, str(payload.get("source_content_type") or "image/png"),
             template, str(payload.get("template_content_type") or ""),
@@ -109,10 +152,12 @@ class Runner:
         registered = self.client.upload_asset(task, "page_registration_correction_preview", correction_id, "registered-preview.png", output.registered_png)
         segments = []
         for index, crop in enumerate(crop_regions(output.registered_png, list(payload.get("question_regions") or [])), start=1):
+            heartbeat.raise_if_failed()
             asset = self.client.upload_asset(task, "page_registration_correction_preview", correction_id, f"segment-preview-{index:04d}.png", crop.pop("png"))
             segments.append({**crop, "file_asset_id": asset["id"], "sha256": asset["hash_sha256"]})
         evidence = output.evidence
         result_version = "sha256:" + hashlib.sha256(json.dumps({"registered": registered["hash_sha256"], "segments": segments}, sort_keys=True).encode()).hexdigest()
+        heartbeat.stop(raise_on_error=False)
         self.client.complete_correction(correction_id, {
             "task_id": task["id"], "lease_token": task["lease_token"], "result_version": result_version,
             "duration_ms": int((time.perf_counter() - started) * 1000),
@@ -125,11 +170,11 @@ class Runner:
             "segments": segments,
         })
 
-    def _process_omr(self, task: dict) -> None:
+    def _process_omr(self, task: dict, heartbeat: _LeaseHeartbeat | _NullHeartbeat = _NULL_HEARTBEAT) -> None:
         started = time.perf_counter()
         payload = task.get("payload") or {}
-        self.client.heartbeat(task, self.config.worker_id, self.config.lease_seconds)
         source = self.client.download(str(payload["source_download_url"]))
+        heartbeat.raise_if_failed()
         profile_data = payload.get("profile") or {}
         profile_hash = str(payload.get("profile_hash") or "").strip()
         if not profile_hash:
@@ -163,12 +208,16 @@ class Runner:
             reference_image_bytes=reference_bytes,
             reference_content_type=str(reference.get("content_type") or ""),
             reference_page_no=int(reference.get("page_no") or 1),
+            reference_page_width=int(reference.get("page_width") or 0),
+            reference_page_height=int(reference.get("page_height") or 0),
             reference_question_region=reference.get("question_region") if isinstance(reference.get("question_region"), dict) else None,
         )
         result["reference_sha256"] = reference_sha256
         run_id = str(payload["omr_run_id"])
+        heartbeat.raise_if_failed()
         overlay = self.client.upload_asset(task, "omr_evidence", run_id, "omr-overlay.png", result.pop("overlay_png"))
         result_version = "sha256:" + hashlib.sha256(json.dumps({**result, "profile_hash": profile_hash}, sort_keys=True).encode()).hexdigest()
+        heartbeat.stop(raise_on_error=False)
         self.client.complete_omr(run_id, {
             "task_id": task["id"], "lease_token": task["lease_token"],
             "result_version": result_version,
@@ -196,3 +245,102 @@ class Runner:
             self.client.fail_omr(str(payload["omr_run_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": not isinstance(exc, OMRExtractionError), "error_code": code, "error_detail": detail, "duration_ms": 0})
         else:
             self.client.fail_task(task, code, detail)
+
+
+class _LeaseHeartbeat:
+    """Renew the task lease from a background thread while a handler runs.
+
+    Page-processing tasks download, decode, and upload large documents in
+    single blocking calls, so a one-shot inline heartbeat lets the lease expire
+    mid-task and the runtime re-assigns work that is still in flight. Handlers
+    call ``raise_if_failed`` between expensive steps to abort early once the
+    lease is lost, and ``stop`` right before reporting completion so no renewal
+    races with the terminal state transition.
+    """
+
+    def __init__(
+        self,
+        *,
+        client: Client,
+        task: dict,
+        worker_id: str,
+        interval: float,
+        lease_seconds: int,
+        request_timeout: float,
+    ) -> None:
+        self.client = client
+        self.task = task
+        self.worker_id = worker_id
+        self.interval = interval
+        self.lease_seconds = lease_seconds
+        self.request_timeout = request_timeout
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._error: Exception | None = None
+        self._last_success = time.monotonic()
+
+    def __enter__(self) -> _LeaseHeartbeat:
+        self._send()
+        self._last_success = time.monotonic()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"page-processing-heartbeat-{self.worker_id}",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        try:
+            self.stop()
+        except Exception:
+            if exc_type is None:
+                raise
+
+    def stop(self, raise_on_error: bool = True) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is None:
+            return
+        thread.join(timeout=self.request_timeout + 0.5)
+        if thread.is_alive():
+            raise RuntimeError("heartbeat request did not stop within its bounded timeout")
+        self._thread = None
+        if raise_on_error:
+            self.raise_if_failed()
+
+    def raise_if_failed(self) -> None:
+        if self._error is not None:
+            raise self._error
+
+    def _run(self) -> None:
+        # A renewal failure is only fatal once the lease can no longer be saved.
+        # Transient transport errors and gateway 5xx/429 are retried on the next
+        # tick; giving up on the first blip would discard an entire in-flight
+        # document even though the previous renewal is still valid for most of
+        # the lease window.
+        while not self._stop.wait(self.interval):
+            try:
+                self._send()
+                self._last_success = time.monotonic()
+            except Exception as exc:
+                if _lease_is_lost(exc) or self._renewal_window_exhausted():
+                    self._error = exc
+                    return
+
+    def _renewal_window_exhausted(self) -> bool:
+        elapsed = time.monotonic() - self._last_success
+        return elapsed + self.interval + self.request_timeout >= self.lease_seconds
+
+    def _send(self) -> None:
+        self.client.heartbeat(self.task, self.worker_id, self.lease_seconds, timeout=self.request_timeout)
+
+
+# The runtime rejects a renewal with 409 once the lease expired or was taken
+# over, and with 403/404 when the task is no longer ours. Anything else (5xx,
+# 429, socket timeouts) is a transient failure worth retrying.
+_LEASE_LOST_STATUS = frozenset({403, 404, 409})
+
+
+def _lease_is_lost(exc: Exception) -> bool:
+    return isinstance(exc, APIError) and exc.status_code in _LEASE_LOST_STATUS

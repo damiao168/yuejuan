@@ -232,7 +232,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 		return requireAuth(auth.RequirePermission("segment:manage")(handler))
 	}
 	requireSegmentEvidenceRead := func(handler http.HandlerFunc) http.Handler {
-		return requireAuth(auth.RequireAnyRole("platform_admin", "tenant_admin", "school_admin")(
+		return requireAuth(auth.RequireAnyRole("platform_admin", "tenant_admin", "school_admin", "page_processing_worker")(
 			auth.RequireAnyPermission("segment:manage", "ocr:manage", "grading:manage", "evidence:manage", "review:manage", "arbitration:manage")(handler),
 		))
 	}
@@ -428,6 +428,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/internal/page-registration-runs/{runId}/fail", requireWorkerExecute(captureHandler.FailRegistration))
 	mux.Handle("POST /api/v1/internal/page-registration-corrections/{id}/result", requireWorkerExecute(captureHandler.CompleteRegistrationCorrection))
 	mux.Handle("POST /api/v1/internal/page-registration-corrections/{id}/failure", requireWorkerExecute(captureHandler.FailRegistrationCorrection))
+	mux.Handle("GET /api/v1/internal/answer-segments/{id}/image", requireWorkerExecute(segmentHandler.GetImage))
 	mux.Handle("POST /api/v1/internal/omr-runs/{runId}/result", requireWorkerExecute(gradingHandler.CompleteOMR))
 	mux.Handle("POST /api/v1/internal/omr-runs/{runId}/failure", requireWorkerExecute(gradingHandler.FailOMR))
 	mux.Handle("GET /api/v1/internal/worker/metrics", requireWorkerRead(workerRuntimeHandler.Metrics))

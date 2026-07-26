@@ -37,8 +37,8 @@ class Client:
         tasks = payload.get("tasks", [])
         return tasks if isinstance(tasks, list) else []
 
-    def heartbeat(self, task: dict[str, Any], worker_id: str, lease_seconds: int) -> None:
-        self._json("POST", f"/api/v1/internal/worker/tasks/{task['id']}/heartbeat", {"lease_token": task["lease_token"], "worker_service": "page-processing", "worker_instance_id": worker_id, "state": "running", "progress": {"phase": "decoding"}, "lease_seconds": lease_seconds})
+    def heartbeat(self, task: dict[str, Any], worker_id: str, lease_seconds: int, timeout: float | None = None) -> None:
+        self._json("POST", f"/api/v1/internal/worker/tasks/{task['id']}/heartbeat", {"lease_token": task["lease_token"], "worker_service": "page-processing", "worker_instance_id": worker_id, "state": "running", "progress": {"phase": "processing"}, "lease_seconds": lease_seconds}, timeout=timeout)
 
     def download(self, path: str) -> bytes:
         req = self._request("GET", path, None)
@@ -110,11 +110,11 @@ class Client:
     def fail_task(self, task: dict[str, Any], error_code: str, detail: dict[str, Any]) -> None:
         self._json("POST", f"/api/v1/internal/worker/tasks/{task['id']}/fail", {"lease_token": task["lease_token"], "retryable": True, "error_code": error_code, "error_detail": detail, "duration_ms": 0})
 
-    def _json(self, method: str, path: str, payload: dict[str, Any], auth: bool = True) -> dict[str, Any]:
+    def _json(self, method: str, path: str, payload: dict[str, Any], auth: bool = True, timeout: float | None = None) -> dict[str, Any]:
         req = self._request(method, path, json.dumps(payload).encode("utf-8"), auth=auth)
         req.add_header("Content-Type", "application/json")
         try:
-            with request.urlopen(req, timeout=120) as response:
+            with request.urlopen(req, timeout=120 if timeout is None else timeout) as response:
                 raw = response.read()
         except error.HTTPError as exc:
             raise APIError(

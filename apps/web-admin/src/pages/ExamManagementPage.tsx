@@ -4,6 +4,7 @@ import {
   App,
   Button,
   Descriptions,
+  Dropdown,
   Drawer,
   Form,
   Input,
@@ -12,10 +13,11 @@ import {
   Space,
   Switch,
   Table,
+  type MenuProps,
   type SelectProps,
   type TableColumnsType
 } from "antd";
-import { Archive, Eye, FileClock, LayoutDashboard, Pencil, Plus, RefreshCw, Save, Search } from "lucide-react";
+import { Archive, Eye, FileClock, LayoutDashboard, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Search } from "lucide-react";
 import { ApiClientError } from "../api/client";
 import type { SessionUser } from "../auth/session";
 import {
@@ -30,7 +32,6 @@ import {
 } from "../api/exams";
 import { listClasses, listGrades, listSchools, type Grade, type School, type SchoolClass } from "../api/org";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
-import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
 import type { ProductExperience } from "../router/experience";
@@ -397,53 +398,74 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
   };
 
   const columns: TableColumnsType<Exam> = [
-    { title: "考试名称", dataIndex: "name", fixed: "left", width: 220 },
-    { title: "学科", dataIndex: "subject", width: 100, render: (value: string) => labelFrom(subjectOptions, value) },
-    { title: "年级", width: 150, render: (_, exam) => gradeNamesForExam(exam) },
-    { title: "班级数量", width: 100, render: (_, exam) => exam.class_ids.length },
-    { title: "总分", dataIndex: "total_score", width: 90 },
-    { title: "状态", dataIndex: "status", width: 110, render: (value: string) => <StatusTag tone={statusTone(value)}>{statusLabels[value] ?? value}</StatusTag> },
-    { title: "阅卷模式", dataIndex: "grading_mode", width: 160, render: (value: string) => labelFrom(gradingModeOptions, value) },
-    { title: "创建人", dataIndex: "created_by", width: 130, render: (value: string) => value === currentUser.id ? currentUser.name : "已授权人员" },
     {
-      title: "创建时间",
-      dataIndex: "created_at",
-      width: 150,
-      render: (value?: string) => (value ? formatTime(value) : <StatusTag tone="neutral">暂无记录</StatusTag>)
+      title: "考试",
+      dataIndex: "name",
+      width: 260,
+      render: (value: string, exam) => (
+        <div className="exam-name-cell">
+          <button type="button" onClick={() => onOpenWorkspace(exam.id)}>{value}</button>
+          <span>{labelFrom(examTypeOptions, exam.exam_type)}</span>
+        </div>
+      )
+    },
+    {
+      title: "学科与范围",
+      width: 175,
+      render: (_, exam) => (
+        <div className="exam-scope-cell">
+          <strong>{labelFrom(subjectOptions, exam.subject)} · {gradeNamesForExam(exam)}</strong>
+          <span>{exam.class_ids.length} 个班级</span>
+        </div>
+      )
+    },
+    { title: "总分", dataIndex: "total_score", width: 65, align: "right" },
+    { title: "状态", dataIndex: "status", width: 105, render: (value: string) => <StatusTag tone={statusTone(value)}>{statusLabels[value] ?? value}</StatusTag> },
+    { title: "阅卷模式", dataIndex: "grading_mode", width: 165, render: (value: string) => <span className="exam-mode-text">{labelFrom(gradingModeOptions, value)}</span> },
+    {
+      title: "创建信息",
+      width: 165,
+      render: (_, exam) => (
+        <div className="exam-created-cell">
+          <strong>{exam.created_by === currentUser.id ? currentUser.name : "已授权人员"}</strong>
+          <span>{formatTime(exam.created_at)}</span>
+        </div>
+      )
     },
     {
       title: "操作",
-      fixed: "right",
-      width: 360,
+      width: 250,
       render: (_, exam) => {
         const next = nextStatus(exam.status);
         const locked = isLocked(exam.status);
+        const moreItems: MenuProps["items"] = [
+          { key: "detail", label: "查看详情", icon: <Eye size={14} /> },
+          ...(canWrite ? [{ key: "edit", label: "编辑考试", icon: <Pencil size={14} />, disabled: locked }] : []),
+          ...(canWrite && exam.status !== "archived" ? [{ key: "archive", label: "归档考试", icon: <Archive size={14} />, danger: true }] : [])
+        ];
         return (
-          <Space className="table-actions" wrap>
+          <Space className="table-actions exam-table-actions" size={6}>
             <Button size="small" type="primary" ghost icon={<LayoutDashboard size={14} />} onClick={() => onOpenWorkspace(exam.id)}>
               工作区
             </Button>
-            <Button size="small" icon={<Eye size={14} />} onClick={() => void openDetail(exam)}>
-              详情
-            </Button>
-            {canWrite ? <Button
-              size="small"
-              icon={<Pencil size={14} />}
-              disabled={locked}
-              onClick={() => setDrawer({ mode: "edit", exam })}
-            >
-              编辑
-            </Button> : null}
             {canWrite && next && next !== "archived" ? (
-              <Button size="small" disabled={!canWrite} loading={actioningId === exam.id} onClick={() => changeStatus(exam, next)}>
+              <Button size="small" loading={actioningId === exam.id} onClick={() => changeStatus(exam, next)}>
                 推进到{statusLabels[next] ?? next}
               </Button>
             ) : null}
-            {canWrite && exam.status !== "archived" ? (
-              <Button size="small" danger icon={<Archive size={14} />} disabled={!canWrite} loading={actioningId === exam.id} onClick={() => archive(exam)}>
-                归档
-              </Button>
-            ) : null}
+            <Dropdown
+              trigger={["click"]}
+              menu={{
+                items: moreItems,
+                onClick: ({ key }) => {
+                  if (key === "detail") void openDetail(exam);
+                  if (key === "edit") setDrawer({ mode: "edit", exam });
+                  if (key === "archive") archive(exam);
+                }
+              }}
+            >
+              <Button size="small" aria-label={`${exam.name} 更多操作`} icon={<MoreHorizontal size={15} />} />
+            </Dropdown>
           </Space>
         );
       }
@@ -519,13 +541,16 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
               <p>{filteredExams.length} 条考试记录</p>
             </div>
           </div>
-          <ResponsiveTable<Exam>
+          <Table<Exam>
             rowKey="id"
             dataSource={filteredExams}
             columns={columns}
-            pagination={{ pageSize: 8, showSizeChanger: false }}
+            pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (total) => `共 ${total} 场考试` }}
             locale={{ emptyText: <EmptyState title="暂无考试" description="当前筛选条件下没有后端返回的考试记录。" /> }}
             size="middle"
+            scroll={{ x: 1185 }}
+            tableLayout="fixed"
+            className="exam-management-table"
           />
         </section>
       )}

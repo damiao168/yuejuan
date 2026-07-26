@@ -239,7 +239,7 @@ func mustUser(r *http.Request) auth.User {
 
 func (h *Handler) auditAction(r *http.Request, action string, targetType string, targetID string, reason string) {
 	user := mustUser(r)
-	_ = h.audit.Audit(r.Context(), auth.AuditEvent{
+	auth.RecordAudit(r.Context(), h.audit, auth.AuditEvent{
 		TenantID:   user.TenantID,
 		ActorID:    user.ID,
 		Action:     action,

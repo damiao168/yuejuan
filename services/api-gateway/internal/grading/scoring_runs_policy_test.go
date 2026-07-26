@@ -1,6 +1,34 @@
 package grading
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
+
+func TestCropRelativeOptionRegionsConvertsPageCoordinates(t *testing.T) {
+	area := map[string]any{"x": 0.5, "y": 0.2, "width": 0.4, "height": 0.2}
+	options := []any{map[string]any{"label": "A", "x": 0.6, "y": 0.25, "width": 0.04, "height": 0.02}}
+
+	result := cropRelativeOptionRegions(area, options)
+	option := result[0].(map[string]any)
+	if math.Abs(option["x"].(float64)-0.25) > 0.000001 ||
+		math.Abs(option["y"].(float64)-0.25) > 0.000001 ||
+		math.Abs(option["width"].(float64)-0.1) > 0.000001 ||
+		math.Abs(option["height"].(float64)-0.1) > 0.000001 {
+		t.Fatalf("unexpected crop-relative option: %#v", option)
+	}
+}
+
+func TestCropRelativeOptionRegionsPreservesAlreadyRelativeCoordinates(t *testing.T) {
+	area := map[string]any{"x": 0.7, "y": 0.2, "width": 0.2, "height": 0.1}
+	options := []any{map[string]any{"label": "A", "x": 0.1, "y": 0.2, "width": 0.2, "height": 0.3}}
+
+	result := cropRelativeOptionRegions(area, options)
+	option := result[0].(map[string]any)
+	if option["x"].(float64) != 0.1 || option["y"].(float64) != 0.2 {
+		t.Fatalf("already relative option was converted twice: %#v", option)
+	}
+}
 
 func TestOMRAutoConfirmationRequiresServerEligibility(t *testing.T) {
 	input := OMRResultInput{Decision: "selected", Selected: []string{"A"}, Confidence: 0.99, NeedsHumanReview: false}

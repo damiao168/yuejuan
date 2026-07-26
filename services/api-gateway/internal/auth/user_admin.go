@@ -67,7 +67,7 @@ func (h *Handler) CreateManagedUser(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	_ = h.store.Audit(r.Context(), AuditEvent{
+	RecordAudit(r.Context(), h.store, AuditEvent{
 		TenantID: actor.TenantID, ActorID: actor.ID, Action: "auth.user_created",
 		TargetType: "user", TargetID: created.ID,
 		AfterValue: map[string]any{"username": created.Username, "display_name": created.DisplayName, "role_code": input.RoleCode, "status": created.Status},

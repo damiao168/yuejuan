@@ -268,10 +268,20 @@ export interface ScoringSummary {
 
 export interface ScoringRunItem {
   answer_segment_id: string;
+  submission_id: string;
+  submission_page_id: string;
+  page_no: number;
+  page_file_asset_id: string;
   question_id: string;
   question_no: string;
   question_type: string;
   anonymous_code: string;
+  normalized_bbox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   state: string;
   recognition_source?: string;
   recognized_answer?: string;
