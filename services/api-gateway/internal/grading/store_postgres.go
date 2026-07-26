@@ -124,17 +124,25 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 		}
 		return Context{}, err
 	}
-	_ = json.Unmarshal(kpRaw, &question.KnowledgePoints)
-	if len(areaRaw) > 0 {
-		_ = json.Unmarshal(areaRaw, &question.AnswerArea)
+	if err := decodeJSONB(kpRaw, &question.KnowledgePoints, "question.knowledge_points"); err != nil {
+		return Context{}, err
+	}
+	if err := decodeJSONB(areaRaw, &question.AnswerArea, "question.answer_area"); err != nil {
+		return Context{}, err
 	}
 	if keyID == "" {
 		return Context{}, ErrAnswerKeyMissing
 	}
 	answerKey := paper.AnswerKey{ID: keyID, QuestionID: question.ID, AnswerVersion: keyVersion}
-	_ = json.Unmarshal(standardRaw, &answerKey.StandardAnswer)
-	_ = json.Unmarshal(equivRaw, &answerKey.EquivalentAnswers)
-	_ = json.Unmarshal(toleranceRaw, &answerKey.Tolerance)
+	if err := decodeJSONB(standardRaw, &answerKey.StandardAnswer, "question_answer_key.standard_answer"); err != nil {
+		return Context{}, err
+	}
+	if err := decodeJSONB(equivRaw, &answerKey.EquivalentAnswers, "question_answer_key.equivalent_answers"); err != nil {
+		return Context{}, err
+	}
+	if err := decodeJSONB(toleranceRaw, &answerKey.Tolerance, "question_answer_key.tolerance"); err != nil {
+		return Context{}, err
+	}
 	question.AnswerKey = &answerKey
 	if answer.ID == "" {
 		return Context{}, ErrAnswerMissing
@@ -142,7 +150,9 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 	answer.TenantID = tenantID
 	answer.AnswerSegmentID = segmentIDOut
 	answer.AnswerPayload = map[string]any{}
-	_ = json.Unmarshal(payloadRaw, &answer.AnswerPayload)
+	if err := decodeJSONB(payloadRaw, &answer.AnswerPayload, "answer_segment_answer.answer_payload"); err != nil {
+		return Context{}, err
+	}
 	if confidence.Valid {
 		value := confidence.Float64
 		answer.Confidence = &value
@@ -247,7 +257,9 @@ func scanAnswer(row answerScanner, out *SegmentAnswer) error {
 		return err
 	}
 	out.AnswerPayload = map[string]any{}
-	_ = json.Unmarshal(payloadRaw, &out.AnswerPayload)
+	if err := decodeJSONB(payloadRaw, &out.AnswerPayload, "answer_segment_answer.answer_payload"); err != nil {
+		return err
+	}
 	if confidence.Valid {
 		value := confidence.Float64
 		out.Confidence = &value
@@ -291,12 +303,22 @@ func scanGrade(row gradeScanner, out *Grade) error {
 		}
 		return err
 	}
-	_ = json.Unmarshal(matchedRaw, &out.MatchedPoints)
-	_ = json.Unmarshal(missingRaw, &out.MissingPoints)
-	_ = json.Unmarshal(evidenceRaw, &out.Evidence)
-	_ = json.Unmarshal(risksRaw, &out.RiskFlags)
+	if err := decodeJSONB(matchedRaw, &out.MatchedPoints, "ai_grade.matched_points"); err != nil {
+		return err
+	}
+	if err := decodeJSONB(missingRaw, &out.MissingPoints, "ai_grade.missing_points"); err != nil {
+		return err
+	}
+	if err := decodeJSONB(evidenceRaw, &out.Evidence, "ai_grade.evidence"); err != nil {
+		return err
+	}
+	if err := decodeJSONB(risksRaw, &out.RiskFlags, "ai_grade.risk_flags"); err != nil {
+		return err
+	}
 	out.RawOutput = map[string]any{}
-	_ = json.Unmarshal(rawOutput, &out.RawOutput)
+	if err := decodeJSONB(rawOutput, &out.RawOutput, "ai_grade.raw_output"); err != nil {
+		return err
+	}
 	out.CreatedAt = out.CreatedAt.UTC()
 	return nil
 }

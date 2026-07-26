@@ -833,17 +833,27 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL AND su
 		}
 		return Context{}, err
 	}
-	_ = json.Unmarshal(kpRaw, &question.KnowledgePoints)
-	if len(areaRaw) > 0 {
-		_ = json.Unmarshal(areaRaw, &question.AnswerArea)
+	if err := decodeJSONB(kpRaw, &question.KnowledgePoints, "question.knowledge_points"); err != nil {
+		return Context{}, err
 	}
-	_ = json.Unmarshal(pointsRaw, &rubric.Points)
-	_ = json.Unmarshal(deductionsRaw, &rubric.Deductions)
-	_ = json.Unmarshal(examplesRaw, &rubric.Examples)
+	if err := decodeJSONB(areaRaw, &question.AnswerArea, "question.answer_area"); err != nil {
+		return Context{}, err
+	}
+	if err := decodeJSONB(pointsRaw, &rubric.Points, "rubric.points"); err != nil {
+		return Context{}, err
+	}
+	if err := decodeJSONB(deductionsRaw, &rubric.Deductions, "rubric.deductions"); err != nil {
+		return Context{}, err
+	}
+	if err := decodeJSONB(examplesRaw, &rubric.Examples, "rubric.examples"); err != nil {
+		return Context{}, err
+	}
 	if answerSource == "ocr_text" {
 		out.OCRText = out.RawAnswer
 	}
-	_ = json.Unmarshal(aiSuggestionRaw, &out.AISuggestion)
+	if err := decodeJSONB(aiSuggestionRaw, &out.AISuggestion, "ai_grade.ai_suggestion"); err != nil {
+		return Context{}, err
+	}
 	if automationResult, loadErr := loadAutomationResult(ctx, q, tenantID, segmentID); loadErr != nil {
 		return Context{}, loadErr
 	} else {
@@ -922,7 +932,9 @@ LEFT JOIN LATERAL (
 		out.MaxScore = &value
 	}
 	if answerKeyID != "" {
-		_ = json.Unmarshal(standardAnswerRaw, &out.StandardAnswer)
+		if err := decodeJSONB(standardAnswerRaw, &out.StandardAnswer, "question_answer_key.standard_answer"); err != nil {
+			return nil, err
+		}
 	}
 	if out.Source == "" && out.RecognizedAnswer == "" && out.RuleType == "" && answerKeyID == "" {
 		return nil, nil
@@ -998,7 +1010,9 @@ func scanGrade(row gradeScanner) (HumanGrade, error) {
 		}
 		return HumanGrade{}, err
 	}
-	_ = json.Unmarshal(selectionsRaw, &out.RubricSelections)
+	if err := decodeJSONB(selectionsRaw, &out.RubricSelections, "human_grade.rubric_selections"); err != nil {
+		return HumanGrade{}, err
+	}
 	out.CreatedAt = out.CreatedAt.UTC()
 	return out, nil
 }
@@ -1401,7 +1415,9 @@ func scanArbitration(row arbitrationScanner) (ArbitrationTask, error) {
 	if finalScore.Valid {
 		out.FinalScore = floatPtr(finalScore.Float64)
 	}
-	_ = json.Unmarshal(contextRaw, &out.Context)
+	if err := decodeJSONB(contextRaw, &out.Context, "arbitration_task.context"); err != nil {
+		return ArbitrationTask{}, err
+	}
 	out.CreatedAt = out.CreatedAt.UTC()
 	out.UpdatedAt = out.UpdatedAt.UTC()
 	return out, nil

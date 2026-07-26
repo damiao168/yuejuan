@@ -80,6 +80,7 @@ import {
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { OcrWorkerAlert } from "../components/OcrWorkerAlert";
 import { ResponsiveTable } from "../components/ResponsiveTable";
+import { ScoringPaperMonitor } from "../components/ScoringPaperMonitor";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
 
@@ -659,19 +660,30 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     try {
       await startScoringRun(initialExamId, `web-${crypto.randomUUID()}`);
       message.success("评分任务已生成");
-      await Promise.all([loadScoringSummary(), loadTasks()]);
+      setScoringDetailOpen(true);
+      const [summary, detail] = await Promise.all([
+        getScoringSummary(initialExamId),
+        getExamAutomationResults(initialExamId)
+      ]);
+      setScoringSummary(summary.scoring_summary);
+      setScoringRunDetail(detail);
+      await loadTasks();
     } catch (currentError) {
       message.error(formatError(currentError));
     } finally {
       setActioning(null);
     }
-  }, [canGrade, initialExamId, loadScoringSummary, loadTasks, message]);
+  }, [canGrade, initialExamId, loadTasks, message]);
 
   const showScoringRunDetail = useCallback(async () => {
     if (!initialExamId) return;
     setActioning("scoring-detail");
     try {
-      const detail = await getExamAutomationResults(initialExamId);
+      const [summary, detail] = await Promise.all([
+        getScoringSummary(initialExamId),
+        getExamAutomationResults(initialExamId)
+      ]);
+      setScoringSummary(summary.scoring_summary);
       setScoringRunDetail(detail);
       setScoringDetailOpen(true);
     } catch (currentError) {
@@ -680,6 +692,22 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
       setActioning(null);
     }
   }, [initialExamId, message]);
+
+  useEffect(() => {
+    const status = scoringSummary?.run?.status;
+    if (!scoringDetailOpen || !initialExamId || !status || !["queued", "processing"].includes(status)) return;
+    const refresh = () => {
+      void Promise.all([
+        getScoringSummary(initialExamId),
+        getExamAutomationResults(initialExamId)
+      ]).then(([summary, detail]) => {
+        setScoringSummary(summary.scoring_summary);
+        setScoringRunDetail(detail);
+      });
+    };
+    const timer = window.setInterval(refresh, 2500);
+    return () => window.clearInterval(timer);
+  }, [initialExamId, scoringDetailOpen, scoringSummary?.run?.status]);
 
   const showScoringResultImage = useCallback(async (item: ScoringRunItem) => {
     setScoringImageLoading(item.answer_segment_id);
@@ -1467,7 +1495,7 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
           <div><h2>评分进度</h2><p>系统只自动确认证据完整且规则明确的答案，其余进入人工队列。</p></div>
           <Space wrap>
             <Button icon={<RefreshCw size={15} />} loading={scoringLoading} onClick={() => void loadScoringSummary()}>刷新</Button>
-            <Button icon={<Eye size={15} />} loading={actioning === "scoring-detail"} onClick={() => void showScoringRunDetail()}>自动阅卷结果</Button>
+            <Button icon={<Eye size={15} />} loading={actioning === "scoring-detail"} onClick={() => void showScoringRunDetail()}>阅卷监控</Button>
             {scoringSummary?.run && scoringSummary.run.failed_count > 0 ? <Button icon={<RotateCcw size={15} />} loading={actioning === "retry-scoring"} onClick={() => void retryFailedScoring()}>重新处理失败项</Button> : null}
             {scoringSummary?.run && ["queued", "processing", "needs_review", "failed"].includes(scoringSummary.run.status) ? <Popconfirm title="取消本次评分？" description="未完成的自动处理和人工任务将停止，已保留的历史结果不会删除。" okText="取消评分" cancelText="保留" okButtonProps={{ danger: true }} onConfirm={() => void cancelCurrentScoringRun()}>
               <Button danger icon={<CircleStop size={15} />} loading={actioning === "cancel-scoring"}>取消评分</Button>
@@ -1496,13 +1524,19 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
       </section> : null}
       <OcrWorkerAlert enabled={canWork} />
       <Drawer
-        title="自动阅卷结果"
-        width="min(1280px, 96vw)"
+        title="阅卷进度与整卷批注"
+        width="min(1680px, 98vw)"
         open={scoringDetailOpen}
         onClose={() => setScoringDetailOpen(false)}
         destroyOnClose={false}
       >
         <div className="automation-results">
+          <ScoringPaperMonitor
+            run={scoringSummary?.run}
+            items={scoringRunDetail?.items ?? []}
+            loading={actioning === "scoring-detail"}
+            onRefresh={() => void showScoringRunDetail()}
+          />
           <div className="automation-results-head">
             <div>
               <strong>全考试当前结果</strong>

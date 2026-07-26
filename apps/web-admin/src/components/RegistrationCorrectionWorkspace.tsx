@@ -196,6 +196,13 @@ export function RegistrationCorrectionWorkspace({
   const [correction, setCorrection] = useState<RegistrationCorrection>();
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   useEffect(() => {
     let active = true;
     const urls: string[] = [];
@@ -241,12 +248,14 @@ export function RegistrationCorrectionWorkspace({
         template_points: templatePoints,
         advanced_anchor_mode: advanced,
       });
+      if (!mountedRef.current) return;
       let current = (
         await previewRegistrationCorrection(
           created.correction.id,
           created.correction.revision,
         )
       ).correction;
+      if (!mountedRef.current) return;
       setCorrection(current);
       for (
         let i = 0;
@@ -254,7 +263,9 @@ export function RegistrationCorrectionWorkspace({
         i++
       ) {
         await new Promise((resolve) => setTimeout(resolve, 1500));
+        if (!mountedRef.current) return;
         current = (await getRegistrationCorrection(current.id)).correction;
+        if (!mountedRef.current) return;
         setCorrection(current);
       }
       if (
@@ -263,10 +274,15 @@ export function RegistrationCorrectionWorkspace({
       )
         throw new Error(current.error_code || "校正预览未完成");
       const url = await imageURL(current.preview_registered_file_asset_id);
+      if (!mountedRef.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
       if (previewURL) URL.revokeObjectURL(previewURL);
       setPreviewURL(url);
       message.success("校正预览已生成");
     } catch (error) {
+      if (!mountedRef.current) return;
       message.error(errorText(error));
     } finally {
       setBusy(false);

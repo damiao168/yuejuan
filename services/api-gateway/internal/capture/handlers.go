@@ -714,5 +714,5 @@ func writeRuntimeError(w http.ResponseWriter, r *http.Request, err error) {
 }
 func (h *Handler) auditAction(r *http.Request, action, targetType, targetID, reason string) {
 	user := mustUser(r)
-	_ = h.audit.Audit(r.Context(), auth.AuditEvent{TenantID: user.TenantID, ActorID: user.ID, Action: action, TargetType: targetType, TargetID: targetID, Reason: strings.TrimSpace(reason), IPAddress: r.RemoteAddr, UserAgent: r.UserAgent(), RequestID: logger.RequestID(r.Context())})
+	auth.RecordAudit(r.Context(), h.audit, auth.AuditEvent{TenantID: user.TenantID, ActorID: user.ID, Action: action, TargetType: targetType, TargetID: targetID, Reason: strings.TrimSpace(reason), IPAddress: r.RemoteAddr, UserAgent: r.UserAgent(), RequestID: logger.RequestID(r.Context())})
 }

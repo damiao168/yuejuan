@@ -8,10 +8,14 @@ services:
       POSTGRES_DB: ${EDUGRADE_POSTGRES_DB}
       POSTGRES_USER: ${EDUGRADE_POSTGRES_USER}
       POSTGRES_PASSWORD: ${EDUGRADE_POSTGRES_PASSWORD}
+    # Data-plane ports bind to loopback by default; production deployments
+    # should only expose nginx. Override EDUGRADE_INTERNAL_BIND_HOST for
+    # isolated development hosts that genuinely need LAN access.
     ports:
-      - "${EDUGRADE_POSTGRES_PORT:-5432}:5432"
+      - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    mem_limit: ${EDUGRADE_POSTGRES_MEM_LIMIT:-2g}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
@@ -23,18 +27,19 @@ services:
     image: redis:7-alpine
     container_name: edugrade-redis
     command: >
-      sh -c 'if [ -n "$${EDUGRADE_REDIS_PASSWORD}" ];
-      then exec redis-server --appendonly yes --requirepass "$${EDUGRADE_REDIS_PASSWORD}";
-      else exec redis-server --appendonly yes;
-      fi'
+      sh -c 'if [ -z "$${EDUGRADE_REDIS_PASSWORD}" ];
+      then echo "EDUGRADE_REDIS_PASSWORD is required; refusing to start an unauthenticated Redis" >&2; exit 1;
+      fi;
+      exec redis-server --appendonly yes --requirepass "$${EDUGRADE_REDIS_PASSWORD}"'
     environment:
       EDUGRADE_REDIS_PASSWORD: ${EDUGRADE_REDIS_PASSWORD}
     ports:
-      - "${EDUGRADE_REDIS_PORT:-6379}:6379"
+      - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
+    mem_limit: ${EDUGRADE_REDIS_MEM_LIMIT:-512m}
     healthcheck:
-      test: ["CMD-SHELL", "if [ -n \"$${EDUGRADE_REDIS_PASSWORD}\" ]; then redis-cli -a \"$${EDUGRADE_REDIS_PASSWORD}\" ping | grep PONG; else redis-cli ping | grep PONG; fi"]
+      test: ["CMD-SHELL", "redis-cli -a \"$${EDUGRADE_REDIS_PASSWORD}\" ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -48,10 +53,11 @@ services:
       MINIO_ROOT_USER: ${EDUGRADE_MINIO_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${EDUGRADE_MINIO_SECRET_KEY}
     ports:
-      - "${EDUGRADE_MINIO_API_PORT:-9000}:9000"
-      - "${EDUGRADE_MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_MINIO_API_PORT:-9000}:9000"
+      - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
+    mem_limit: ${EDUGRADE_MINIO_MEM_LIMIT:-1g}
     healthcheck:
       test: ["CMD-SHELL", "mc ready local"]
       interval: 10s
@@ -62,11 +68,14 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.14.1
     container_name: edugrade-qdrant
+    environment:
+      QDRANT__SERVICE__API_KEY: ${EDUGRADE_QDRANT_API_KEY:?EDUGRADE_QDRANT_API_KEY is required; see infra/docker-compose/README.md upgrade notes}
     ports:
-      - "${EDUGRADE_QDRANT_HTTP_PORT:-6333}:6333"
-      - "${EDUGRADE_QDRANT_GRPC_PORT:-6334}:6334"
+      - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_QDRANT_HTTP_PORT:-6333}:6333"
+      - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    mem_limit: ${EDUGRADE_QDRANT_MEM_LIMIT:-2g}
     healthcheck:
       test: ["CMD-SHELL", "grep -qi ':18BD' /proc/net/tcp"]
       interval: 10s
@@ -151,7 +160,7 @@ services:
       context: ../..
       dockerfile: services/api-gateway/Dockerfile
       args:
-        GO_BUILD_IMAGE: ${EDUGRADE_GO_BUILD_IMAGE:-golang:1.24-alpine}
+        GO_BUILD_IMAGE: ${EDUGRADE_GO_BUILD_IMAGE:-golang:1.26-alpine}
         API_RUNTIME_IMAGE: ${EDUGRADE_API_RUNTIME_IMAGE:-alpine:3.22}
     image: edugrade/api-gateway:${EDUGRADE_IMAGE_TAG:-local}
     container_name: edugrade-api-gateway
@@ -207,7 +216,8 @@ services:
       EDUGRADE_BOOTSTRAP_DISPLAY_NAME: ${EDUGRADE_BOOTSTRAP_DISPLAY_NAME:-Platform Admin}
       EDUGRADE_BOOTSTRAP_PASSWORD: ${EDUGRADE_BOOTSTRAP_PASSWORD:-}
     ports:
-      - "${EDUGRADE_API_PORT:-8080}:8080"
+      - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_API_PORT:-8080}:8080"
+    mem_limit: ${EDUGRADE_API_MEM_LIMIT:-1g}
     depends_on:
       postgres:
         condition: service_healthy
@@ -268,6 +278,7 @@ services:
       EDUGRADE_GRADING_MODEL_READY_TIMEOUT_SECONDS: ${EDUGRADE_GRADING_MODEL_READY_TIMEOUT_SECONDS:-3}
       EDUGRADE_GRADING_MODEL_QUEUE_TIMEOUT_SECONDS: ${EDUGRADE_GRADING_MODEL_QUEUE_TIMEOUT_SECONDS:-5}
       EDUGRADE_GRADING_MODEL_MAX_RETRIES: ${EDUGRADE_GRADING_MODEL_MAX_RETRIES:-1}
+    mem_limit: ${EDUGRADE_GRADING_AGENT_MEM_LIMIT:-2g}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -307,6 +318,7 @@ services:
       EDUGRADE_OCR_LEASE_SECONDS: ${EDUGRADE_OCR_LEASE_SECONDS:-300}
       EDUGRADE_OCR_HEARTBEAT_INTERVAL: ${EDUGRADE_OCR_HEARTBEAT_INTERVAL:-10}
       EDUGRADE_OCR_HEARTBEAT_TIMEOUT: ${EDUGRADE_OCR_HEARTBEAT_TIMEOUT:-3}
+    mem_limit: ${EDUGRADE_OCR_WORKER_MEM_LIMIT:-4g}
     volumes:
       - ocr_model_cache:/home/ocr-worker/.paddlex
     depends_on:
@@ -332,6 +344,7 @@ services:
       EDUGRADE_IMAGE_QUALITY_LEASE_SECONDS: ${EDUGRADE_IMAGE_QUALITY_LEASE_SECONDS}
       EDUGRADE_IMAGE_QUALITY_POLL_INTERVAL: ${EDUGRADE_IMAGE_QUALITY_POLL_INTERVAL}
       EDUGRADE_IMAGE_QUALITY_WORKER_ID: ${EDUGRADE_IMAGE_QUALITY_WORKER_ID}
+    mem_limit: ${EDUGRADE_IMAGE_QUALITY_MEM_LIMIT:-2g}
     depends_on:
       api-gateway:
         condition: service_healthy
@@ -358,6 +371,9 @@ services:
       EDUGRADE_PAGE_PROCESSING_MAX_PAGE_PIXELS: ${EDUGRADE_PAGE_PROCESSING_MAX_PAGE_PIXELS:-50000000}
       EDUGRADE_PAGE_PROCESSING_MAX_TOTAL_PIXELS: ${EDUGRADE_PAGE_PROCESSING_MAX_TOTAL_PIXELS:-1000000000}
       EDUGRADE_PAGE_PROCESSING_WORKER_ID: ${EDUGRADE_PAGE_PROCESSING_WORKER_ID:-compose-page-processing-1}
+      EDUGRADE_PAGE_PROCESSING_HEARTBEAT_INTERVAL: ${EDUGRADE_PAGE_PROCESSING_HEARTBEAT_INTERVAL:-30}
+      EDUGRADE_PAGE_PROCESSING_HEARTBEAT_TIMEOUT: ${EDUGRADE_PAGE_PROCESSING_HEARTBEAT_TIMEOUT:-10}
+    mem_limit: ${EDUGRADE_PAGE_PROCESSING_MEM_LIMIT:-8g}
     depends_on:
       api-gateway:
         condition: service_healthy
@@ -393,7 +409,7 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     ports:
-      - "${EDUGRADE_PROMETHEUS_PORT:-9090}:9090"
+      - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_PROMETHEUS_PORT:-9090}:9090"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:9090/-/healthy | grep -q Prometheus"]
       interval: 10s
@@ -412,7 +428,7 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
     ports:
-      - "${EDUGRADE_GRAFANA_PORT:-3000}:3000"
+      - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_GRAFANA_PORT:-3000}:3000"
     depends_on:
       prometheus:
         condition: service_healthy

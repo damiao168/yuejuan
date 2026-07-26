@@ -23,7 +23,16 @@ Set-Location infra\docker-compose
 Copy-Item .env.example .env
 ```
 
-至少替换：PostgreSQL、Redis、MinIO、Grafana 密码，以及长度不少于 32 字符的 `EDUGRADE_AI_SERVICE_TOKEN`。令牌只放在未提交的 `.env`，API 网关和 `grading-agent` 使用同一值。
+至少替换：PostgreSQL、Redis、MinIO、Grafana 密码，`EDUGRADE_QDRANT_API_KEY`，以及长度不少于 32 字符的 `EDUGRADE_AI_SERVICE_TOKEN`。令牌只放在未提交的 `.env`，API 网关和 `grading-agent` 使用同一值。
+
+### 从既有部署升级
+
+`.env` 不随仓库更新，升级后需要手工补齐两个新增项，否则 `preflight.ps1` 会直接拒绝启动：
+
+- `EDUGRADE_QDRANT_API_KEY`：**必填**。Qdrant 此前无鉴权，现在容器会读取该值；网关侧用同一个值发送 `api-key` 头，两端必须一致。
+- `EDUGRADE_REDIS_PASSWORD`：不能再留空。Redis 过去在空密码时会静默降级为无鉴权启动，现在会直接拒绝启动。
+
+以下新增项都有默认值，不填也能启动：`EDUGRADE_INTERNAL_BIND_HOST`（默认 `127.0.0.1`，数据面端口只监听回环，仅 nginx 对外）、各 `EDUGRADE_*_MEM_LIMIT`、`EDUGRADE_PAGE_PROCESSING_HEARTBEAT_*`。若需要从其他机器直连数据库或 MinIO 控制台，显式设置 `EDUGRADE_INTERNAL_BIND_HOST=0.0.0.0`（生产环境 preflight 会拒绝该值）。
 
 模型运行参数：
 
@@ -99,10 +108,10 @@ docker compose --env-file .env -f docker-compose.yml logs -f api-gateway grading
 
 `down -v` 会永久删除当前 Compose 项目的数据库和对象存储卷，只能在确认目标项目后用于一次性环境。日常升级不得执行。
 
-恢复命令：
+恢复命令（默认恢复到隔离的验证库；覆盖主库需显式加 `-AllowPrimaryDatabase`）：
 
 ```powershell
-.\scripts\restore.ps1 -PostgresDump .\backups\postgres-YYYYMMDD-HHMMSS.dump
+.\scripts\restore.ps1 -PostgresDump .\backups\postgres-YYYYMMDD-HHMMSS.dump -TargetDatabase edugrade_restore_check -CreateTargetDatabase -ConfirmRestore
 ```
 
 ## 模型启动

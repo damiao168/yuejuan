@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -55,28 +56,33 @@ type ScoringSummary struct {
 // It intentionally contains no student identity; the grading workspace remains
 // the only place that resolves an anonymous task to protected answer assets.
 type ScoringRunItem struct {
-	AnswerSegmentID       string   `json:"answer_segment_id"`
-	QuestionID            string   `json:"question_id"`
-	QuestionNo            string   `json:"question_no"`
-	QuestionType          string   `json:"question_type"`
-	AnonymousCode         string   `json:"anonymous_code"`
-	State                 string   `json:"state"`
-	RecognitionSource     string   `json:"recognition_source,omitempty"`
-	RecognizedAnswer      string   `json:"recognized_answer,omitempty"`
-	RecognitionDecision   string   `json:"recognition_decision,omitempty"`
-	RecognitionConfidence *float64 `json:"recognition_confidence,omitempty"`
-	StandardAnswer        any      `json:"standard_answer,omitempty"`
-	RuleType              string   `json:"rule_type,omitempty"`
-	Score                 *float64 `json:"score,omitempty"`
-	MaxScore              *float64 `json:"max_score,omitempty"`
-	GradeSource           string   `json:"grade_source,omitempty"`
-	OMRRunID              string   `json:"omr_run_id,omitempty"`
-	RuntimeTaskID         string   `json:"runtime_task_id,omitempty"`
-	RuntimeStatus         string   `json:"runtime_status,omitempty"`
-	ReviewTaskID          string   `json:"review_task_id,omitempty"`
-	ReviewStatus          string   `json:"review_status,omitempty"`
-	ReasonCode            string   `json:"reason_code,omitempty"`
-	ErrorCode             string   `json:"error_code,omitempty"`
+	AnswerSegmentID       string             `json:"answer_segment_id"`
+	SubmissionID          string             `json:"submission_id"`
+	SubmissionPageID      string             `json:"submission_page_id"`
+	PageNo                int                `json:"page_no"`
+	PageFileAssetID       string             `json:"page_file_asset_id"`
+	QuestionID            string             `json:"question_id"`
+	QuestionNo            string             `json:"question_no"`
+	QuestionType          string             `json:"question_type"`
+	AnonymousCode         string             `json:"anonymous_code"`
+	NormalizedBBox        map[string]float64 `json:"normalized_bbox"`
+	State                 string             `json:"state"`
+	RecognitionSource     string             `json:"recognition_source,omitempty"`
+	RecognizedAnswer      string             `json:"recognized_answer,omitempty"`
+	RecognitionDecision   string             `json:"recognition_decision,omitempty"`
+	RecognitionConfidence *float64           `json:"recognition_confidence,omitempty"`
+	StandardAnswer        any                `json:"standard_answer,omitempty"`
+	RuleType              string             `json:"rule_type,omitempty"`
+	Score                 *float64           `json:"score,omitempty"`
+	MaxScore              *float64           `json:"max_score,omitempty"`
+	GradeSource           string             `json:"grade_source,omitempty"`
+	OMRRunID              string             `json:"omr_run_id,omitempty"`
+	RuntimeTaskID         string             `json:"runtime_task_id,omitempty"`
+	RuntimeStatus         string             `json:"runtime_status,omitempty"`
+	ReviewTaskID          string             `json:"review_task_id,omitempty"`
+	ReviewStatus          string             `json:"review_status,omitempty"`
+	ReasonCode            string             `json:"reason_code,omitempty"`
+	ErrorCode             string             `json:"error_code,omitempty"`
 }
 
 type ScoringRunDetail struct {
@@ -349,8 +355,11 @@ ON CONFLICT (tenant_id,answer_segment_id,source) WHERE status IN ('pending','ass
 	queued, review := 0, 0
 	for _, segment := range segments {
 		var area map[string]any
-		_ = json.Unmarshal(segment.area, &area)
+		if err := decodeJSONB(segment.area, &area, "question.answer_area"); err != nil {
+			return ScoringRun{}, err
+		}
 		options, _ := area["option_regions"].([]any)
+		options = cropRelativeOptionRegions(area, options)
 		isOMR := segment.kind == "single_choice" || segment.kind == "true_false" || segment.kind == "multiple_choice"
 		isTextRule := segment.kind == "fill_blank" || segment.kind == "numeric"
 		if isTextRule && segment.ruleID != "" && segment.answerID != "" {
@@ -373,7 +382,7 @@ ON CONFLICT (tenant_id,answer_segment_id,source) WHERE status IN ('pending','ass
 			if _, err = tx.ExecContext(ctx, `UPDATE answer_candidate SET is_current=false WHERE tenant_id=$1::uuid AND answer_segment_id=$2::uuid AND is_current`, tenantID, segment.id); err != nil {
 				return ScoringRun{}, err
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO answer_candidate(tenant_id,answer_segment_id,scoring_run_id,source,payload,display_text,confidence,decision,evidence,engine_version,profile_version,input_hash,is_current,created_by) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::jsonb,$6,NULLIF($7,0),$8,jsonb_build_object('answer_segment_answer_id',$9),'rule-input-v1','rule-input-v1',$10,true,$11::uuid)`, tenantID, segment.id, runID, source, segment.answerPayload, segment.answerText, confidence, decision, segment.answerID, "sha256:"+strings.ReplaceAll(segment.answerID, "-", ""), actorID)
+			_, err = tx.ExecContext(ctx, `INSERT INTO answer_candidate(tenant_id,answer_segment_id,scoring_run_id,source,payload,display_text,confidence,decision,evidence,engine_version,profile_version,input_hash,is_current,created_by) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::jsonb,$6,NULLIF($7,0),$8,jsonb_build_object('answer_segment_answer_id',$9::text),'rule-input-v1','rule-input-v1',$10,true,$11::uuid)`, tenantID, segment.id, runID, source, segment.answerPayload, segment.answerText, confidence, decision, segment.answerID, "sha256:"+strings.ReplaceAll(segment.answerID, "-", ""), actorID)
 			if err != nil {
 				return ScoringRun{}, err
 			}
@@ -388,7 +397,9 @@ ON CONFLICT (tenant_id,answer_segment_id,source) WHERE status IN ('pending','ass
 			}
 		} else if isOMR && segment.ruleID != "" && len(options) >= 2 {
 			var templateLayout paper.TemplateLayout
-			_ = json.Unmarshal(segment.templateLayout, &templateLayout)
+			if err := decodeJSONB(segment.templateLayout, &templateLayout, "answer_sheet_template.layout"); err != nil {
+				return ScoringRun{}, err
+			}
 			currentReference := paper.TemplateOMRReference{
 				Source:      paper.OMRReferenceSourceExamPaper,
 				FileAssetID: segment.referenceAssetID,
@@ -418,21 +429,27 @@ VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::uuid,$7,$8,$9,NULLIF($10,''):
 			if err != nil {
 				return ScoringRun{}, err
 			}
-			taskPayload := map[string]any{"exam_id": examID, "answer_segment_id": segment.id, "omr_run_id": omrID, "source_download_url": "/api/v1/answer-segments/" + segment.id + "/image", "source_content_type": segment.contentType, "option_regions": options, "multiple": segment.kind == "multiple_choice", "profile": policy.RuntimeProfile, "profile_hash": policy.ProfileHash}
+			taskPayload := map[string]any{"exam_id": examID, "answer_segment_id": segment.id, "omr_run_id": omrID, "source_download_url": "/api/v1/internal/answer-segments/" + segment.id + "/image", "source_content_type": segment.contentType, "option_regions": options, "multiple": segment.kind == "multiple_choice", "profile": policy.RuntimeProfile, "profile_hash": policy.ProfileHash}
 			if policy.Reference != nil {
+				pageWidth, pageHeight := templatePageDimensions(templateLayout, segment.questionID)
 				taskPayload["reference"] = map[string]any{
 					"file_asset_id": policy.Reference.FileAssetID,
 					"download_url":  "/api/v1/files/" + policy.Reference.FileAssetID + "/download",
 					"sha256":        policy.Reference.HashSHA256,
 					"content_type":  policy.Reference.ContentType,
 					"page_no":       policy.Reference.PageNo,
+					"page_width":    pageWidth,
+					"page_height":   pageHeight,
 					"question_region": map[string]any{
 						"x": policy.Reference.X, "y": policy.Reference.Y,
 						"width": policy.Reference.Width, "height": policy.Reference.Height,
 					},
 				}
 			}
-			payload, _ := json.Marshal(taskPayload)
+			payload, err := json.Marshal(taskPayload)
+			if err != nil {
+				return ScoringRun{}, fmt.Errorf("encode omr worker task payload: %w", err)
+			}
 			var taskID string
 			err = tx.QueryRowContext(ctx, `INSERT INTO agent_worker_task (tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)
 VALUES ($1::uuid,'omr_extract','page-processing','omr_run',$2::uuid,50,$3::jsonb,'omr-task-v2',$4,$4,3,5,$5::uuid)
@@ -479,6 +496,54 @@ ON CONFLICT (tenant_id,task_type,idempotency_key) DO UPDATE SET idempotency_key=
 	return run, tx.Commit()
 }
 
+func cropRelativeOptionRegions(area map[string]any, options []any) []any {
+	areaX, xOK := area["x"].(float64)
+	areaY, yOK := area["y"].(float64)
+	areaWidth, widthOK := area["width"].(float64)
+	areaHeight, heightOK := area["height"].(float64)
+	if !xOK || !yOK || !widthOK || !heightOK || areaWidth <= 0 || areaHeight <= 0 {
+		return options
+	}
+	normalized := make([]any, 0, len(options))
+	for _, raw := range options {
+		option, ok := raw.(map[string]any)
+		if !ok {
+			return options
+		}
+		x, xOK := option["x"].(float64)
+		y, yOK := option["y"].(float64)
+		width, widthOK := option["width"].(float64)
+		height, heightOK := option["height"].(float64)
+		if !xOK || !yOK || !widthOK || !heightOK ||
+			x < areaX || y < areaY || x+width > areaX+areaWidth+0.000001 || y+height > areaY+areaHeight+0.000001 {
+			// Some integrations already provide crop-relative regions. Preserve
+			// those values instead of applying the conversion twice.
+			return options
+		}
+		relative := make(map[string]any, len(option))
+		for key, value := range option {
+			relative[key] = value
+		}
+		relative["x"] = (x - areaX) / areaWidth
+		relative["y"] = (y - areaY) / areaHeight
+		relative["width"] = width / areaWidth
+		relative["height"] = height / areaHeight
+		normalized = append(normalized, relative)
+	}
+	return normalized
+}
+
+func templatePageDimensions(layout paper.TemplateLayout, questionID string) (int, int) {
+	for _, page := range layout.Pages {
+		for _, region := range page.QuestionRegions {
+			if region.QuestionID == questionID {
+				return page.Width, page.Height
+			}
+		}
+	}
+	return 0, 0
+}
+
 const scoringRunSelect = `SELECT id::text,tenant_id::text,exam_id::text,idempotency_key,status,total_count,queued_count,auto_confirmed_count,human_confirmed_count,review_count,failed_count,started_by::text,started_at,completed_at,created_at,updated_at FROM scoring_run`
 
 func scanScoringRun(row ruleScanner) (ScoringRun, error) {
@@ -517,7 +582,7 @@ func (s *PostgresStore) GetScoringSummary(ctx context.Context, tenantID, examID 
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT q.id::text,q.question_no,q.question_type,count(seg.id)::int,
 count(seg.id) FILTER(WHERE EXISTS(SELECT 1 FROM omr_run o WHERE o.tenant_id=seg.tenant_id AND o.answer_segment_id=seg.id AND o.scoring_run_id=NULLIF($3,'')::uuid AND o.status IN ('queued','processing') AND o.deleted_at IS NULL))::int,
-count(seg.id) FILTER(WHERE EXISTS(SELECT 1 FROM question_grade g WHERE g.tenant_id=seg.tenant_id AND g.answer_segment_id=seg.id AND g.is_current AND g.deleted_at IS NULL))::int,
+count(seg.id) FILTER(WHERE EXISTS(SELECT 1 FROM question_grade g WHERE g.tenant_id=seg.tenant_id AND g.answer_segment_id=seg.id AND g.scoring_run_id=NULLIF($3,'')::uuid AND g.is_current AND g.deleted_at IS NULL))::int,
 count(seg.id) FILTER(WHERE EXISTS(SELECT 1 FROM review_task rt WHERE rt.tenant_id=seg.tenant_id AND rt.answer_segment_id=seg.id AND rt.scoring_run_id=NULLIF($3,'')::uuid AND rt.status IN ('pending','assigned','in_progress','returned') AND rt.deleted_at IS NULL))::int,
 count(seg.id) FILTER(WHERE EXISTS(SELECT 1 FROM omr_run o WHERE o.tenant_id=seg.tenant_id AND o.answer_segment_id=seg.id AND o.scoring_run_id=NULLIF($3,'')::uuid AND o.status='terminal_error' AND o.deleted_at IS NULL))::int
 FROM question q LEFT JOIN answer_segment seg ON seg.tenant_id=q.tenant_id AND seg.question_id=q.id AND seg.deleted_at IS NULL
@@ -543,13 +608,17 @@ func (s *PostgresStore) GetScoringRunDetail(ctx context.Context, tenantID, runID
 	}
 	detail := ScoringRunDetail{Run: run, Items: []ScoringRunItem{}}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT seg.id::text,q.id::text,q.question_no,q.question_type,COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),
+SELECT seg.id::text,seg.submission_id::text,seg.submission_page_id::text,sp.page_no,
+  COALESCE(pr.registered_file_asset_id,sp.normalized_file_asset_id,sp.file_asset_id)::text,
+  q.id::text,q.question_no,q.question_type,COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),seg.normalized_bbox,
   COALESCE(ac.source,''),COALESCE(ac.display_text,''),COALESCE(ac.decision,''),ac.confidence::float8,
   COALESCE(ak.standard_answer,'null'::jsonb),COALESCE(sr.rule_type,''),g.score::float8,g.max_score::float8,COALESCE(g.source,''),
   COALESCE(o.id::text,''),COALESCE(o.status,''),COALESCE(o.runtime_task_id::text,''),COALESCE(wt.status,''),COALESCE(o.error_code,''),
   COALESCE(rt.id::text,''),COALESCE(rt.status,''),COALESCE(rt.reason_code,''),COALESCE(g.id::text,'')
 FROM answer_segment seg
 JOIN submission sub ON sub.tenant_id=seg.tenant_id AND sub.id=seg.submission_id AND sub.deleted_at IS NULL
+JOIN submission_page sp ON sp.tenant_id=seg.tenant_id AND sp.id=seg.submission_page_id AND sp.deleted_at IS NULL
+LEFT JOIN page_registration_run pr ON pr.tenant_id=seg.tenant_id AND pr.id=seg.registration_run_id AND pr.deleted_at IS NULL
 JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id AND q.deleted_at IS NULL
 LEFT JOIN omr_run o ON o.tenant_id=seg.tenant_id AND o.scoring_run_id=$3::uuid AND o.answer_segment_id=seg.id AND o.deleted_at IS NULL
 LEFT JOIN agent_worker_task wt ON wt.tenant_id=seg.tenant_id AND wt.id=o.runtime_task_id
@@ -607,7 +676,9 @@ ORDER BY q.sort_order,seg.created_at`, tenantID, run.ExamID, runID)
 func (s *PostgresStore) GetExamAutomationResults(ctx context.Context, tenantID, examID string) (ExamAutomationResults, error) {
 	out := ExamAutomationResults{Items: []ScoringRunItem{}}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT seg.id::text,q.id::text,q.question_no,q.question_type,COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),
+SELECT seg.id::text,seg.submission_id::text,seg.submission_page_id::text,sp.page_no,
+  COALESCE(pr.registered_file_asset_id,sp.normalized_file_asset_id,sp.file_asset_id)::text,
+  q.id::text,q.question_no,q.question_type,COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),seg.normalized_bbox,
   COALESCE(NULLIF(ac.source,''),ans.source,''),COALESCE(NULLIF(ac.display_text,''),ans.answer_text,''),
   COALESCE(NULLIF(ac.decision,''),CASE WHEN ans.id IS NOT NULL THEN 'confirmed' ELSE '' END),COALESCE(ac.confidence,ans.confidence)::float8,
   COALESCE(ak.standard_answer,'null'::jsonb),COALESCE(sr.rule_type,q.question_type),
@@ -619,6 +690,8 @@ SELECT seg.id::text,q.id::text,q.question_no,q.question_type,COALESCE(NULLIF(sub
   COALESCE(rt.id::text,''),COALESCE(rt.status,''),COALESCE(rt.reason_code,''),COALESCE(g.id::text,'')
 FROM answer_segment seg
 JOIN submission sub ON sub.tenant_id=seg.tenant_id AND sub.id=seg.submission_id AND sub.deleted_at IS NULL
+JOIN submission_page sp ON sp.tenant_id=seg.tenant_id AND sp.id=seg.submission_page_id AND sp.deleted_at IS NULL
+LEFT JOIN page_registration_run pr ON pr.tenant_id=seg.tenant_id AND pr.id=seg.registration_run_id AND pr.deleted_at IS NULL
 JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id AND q.deleted_at IS NULL
 LEFT JOIN LATERAL (
   SELECT id,source,display_text,decision,confidence FROM answer_candidate
@@ -662,7 +735,6 @@ LEFT JOIN LATERAL (
   ORDER BY created_at DESC LIMIT 1
 ) rt ON true
 WHERE seg.tenant_id=$1::uuid AND sub.exam_id=$2::uuid AND seg.deleted_at IS NULL
-  AND q.question_type IN ('single_choice','multiple_choice','true_false','fill_blank','numeric')
 ORDER BY COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),q.sort_order,seg.created_at`, tenantID, examID)
 	if err != nil {
 		return out, err
@@ -681,9 +753,10 @@ ORDER BY COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),q.sort_order,seg.cre
 func scanScoringRunItem(row ruleScanner, runStatus string) (ScoringRunItem, error) {
 	var item ScoringRunItem
 	var recognitionConfidence, score, maxScore sql.NullFloat64
-	var standardAnswerRaw []byte
+	var normalizedBBoxRaw, standardAnswerRaw []byte
 	var gradeID string
-	if err := row.Scan(&item.AnswerSegmentID, &item.QuestionID, &item.QuestionNo, &item.QuestionType, &item.AnonymousCode,
+	if err := row.Scan(&item.AnswerSegmentID, &item.SubmissionID, &item.SubmissionPageID, &item.PageNo, &item.PageFileAssetID,
+		&item.QuestionID, &item.QuestionNo, &item.QuestionType, &item.AnonymousCode, &normalizedBBoxRaw,
 		&item.RecognitionSource, &item.RecognizedAnswer, &item.RecognitionDecision, &recognitionConfidence,
 		&standardAnswerRaw, &item.RuleType, &score, &maxScore, &item.GradeSource,
 		&item.OMRRunID, &item.State, &item.RuntimeTaskID, &item.RuntimeStatus, &item.ErrorCode,
@@ -702,7 +775,14 @@ func scanScoringRunItem(row ruleScanner, runStatus string) (ScoringRunItem, erro
 		value := maxScore.Float64
 		item.MaxScore = &value
 	}
-	_ = json.Unmarshal(standardAnswerRaw, &item.StandardAnswer)
+	// answer_segment.normalized_bbox is written straight from the page-processing
+	// callback with no column constraint and no server-side validation, and the
+	// strict map[string]float64 here is narrower than every other reader of the
+	// column. Degrade to an empty box rather than failing the whole listing.
+	decodeJSONBLenient(normalizedBBoxRaw, &item.NormalizedBBox)
+	if err := decodeJSONB(standardAnswerRaw, &item.StandardAnswer, "question_answer_key.standard_answer"); err != nil {
+		return ScoringRunItem{}, err
+	}
 	item.State = scoringItemState(runStatus, item.State, item.ReviewStatus, gradeID)
 	return item, nil
 }
@@ -959,8 +1039,12 @@ func (s *PostgresStore) GetOMRRun(ctx context.Context, tenantID, id string) (OMR
 		v := confidence.Float64
 		out.Confidence = &v
 	}
-	_ = json.Unmarshal(measurements, &out.Measurements)
-	_ = json.Unmarshal(selected, &out.SelectedOptions)
+	if err := decodeJSONB(measurements, &out.Measurements, "omr_run.measurements"); err != nil {
+		return out, err
+	}
+	if err := decodeJSONB(selected, &out.SelectedOptions, "omr_run.selected_options"); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -1208,14 +1292,22 @@ FOR UPDATE OF seg,ans`, tenantID, segmentID, answerID)
 		return Context{}, ErrAnswerKeyMissing
 	}
 	answerKey := paper.AnswerKey{ID: keyID, QuestionID: question.ID, AnswerVersion: keyVersion}
-	_ = json.Unmarshal(standardRaw, &answerKey.StandardAnswer)
-	_ = json.Unmarshal(equivalentRaw, &answerKey.EquivalentAnswers)
-	_ = json.Unmarshal(toleranceRaw, &answerKey.Tolerance)
+	if err := decodeJSONB(standardRaw, &answerKey.StandardAnswer, "question_answer_key.standard_answer"); err != nil {
+		return Context{}, err
+	}
+	if err := decodeJSONB(equivalentRaw, &answerKey.EquivalentAnswers, "question_answer_key.equivalent_answers"); err != nil {
+		return Context{}, err
+	}
+	if err := decodeJSONB(toleranceRaw, &answerKey.Tolerance, "question_answer_key.tolerance"); err != nil {
+		return Context{}, err
+	}
 	question.AnswerKey = &answerKey
 	answer.TenantID = tenantID
 	answer.AnswerSegmentID = segmentIDOut
 	answer.AnswerPayload = map[string]any{}
-	_ = json.Unmarshal(payloadRaw, &answer.AnswerPayload)
+	if err := decodeJSONB(payloadRaw, &answer.AnswerPayload, "answer_segment_answer.answer_payload"); err != nil {
+		return Context{}, err
+	}
 	if confidence.Valid {
 		value := confidence.Float64
 		answer.Confidence = &value
@@ -1250,7 +1342,9 @@ FOR UPDATE OF seg,ac`, tenantID, segmentID, candidateID).Scan(&examID, &submissi
 	var existingEvidence []byte
 	err = tx.QueryRowContext(ctx, `SELECT id::text,answer_segment_id::text,question_id::text,score::float8,max_score::float8,source,version,evidence,created_at FROM question_grade WHERE tenant_id=$1::uuid AND answer_segment_id=$2::uuid AND answer_candidate_id=$3::uuid AND scoring_rule_id=$4::uuid AND is_current AND deleted_at IS NULL`, tenantID, segmentID, candidateID, ruleID).Scan(&existing.ID, &existing.AnswerSegmentID, &existing.QuestionID, &existing.Score, &existing.MaxScore, &existing.Source, &existing.Version, &existingEvidence, &existing.CreatedAt)
 	if err == nil {
-		_ = json.Unmarshal(existingEvidence, &existing.Evidence)
+		if decodeErr := decodeJSONB(existingEvidence, &existing.Evidence, "question_grade.evidence"); decodeErr != nil {
+			return QuestionGrade{}, decodeErr
+		}
 		return existing, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -1275,7 +1369,9 @@ RETURNING id::text,answer_segment_id::text,question_id::text,score::float8,max_s
 	if err = row.Scan(&out.ID, &out.AnswerSegmentID, &out.QuestionID, &out.Score, &out.MaxScore, &out.Source, &out.Version, &evidenceRaw, &out.CreatedAt); err != nil {
 		return QuestionGrade{}, err
 	}
-	_ = json.Unmarshal(evidenceRaw, &out.Evidence)
+	if err = decodeJSONB(evidenceRaw, &out.Evidence, "question_grade.evidence"); err != nil {
+		return QuestionGrade{}, err
+	}
 	return out, nil
 }
 
@@ -1343,7 +1439,9 @@ FOR UPDATE OF seg`, tenantID, segmentID).Scan(&examID, &submissionID, &questionI
 	var existingEvidence []byte
 	err = tx.QueryRowContext(ctx, `SELECT id::text,answer_segment_id::text,question_id::text,score::float8,max_score::float8,source,version,evidence,created_at FROM question_grade WHERE tenant_id=$1::uuid AND answer_segment_id=$2::uuid AND answer_candidate_id=$3::uuid AND scoring_rule_id=$4::uuid AND is_current AND deleted_at IS NULL`, tenantID, segmentID, candidateID, ruleID).Scan(&existing.ID, &existing.AnswerSegmentID, &existing.QuestionID, &existing.Score, &existing.MaxScore, &existing.Source, &existing.Version, &existingEvidence, &existing.CreatedAt)
 	if err == nil {
-		_ = json.Unmarshal(existingEvidence, &existing.Evidence)
+		if decodeErr := decodeJSONB(existingEvidence, &existing.Evidence, "question_grade.evidence"); decodeErr != nil {
+			return QuestionGrade{}, decodeErr
+		}
 		return existing, tx.Commit()
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -1366,7 +1464,9 @@ RETURNING id::text,answer_segment_id::text,question_id::text,score::float8,max_s
 	if err = row.Scan(&out.ID, &out.AnswerSegmentID, &out.QuestionID, &out.Score, &out.MaxScore, &out.Source, &out.Version, &evidenceRaw, &out.CreatedAt); err != nil {
 		return out, err
 	}
-	_ = json.Unmarshal(evidenceRaw, &out.Evidence)
+	if err = decodeJSONB(evidenceRaw, &out.Evidence, "question_grade.evidence"); err != nil {
+		return out, err
+	}
 	if runID != "" {
 		if _, err = tx.ExecContext(ctx, `UPDATE scoring_run SET auto_confirmed_count=auto_confirmed_count+1,status=CASE WHEN queued_count=0 AND failed_count=0 AND review_count=0 THEN 'completed' WHEN queued_count=0 AND review_count>0 THEN 'needs_review' ELSE status END,completed_at=CASE WHEN queued_count=0 AND review_count=0 AND failed_count=0 THEN now() ELSE completed_at END,updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, runID); err != nil {
 			return out, err

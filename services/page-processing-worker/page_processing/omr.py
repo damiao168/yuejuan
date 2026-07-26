@@ -35,6 +35,8 @@ def extract_marks(
     reference_image_bytes: bytes | None = None,
     reference_content_type: str = "",
     reference_page_no: int = 1,
+    reference_page_width: int = 0,
+    reference_page_height: int = 0,
     reference_question_region: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     profile = profile or OMRProfile()
@@ -54,9 +56,11 @@ def extract_marks(
             reference_content_type,
             reference_page_no,
             reference_question_region,
+            reference_page_width,
+            reference_page_height,
         )
         if reference.shape != image.shape:
-            raise OMRExtractionError("omr_reference_crop_shape_mismatch")
+            reference = _align_reference_crop(reference, image.shape)
         reference_foreground = _foreground_mask(reference)
         # Registration introduces sub-pixel anti-aliasing around printed text and
         # bubble outlines. Suppress only a narrow halo from the blank page before
@@ -156,7 +160,14 @@ def _decode_grayscale(data: bytes) -> np.ndarray:
         raise OMRExtractionError("omr_image_decode_failed") from exc
 
 
-def _decode_reference_crop(data: bytes, content_type: str, page_no: int, region: dict[str, Any]) -> np.ndarray:
+def _decode_reference_crop(
+    data: bytes,
+    content_type: str,
+    page_no: int,
+    region: dict[str, Any],
+    page_width: int = 0,
+    page_height: int = 0,
+) -> np.ndarray:
     if page_no < 1 or page_no > 100:
         raise OMRExtractionError("omr_reference_page_invalid")
     try:
@@ -173,6 +184,8 @@ def _decode_reference_crop(data: bytes, content_type: str, page_no: int, region:
     if page_no > len(pages):
         raise OMRExtractionError("omr_reference_page_missing")
     reference = _decode_grayscale(pages[page_no - 1].png)
+    if page_width > 0 and page_height > 0 and reference.shape != (page_height, page_width):
+        reference = cv2.resize(reference, (page_width, page_height), interpolation=cv2.INTER_AREA)
     try:
         x = float(region["x"])
         y = float(region["y"])
@@ -202,6 +215,13 @@ def _foreground_mask(gray: np.ndarray) -> np.ndarray:
     combined = cv2.bitwise_and(otsu, adaptive)
     kernel = np.ones((2, 2), dtype=np.uint8)
     return cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel)
+
+
+def _align_reference_crop(reference: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
+    target_height, target_width = target_shape
+    reference_height, reference_width = reference.shape
+    interpolation = cv2.INTER_AREA if reference_width > target_width or reference_height > target_height else cv2.INTER_CUBIC
+    return cv2.resize(reference, (target_width, target_height), interpolation=interpolation)
 
 
 def _pixel_region(region: dict[str, Any], width: int, height: int) -> tuple[int, int, int, int]:

@@ -184,7 +184,9 @@ func scanScoringRule(row ruleScanner) (ScoringRule, error) {
 		return ScoringRule{}, err
 	}
 	out.Config = map[string]any{}
-	_ = json.Unmarshal(config, &out.Config)
+	if err := decodeJSONB(config, &out.Config, "scoring_rule.config"); err != nil {
+		return ScoringRule{}, err
+	}
 	if publishedAt.Valid {
 		value := publishedAt.Time.UTC()
 		out.PublishedAt = &value

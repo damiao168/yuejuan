@@ -81,7 +81,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	limiterKey := LoginFailureKey(req.TenantCode, req.Username, clientIP)
 	if retryAfter, blocked := h.loginLimiter.IsBlocked(limiterKey, time.Now().UTC()); blocked {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
-		_ = h.store.Audit(r.Context(), AuditEvent{
+		RecordAudit(r.Context(), h.store, AuditEvent{
 			TenantID:   PlatformTenantID,
 			Action:     "auth.login_rate_limited",
 			TargetType: "user",
@@ -108,7 +108,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		if tenantID == "" {
 			tenantID = PlatformTenantID
 		}
-		_ = h.store.Audit(r.Context(), AuditEvent{
+		RecordAudit(r.Context(), h.store, AuditEvent{
 			TenantID:   tenantID,
 			ActorID:    user.ID,
 			Action:     "auth.login_failed",
@@ -121,7 +121,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		})
 		if blocked {
 			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
-			_ = h.store.Audit(r.Context(), AuditEvent{
+			RecordAudit(r.Context(), h.store, AuditEvent{
 				TenantID:   tenantID,
 				ActorID:    user.ID,
 				Action:     "auth.login_rate_limited",
@@ -150,7 +150,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusInternalServerError, "session_create_failed", "failed to create session")
 		return
 	}
-	_ = h.store.Audit(r.Context(), AuditEvent{
+	RecordAudit(r.Context(), h.store, AuditEvent{
 		TenantID:   user.TenantID,
 		ActorID:    user.ID,
 		Action:     "auth.login_succeeded",
@@ -251,7 +251,7 @@ func (h *Handler) ExportAudits(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusInternalServerError, "audit_export_failed", "failed to build audit export")
 		return
 	}
-	_ = h.store.Audit(r.Context(), AuditEvent{
+	RecordAudit(r.Context(), h.store, AuditEvent{
 		TenantID:   user.TenantID,
 		ActorID:    user.ID,
 		Action:     "audit.exported",
@@ -346,7 +346,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusInternalServerError, "logout_failed", "failed to logout")
 		return
 	}
-	_ = h.store.Audit(r.Context(), AuditEvent{
+	RecordAudit(r.Context(), h.store, AuditEvent{
 		TenantID:   user.TenantID,
 		ActorID:    user.ID,
 		Action:     "auth.logout",

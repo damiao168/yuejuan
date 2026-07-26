@@ -7,6 +7,7 @@ import { ApiClientError } from "./api/client";
 import { hasAnyPermission, hasEveryPermission, sessionFromAuthUser, type SessionUser } from "./auth/session";
 import { clearReviewDraftFallbacks } from "./auth/reviewDraftFallback";
 import { AppLayout } from "./components/AppLayout";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ForbiddenState, LoadingState, NotFoundState } from "./components/PageState";
 import { LoginPage } from "./pages/LoginPage";
 import { examWorkspaceFromPath, hasExamWorkspaceSectionAccess, hasRouteAccess, notFoundRoute, pathFromHash, routeFromPath } from "./router/routes";
@@ -288,7 +289,9 @@ function App() {
         onLogout={logout}
         immersive={experience === "teacher" && (route.path === "/grading" || examWorkspace?.section === "grading")}
       >
-        <Suspense fallback={<LoadingState label="正在加载页面" />}>{content}</Suspense>
+        <ErrorBoundary resetKey={`${navigationExperience}:${canonicalPath}`}>
+          <Suspense fallback={<LoadingState label="正在加载页面" />}>{content}</Suspense>
+        </ErrorBoundary>
       </AppLayout>
     </AntApp>
   );
