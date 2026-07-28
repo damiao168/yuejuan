@@ -30,6 +30,8 @@ idempotency_key, uploaded_by::text, created_at`
 const pageColumns = `id::text, tenant_id::text, capture_batch_id::text, capture_file_id::text,
 source_index, COALESCE(submission_id::text, ''), COALESCE(submission_page_id::text, ''),
 COALESCE(assigned_page_no, 0), sequence_no, rotation_degrees, decoded_file_asset_id::text,
+COALESCE(barcode_student_id::text, ''), COALESCE(barcode_template_id::text, ''),
+COALESCE(sheet_serial::text, ''),
 status, COALESCE(duplicate_of_page_id::text, ''), revision, page_identity, match_candidates,
 manual_override, created_at`
 
@@ -260,15 +262,38 @@ VALUES ($1,$2::uuid,$3,'pages_uploaded',$4,$4,'unchecked','[]',$5::uuid) RETURNI
 	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(sequence_no),0) FROM capture_page WHERE tenant_id=$1 AND capture_batch_id=$2::uuid AND deleted_at IS NULL`, tenantID, item.CaptureBatchID).Scan(&sequenceBase); err != nil {
 		return File{}, err
 	}
+	conflictBatchIDs := map[string]bool{}
 	for i, p := range pages {
 		barcode := s.evaluateBarcodesTx(ctx, tx, tenantID, examID, p.Barcodes)
 		assignedPageNo := p.SourceIndex
 		if barcode.AssignedPageNo > 0 {
 			assignedPageNo = barcode.AssignedPageNo
 		}
+		var duplicate sheetPageDuplicate
+		if barcode.AssignedSheetSerial != "" {
+			duplicate, err = lockIssuedSheetAndFindDuplicateTx(
+				ctx, tx, tenantID, barcode.AssignedSheetSerial, assignedPageNo,
+			)
+			if err != nil {
+				return File{}, err
+			}
+			if duplicate.PageID != "" {
+				barcode.NeedsReview = true
+			}
+		}
+		submissionPageNo := assignedPageNo
+		if duplicate.SubmissionID == submissionID {
+			if err = tx.QueryRowContext(ctx, `
+SELECT COALESCE(max(page_no),0)+1
+FROM submission_page
+WHERE tenant_id=$1 AND submission_id=$2::uuid AND deleted_at IS NULL
+`, tenantID, submissionID).Scan(&submissionPageNo); err != nil {
+				return File{}, err
+			}
+		}
 		var submissionPageID string
 		if err = tx.QueryRowContext(ctx, `INSERT INTO submission_page (tenant_id,submission_id,file_asset_id,page_no,status,quality_status,quality_override,quality_issues)
-VALUES ($1,$2::uuid,$3::uuid,$4,'uploaded','unchecked','{}','[]') RETURNING id::text`, tenantID, submissionID, p.FileAssetID, assignedPageNo).Scan(&submissionPageID); err != nil {
+VALUES ($1,$2::uuid,$3::uuid,$4,'uploaded','unchecked','{}','[]') RETURNING id::text`, tenantID, submissionID, p.FileAssetID, submissionPageNo).Scan(&submissionPageID); err != nil {
 			return File{}, err
 		}
 		barcodeStatus := "none"
@@ -277,13 +302,47 @@ VALUES ($1,$2::uuid,$3::uuid,$4,'uploaded','unchecked','{}','[]') RETURNING id::
 		} else if barcode.NeedsReview {
 			barcodeStatus = "needs_review"
 		}
-		identity, _ := json.Marshal(map[string]any{"decoder": "page-processing", "width": p.Width, "height": p.Height, "sha256": p.SHA256, "barcode_status": barcodeStatus, "barcode_observations": barcode.Evidence})
+		identityFields := map[string]any{
+			"decoder": "page-processing", "width": p.Width, "height": p.Height,
+			"sha256": p.SHA256, "barcode_status": barcodeStatus, "barcode_observations": barcode.Evidence,
+		}
+		if duplicate.PageID != "" {
+			identityFields["barcode_conflict_code"] = "sheet_page_duplicate"
+			identityFields["barcode_conflict_page_id"] = duplicate.PageID
+		}
+		identity, _ := json.Marshal(identityFields)
 		candidates, _ := json.Marshal(barcode.Candidates)
+		pageStatus := "quality_checking"
+		if duplicate.PageID != "" {
+			pageStatus = "needs_review"
+		}
 		var capturePageID string
-		err = tx.QueryRowContext(ctx, `INSERT INTO capture_page (tenant_id,capture_batch_id,capture_file_id,source_index,submission_id,submission_page_id,assigned_page_no,sequence_no,decoded_file_asset_id,status,page_identity,match_candidates)
-VALUES ($1,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7,$8,$9::uuid,'quality_checking',$10,$11) RETURNING id::text`, tenantID, item.CaptureBatchID, item.ID, p.SourceIndex, submissionID, submissionPageID, assignedPageNo, sequenceBase+i+1, p.FileAssetID, identity, candidates).Scan(&capturePageID)
+		err = tx.QueryRowContext(ctx, `INSERT INTO capture_page (
+tenant_id,capture_batch_id,capture_file_id,source_index,submission_id,submission_page_id,
+assigned_page_no,sequence_no,decoded_file_asset_id,barcode_student_id,barcode_template_id,
+sheet_serial,status,duplicate_of_page_id,page_identity,match_candidates
+)
+VALUES (
+$1,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7,$8,$9::uuid,
+NULLIF($10,'')::uuid,NULLIF($11,'')::uuid,NULLIF($12,'')::uuid,$13,
+NULLIF($14,'')::uuid,$15,$16
+)
+RETURNING id::text`, tenantID, item.CaptureBatchID, item.ID, p.SourceIndex, submissionID,
+			submissionPageID, assignedPageNo, sequenceBase+i+1, p.FileAssetID,
+			barcode.AssignedStudentID, barcode.AssignedTemplateID, barcode.AssignedSheetSerial,
+			pageStatus, duplicate.PageID, identity, candidates).Scan(&capturePageID)
 		if err != nil {
 			return File{}, err
+		}
+		if barcode.AssignedSheetSerial != "" {
+			if err = markSheetPageObservedTx(
+				ctx, tx, tenantID, barcode.AssignedSheetSerial, capturePageID, submissionID, duplicate,
+			); err != nil {
+				return File{}, err
+			}
+			if duplicate.BatchID != "" {
+				conflictBatchIDs[duplicate.BatchID] = true
+			}
 		}
 		var qualityRunID string
 		err = tx.QueryRowContext(ctx, `INSERT INTO submission_page_quality_run (
@@ -314,7 +373,104 @@ VALUES ($1,'image_quality','image-quality','image_quality_run',$2::uuid,70,$3,'i
 	if err = s.aggregateBatchTx(ctx, tx, tenantID, item.CaptureBatchID); err != nil {
 		return File{}, err
 	}
+	for conflictBatchID := range conflictBatchIDs {
+		if conflictBatchID == item.CaptureBatchID {
+			continue
+		}
+		if err = s.aggregateBatchTx(ctx, tx, tenantID, conflictBatchID); err != nil {
+			return File{}, err
+		}
+	}
 	return item, tx.Commit()
+}
+
+type sheetPageDuplicate struct {
+	PageID       string
+	SubmissionID string
+	BatchID      string
+}
+
+func lockIssuedSheetAndFindDuplicateTx(ctx context.Context, tx *sql.Tx, tenantID, sheetSerial string, pageNo int) (sheetPageDuplicate, error) {
+	var lockedSerial string
+	if err := tx.QueryRowContext(ctx, `
+SELECT id::text
+FROM answer_sheet_print_sheet
+WHERE tenant_id=$1 AND id=$2::uuid AND status IN ('issued','observed','conflict')
+FOR UPDATE
+`, tenantID, sheetSerial).Scan(&lockedSerial); err != nil {
+		return sheetPageDuplicate{}, mapNotFound(err)
+	}
+	var out sheetPageDuplicate
+	err := tx.QueryRowContext(ctx, `
+SELECT id::text,COALESCE(submission_id::text,''),capture_batch_id::text
+FROM capture_page
+WHERE tenant_id=$1 AND sheet_serial=$2::uuid AND assigned_page_no=$3
+  AND status<>'deleted' AND deleted_at IS NULL
+ORDER BY created_at,id
+LIMIT 1
+`, tenantID, sheetSerial, pageNo).Scan(&out.PageID, &out.SubmissionID, &out.BatchID)
+	if err == sql.ErrNoRows {
+		return sheetPageDuplicate{}, nil
+	}
+	if err != nil {
+		return sheetPageDuplicate{}, err
+	}
+	return out, nil
+}
+
+func markSheetPageObservedTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	tenantID, sheetSerial, capturePageID, submissionID string,
+	duplicate sheetPageDuplicate,
+) error {
+	conflict := duplicate.PageID != ""
+	if _, err := tx.ExecContext(ctx, `
+UPDATE answer_sheet_print_sheet
+SET status=CASE
+      WHEN $3::boolean THEN 'conflict'
+      WHEN status='issued' THEN 'observed'
+      ELSE status
+    END,
+    first_observed_at=COALESCE(first_observed_at,now()),
+    last_observed_at=now(),
+    updated_at=now()
+WHERE tenant_id=$1 AND id=$2::uuid
+`, tenantID, sheetSerial, conflict); err != nil {
+		return err
+	}
+	if !conflict {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE capture_page
+SET status='needs_review',
+    page_identity=page_identity || jsonb_build_object(
+      'barcode_status','needs_review',
+      'barcode_conflict_code','sheet_page_duplicate',
+      'barcode_conflict_page_id',$3::text
+    ),
+    revision=revision+1,
+    updated_at=now()
+WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL
+`, tenantID, duplicate.PageID, capturePageID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `
+UPDATE submission
+SET identity_status='conflict',
+    identity_revision=identity_revision+1,
+    identity_evidence=identity_evidence || jsonb_build_object(
+      'method','controlled_barcode',
+      'conflict_code','sheet_page_duplicate',
+      'sheet_serial',$4::text
+    ),
+    updated_at=now()
+WHERE tenant_id=$1
+  AND id IN ($2::uuid,$3::uuid)
+  AND deleted_at IS NULL
+`, tenantID, submissionID, duplicate.SubmissionID, sheetSerial)
+	return err
 }
 
 func validBarcodeObservations(items []BarcodeObservation, width, height int) bool {
@@ -537,7 +693,13 @@ func scanFile(r scanner) (File, error) {
 func scanPage(r scanner) (Page, error) {
 	var x Page
 	var identity, candidates, override []byte
-	err := r.Scan(&x.ID, &x.TenantID, &x.CaptureBatchID, &x.CaptureFileID, &x.SourceIndex, &x.SubmissionID, &x.SubmissionPageID, &x.AssignedPageNo, &x.SequenceNo, &x.RotationDegrees, &x.DecodedFileAssetID, &x.Status, &x.DuplicateOfPageID, &x.Revision, &identity, &candidates, &override, &x.CreatedAt)
+	err := r.Scan(
+		&x.ID, &x.TenantID, &x.CaptureBatchID, &x.CaptureFileID, &x.SourceIndex,
+		&x.SubmissionID, &x.SubmissionPageID, &x.AssignedPageNo, &x.SequenceNo,
+		&x.RotationDegrees, &x.DecodedFileAssetID, &x.BarcodeStudentID,
+		&x.BarcodeTemplateID, &x.SheetSerial, &x.Status, &x.DuplicateOfPageID,
+		&x.Revision, &identity, &candidates, &override, &x.CreatedAt,
+	)
 	if err != nil {
 		return Page{}, mapNotFound(err)
 	}

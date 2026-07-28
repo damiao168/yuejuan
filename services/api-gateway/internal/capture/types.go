@@ -64,6 +64,9 @@ type Page struct {
 	SequenceNo         int            `json:"sequence_no"`
 	RotationDegrees    int            `json:"rotation_degrees"`
 	DecodedFileAssetID string         `json:"decoded_file_asset_id"`
+	BarcodeStudentID   string         `json:"barcode_student_id,omitempty"`
+	BarcodeTemplateID  string         `json:"barcode_template_id,omitempty"`
+	SheetSerial        string         `json:"sheet_serial,omitempty"`
 	Status             string         `json:"status"`
 	DuplicateOfPageID  string         `json:"duplicate_of_page_id,omitempty"`
 	Revision           int            `json:"revision"`
@@ -177,7 +180,8 @@ type IssuedTemplateBarcodes struct {
 }
 
 type IssueStudentBarcodesInput struct {
-	StudentIDs []string `json:"student_ids"`
+	StudentIDs     []string `json:"student_ids"`
+	IdempotencyKey string   `json:"idempotency_key"`
 }
 
 type IssuedStudentBarcodeSet struct {
@@ -187,10 +191,12 @@ type IssuedStudentBarcodeSet struct {
 }
 
 type IssuedStudentBarcodes struct {
+	PrintBatchID        string                    `json:"print_batch_id"`
 	TemplateID          string                    `json:"template_id"`
 	TemplateContentHash string                    `json:"template_content_hash"`
 	KeyID               string                    `json:"kid"`
 	Students            []IssuedStudentBarcodeSet `json:"students"`
+	IssuedAt            time.Time                 `json:"issued_at"`
 }
 
 type FileResultInput struct {
@@ -390,7 +396,7 @@ type BatchDetail struct {
 
 type Store interface {
 	IssueTemplateBarcodes(ctx context.Context, tenantID, templateID string) (IssuedTemplateBarcodes, error)
-	IssueStudentBarcodes(ctx context.Context, tenantID, templateID string, input IssueStudentBarcodesInput) (IssuedStudentBarcodes, error)
+	IssueStudentBarcodes(ctx context.Context, tenantID, templateID, actorID string, input IssueStudentBarcodesInput) (IssuedStudentBarcodes, error)
 	CreateBatch(ctx context.Context, tenantID, examID, actorID string, input CreateBatchInput) (Batch, error)
 	ListBatches(ctx context.Context, tenantID, examID string) ([]Batch, error)
 	GetBatch(ctx context.Context, tenantID, batchID string) (Batch, error)

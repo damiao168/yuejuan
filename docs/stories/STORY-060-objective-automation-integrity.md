@@ -122,7 +122,7 @@ In Progress（2026-07-28 实现事实审计：花名册对账完成；条码、O
 当前实现不能按本 Story 全量批准：
 
 - 花名册对账、显式缺考和发布门禁已完成真实 PostgreSQL E2E。
-- 学生条码 v2 已完成签名/验证和基础候选归属，但尚未持久化 sheet serial、限制考试 roster、生成打印包或完成实体回扫。
+- 学生条码 v2 已完成考试 roster 约束、不可变 print batch/sheet/page 台账、签发幂等、未签发 serial 拒绝和跨文件重复页冲突 E2E；打印包、作废/重印入口及实体回扫仍未完成。
 - OMR 校准仍按 question 作用域，样本仍预筛高置信 `selected`，未完成计划中的 profile 级无偏校准。
 - capture file 失败重跑、失败后同 hash 重传和质量 override 业务入口均未完成。
 - `human_grade.ai_grade_id` 和假门禁删除已完成。

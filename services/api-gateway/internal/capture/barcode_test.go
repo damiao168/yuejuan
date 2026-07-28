@@ -85,11 +85,11 @@ func TestStudentClaimsRejectInvalidIdentity(t *testing.T) {
 	if _, err := keyring.Sign(noSerial); !errors.Is(err, ErrBarcodeInvalid) {
 		t.Fatalf("student claims without sheet_serial must be rejected, got %v", err)
 	}
-	longSerial := base
-	longSerial.StudentID = "44444444-4444-4444-8444-444444444444"
-	longSerial.SheetSerial = strings.Repeat("s", 65)
-	if _, err := keyring.Sign(longSerial); !errors.Is(err, ErrBarcodeInvalid) {
-		t.Fatalf("oversized sheet_serial must be rejected, got %v", err)
+	invalidSerial := base
+	invalidSerial.StudentID = "44444444-4444-4444-8444-444444444444"
+	invalidSerial.SheetSerial = "serial-not-issued-by-edugrade"
+	if _, err := keyring.Sign(invalidSerial); !errors.Is(err, ErrBarcodeInvalid) {
+		t.Fatalf("non-UUID sheet_serial must be rejected, got %v", err)
 	}
 }
 

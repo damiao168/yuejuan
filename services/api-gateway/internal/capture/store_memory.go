@@ -28,7 +28,7 @@ func (s *MemoryStore) IssueTemplateBarcodes(context.Context, string, string) (Is
 	return IssuedTemplateBarcodes{}, ErrInvalidTransition
 }
 
-func (s *MemoryStore) IssueStudentBarcodes(context.Context, string, string, IssueStudentBarcodesInput) (IssuedStudentBarcodes, error) {
+func (s *MemoryStore) IssueStudentBarcodes(context.Context, string, string, string, IssueStudentBarcodesInput) (IssuedStudentBarcodes, error) {
 	return IssuedStudentBarcodes{}, ErrInvalidTransition
 }
 

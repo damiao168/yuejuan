@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -39,46 +40,203 @@ func (s *PostgresStore) IssueTemplateBarcodes(ctx context.Context, tenantID, tem
 // distinguishable and a re-observed serial can be routed to manual review.
 // Identity in the claims is the student row UUID — school numbers or names
 // never enter the printed payload.
-func (s *PostgresStore) IssueStudentBarcodes(ctx context.Context, tenantID, templateID string, input IssueStudentBarcodesInput) (IssuedStudentBarcodes, error) {
-	if len(input.StudentIDs) == 0 || len(input.StudentIDs) > 2000 {
+func (s *PostgresStore) IssueStudentBarcodes(ctx context.Context, tenantID, templateID, actorID string, input IssueStudentBarcodesInput) (IssuedStudentBarcodes, error) {
+	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
+	if len(input.StudentIDs) == 0 || len(input.StudentIDs) > 2000 || len(idempotencyKey) == 0 || len(idempotencyKey) > 120 {
 		return IssuedStudentBarcodes{}, ErrInvalidInput
 	}
+	studentIDs := make([]string, 0, len(input.StudentIDs))
+	seen := map[string]bool{}
+	for _, rawStudentID := range input.StudentIDs {
+		parsed, err := uuid.Parse(strings.TrimSpace(rawStudentID))
+		if err != nil {
+			return IssuedStudentBarcodes{}, ErrInvalidInput
+		}
+		studentID := parsed.String()
+		if seen[studentID] {
+			return IssuedStudentBarcodes{}, ErrInvalidInput
+		}
+		seen[studentID] = true
+		studentIDs = append(studentIDs, studentID)
+	}
+	requestStudents := append([]string(nil), studentIDs...)
+	sort.Strings(requestStudents)
+	requestPayload, _ := json.Marshal(requestStudents)
+	requestSum := sha256.Sum256(requestPayload)
+	requestHash := "sha256:" + hex.EncodeToString(requestSum[:])
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return IssuedStudentBarcodes{}, err
+	}
+	defer tx.Rollback()
 	var examID, contentHash string
 	var layoutRaw []byte
-	if err := s.db.QueryRowContext(ctx, `SELECT exam_id::text,content_hash,layout FROM answer_sheet_template WHERE tenant_id=$1 AND id=$2::uuid AND status='locked' AND deleted_at IS NULL`, tenantID, templateID).Scan(&examID, &contentHash, &layoutRaw); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT exam_id::text,content_hash,layout FROM answer_sheet_template WHERE tenant_id=$1 AND id=$2::uuid AND status='locked' AND deleted_at IS NULL FOR SHARE`, tenantID, templateID).Scan(&examID, &contentHash, &layoutRaw); err != nil {
 		return IssuedStudentBarcodes{}, mapNotFound(err)
 	}
 	var layout templateLayout
 	if json.Unmarshal(layoutRaw, &layout) != nil || len(layout.Pages) == 0 {
 		return IssuedStudentBarcodes{}, ErrInvalidInput
 	}
-	out := IssuedStudentBarcodes{TemplateID: templateID, TemplateContentHash: contentHash, KeyID: s.barcodeKeyring.ActiveKeyID, Students: []IssuedStudentBarcodeSet{}}
-	seen := map[string]bool{}
-	for _, studentID := range input.StudentIDs {
-		if seen[studentID] {
-			return IssuedStudentBarcodes{}, ErrInvalidInput
+	var existingBatchID, existingRequestHash string
+	err = tx.QueryRowContext(ctx, `
+SELECT id::text, request_hash
+FROM answer_sheet_print_batch
+WHERE tenant_id=$1 AND template_id=$2::uuid AND idempotency_key=$3
+`, tenantID, templateID, idempotencyKey).Scan(&existingBatchID, &existingRequestHash)
+	if err == nil {
+		if existingRequestHash != requestHash {
+			return IssuedStudentBarcodes{}, ErrConflict
 		}
-		seen[studentID] = true
-		var exists bool
-		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM student WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL)`, tenantID, studentID).Scan(&exists); err != nil {
+		out, loadErr := loadIssuedStudentBarcodesTx(ctx, tx, tenantID, existingBatchID)
+		if loadErr != nil {
+			return IssuedStudentBarcodes{}, loadErr
+		}
+		return out, tx.Commit()
+	}
+	if err != sql.ErrNoRows {
+		return IssuedStudentBarcodes{}, err
+	}
+
+	studentPayload, _ := json.Marshal(studentIDs)
+	var rosterCount int
+	if err = tx.QueryRowContext(ctx, `
+WITH requested AS (
+  SELECT value::uuid AS student_id
+  FROM jsonb_array_elements_text($3::jsonb)
+)
+SELECT count(DISTINCT st.id)
+FROM requested r
+JOIN student st
+  ON st.tenant_id=$1 AND st.id=r.student_id
+  AND st.status='active' AND st.deleted_at IS NULL
+JOIN exam_class ec
+  ON ec.tenant_id=st.tenant_id AND ec.exam_id=$2::uuid
+  AND ec.class_id=st.class_id AND ec.deleted_at IS NULL
+`, tenantID, examID, string(studentPayload)).Scan(&rosterCount); err != nil {
+		return IssuedStudentBarcodes{}, err
+	}
+	if rosterCount != len(studentIDs) {
+		return IssuedStudentBarcodes{}, ErrInvalidInput
+	}
+
+	var printBatchID string
+	var issuedAt time.Time
+	err = tx.QueryRowContext(ctx, `
+INSERT INTO answer_sheet_print_batch (
+  tenant_id,exam_id,template_id,template_content_hash,key_id,idempotency_key,
+  request_hash,sheet_count,page_count,issued_by
+)
+VALUES ($1,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10::uuid)
+ON CONFLICT (tenant_id,template_id,idempotency_key) DO NOTHING
+RETURNING id::text,issued_at
+`, tenantID, examID, templateID, contentHash, s.barcodeKeyring.ActiveKeyID, idempotencyKey,
+		requestHash, len(studentIDs), len(layout.Pages), actorID).Scan(&printBatchID, &issuedAt)
+	if err == sql.ErrNoRows {
+		if err = tx.QueryRowContext(ctx, `
+SELECT id::text,request_hash
+FROM answer_sheet_print_batch
+WHERE tenant_id=$1 AND template_id=$2::uuid AND idempotency_key=$3
+`, tenantID, templateID, idempotencyKey).Scan(&existingBatchID, &existingRequestHash); err != nil {
 			return IssuedStudentBarcodes{}, err
 		}
-		if !exists {
-			return IssuedStudentBarcodes{}, ErrInvalidInput
+		if existingRequestHash != requestHash {
+			return IssuedStudentBarcodes{}, ErrConflict
 		}
+		out, loadErr := loadIssuedStudentBarcodesTx(ctx, tx, tenantID, existingBatchID)
+		if loadErr != nil {
+			return IssuedStudentBarcodes{}, loadErr
+		}
+		return out, tx.Commit()
+	}
+	if err != nil {
+		return IssuedStudentBarcodes{}, err
+	}
+
+	out := IssuedStudentBarcodes{
+		PrintBatchID: printBatchID, TemplateID: templateID, TemplateContentHash: contentHash,
+		KeyID: s.barcodeKeyring.ActiveKeyID, Students: []IssuedStudentBarcodeSet{}, IssuedAt: issuedAt.UTC(),
+	}
+	for ordinal, studentID := range studentIDs {
 		serial := uuid.NewString()
+		if _, err = tx.ExecContext(ctx, `
+INSERT INTO answer_sheet_print_sheet (
+  id,tenant_id,print_batch_id,exam_id,template_id,template_content_hash,student_id,ordinal
+)
+VALUES ($1::uuid,$2,$3::uuid,$4::uuid,$5::uuid,$6,$7::uuid,$8)
+`, serial, tenantID, printBatchID, examID, templateID, contentHash, studentID, ordinal+1); err != nil {
+			return IssuedStudentBarcodes{}, err
+		}
 		set := IssuedStudentBarcodeSet{StudentID: studentID, SheetSerial: serial, Pages: []IssuedPageBarcode{}}
 		for _, page := range layout.Pages {
+			nonce := uuid.NewString()
 			value, err := s.barcodeKeyring.Sign(BarcodeClaims{
 				TenantID: tenantID, ExamID: examID, TemplateID: templateID, TemplateContentHash: contentHash,
-				PageNo: page.PageNo, Nonce: uuid.NewString(), StudentID: studentID, SheetSerial: serial,
+				PageNo: page.PageNo, Nonce: nonce, StudentID: studentID, SheetSerial: serial,
 			})
 			if err != nil {
 				return IssuedStudentBarcodes{}, ErrInvalidTransition
 			}
+			if _, err = tx.ExecContext(ctx, `
+INSERT INTO answer_sheet_print_page (tenant_id,print_sheet_id,page_no,nonce,barcode_value)
+VALUES ($1,$2::uuid,$3,$4::uuid,$5)
+`, tenantID, serial, page.PageNo, nonce, value); err != nil {
+				return IssuedStudentBarcodes{}, err
+			}
 			set.Pages = append(set.Pages, IssuedPageBarcode{PageNo: page.PageNo, Value: value})
 		}
 		out.Students = append(out.Students, set)
+	}
+	return out, tx.Commit()
+}
+
+func loadIssuedStudentBarcodesTx(ctx context.Context, tx *sql.Tx, tenantID, printBatchID string) (IssuedStudentBarcodes, error) {
+	var out IssuedStudentBarcodes
+	if err := tx.QueryRowContext(ctx, `
+SELECT id::text,template_id::text,template_content_hash,key_id,issued_at
+FROM answer_sheet_print_batch
+WHERE tenant_id=$1 AND id=$2::uuid
+`, tenantID, printBatchID).Scan(
+		&out.PrintBatchID, &out.TemplateID, &out.TemplateContentHash, &out.KeyID, &out.IssuedAt,
+	); err != nil {
+		return IssuedStudentBarcodes{}, mapNotFound(err)
+	}
+	out.IssuedAt = out.IssuedAt.UTC()
+	out.Students = []IssuedStudentBarcodeSet{}
+	rows, err := tx.QueryContext(ctx, `
+SELECT s.student_id::text,s.id::text,p.page_no,p.barcode_value
+FROM answer_sheet_print_sheet s
+JOIN answer_sheet_print_page p
+  ON p.tenant_id=s.tenant_id AND p.print_sheet_id=s.id
+WHERE s.tenant_id=$1 AND s.print_batch_id=$2::uuid
+ORDER BY s.ordinal,p.page_no
+`, tenantID, printBatchID)
+	if err != nil {
+		return IssuedStudentBarcodes{}, err
+	}
+	defer rows.Close()
+	currentSerial := ""
+	for rows.Next() {
+		var studentID, serial, value string
+		var pageNo int
+		if err = rows.Scan(&studentID, &serial, &pageNo, &value); err != nil {
+			return IssuedStudentBarcodes{}, err
+		}
+		if serial != currentSerial {
+			out.Students = append(out.Students, IssuedStudentBarcodeSet{
+				StudentID: studentID, SheetSerial: serial, Pages: []IssuedPageBarcode{},
+			})
+			currentSerial = serial
+		}
+		last := len(out.Students) - 1
+		out.Students[last].Pages = append(out.Students[last].Pages, IssuedPageBarcode{PageNo: pageNo, Value: value})
+	}
+	if err = rows.Err(); err != nil {
+		return IssuedStudentBarcodes{}, err
+	}
+	if len(out.Students) == 0 {
+		return IssuedStudentBarcodes{}, ErrInvalidTransition
 	}
 	return out, nil
 }
@@ -89,6 +247,7 @@ type barcodeEvaluation struct {
 	AssignedPageNo      int
 	AssignedStudentID   string
 	AssignedSheetSerial string
+	AssignedTemplateID  string
 	NeedsReview         bool
 }
 
@@ -155,6 +314,7 @@ func (s *PostgresStore) evaluateBarcodesTx(ctx context.Context, tx *sql.Tx, tena
 		}
 		out.Candidates = append(out.Candidates, candidate)
 		out.AssignedPageNo = claims.PageNo
+		out.AssignedTemplateID = claims.TemplateID
 		if claims.boundToStudent() {
 			out.AssignedStudentID = claims.StudentID
 			out.AssignedSheetSerial = claims.SheetSerial
@@ -162,6 +322,9 @@ func (s *PostgresStore) evaluateBarcodesTx(ctx context.Context, tx *sql.Tx, tena
 	}
 	if len(unique) > 1 {
 		out.AssignedPageNo = 0
+		out.AssignedStudentID = ""
+		out.AssignedSheetSerial = ""
+		out.AssignedTemplateID = ""
 		out.NeedsReview = true
 	}
 	// Two different verified student identities on one page can only come from
@@ -169,6 +332,7 @@ func (s *PostgresStore) evaluateBarcodesTx(ctx context.Context, tx *sql.Tx, tena
 	if len(students) > 1 {
 		out.AssignedStudentID = ""
 		out.AssignedSheetSerial = ""
+		out.AssignedTemplateID = ""
 		out.NeedsReview = true
 	}
 	return out
@@ -204,9 +368,35 @@ func (s *PostgresStore) validateBarcodeOwnershipTx(ctx context.Context, tx *sql.
 		return "page_not_in_template"
 	}
 	if claims.boundToStudent() {
-		var exists bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM student WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL)`, tenantID, claims.StudentID).Scan(&exists); err != nil || !exists {
-			return "student_unknown"
+		var inRoster bool
+		if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM student st
+  JOIN exam_class ec
+    ON ec.tenant_id=st.tenant_id AND ec.class_id=st.class_id
+    AND ec.exam_id=$2::uuid AND ec.deleted_at IS NULL
+  WHERE st.tenant_id=$1 AND st.id=$3::uuid
+    AND st.status='active' AND st.deleted_at IS NULL
+)
+`, tenantID, examID, claims.StudentID).Scan(&inRoster); err != nil || !inRoster {
+			return "student_not_in_roster"
+		}
+		var issued bool
+		if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM answer_sheet_print_sheet
+  WHERE tenant_id=$1
+    AND id=$2::uuid
+    AND exam_id=$3::uuid
+    AND template_id=$4::uuid
+    AND template_content_hash=$5
+    AND student_id=$6::uuid
+    AND status IN ('issued','observed','conflict')
+)
+`, tenantID, claims.SheetSerial, examID, claims.TemplateID, claims.TemplateContentHash, claims.StudentID).Scan(&issued); err != nil || !issued {
+			return "sheet_not_issued"
 		}
 	}
 	return ""

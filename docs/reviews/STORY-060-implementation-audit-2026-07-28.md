@@ -6,7 +6,7 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 
 已形成生产价值的主要能力是：
 
-- 学生身份条码 v2 的签名、验证和基础归属候选。
+- 学生身份条码 v2 的签名、验证、考试 roster 约束、不可变签发台账和重复页冲突证据。
 - 花名册对账、显式缺考、身份未决/缺页状态和发布硬门禁。
 - `human_grade.ai_grade_id` 的服务端关联。
 - 删除没有生产者的 `score_anomaly_unconfirmed` 假门禁。
@@ -14,7 +14,7 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 
 仍未完成的核心能力是：
 
-- 学生条码跨答卷序列防重、考试 roster 约束、打印包和真实打印回扫。
+- 学生答题卡打印文件、作废/重印操作入口和真实打印回扫。
 - OMR 校准从题目级提升到模板 profile 级，并采用无偏分层样本。
 - 失败采集文件批内重跑、失败/废弃文件同 hash 重传和质量人工放行。
 - 卡纸/插页场景的完整归属 E2E。
@@ -35,7 +35,7 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 
 | 范围 | 状态 | 已有证据 | 未完成事实 |
 | --- | --- | --- | --- |
-| 1. 条码承载学生身份 | 部分完成 | `BarcodeClaims` v2 包含 `student_id`、`sheet_serial`；旧 v1 保持验证；有签名/篡改单测；有签发路由和基础归属候选 | 签发仅验证租户内学生存在，没有限制为当前考试 roster；`sheet_serial` 未作为持久化唯一事实，无法可靠发现跨文件/跨 submission 重复；没有打印包 UI/PDF；没有插页 E2E 和 30 份实体回扫报告 |
+| 1. 条码承载学生身份 | 签发与重复检测完成，完整打印闭环未完成 | migration 000054 持久化 print batch/sheet/page；签发限制 active exam roster 并支持幂等重放；未签发 serial 不受信任；capture page 保存类型化 student/template/serial；跨文件/跨 submission 重复页双方进入冲突；旧 v1 保持验证 | 尚无冲突解除后的 serial 状态重算、打印包 UI/可下载文件、作废/重印原因入口、插页后续页完整 E2E 和 30 份实体回扫报告 |
 | 2. 花名册对账与缺考 | 软件范围完成 | migration 000052/000053；管理员 roster API/UI；缺考原因和审计；缺考后不再触发 missing submission；未识别、缺页、重复答卷和缺少答卷进入发布门禁；500 人 PostgreSQL E2E | 历史已发布考试不会被追溯重开；这属于迁移/运营边界，不阻断本项 |
 | 3. OMR 校准范式修正 | 未完成 | 原有题目级校准、人工标注、双人审批/撤销和前端标注抽屉仍可用 | `CreateOMRCalibrationInput` 仍要求 `question_id`；session、scope、批准查询仍绑定 question；样本 SQL 仍要求 `decision='selected' AND confidence >= minimum`，排除了 ambiguous/blank/低置信样本；没有模板级校准场次和克隆语义 |
 | 4. 采集链路自救 | 未完成 | 页面配准任务已有 retry；Worker Runtime 有通用重试/重排 | `QueueBatch` 只查询 `status='uploaded'`；失败 capture file 不能通过批次重新排队；同 batch 同 sha256 无条件标 duplicate；没有修改 `submission_page.quality_override` 的业务 API/UI，现有字段仍只是空对象/读取能力；旧 submission 直传管线仍存在 |
@@ -46,7 +46,7 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 | 验收项 | 状态 | 结论 |
 | --- | --- | --- |
 | 1. 500 人 roster、抽走 3 份、缺考后发布 | 通过 | `TestStory060FiveHundredStudentRosterScaleE2EWithPostgresTestDatabase` 覆盖 497 份答卷、3 人缺考和发布门禁；HTTP 对账已在本地真实 PostgreSQL 执行 |
-| 2. 扫描仪卡纸/中间多一页且后续不串位 | 未通过 | 没有对应 E2E；当前每个 capture file 先创建一个 submission，条码候选尚未形成跨页、跨文件的 sheet serial 持久化约束 |
+| 2. 扫描仪卡纸/中间多一页且后续不串位 | 部分通过 | `TestStory060StudentSheetIdentityE2EWithPostgresTestDatabase` 已证明同一 sheet serial/page 跨两个 capture file 和两个 submission 时双方进入冲突且不静默覆盖；尚未完成“中间插页后继续扫描”的多页联合 E2E |
 | 3. 30 份试印回扫及旧条码兼容 | 部分通过 | 旧 v1 与新 v2 的软件兼容单测通过；没有打印包和实体扫描报告，因此不能批准物理链路 |
 | 4. 20 题模板 ≤200 次标注完成全模板校准 | 未通过 | 当前仍是每题独立校准，且存在高置信 selected 样本偏置 |
 | 5. 失败文件重跑、同文件重传、质量 override | 未通过 | 三条产品路径均未落地；页面配准 retry 不能替代 capture file 重跑和质量放行 |
@@ -55,15 +55,16 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 
 ## 发现的产品与安全缺口
 
-### 条码签发范围不足
+### 条码签发范围与序列台账已收口
 
-当前学生条码签发检查的是“学生属于同租户”，不是“学生属于该模板考试关联的应考班级”。这会允许管理员为同租户但不参加本场考试的学生签发有效条码。
+2026-07-28 的 060A 增量已把签发范围限制为模板所属考试的 active roster，并新增不可变 print batch/sheet/page 台账。相同幂等键只会返回原批次、原 serial 和原条码；相同幂等键携带不同学生集合会返回冲突。
 
-收口要求：
+已完成：
 
 - 签发只接受当前考试 roster 中的 active student。
-- 签发结果保存不可变的 sheet serial 事实，而不是只返回给调用方。
-- 同一 sheet serial 再次出现在不同 capture file/submission 时必须进入冲突队列，不能覆盖归属。
+- 签发结果保存不可变的 sheet serial 和每页条码事实，而不是只返回给调用方。
+- 未登记的 v2 serial 即使 HMAC 有效，也按 `sheet_not_issued` 拒绝归属。
+- 同一 sheet serial/page 再次出现在不同 capture file/submission 时，原页和新页都进入冲突队列。
 
 ### 条码不是打印能力
 
@@ -74,7 +75,7 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 - 打印批次、作废/重印原因和审计。
 - 真实打印机与扫描仪回扫的解码率和配准偏差。
 
-在实体报告通过前，产品只能称为“学生条码签发基础”，不能称为“学生答题卡打印闭环”。
+在实体报告通过前，产品可以称为“学生答题卡身份台账与重复页检测”，不能称为“学生答题卡打印闭环”。
 
 ### OMR 评测存在选择偏置
 
@@ -96,10 +97,11 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 
 ### STORY-060A：学生条码归属闭环
 
-- roster 限制和批量签发幂等。
-- 持久化打印批次、sheet serial 和作废/重印。
-- capture page/submission 绑定 serial 并检测跨文件冲突。
-- 插页/缺页/重复页 E2E。
+- [x] roster 限制和批量签发幂等。
+- [x] 持久化打印批次、sheet serial 和每页条码。
+- [x] capture page 绑定 serial 并检测跨文件/跨 submission 重复页冲突。
+- [ ] 作废/重印原因、操作者和审计入口。
+- [ ] 插页/缺页/重复页的多页联合 E2E。
 - 打印包 UI 与可下载文件。
 - 30 份实体回扫作为外部验收证据。
 

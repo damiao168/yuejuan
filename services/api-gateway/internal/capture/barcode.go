@@ -138,7 +138,7 @@ func validateBarcodeClaims(claims BarcodeClaims) error {
 		if _, err := uuid.Parse(claims.StudentID); err != nil {
 			return fmt.Errorf("%w: claims_invalid", ErrBarcodeInvalid)
 		}
-		if claims.SheetSerial == "" || len(claims.SheetSerial) > 64 {
+		if _, err := uuid.Parse(claims.SheetSerial); err != nil {
 			return fmt.Errorf("%w: claims_invalid", ErrBarcodeInvalid)
 		}
 	}

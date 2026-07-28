@@ -15,6 +15,7 @@ import (
 
 	"edugrade-enterprise/services/api-gateway/internal/appeal"
 	"edugrade-enterprise/services/api-gateway/internal/auth"
+	"edugrade-enterprise/services/api-gateway/internal/capture"
 	"edugrade-enterprise/services/api-gateway/internal/config"
 	"edugrade-enterprise/services/api-gateway/internal/evidence"
 	"edugrade-enterprise/services/api-gateway/internal/exam"
@@ -210,6 +211,10 @@ func e2ePostgresRouter(db *sql.DB) http.Handler {
 	cfg := config.Config{
 		Service: config.ServiceConfig{Name: "api-gateway-postgres-e2e-test", Environment: "test", ReadinessTimeout: time.Millisecond},
 		Auth:    config.AuthConfig{SessionTTL: time.Hour},
+		Barcode: config.BarcodeConfig{
+			ActiveKeyID: e2eBarcodeKeyring().ActiveKeyID,
+			HMACKeys:    e2eBarcodeKeyring().Keys,
+		},
 		Files: config.FileConfig{
 			Bucket:            "edugrade-story041-e2e",
 			MaxUploadBytes:    2 * 1024 * 1024,
@@ -238,7 +243,15 @@ func e2ePostgresRouter(db *sql.DB) http.Handler {
 		review.NewPostgresStore(db),
 		score.NewPostgresStore(db),
 		appeal.NewPostgresStore(db),
+		capture.NewPostgresStoreWithBarcodeKeyring(db, e2eBarcodeKeyring()),
 	)
+}
+
+func e2eBarcodeKeyring() capture.BarcodeKeyring {
+	return capture.BarcodeKeyring{
+		ActiveKeyID: "story060-e2e",
+		Keys:        map[string][]byte{"story060-e2e": []byte(strings.Repeat("s", 32))},
+	}
 }
 
 func e2eOpenPostgresTestDB(t *testing.T, dsn string) *sql.DB {

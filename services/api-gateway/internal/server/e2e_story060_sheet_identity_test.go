@@ -1,0 +1,235 @@
+package server
+
+import (
+	"context"
+	"net/http"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"edugrade-enterprise/services/api-gateway/internal/capture"
+)
+
+func TestStory060StudentSheetIdentityE2EWithPostgresTestDatabase(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("EDUGRADE_E2E_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("EDUGRADE_E2E_DATABASE_URL is not set; skipping STORY-060 sheet identity PostgreSQL acceptance workflow")
+	}
+	db := e2eOpenPostgresTestDB(t, dsn)
+	e2eApplyPostgresMigrations(t, db)
+	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin"})
+	router := e2ePostgresRouter(db)
+	adminToken := e2eLoginWithTenant(t, router, "demo", "tenant_admin", "ChangeMe123!")
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "")
+	fixture := e2eCreateStory056AcceptanceFixture(t, db, router, adminToken, suffix)
+
+	var rosterStudentID, gradeID string
+	if err := db.QueryRow(`
+SELECT st.id::text,cls.grade_id::text
+FROM exam_class ec
+JOIN school_class cls
+  ON cls.tenant_id=ec.tenant_id AND cls.id=ec.class_id
+JOIN student st
+  ON st.tenant_id=ec.tenant_id AND st.class_id=ec.class_id
+WHERE ec.tenant_id=$1::uuid AND ec.exam_id=$2::uuid
+  AND ec.deleted_at IS NULL AND st.status='active' AND st.deleted_at IS NULL
+ORDER BY st.created_at
+LIMIT 1
+`, fixture.TenantID, fixture.ExamID).Scan(&rosterStudentID, &gradeID); err != nil {
+		t.Fatalf("lookup STORY-060 roster student: %v", err)
+	}
+
+	outsideClass := e2ePostJSON(t, router, http.MethodPost, "/api/v1/classes", adminToken, story056JSON(t, map[string]any{
+		"school_id": fixture.SchoolID,
+		"grade_id":  gradeID,
+		"name":      "STORY-060 非应考班级",
+		"code":      "story060-outside-" + suffix,
+	}), http.StatusCreated)["class"].(map[string]any)
+	outsideStudent := e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, story056JSON(t, map[string]any{
+		"school_id":  fixture.SchoolID,
+		"class_id":   e2eString(t, outsideClass, "id"),
+		"student_no": "S060-OUTSIDE-" + suffix,
+		"name":       "非本场应考学生",
+	}), http.StatusCreated)["student"].(map[string]any)
+	outsideStudentID := e2eString(t, outsideStudent, "id")
+
+	e2eExpectStatus(
+		t,
+		router,
+		http.MethodPost,
+		"/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/student-barcodes",
+		adminToken,
+		story056JSON(t, map[string]any{
+			"student_ids":     []string{rosterStudentID, outsideStudentID},
+			"idempotency_key": "story060-reject-outside-" + suffix,
+		}),
+		http.StatusBadRequest,
+	)
+
+	issueBody := story056JSON(t, map[string]any{
+		"student_ids":     []string{rosterStudentID},
+		"idempotency_key": "story060-issue-" + suffix,
+	})
+	issued := e2ePostJSON(
+		t,
+		router,
+		http.MethodPost,
+		"/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/student-barcodes",
+		adminToken,
+		issueBody,
+		http.StatusOK,
+	)["barcodes"].(map[string]any)
+	replayed := e2ePostJSON(
+		t,
+		router,
+		http.MethodPost,
+		"/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/student-barcodes",
+		adminToken,
+		issueBody,
+		http.StatusOK,
+	)["barcodes"].(map[string]any)
+	printBatchID := e2eString(t, issued, "print_batch_id")
+	if e2eString(t, replayed, "print_batch_id") != printBatchID {
+		t.Fatalf("idempotent issuance created a second print batch: first=%#v replay=%#v", issued, replayed)
+	}
+	issuedStudent := issued["students"].([]any)[0].(map[string]any)
+	replayedStudent := replayed["students"].([]any)[0].(map[string]any)
+	sheetSerial := e2eString(t, issuedStudent, "sheet_serial")
+	if e2eString(t, replayedStudent, "sheet_serial") != sheetSerial {
+		t.Fatalf("idempotent issuance changed the physical sheet serial: first=%#v replay=%#v", issuedStudent, replayedStudent)
+	}
+	barcodeValue := e2eString(t, issuedStudent["pages"].([]any)[0].(map[string]any), "value")
+	if e2eString(t, replayedStudent["pages"].([]any)[0].(map[string]any), "value") != barcodeValue {
+		t.Fatal("idempotent issuance must return the exact persisted barcode value")
+	}
+	e2eExpectStatus(
+		t,
+		router,
+		http.MethodPost,
+		"/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/student-barcodes",
+		adminToken,
+		story056JSON(t, map[string]any{
+			"student_ids":     []string{outsideStudentID},
+			"idempotency_key": "story060-issue-" + suffix,
+		}),
+		http.StatusConflict,
+	)
+	var printBatchCount, printSheetCount, printPageCount int
+	if err := db.QueryRow(`
+SELECT
+  (SELECT count(*) FROM answer_sheet_print_batch WHERE tenant_id=$1::uuid AND id=$2::uuid),
+  (SELECT count(*) FROM answer_sheet_print_sheet WHERE tenant_id=$1::uuid AND print_batch_id=$2::uuid),
+  (SELECT count(*) FROM answer_sheet_print_page p
+     JOIN answer_sheet_print_sheet s ON s.tenant_id=p.tenant_id AND s.id=p.print_sheet_id
+   WHERE s.tenant_id=$1::uuid AND s.print_batch_id=$2::uuid)
+`, fixture.TenantID, printBatchID).Scan(&printBatchCount, &printSheetCount, &printPageCount); err != nil {
+		t.Fatalf("query persisted print ledger: %v", err)
+	}
+	if printBatchCount != 1 || printSheetCount != 1 || printPageCount != 1 {
+		t.Fatalf("unexpected print ledger counts: batch=%d sheet=%d page=%d", printBatchCount, printSheetCount, printPageCount)
+	}
+
+	firstAssetID := e2eUploadSyntheticPDF(
+		t, router, adminToken, "story060-sheet-first-"+suffix+".pdf",
+		"%PDF-1.4\n% STORY-060 first physical page "+suffix+"\n",
+	)
+	secondAssetID := e2eUploadSyntheticPDF(
+		t, router, adminToken, "story060-sheet-duplicate-"+suffix+".pdf",
+		"%PDF-1.4\n% STORY-060 duplicate physical page "+suffix+"\n",
+	)
+	batch := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+fixture.ExamID+"/capture-batches", adminToken, story056JSON(t, map[string]any{
+		"name":            "STORY-060 答题卡序列冲突验收",
+		"source_type":     "web_upload",
+		"idempotency_key": "story060-capture-" + suffix,
+	}), http.StatusCreated)["batch"].(map[string]any)
+	batchID := e2eString(t, batch, "id")
+	firstFile := e2ePostJSON(t, router, http.MethodPost, "/api/v1/capture-batches/"+batchID+"/files", adminToken, story056JSON(t, map[string]any{
+		"file_asset_id":   firstAssetID,
+		"idempotency_key": "story060-file-first-" + suffix,
+	}), http.StatusCreated)["file"].(map[string]any)
+	secondFile := e2ePostJSON(t, router, http.MethodPost, "/api/v1/capture-batches/"+batchID+"/files", adminToken, story056JSON(t, map[string]any{
+		"file_asset_id":   secondAssetID,
+		"idempotency_key": "story060-file-duplicate-" + suffix,
+	}), http.StatusCreated)["file"].(map[string]any)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/capture-batches/"+batchID+"/process", adminToken, `{}`, http.StatusOK)
+
+	store := capture.NewPostgresStoreWithBarcodeKeyring(db, e2eBarcodeKeyring())
+	applyPage := func(label string, file map[string]any, assetID string) {
+		t.Helper()
+		var hash string
+		if err := db.QueryRow(`
+SELECT hash_sha256
+FROM file_asset
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL
+`, fixture.TenantID, assetID).Scan(&hash); err != nil {
+			t.Fatalf("lookup capture asset hash: %v", err)
+		}
+		_, err := store.ApplyFileResult(context.Background(), fixture.TenantID, e2eString(t, file, "id"), []capture.DecodedPageInput{{
+			SourceIndex: 1,
+			FileAssetID: assetID,
+			SHA256:      hash,
+			Width:       1000,
+			Height:      1400,
+			Barcodes: []capture.BarcodeObservation{{
+				Format: "QR_CODE",
+				Text:   barcodeValue,
+				Polygon: []map[string]int{
+					{"x": 10, "y": 10},
+					{"x": 110, "y": 10},
+					{"x": 110, "y": 110},
+					{"x": 10, "y": 110},
+				},
+			}},
+		}})
+		if err != nil {
+			t.Fatalf("apply %s captured student sheet page: %v", label, err)
+		}
+	}
+	applyPage("first", firstFile, firstAssetID)
+	applyPage("duplicate", secondFile, secondAssetID)
+
+	pages := e2eGetJSON(t, router, "/api/v1/capture-batches/"+batchID+"/pages", adminToken, http.StatusOK)["pages"].([]any)
+	if len(pages) != 2 {
+		t.Fatalf("expected both repeated physical pages to remain visible for review: %#v", pages)
+	}
+	firstPage := pages[0].(map[string]any)
+	secondPage := pages[1].(map[string]any)
+	firstPageID := e2eString(t, firstPage, "id")
+	if firstPage["status"] != "needs_review" || secondPage["status"] != "needs_review" {
+		t.Fatalf("both sides of a sheet serial conflict must enter review: %#v", pages)
+	}
+	if e2eString(t, firstPage, "sheet_serial") != sheetSerial ||
+		e2eString(t, secondPage, "sheet_serial") != sheetSerial ||
+		e2eString(t, secondPage, "duplicate_of_page_id") != firstPageID {
+		t.Fatalf("typed serial ownership or duplicate link missing: %#v", pages)
+	}
+	for _, rawPage := range pages {
+		page := rawPage.(map[string]any)
+		identity := page["page_identity"].(map[string]any)
+		if identity["barcode_status"] != "needs_review" || identity["barcode_conflict_code"] != "sheet_page_duplicate" {
+			t.Fatalf("page conflict evidence is incomplete: %#v", page)
+		}
+	}
+	var sheetStatus string
+	var conflictingSubmissions int
+	if err := db.QueryRow(`
+SELECT status
+FROM answer_sheet_print_sheet
+WHERE tenant_id=$1::uuid AND id=$2::uuid
+`, fixture.TenantID, sheetSerial).Scan(&sheetStatus); err != nil {
+		t.Fatalf("query conflicted print sheet: %v", err)
+	}
+	if err := db.QueryRow(`
+SELECT count(DISTINCT s.id)
+FROM capture_page p
+JOIN submission s ON s.tenant_id=p.tenant_id AND s.id=p.submission_id
+WHERE p.tenant_id=$1::uuid AND p.sheet_serial=$2::uuid
+  AND p.deleted_at IS NULL AND s.identity_status='conflict'
+`, fixture.TenantID, sheetSerial).Scan(&conflictingSubmissions); err != nil {
+		t.Fatalf("query conflicting submissions: %v", err)
+	}
+	if sheetStatus != "conflict" || conflictingSubmissions != 2 {
+		t.Fatalf("duplicate scan must persist a sheet and submission conflict: sheet=%s submissions=%d", sheetStatus, conflictingSubmissions)
+	}
+}

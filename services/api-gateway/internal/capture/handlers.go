@@ -69,7 +69,7 @@ func (h *Handler) IssueStudentBarcodes(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &input) {
 		return
 	}
-	out, err := h.store.IssueStudentBarcodes(r.Context(), user.TenantID, r.PathValue("id"), input)
+	out, err := h.store.IssueStudentBarcodes(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
 	if err != nil {
 		writeError(w, r, err)
 		return
