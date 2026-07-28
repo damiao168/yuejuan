@@ -154,7 +154,7 @@ Set-Location infra\docker-compose
 Copy-Item .env.example .env
 ```
 
-在 `.env` 中替换数据库、Redis、MinIO、Grafana 密码，以及长度不少于 32 个字符的 `EDUGRADE_AI_SERVICE_TOKEN`。不要把真实密钥写入仓库。
+在 `.env` 中替换数据库、Redis、MinIO、Grafana 密码、`EDUGRADE_QDRANT_API_KEY`，以及长度不少于 32 个字符的 `EDUGRADE_AI_SERVICE_TOKEN`。不要把真实密钥写入仓库。
 
 如果使用 Lab 本地模型，启动模型后同步 API key：
 
@@ -166,6 +166,8 @@ docker compose --env-file .env -f docker-compose.yml up -d --build
 ```
 
 `grading-agent` 只监听 Compose 内网 `8100`，不映射宿主机端口，也不经过 Nginx 暴露。它通过 `host.docker.internal:8087` 访问宿主机上的 llama.cpp。
+
+OCR、图像质量、页面处理和可观测性服务使用 profile 按需启动；对应的安全启动方式见 [`infra/docker-compose/README.md`](infra/docker-compose/README.md)。
 
 常用地址：
 

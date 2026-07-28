@@ -1,6 +1,7 @@
 .git
 .gotmp
 .playwright-cli
+.claude
 
 # Never send local credentials or private keys to BuildKit. Runtime
 # configuration is injected by Compose and does not belong in image contexts.
@@ -27,7 +28,9 @@ services/api-gateway/bin
 tmp
 output
 lab
+infra/docker-compose/backups
 
 *.log
+*.dump
 *.test
 *.exe

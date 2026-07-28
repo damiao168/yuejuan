@@ -1,5 +1,11 @@
 name: edugrade-enterprise
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${EDUGRADE_CONTAINER_LOG_MAX_SIZE:-10m}
+    max-file: ${EDUGRADE_CONTAINER_LOG_MAX_FILES:-5}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -21,6 +27,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    logging: *default-logging
     restart: unless-stopped
 
   redis:
@@ -43,6 +50,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    logging: *default-logging
     restart: unless-stopped
 
   minio:
@@ -63,6 +71,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 18
+    logging: *default-logging
     restart: unless-stopped
 
   qdrant:
@@ -81,6 +90,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 18
+    logging: *default-logging
     restart: unless-stopped
 
   db-migrate:
@@ -160,7 +170,7 @@ services:
       context: ../..
       dockerfile: services/api-gateway/Dockerfile
       args:
-        GO_BUILD_IMAGE: ${EDUGRADE_GO_BUILD_IMAGE:-golang:1.26-alpine}
+        GO_BUILD_IMAGE: ${EDUGRADE_GO_BUILD_IMAGE:-golang:1.26.5-alpine}
         API_RUNTIME_IMAGE: ${EDUGRADE_API_RUNTIME_IMAGE:-alpine:3.22}
     image: edugrade/api-gateway:${EDUGRADE_IMAGE_TAG:-local}
     container_name: edugrade-api-gateway
@@ -234,6 +244,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 18
+    logging: *default-logging
     restart: unless-stopped
 
   web-admin:
@@ -254,6 +265,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    logging: *default-logging
     restart: unless-stopped
 
   grading-agent:
@@ -261,7 +273,7 @@ services:
       context: ../..
       dockerfile: ai-services/Dockerfile
       args:
-        AI_PYTHON_IMAGE: ${EDUGRADE_AI_PYTHON_IMAGE:-python:3.12-alpine}
+        AI_PYTHON_IMAGE: ${EDUGRADE_AI_PYTHON_IMAGE:-python:3.12.13-alpine3.24}
     image: edugrade/grading-agent:${EDUGRADE_IMAGE_TAG:-local}
     container_name: edugrade-grading-agent
     environment:
@@ -286,6 +298,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    logging: *default-logging
     restart: unless-stopped
 
   ocr-worker:
@@ -294,7 +307,7 @@ services:
       dockerfile: services/ocr-worker/Dockerfile
       args:
         INSTALL_PADDLEOCR: ${EDUGRADE_OCR_INSTALL_PADDLEOCR:-true}
-        OCR_PYTHON_IMAGE: ${EDUGRADE_OCR_PYTHON_IMAGE:-python:3.11-slim}
+        OCR_PYTHON_IMAGE: ${EDUGRADE_OCR_PYTHON_IMAGE:-python:3.11.15-slim-trixie}
         PIP_INDEX_URL: ${EDUGRADE_PYPI_INDEX_URL:-https://pypi.org/simple}
         DEBIAN_MIRROR: ${EDUGRADE_DEBIAN_MIRROR:-http://deb.debian.org/debian}
         DEBIAN_SECURITY_MIRROR: ${EDUGRADE_DEBIAN_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
@@ -324,6 +337,7 @@ services:
     depends_on:
       api-gateway:
         condition: service_healthy
+    logging: *default-logging
     restart: unless-stopped
 
   image-quality-worker:
@@ -331,7 +345,7 @@ services:
       context: ../..
       dockerfile: services/image-quality-worker/Dockerfile
       args:
-        QUALITY_PYTHON_IMAGE: ${EDUGRADE_QUALITY_PYTHON_IMAGE:-python:3.11-slim}
+        QUALITY_PYTHON_IMAGE: ${EDUGRADE_QUALITY_PYTHON_IMAGE:-python:3.11.15-slim-trixie}
     image: edugrade/image-quality-worker:${EDUGRADE_IMAGE_TAG:-local}
     container_name: edugrade-image-quality-worker
     profiles: ["quality"]
@@ -340,7 +354,7 @@ services:
       EDUGRADE_IMAGE_QUALITY_TENANT_CODE: ${EDUGRADE_IMAGE_QUALITY_TENANT_CODE}
       EDUGRADE_IMAGE_QUALITY_USERNAME: ${EDUGRADE_IMAGE_QUALITY_USERNAME}
       EDUGRADE_IMAGE_QUALITY_PASSWORD: ${EDUGRADE_IMAGE_QUALITY_PASSWORD}
-      EDUGRADE_IMAGE_QUALITY_BATCH_SIZE: ${EDUGRADE_IMAGE_QUALITY_BATCH_SIZE}
+      EDUGRADE_IMAGE_QUALITY_BATCH_SIZE: ${EDUGRADE_IMAGE_QUALITY_BATCH_SIZE:-1}
       EDUGRADE_IMAGE_QUALITY_LEASE_SECONDS: ${EDUGRADE_IMAGE_QUALITY_LEASE_SECONDS}
       EDUGRADE_IMAGE_QUALITY_POLL_INTERVAL: ${EDUGRADE_IMAGE_QUALITY_POLL_INTERVAL}
       EDUGRADE_IMAGE_QUALITY_WORKER_ID: ${EDUGRADE_IMAGE_QUALITY_WORKER_ID}
@@ -348,6 +362,7 @@ services:
     depends_on:
       api-gateway:
         condition: service_healthy
+    logging: *default-logging
     restart: unless-stopped
 
   page-processing-worker:
@@ -355,7 +370,7 @@ services:
       context: ../..
       dockerfile: services/page-processing-worker/Dockerfile
       args:
-        PAGE_PROCESSING_PYTHON_IMAGE: ${EDUGRADE_PAGE_PROCESSING_PYTHON_IMAGE:-python:3.11-slim}
+        PAGE_PROCESSING_PYTHON_IMAGE: ${EDUGRADE_PAGE_PROCESSING_PYTHON_IMAGE:-python:3.11.15-slim-trixie}
     image: edugrade/page-processing-worker:${EDUGRADE_IMAGE_TAG:-local}
     container_name: edugrade-page-processing-worker
     profiles: ["processing"]
@@ -364,7 +379,7 @@ services:
       EDUGRADE_PAGE_PROCESSING_TENANT_CODE: ${EDUGRADE_PAGE_PROCESSING_TENANT_CODE}
       EDUGRADE_PAGE_PROCESSING_USERNAME: ${EDUGRADE_PAGE_PROCESSING_USERNAME}
       EDUGRADE_PAGE_PROCESSING_PASSWORD: ${EDUGRADE_PAGE_PROCESSING_PASSWORD}
-      EDUGRADE_PAGE_PROCESSING_BATCH_SIZE: ${EDUGRADE_PAGE_PROCESSING_BATCH_SIZE:-2}
+      EDUGRADE_PAGE_PROCESSING_BATCH_SIZE: ${EDUGRADE_PAGE_PROCESSING_BATCH_SIZE:-1}
       EDUGRADE_PAGE_PROCESSING_LEASE_SECONDS: ${EDUGRADE_PAGE_PROCESSING_LEASE_SECONDS:-600}
       EDUGRADE_PAGE_PROCESSING_POLL_INTERVAL: ${EDUGRADE_PAGE_PROCESSING_POLL_INTERVAL:-4}
       EDUGRADE_PAGE_PROCESSING_MAX_PAGES: ${EDUGRADE_PAGE_PROCESSING_MAX_PAGES:-500}
@@ -377,6 +392,7 @@ services:
     depends_on:
       api-gateway:
         condition: service_healthy
+    logging: *default-logging
     restart: unless-stopped
 
   nginx:
@@ -396,6 +412,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    logging: *default-logging
     restart: unless-stopped
 
   prometheus:
@@ -415,6 +432,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    logging: *default-logging
     restart: unless-stopped
 
   grafana:
@@ -437,6 +455,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 18
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:

@@ -23,7 +23,7 @@ Set-Location infra\docker-compose
 Copy-Item .env.example .env
 ```
 
-至少替换：PostgreSQL、Redis、MinIO、Grafana 密码，`EDUGRADE_QDRANT_API_KEY`，以及长度不少于 32 字符的 `EDUGRADE_AI_SERVICE_TOKEN`。令牌只放在未提交的 `.env`，API 网关和 `grading-agent` 使用同一值。
+至少替换：PostgreSQL、Redis、MinIO、Grafana 密码，`EDUGRADE_QDRANT_API_KEY`，以及长度不少于 32 字符的 `EDUGRADE_AI_SERVICE_TOKEN`。同时通过下文的同步脚本写入本地模型 `EDUGRADE_GRADING_MODEL_API_KEY`。令牌只放在未提交的 `.env`，API 网关和 `grading-agent` 使用同一服务令牌。
 
 ### 从既有部署升级
 
@@ -32,7 +32,7 @@ Copy-Item .env.example .env
 - `EDUGRADE_QDRANT_API_KEY`：**必填**。Qdrant 此前无鉴权，现在容器会读取该值；网关侧用同一个值发送 `api-key` 头，两端必须一致。
 - `EDUGRADE_REDIS_PASSWORD`：不能再留空。Redis 过去在空密码时会静默降级为无鉴权启动，现在会直接拒绝启动。
 
-以下新增项都有默认值，不填也能启动：`EDUGRADE_INTERNAL_BIND_HOST`（默认 `127.0.0.1`，数据面端口只监听回环，仅 nginx 对外）、各 `EDUGRADE_*_MEM_LIMIT`、`EDUGRADE_PAGE_PROCESSING_HEARTBEAT_*`。若需要从其他机器直连数据库或 MinIO 控制台，显式设置 `EDUGRADE_INTERNAL_BIND_HOST=0.0.0.0`（生产环境 preflight 会拒绝该值）。
+以下新增项都有默认值，不填也能启动：`EDUGRADE_INTERNAL_BIND_HOST`（默认 `127.0.0.1`，数据面端口只监听回环，仅 nginx 对外）、`EDUGRADE_CONTAINER_LOG_MAX_*`、各 `EDUGRADE_*_MEM_LIMIT`、`EDUGRADE_PAGE_PROCESSING_HEARTBEAT_*`。若需要从其他机器直连数据库或 MinIO 控制台，显式设置 `EDUGRADE_INTERNAL_BIND_HOST=0.0.0.0`（生产环境 preflight 会拒绝该值）。
 
 模型运行参数：
 
@@ -47,6 +47,15 @@ EDUGRADE_AI_PROMPT_VERSION=subjective-local-structured-v2
 ```powershell
 .\scripts\preflight.ps1
 .\scripts\init.ps1
+```
+
+按需启用可选服务（账号密码必须先写入 `.env`）：
+
+```powershell
+.\scripts\init.ps1 -SkipBuild -EnableOcr
+.\scripts\init.ps1 -SkipBuild -EnableQuality
+.\scripts\init.ps1 -SkipBuild -EnableProcessing
+.\scripts\init.ps1 -SkipBuild -EnableObservability
 ```
 
 等价手工命令：
@@ -84,27 +93,22 @@ docker compose --env-file .env -f docker-compose.yml logs -f api-gateway grading
 停止服务不会删除数据：
 
 ```powershell
-  docker compose --env-file .env -f docker-compose.yml down
-  ```
+docker compose --env-file .env -f docker-compose.yml down
+```
 
-  ## Local Lab model integration
+## 本地 Lab 模型集成
 
-  The integrated grading-agent container calls the Lab-pinned llama.cpp runtime
-  on the host at `host.docker.internal:8087`. The Lab startup script generates an
-  API key for that runtime, so synchronize it into the private Compose `.env`
-  before running preflight:
+`grading-agent` 容器通过 `host.docker.internal:8087` 调用 Lab 固定的 llama.cpp 运行时。Lab 启动脚本会生成运行时 API key，因此在 preflight 前必须把它同步到私有 Compose `.env`：
 
-  ```powershell
-  powershell -ExecutionPolicy Bypass -File ..\..\lab\scripts\prepare-local-runtime.ps1
-  powershell -ExecutionPolicy Bypass -File ..\..\lab\scripts\start-local-server.ps1
-  .\scripts\sync-local-grading-model-key.ps1
-  .\scripts\preflight.ps1
-  .\scripts\init.ps1
-  ```
+```powershell
+powershell -ExecutionPolicy Bypass -File ..\..\lab\scripts\prepare-local-runtime.ps1
+powershell -ExecutionPolicy Bypass -File ..\..\lab\scripts\start-local-server.ps1
+.\scripts\sync-local-grading-model-key.ps1
+.\scripts\preflight.ps1
+.\scripts\init.ps1
+```
 
-  The key is written only to the ignored `.env` file. Do not commit it or place it
-  in frontend configuration. `grading-agent` remains internal and only returns
-  teacher-reviewed suggestions; it cannot publish a final grade.
+密钥只写入已忽略的 `.env`，不得提交或放进前端配置。`grading-agent` 保持内网服务，只返回待教师复核的建议，不能发布最终成绩。
 
 `down -v` 会永久删除当前 Compose 项目的数据库和对象存储卷，只能在确认目标项目后用于一次性环境。日常升级不得执行。
 
@@ -122,7 +126,8 @@ docker compose --env-file .env -f docker-compose.yml logs -f api-gateway grading
 powershell -ExecutionPolicy Bypass -File lab\scripts\start-local-server.ps1 -Candidate qwen3_4b
 ```
 
-日志位于忽略目录 `lab/.runtime/logs`。停止模型：
+日志写入忽略文件 `lab/.runtime/llama-server.stdout.log` 和
+`lab/.runtime/llama-server.stderr.log`。停止模型：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File lab\scripts\stop-local-server.ps1

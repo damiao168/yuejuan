@@ -4,7 +4,8 @@ param(
   [switch]$SkipPublic,
   [string]$TenantCode = $env:EDUGRADE_SMOKE_TENANT_CODE,
   [string]$Username = $env:EDUGRADE_SMOKE_USERNAME,
-  [string]$Password = $env:EDUGRADE_SMOKE_PASSWORD
+  [string]$Password = $env:EDUGRADE_SMOKE_PASSWORD,
+  [string]$SessionCookieName = $(if ([string]::IsNullOrWhiteSpace($env:EDUGRADE_SESSION_COOKIE_NAME)) { "edugrade_session" } else { $env:EDUGRADE_SESSION_COOKIE_NAME })
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,7 +35,7 @@ if ($credentialsProvided) {
   $body = @{ tenant_code = $TenantCode; username = $Username; password = $Password } | ConvertTo-Json
   $login = Invoke-WebRequest -UseBasicParsing -WebSession $session -Uri "$($ApiUrl.TrimEnd('/'))/api/v1/auth/login" -Method Post -ContentType "application/json" -Body $body -TimeoutSec 15
   if ($login.StatusCode -ne 200) { throw "Authenticated smoke login failed." }
-  $cookie = $session.Cookies.GetCookies($ApiUrl) | Where-Object { $_.Name -eq "edugrade_session" }
+  $cookie = $session.Cookies.GetCookies($ApiUrl) | Where-Object { $_.Name -eq $SessionCookieName }
   if (-not $cookie -or -not $cookie.HttpOnly) { throw "Login did not return the expected HttpOnly session cookie." }
   Assert-HttpOk "Authenticated /auth/me" "$($ApiUrl.TrimEnd('/'))/api/v1/auth/me" $session | Out-Null
   Assert-HttpOk "Authenticated readiness" "$($ApiUrl.TrimEnd('/'))/ready" $session | Out-Null

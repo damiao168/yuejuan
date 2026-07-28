@@ -27,9 +27,34 @@ jobs:
             lab/package-lock.json
       - run: npm ci
       - run: npm ci --prefix lab
+      - run: npm audit --audit-level=high
+      - run: npm --prefix lab audit --audit-level=high
       - run: npm run typecheck
+      - run: npm run build
       - run: npm --workspace apps/web-admin run check:production-routes
+      - run: npm --workspace apps/desktop-client run check:security-config
+      - run: npm run check:story049
+      - run: npm run check:story050
+      - run: npm run check:story051
+      - run: npm run check:story052
+      - run: npm run check:story053
+      - run: npm run check:story057
       - run: npm --prefix lab test
+      - run: npm --prefix lab run eval
+      - run: npm --prefix lab run gate:dev
+
+  desktop-rust:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - run: cargo fmt --check --manifest-path apps/desktop-client/src-tauri/Cargo.toml
+      - run: cargo check --locked --manifest-path apps/desktop-client/src-tauri/Cargo.toml
+      - run: cargo clippy --locked --manifest-path apps/desktop-client/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 
   go:
     runs-on: ubuntu-latest
@@ -55,16 +80,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.x"
+          go-version: "1.26.5"
           cache-dependency-path: services/api-gateway/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: lab/package-lock.json
+      - run: npm ci --prefix ../../lab
+      - run: go mod verify
+      - run: go mod tidy -diff
+      - run: test -z "$(gofmt -l .)"
       - run: go test ./... -count=1
       - run: go vet ./...
+      - name: Run staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - name: PostgreSQL workflows
         env:
           EDUGRADE_E2E_DATABASE_URL: postgres://edugrade:edugrade@127.0.0.1:5432/edugrade_e2e?sslmode=disable
         run: go test ./internal/server -run 'PostgresTestDatabase|Story056.*E2E' -count=1 -v
+      - name: Lab/main boundary integration
+        run: npm --prefix ../.. run check:lab-integration
 
   python:
     runs-on: ubuntu-latest
@@ -79,11 +117,15 @@ jobs:
             services/ocr-worker/pyproject.toml
             services/image-quality-worker/pyproject.toml
             services/page-processing-worker/pyproject.toml
+      - run: python -m pip install --upgrade pip==26.1.2 setuptools==83.0.0
       - run: >-
-          python -m pip install pytest
+          python -m pip install pytest==9.1.1 pip-audit==2.10.1 ruff==0.16.0
           -e services/ocr-worker
           -e services/image-quality-worker
           -e services/page-processing-worker
+      - run: python -m pip check
+      - run: python -m pip_audit --strict
+      - run: ruff check ai-services services/image-quality-worker services/ocr-worker services/page-processing-worker
       - name: OCR worker tests
         run: python -m pytest -q services/ocr-worker/tests
       - name: Image quality worker tests
@@ -91,6 +133,7 @@ jobs:
       - name: Page processing worker tests
         run: python -m pytest -q services/page-processing-worker/tests
       - run: PYTHONPATH=ai-services python -m unittest discover -s ai-services/tests -p 'test_*.py'
+      - run: python -m pytest -q tests/ai-evaluation
 
   compose-config:
     runs-on: ubuntu-latest
@@ -107,3 +150,15 @@ jobs:
           --profile processing
           --profile observability
           config -q
+      - name: Validate STORY-056 isolated Compose
+        env:
+          EDUGRADE_E2E_ADMIN_PASSWORD: ci-story056-admin
+          EDUGRADE_E2E_WORKER_PASSWORD: ci-story056-worker
+          EDUGRADE_E2E_UNPRIVILEGED_PASSWORD: ci-story056-unprivileged
+        run: docker compose -f infra/docker-compose/docker-compose.story056-e2e.yml --profile e2e config -q
+      - name: Validate STORY-060 isolated Compose
+        env:
+          EDUGRADE_E2E_ADMIN_PASSWORD: ci-story060-admin
+          EDUGRADE_E2E_GRADING_TOKEN: ci-story060-grading-token-at-least-32-characters
+          EDUGRADE_E2E_MODEL_API_KEY: ci-story060-model-key
+        run: docker compose -f infra/docker-compose/docker-compose.story060-e2e.yml --profile e2e config -q

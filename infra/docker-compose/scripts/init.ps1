@@ -6,7 +6,9 @@ param(
   [switch]$BootstrapAdmin,
   [switch]$BaselineExistingMigrations,
   [switch]$EnableOcr,
-  [switch]$EnableQuality
+  [switch]$EnableQuality,
+  [switch]$EnableProcessing,
+  [switch]$EnableObservability
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +18,29 @@ $envCandidate = if ([IO.Path]::IsPathRooted($EnvFile)) { $EnvFile } else { Join-
 $composePath = (Resolve-Path -LiteralPath $composeCandidate).Path
 $envPath = (Resolve-Path -LiteralPath $envCandidate).Path
 $composeDir = Split-Path -Parent $composePath
+
+function Read-EnvFile([string]$Path) {
+  $values = @{}
+  foreach ($line in Get-Content -LiteralPath $Path -Encoding utf8) {
+    $trimmed = $line.Trim()
+    if ($trimmed -eq "" -or $trimmed.StartsWith("#")) { continue }
+    $parts = $trimmed.Split("=", 2)
+    if ($parts.Count -ne 2) { throw "Invalid env line for key parsing." }
+    $values[$parts[0].Trim()] = $parts[1].Trim().Trim('"').Trim("'")
+  }
+  return $values
+}
+
+$deploymentSettings = Read-EnvFile $envPath
+
+function Assert-WorkerCredentials([string]$Name, [string]$Prefix) {
+  foreach ($suffix in @("TENANT_CODE", "USERNAME", "PASSWORD")) {
+    $key = "${Prefix}_${suffix}"
+    if (-not $deploymentSettings.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($deploymentSettings[$key])) {
+      throw "$Name requires a non-empty $key in the deployment env file."
+    }
+  }
+}
 
 function Invoke-Compose {
   param([string[]]$Arguments)
@@ -69,10 +94,44 @@ try {
     Invoke-Compose -Arguments @("run", "--rm", "-e", "EDUGRADE_BOOTSTRAP_PASSWORD", "api-gateway", "bootstrap-admin")
   }
 
-  if ($EnableOcr) { Invoke-Compose -Arguments @("--profile", "ocr", "up", "-d", "--build", "ocr-worker") }
-  if ($EnableQuality) { Invoke-Compose -Arguments @("--profile", "quality", "up", "-d", "--build", "image-quality-worker") }
+  if ($EnableOcr) {
+    Assert-WorkerCredentials "OCR worker" "EDUGRADE_OCR_WORKER"
+    $workerArgs = @("--profile", "ocr", "up", "-d")
+    if (-not $SkipBuild) { $workerArgs += "--build" }
+    $workerArgs += "ocr-worker"
+    Invoke-Compose -Arguments $workerArgs
+    Wait-ComposeService "ocr-worker"
+  }
+  if ($EnableQuality) {
+    Assert-WorkerCredentials "image-quality worker" "EDUGRADE_IMAGE_QUALITY"
+    $workerArgs = @("--profile", "quality", "up", "-d")
+    if (-not $SkipBuild) { $workerArgs += "--build" }
+    $workerArgs += "image-quality-worker"
+    Invoke-Compose -Arguments $workerArgs
+    Wait-ComposeService "image-quality-worker"
+  }
+  if ($EnableProcessing) {
+    Assert-WorkerCredentials "page-processing worker" "EDUGRADE_PAGE_PROCESSING"
+    $workerArgs = @("--profile", "processing", "up", "-d")
+    if (-not $SkipBuild) { $workerArgs += "--build" }
+    $workerArgs += "page-processing-worker"
+    Invoke-Compose -Arguments $workerArgs
+    Wait-ComposeService "page-processing-worker"
+  }
+  if ($EnableObservability) {
+    Invoke-Compose -Arguments @("--profile", "observability", "up", "-d", "prometheus", "grafana")
+    foreach ($service in @("prometheus", "grafana")) { Wait-ComposeService $service }
+  }
 
-  if (-not $SkipSmoke) { & (Join-Path $scriptRoot "smoke-test.ps1") }
+  if (-not $SkipSmoke) {
+    $apiPort = if ([string]::IsNullOrWhiteSpace($deploymentSettings["EDUGRADE_API_PORT"])) { "8080" } else { $deploymentSettings["EDUGRADE_API_PORT"] }
+    $nginxPort = if ([string]::IsNullOrWhiteSpace($deploymentSettings["EDUGRADE_NGINX_HTTP_PORT"])) { "8088" } else { $deploymentSettings["EDUGRADE_NGINX_HTTP_PORT"] }
+    $cookieName = if ([string]::IsNullOrWhiteSpace($deploymentSettings["EDUGRADE_SESSION_COOKIE_NAME"])) { "edugrade_session" } else { $deploymentSettings["EDUGRADE_SESSION_COOKIE_NAME"] }
+    & (Join-Path $scriptRoot "smoke-test.ps1") `
+      -ApiUrl "http://127.0.0.1:$apiPort" `
+      -PublicUrl "http://127.0.0.1:$nginxPort" `
+      -SessionCookieName $cookieName
+  }
   Invoke-Compose -Arguments @("ps")
   Write-Host "EduGrade private deployment initialized."
 } finally {

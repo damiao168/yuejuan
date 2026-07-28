@@ -14,7 +14,7 @@ function Resolve-DeploymentPath([string]$Path) {
 
 function Read-EnvFile([string]$Path) {
   $values = @{}
-  foreach ($line in Get-Content -LiteralPath $Path) {
+  foreach ($line in Get-Content -LiteralPath $Path -Encoding utf8) {
     $trimmed = $line.Trim()
     if ($trimmed -eq "" -or $trimmed.StartsWith("#")) { continue }
     $parts = $trimmed.Split("=", 2)
@@ -31,6 +31,8 @@ $envValues = Read-EnvFile $envPath
 
 $requiredKeys = @(
   "EDUGRADE_ENV",
+  "EDUGRADE_SESSION_COOKIE_SECURE",
+  "EDUGRADE_CORS_ALLOWED_ORIGINS",
   "EDUGRADE_POSTGRES_DB",
   "EDUGRADE_POSTGRES_USER",
   "EDUGRADE_POSTGRES_PASSWORD",
@@ -39,6 +41,8 @@ $requiredKeys = @(
   "EDUGRADE_MINIO_ACCESS_KEY",
   "EDUGRADE_MINIO_SECRET_KEY",
   "EDUGRADE_FILE_BUCKET",
+  "EDUGRADE_BARCODE_HMAC_KEYS",
+  "EDUGRADE_QDRANT_API_KEY",
   "EDUGRADE_AI_SERVICE_URL",
   "EDUGRADE_AI_SERVICE_TOKEN",
   "EDUGRADE_AI_MODEL_VERSION",
@@ -51,14 +55,11 @@ foreach ($key in $requiredKeys) {
     throw "Required deployment setting is missing: $key"
   }
 }
-# Qdrant ships without authentication unless an API key is set on both sides.
-# Only required when Qdrant is actually wired up.
-if (-not [string]::IsNullOrWhiteSpace($envValues["EDUGRADE_QDRANT_URL"]) -and
-    [string]::IsNullOrWhiteSpace($envValues["EDUGRADE_QDRANT_API_KEY"])) {
-  throw "EDUGRADE_QDRANT_API_KEY is required when EDUGRADE_QDRANT_URL is set. Existing .env files predate this setting; see infra/docker-compose/README.md upgrade notes."
-}
 if ($envValues["EDUGRADE_AI_SERVICE_TOKEN"].Length -lt 32) {
   throw "EDUGRADE_AI_SERVICE_TOKEN must contain at least 32 characters."
+}
+if ($envValues["EDUGRADE_QDRANT_API_KEY"].Length -lt 32) {
+  throw "EDUGRADE_QDRANT_API_KEY must contain at least 32 characters."
 }
 
 $localEnvironments = @("local", "development", "dev", "test")
@@ -67,10 +68,16 @@ $productionLike = $localEnvironments -notcontains $environment
 if ($productionLike) {
   $problems = @()
   if ($envValues["EDUGRADE_SESSION_COOKIE_SECURE"] -ne "true") { $problems += "secure session cookie is required" }
+  if ($envValues["EDUGRADE_POSTGRES_PASSWORD"] -match "change_me|edugrade_dev") { $problems += "PostgreSQL example password must be replaced" }
   if ($envValues["EDUGRADE_POSTGRES_DSN"] -match "sslmode=disable|change_me|edugrade_dev") { $problems += "PostgreSQL DSN is not production-safe" }
+  if ($envValues["EDUGRADE_REDIS_PASSWORD"] -match "change_me|edugrade_dev") { $problems += "Redis example password must be replaced" }
   if ($envValues["EDUGRADE_MINIO_ACCESS_KEY"] -eq "edugrade" -or $envValues["EDUGRADE_MINIO_SECRET_KEY"] -match "change_me|edugrade_dev") { $problems += "MinIO example credentials must be replaced" }
   if ($envValues["EDUGRADE_CORS_ALLOWED_ORIGINS"] -match "localhost|127\.0\.0\.1") { $problems += "local CORS origins are not allowed" }
   if ($envValues["EDUGRADE_QDRANT_API_KEY"] -match "change_me") { $problems += "Qdrant example API key must be replaced" }
+  if ($envValues["EDUGRADE_AI_SERVICE_TOKEN"] -match "replace_with|change_me") { $problems += "AI service example token must be replaced" }
+  if ($envValues["EDUGRADE_GRADING_MODEL_API_KEY"] -match "replace_with|change_me") { $problems += "grading model example API key must be replaced" }
+  if ($envValues["EDUGRADE_BARCODE_HMAC_KEYS"] -match "replace_with|change_me") { $problems += "barcode example HMAC key must be replaced" }
+  if ($envValues["EDUGRADE_GRAFANA_ADMIN_PASSWORD"] -match "change_me" -or $envValues["EDUGRADE_GRAFANA_ADMIN_PASSWORD"] -eq "admin") { $problems += "Grafana example password must be replaced" }
   if ($envValues.ContainsKey("EDUGRADE_INTERNAL_BIND_HOST") -and $envValues["EDUGRADE_INTERNAL_BIND_HOST"] -eq "0.0.0.0") { $problems += "internal service ports must not bind to 0.0.0.0 in production" }
   if ($problems.Count -gt 0) { throw "Production preflight rejected unsafe configuration: $($problems -join '; ')" }
 } elseif (
@@ -88,7 +95,7 @@ if ($LASTEXITCODE -ne 0) { throw "Docker Compose is not available." }
 
 Push-Location $composeDir
 try {
-  docker compose --env-file $envPath -f $composePath --profile tools --profile ocr --profile quality config --quiet
+  docker compose --env-file $envPath -f $composePath --profile tools --profile ocr --profile quality --profile processing --profile observability config --quiet
   if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 } finally {
   Pop-Location
@@ -99,7 +106,10 @@ $baseImages = @(
   $envValues["EDUGRADE_API_RUNTIME_IMAGE"],
   $envValues["EDUGRADE_NODE_BUILD_IMAGE"],
   $envValues["EDUGRADE_WEB_RUNTIME_IMAGE"],
-  $envValues["EDUGRADE_AI_PYTHON_IMAGE"]
+  $envValues["EDUGRADE_AI_PYTHON_IMAGE"],
+  $envValues["EDUGRADE_OCR_PYTHON_IMAGE"],
+  $envValues["EDUGRADE_QUALITY_PYTHON_IMAGE"],
+  $envValues["EDUGRADE_PAGE_PROCESSING_PYTHON_IMAGE"]
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
 $missingImages = @()
 foreach ($image in $baseImages) {

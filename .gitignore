@@ -4,6 +4,7 @@ bin/
 .vite/
 .DS_Store
 *.log
+*.dump
 coverage/
 .pytest_cache/
 .mypy_cache/
@@ -12,8 +13,11 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 target/
+apps/desktop-client/src-tauri/gen/schemas/
 .gotmp/
 .playwright-cli/
+/.claude/
+/tmp/
 output/
 infra/docker-compose/backups/
 infra/docker-compose/.cookies

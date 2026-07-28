@@ -1,20 +1,21 @@
 # EduGrade Enterprise 预生产部署 Runbook
 
-适用版本：STORY-052  
+适用版本：当前 `main`（至 STORY-060）
+
 适用拓扑：Windows 主机 + Docker Desktop/Engine + Docker Compose 单机私有化部署
 
 ## 1. 能力边界
 
-本 Runbook 用于单机内网部署、受控试点和预生产验收。它覆盖 PostgreSQL、Redis、MinIO、Qdrant、API Gateway、Web Admin、Nginx 和 AI placeholder 的启动、迁移、初始化、登录、备份与恢复验证。
+本 Runbook 用于单机内网部署、受控试点和预生产验收。它覆盖 PostgreSQL、Redis、MinIO、Qdrant、API Gateway、Web Admin、Nginx、内部 `grading-agent`，以及按 profile 启用的 OCR、图像质量、页面处理和可观测性服务的启动、迁移、初始化、登录、备份与恢复验证。
 
-该拓扑不提供多机高可用、自动故障转移、跨地域灾备或完整安全扫描。OCR 和 image-quality worker 通过 profile 单独启用；真实主观题 AI、扫描仪、答案分组等未实现能力不因部署成功而变成生产能力。
+该拓扑不提供多机高可用、自动故障转移、跨地域灾备或完整安全扫描。`grading-agent` 可调用受控的本地 llama.cpp 模型，但只产生必须由教师复核的建议；Lab 当前仍为 `Pilot NOT_READY`。OCR、图像质量和页面处理 worker 通过 profile 单独启用；扫描仪驱动、无人工最终定分等未实现能力不因部署成功而变成生产能力。
 
 ## 2. 主机要求
 
 - Windows 10/11 或 Windows Server，启用 Docker Desktop/Engine Linux containers。
 - Docker Engine 与 Docker Compose v2 可用。
 - 建议至少 8 核 CPU、16 GB 内存、100 GB 可用磁盘；启用 PaddleOCR 时按模型资源额外预留。
-- 端口默认使用：8088、8080、5432、6379、9000、9001、6333、6334、8100。
+- 宿主机端口默认使用：8088、8080、5432、6379、9000、9001、6333、6334。`grading-agent:8100` 仅在 Compose 内网监听，不映射到宿主机。
 - 正式环境必须有受控 DNS、TLS 证书、备份介质和限制访问的运维账号。
 
 ## 3. 配置准备
@@ -130,13 +131,14 @@ try {
 
 `/ready` 是受 `system:read` 保护的依赖详情，不是匿名 Kubernetes probe；容器健康检查使用 `/health`。
 
-## 8. OCR 与图像质量 Worker
+## 8. OCR、图像质量与页面处理 Worker
 
 先创建具备最小权限的 worker 账号，并在 `.env` 配置对应 tenant、username、password。
 
 ```powershell
 .\scripts\init.ps1 -SkipBuild -EnableQuality
 .\scripts\init.ps1 -SkipBuild -EnableOcr
+.\scripts\init.ps1 -SkipBuild -EnableProcessing
 ```
 
 OCR 首次构建会下载 PaddleOCR/PaddlePaddle 依赖和模型，耗时及磁盘占用显著增加。没有配置 worker 凭据时不得启用 profile。
@@ -153,17 +155,19 @@ EDUGRADE_WEB_RUNTIME_IMAGE
 EDUGRADE_AI_PYTHON_IMAGE
 EDUGRADE_OCR_PYTHON_IMAGE
 EDUGRADE_QUALITY_PYTHON_IMAGE
+EDUGRADE_PAGE_PROCESSING_PYTHON_IMAGE
 ```
 
 联网机器准备离线包：
 
 ```powershell
-docker pull golang:1.24-alpine
+docker pull golang:1.26.5-alpine
 docker pull alpine:3.22
 docker pull node:24-alpine
 docker pull nginx:1.29-alpine
-docker pull python:3.12-alpine
-docker save -o edugrade-base-images.tar golang:1.24-alpine alpine:3.22 node:24-alpine nginx:1.29-alpine python:3.12-alpine
+docker pull python:3.12.13-alpine3.24
+docker pull python:3.11.15-slim-trixie
+docker save -o edugrade-base-images.tar golang:1.26.5-alpine alpine:3.22 node:24-alpine nginx:1.29-alpine python:3.12.13-alpine3.24 python:3.11.15-slim-trixie
 ```
 
 离线机器导入：
