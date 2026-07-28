@@ -15,14 +15,14 @@
     "antd": "^5.27.6",
     "framer-motion": "^12.23.0",
     "lucide-react": "^0.468.0",
-    "papaparse": "^5.5.3",
+    "papaparse": "^5.5.4",
     "pdfjs-dist": "^5.4.149",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "recharts": "^2.15.0"
   },
   "devDependencies": {
-    "@types/papaparse": "^5.3.16",
+    "@types/papaparse": "^5.5.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
