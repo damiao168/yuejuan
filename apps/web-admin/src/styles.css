@@ -3833,7 +3833,7 @@ select {
 
 .score-summary-strip {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 0;
   overflow: hidden;
 }
@@ -3935,6 +3935,39 @@ select {
 
 .score-table-panel .ant-table-wrapper {
   margin-top: 0;
+}
+
+.score-roster-panel {
+  border-top: 3px solid #1677ff;
+}
+
+.score-roster-student,
+.score-roster-resolution {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.score-roster-student span,
+.score-roster-resolution small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.score-roster-resolution span,
+.score-roster-resolution small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.score-attendance-label {
+  display: block;
+  margin: 16px 0 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .score-item-strip {

@@ -52,6 +52,43 @@ export interface QualityReport {
   issues: QualityIssue[];
 }
 
+export type RosterStatus = "graded" | "absent" | "unmatched" | "missing_pages";
+
+export interface RosterEntry {
+  key: string;
+  student_id?: string;
+  student_no?: string;
+  student_name?: string;
+  class_id?: string;
+  class_name?: string;
+  submission_id?: string;
+  candidate_no?: string;
+  status: RosterStatus;
+  resolution_code: string;
+  expected_page_count: number;
+  actual_page_count: number;
+  total_score?: number;
+  max_score?: number;
+  attendance_reason?: string;
+  marked_by?: string;
+  marked_at?: string;
+}
+
+export interface RosterSummary {
+  expected: number;
+  received: number;
+  graded: number;
+  absent: number;
+  unresolved: number;
+  missing_pages: number;
+  unidentified: number;
+}
+
+export interface RosterReport {
+  entries: RosterEntry[];
+  summary: RosterSummary;
+}
+
 export interface FinalizeResult {
   status: string;
   created_finals: number;
@@ -93,6 +130,20 @@ export async function listExamGrades(examId: string) {
 export async function checkExamGradeQuality(examId: string, stage: "confirmation" | "publish" = "publish") {
   const query = stage === "publish" ? "?stage=publish" : "";
   return apiClient.request<QualityCheckResult>(`/api/v1/exams/${encodeURIComponent(examId)}/grades/quality${query}`);
+}
+
+export async function listExamRoster(examId: string) {
+  return apiClient.request<{ roster: RosterReport }>(`/api/v1/exams/${encodeURIComponent(examId)}/roster`);
+}
+
+export async function setExamAttendance(examId: string, studentId: string, status: "expected" | "absent", reason: string) {
+  return apiClient.request<{ roster: RosterReport }>(
+    `/api/v1/exams/${encodeURIComponent(examId)}/roster/${encodeURIComponent(studentId)}/attendance`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ status, reason })
+    }
+  );
 }
 
 export async function confirmExamGrades(examId: string, reason: string) {

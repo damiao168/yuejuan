@@ -158,6 +158,51 @@ func TestStudentGradeRouteEnforcesStudentScope(t *testing.T) {
 	}
 }
 
+func TestRosterRoutesRequireAdministrativeRole(t *testing.T) {
+	authStore := scoreAuthStoreWithStudents(t)
+	scoreStore := seededRouteScoreStore()
+	scoreStore.AddRosterStudent(score.RosterSeed{
+		ExamID: "exam-1", StudentID: "student-1", StudentNo: "001",
+		StudentName: "Scoped Student", ClassID: "class-1", ClassName: "Class 1",
+	})
+	router := scoreRouter(authStore, scoreStore)
+	teacherToken := reviewLogin(t, router, "score_manager")
+
+	req := reviewAuthedRequest(http.MethodGet, "/api/v1/exams/exam-1/roster", "", teacherToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("teacher must not read administrative roster identities, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPut, "/api/v1/exams/exam-1/roster/student-1/attendance", `{"status":"absent","reason":"not authorized"}`, teacherToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("teacher must not change attendance, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRosterRoutesRejectMalformedIdentifiers(t *testing.T) {
+	authStore := reviewAuthStore(t, []string{"score:manage"})
+	router := scoreRouter(authStore, seededRouteScoreStore())
+	token := reviewLogin(t, router, "review_manager")
+
+	req := reviewAuthedRequest(http.MethodGet, "/api/v1/exams/not-a-uuid/roster", "", token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_score_input") {
+		t.Fatalf("malformed roster exam id expected 400, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPut, "/api/v1/exams/00000000-0000-0000-0000-000000000901/roster/not-a-uuid/attendance", `{"status":"absent","reason":"verified"}`, token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_score_input") {
+		t.Fatalf("malformed roster student id expected 400, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func scoreRouter(authStore *auth.MemoryStore, scoreStore score.Store) http.Handler {
 	cfg := config.Config{
 		Service: config.ServiceConfig{Name: "test", Environment: "test", ReadinessTimeout: time.Millisecond},

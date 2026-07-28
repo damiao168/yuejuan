@@ -8,6 +8,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"github.com/google/uuid"
 )
 
 type Handler struct {
@@ -54,6 +55,52 @@ func (h *Handler) CheckQuality(w http.ResponseWriter, r *http.Request) {
 		"can_publish": quality.Passed && requirePendingPublish,
 		"stage":       map[bool]string{true: "publish", false: "confirmation"}[requirePendingPublish],
 	})
+}
+
+func (h *Handler) ListRoster(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	examID := r.PathValue("examId")
+	if _, err := uuid.Parse(examID); err != nil {
+		writeStoreError(w, r, ErrInvalidInput)
+		return
+	}
+	report, err := h.store.ListRoster(r.Context(), user.TenantID, examID)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"roster": report})
+}
+
+func (h *Handler) SetAttendance(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	examID := r.PathValue("examId")
+	studentID := r.PathValue("studentId")
+	if _, err := uuid.Parse(examID); err != nil {
+		writeStoreError(w, r, ErrInvalidInput)
+		return
+	}
+	if _, err := uuid.Parse(studentID); err != nil {
+		writeStoreError(w, r, ErrInvalidInput)
+		return
+	}
+	var input AttendanceInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	var valid bool
+	input, valid = normalizeAttendanceInput(input)
+	if !valid {
+		writeStoreError(w, r, ErrInvalidInput)
+		return
+	}
+	report, err := h.store.SetAttendance(r.Context(), user.TenantID, examID, studentID, user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "score.roster_attendance_updated", "student", studentID, input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"roster": report})
 }
 
 func (h *Handler) ConfirmGrades(w http.ResponseWriter, r *http.Request) {
