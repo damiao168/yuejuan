@@ -37,19 +37,42 @@ type TaskSeed struct {
 	Status string
 }
 
+type RosterSeed struct {
+	ExamID      string
+	StudentID   string
+	StudentNo   string
+	StudentName string
+	ClassID     string
+	ClassName   string
+}
+
+type RosterSubmissionSeed struct {
+	ExamID           string
+	SubmissionID     string
+	StudentID        string
+	CandidateNo      string
+	ExpectedPages    int
+	ActualPages      int
+	QualityStatus    string
+	SubmissionStatus string
+}
+
 type MemoryStore struct {
-	mu           sync.RWMutex
-	next         int
-	segments     map[string]SegmentSeed
-	finals       map[string]FinalGrade
-	finalBySeg   map[string]string
-	humanGrades  map[string]GradeSeed
-	ruleGrades   map[string]GradeSeed
-	submissions  map[string]SubmissionGrade
-	examStatuses map[string]string
-	reviewTasks  []TaskSeed
-	arbTasks     []TaskSeed
-	ocrTasks     []TaskSeed
+	mu                sync.RWMutex
+	next              int
+	segments          map[string]SegmentSeed
+	finals            map[string]FinalGrade
+	finalBySeg        map[string]string
+	humanGrades       map[string]GradeSeed
+	ruleGrades        map[string]GradeSeed
+	submissions       map[string]SubmissionGrade
+	examStatuses      map[string]string
+	reviewTasks       []TaskSeed
+	arbTasks          []TaskSeed
+	ocrTasks          []TaskSeed
+	roster            map[string]RosterSeed
+	rosterSubmissions []RosterSubmissionSeed
+	attendance        map[string]RosterEntry
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -62,6 +85,8 @@ func NewMemoryStore() *MemoryStore {
 		ruleGrades:   map[string]GradeSeed{},
 		submissions:  map[string]SubmissionGrade{},
 		examStatuses: map[string]string{},
+		roster:       map[string]RosterSeed{},
+		attendance:   map[string]RosterEntry{},
 	}
 }
 
@@ -144,6 +169,21 @@ func (s *MemoryStore) AddOCRTask(seed TaskSeed) {
 	s.ocrTasks = append(s.ocrTasks, seed)
 }
 
+func (s *MemoryStore) AddRosterStudent(seed RosterSeed) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.roster[key(seed.ExamID, seed.StudentID)] = seed
+	if _, exists := s.examStatuses[seed.ExamID]; !exists {
+		s.examStatuses[seed.ExamID] = "collecting"
+	}
+}
+
+func (s *MemoryStore) AddRosterSubmission(seed RosterSubmissionSeed) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rosterSubmissions = append(s.rosterSubmissions, seed)
+}
+
 func (s *MemoryStore) FinalizeExam(_ context.Context, tenantID string, examID string, actorID string) (FinalizeResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -222,6 +262,33 @@ func (s *MemoryStore) CheckQuality(_ context.Context, _ string, examID string, r
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.qualityLocked(examID, requirePendingPublish), nil
+}
+
+func (s *MemoryStore) ListRoster(_ context.Context, _ string, examID string) (RosterReport, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.rosterReportLocked(examID), nil
+}
+
+func (s *MemoryStore) SetAttendance(_ context.Context, _ string, examID string, studentID string, actorID string, input AttendanceInput) (RosterReport, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var valid bool
+	input, valid = normalizeAttendanceInput(input)
+	if !valid {
+		return RosterReport{}, ErrInvalidInput
+	}
+	if _, ok := s.roster[key(examID, studentID)]; !ok {
+		return RosterReport{}, ErrNotFound
+	}
+	if status := s.examStatuses[examID]; status == "published" || status == "archived" {
+		return RosterReport{}, ErrInvalidTransition
+	}
+	now := time.Now().UTC()
+	s.attendance[key(examID, studentID)] = RosterEntry{
+		Status: input.Status, AttendanceReason: input.Reason, MarkedBy: actorID, MarkedAt: &now,
+	}
+	return s.rosterReportLocked(examID), nil
 }
 
 func (s *MemoryStore) ConfirmGrades(_ context.Context, tenantID string, examID string, actorID string, _ ConfirmInput) ([]SubmissionGrade, error) {
@@ -428,6 +495,22 @@ func (s *MemoryStore) qualityLocked(examID string, requirePendingPublish bool) Q
 	if missing > 0 {
 		issues = append(issues, QualityIssue{Code: "missing_final_grades", Message: "there are answer segments without final grades", Blocking: true, Count: missing})
 	}
+	roster := s.rosterReportLocked(examID)
+	missingSubmissions := 0
+	for _, entry := range roster.Entries {
+		if entry.ResolutionCode == "missing_submission" {
+			missingSubmissions++
+		}
+	}
+	if missingSubmissions > 0 {
+		issues = append(issues, QualityIssue{Code: "missing_submission_unresolved", Message: "expected students have no matched submission", Blocking: true, Count: missingSubmissions})
+	}
+	if roster.Summary.Unidentified > 0 {
+		issues = append(issues, QualityIssue{Code: "unidentified_submission", Message: "submissions are not uniquely matched to an expected student", Blocking: true, Count: roster.Summary.Unidentified})
+	}
+	if roster.Summary.MissingPages > 0 {
+		issues = append(issues, QualityIssue{Code: "missing_pages_unresolved", Message: "matched submissions have unresolved missing or rejected pages", Blocking: true, Count: roster.Summary.MissingPages})
+	}
 	if requirePendingPublish {
 		unconfirmed := 0
 		for _, grade := range s.submissions {
@@ -440,6 +523,106 @@ func (s *MemoryStore) qualityLocked(examID string, requirePendingPublish bool) Q
 		}
 	}
 	return QualityReport{Passed: len(issues) == 0, Issues: issues}
+}
+
+func (s *MemoryStore) rosterReportLocked(examID string) RosterReport {
+	report := RosterReport{Entries: []RosterEntry{}}
+	rosterKeys := map[string]RosterSeed{}
+	submissionCounts := map[string]int{}
+	for rosterKey, seed := range s.roster {
+		if seed.ExamID == examID {
+			rosterKeys[rosterKey] = seed
+			report.Summary.Expected++
+		}
+	}
+	for _, submission := range s.rosterSubmissions {
+		if submission.ExamID == examID {
+			submissionCounts[submission.StudentID]++
+			report.Summary.Received++
+		}
+	}
+	for rosterKey, seed := range rosterKeys {
+		decision := s.attendance[rosterKey]
+		submissionCount := submissionCounts[seed.StudentID]
+		entry := RosterEntry{
+			Key: "student:" + seed.StudentID, StudentID: seed.StudentID, StudentNo: seed.StudentNo,
+			StudentName: seed.StudentName, ClassID: seed.ClassID, ClassName: seed.ClassName,
+			Status: "unmatched", ResolutionCode: "missing_submission",
+			AttendanceReason: decision.AttendanceReason, MarkedBy: decision.MarkedBy, MarkedAt: cloneTime(decision.MarkedAt),
+		}
+		if decision.Status == "absent" && submissionCount == 0 {
+			entry.Status = "absent"
+			entry.ResolutionCode = "absent"
+			report.Summary.Absent++
+		} else if submissionCount == 1 && decision.Status != "absent" {
+			for _, submission := range s.rosterSubmissions {
+				if submission.ExamID != examID || submission.StudentID != seed.StudentID {
+					continue
+				}
+				entry.SubmissionID = submission.SubmissionID
+				entry.CandidateNo = submission.CandidateNo
+				entry.ExpectedPageCount = submission.ExpectedPages
+				entry.ActualPageCount = submission.ActualPages
+				if submission.ActualPages < submission.ExpectedPages || submission.QualityStatus == "failed" || submission.SubmissionStatus == "rejected" {
+					entry.Status = "missing_pages"
+					entry.ResolutionCode = "missing_pages"
+					report.Summary.MissingPages++
+				} else if grade, ok := s.submissions[key(examID, submission.SubmissionID)]; ok {
+					entry.Status = "graded"
+					entry.ResolutionCode = "graded"
+					total, max := grade.TotalScore, grade.MaxScore
+					entry.TotalScore, entry.MaxScore = &total, &max
+					report.Summary.Graded++
+				} else {
+					entry.ResolutionCode = "grading_incomplete"
+				}
+				break
+			}
+		} else if submissionCount > 1 {
+			entry.ResolutionCode = "duplicate_submission"
+		} else if decision.Status == "absent" {
+			entry.ResolutionCode = "absent_has_submission"
+		}
+		if entry.Status == "unmatched" {
+			report.Summary.Unresolved++
+		}
+		report.Entries = append(report.Entries, entry)
+	}
+	for _, submission := range s.rosterSubmissions {
+		if submission.ExamID != examID {
+			continue
+		}
+		rosterSeed, inRoster := rosterKeys[key(examID, submission.StudentID)]
+		decision := s.attendance[key(examID, submission.StudentID)]
+		if submission.StudentID != "" && inRoster && decision.Status != "absent" && submissionCounts[submission.StudentID] == 1 {
+			continue
+		}
+		code := "student_not_in_roster"
+		switch {
+		case submission.StudentID == "":
+			code = "student_unidentified"
+		case inRoster && decision.Status == "absent":
+			code = "absent_has_submission"
+		case inRoster && submissionCounts[submission.StudentID] > 1:
+			code = "duplicate_submission"
+		}
+		report.Entries = append(report.Entries, RosterEntry{
+			Key: "submission:" + submission.SubmissionID, StudentID: submission.StudentID,
+			StudentNo: rosterSeed.StudentNo, StudentName: rosterSeed.StudentName,
+			ClassID: rosterSeed.ClassID, ClassName: rosterSeed.ClassName,
+			SubmissionID: submission.SubmissionID, CandidateNo: submission.CandidateNo,
+			Status: "unmatched", ResolutionCode: code, ExpectedPageCount: submission.ExpectedPages, ActualPageCount: submission.ActualPages,
+		})
+		report.Summary.Unidentified++
+	}
+	report.Summary.Unresolved += report.Summary.Unidentified + report.Summary.MissingPages
+	sort.Slice(report.Entries, func(i, j int) bool {
+		if report.Entries[i].ClassName == report.Entries[j].ClassName {
+			return report.Entries[i].StudentNo < report.Entries[j].StudentNo
+		}
+		return report.Entries[i].ClassName < report.Entries[j].ClassName
+	})
+	return report
 }
 
 func canPublishExamStatus(status string) bool {

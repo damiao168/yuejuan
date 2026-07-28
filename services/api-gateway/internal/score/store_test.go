@@ -76,6 +76,44 @@ func TestCheckQualityReadOnlyForPublishGate(t *testing.T) {
 	}
 }
 
+func TestRosterReconciliationRequiresExplicitAbsenceAndBlocksUnknownSubmissions(t *testing.T) {
+	store := NewMemoryStore()
+	for _, student := range []RosterSeed{
+		{ExamID: "exam-roster", StudentID: "student-1", StudentNo: "001", StudentName: "Alice", ClassID: "class-1", ClassName: "Class 1"},
+		{ExamID: "exam-roster", StudentID: "student-2", StudentNo: "002", StudentName: "Bob", ClassID: "class-1", ClassName: "Class 1"},
+	} {
+		store.AddRosterStudent(student)
+	}
+	store.AddRosterSubmission(RosterSubmissionSeed{ExamID: "exam-roster", SubmissionID: "submission-1", StudentID: "student-1", CandidateNo: "001", ExpectedPages: 1, ActualPages: 1, QualityStatus: "passed"})
+	store.AddRosterSubmission(RosterSubmissionSeed{ExamID: "exam-roster", SubmissionID: "submission-unknown", CandidateNo: "UNKNOWN", ExpectedPages: 1, ActualPages: 1, QualityStatus: "passed"})
+	store.AddSegment(SegmentSeed{ExamID: "exam-roster", SubmissionID: "submission-1", StudentID: "student-1", AnonymousCode: "001", AnswerSegmentID: "segment-1", QuestionID: "question-1", QuestionNo: "Q1", MaxScore: 10})
+	store.AddHumanGrade(GradeSeed{AnswerSegmentID: "segment-1", Score: 8, MaxScore: 10})
+	if _, err := store.FinalizeExam(context.Background(), tenantID, "exam-roster", "manager-1"); err != nil {
+		t.Fatalf("finalize roster exam: %v", err)
+	}
+
+	report, err := store.ListRoster(context.Background(), tenantID, "exam-roster")
+	if err != nil {
+		t.Fatalf("list roster: %v", err)
+	}
+	if report.Summary.Expected != 2 || report.Summary.Received != 2 || report.Summary.Graded != 1 || report.Summary.Unidentified != 1 {
+		t.Fatalf("unexpected roster summary: %#v", report.Summary)
+	}
+	if _, err := store.SetAttendance(context.Background(), tenantID, "exam-roster", "student-2", "manager-1", AttendanceInput{Status: " ABSENT ", Reason: " verified by invigilator "}); err != nil {
+		t.Fatalf("mark absent: %v", err)
+	}
+	if _, err := store.SetAttendance(context.Background(), tenantID, "exam-roster", "student-2", "manager-1", AttendanceInput{Status: "absent", Reason: strings.Repeat("缺", 301)}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("overlong attendance reason must be rejected, got %v", err)
+	}
+	quality, err := store.CheckQuality(context.Background(), tenantID, "exam-roster", true)
+	if err != nil {
+		t.Fatalf("quality check: %v", err)
+	}
+	if quality.Passed || !hasIssue(quality.Issues, "unidentified_submission") || hasIssue(quality.Issues, "missing_submission_unresolved") {
+		t.Fatalf("absence should resolve the missing student but not the unidentified answer sheet: %#v", quality)
+	}
+}
+
 func TestConfirmPublishStudentLookupAndCSVExport(t *testing.T) {
 	store := seededScoreStore()
 	if _, err := store.FinalizeExam(context.Background(), tenantID, "exam-1", "manager-1"); err != nil {
@@ -215,6 +253,15 @@ func seededScoreStore() *MemoryStore {
 func containsStatus(statuses []string, target string) bool {
 	for _, status := range statuses {
 		if status == target {
+			return true
+		}
+	}
+	return false
+}
+
+func hasIssue(issues []QualityIssue, target string) bool {
+	for _, issue := range issues {
+		if issue.Code == target {
 			return true
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -86,6 +87,102 @@ func (s *PostgresStore) CheckQuality(ctx context.Context, tenantID string, examI
 		return QualityReport{}, err
 	}
 	return quality, nil
+}
+
+func (s *PostgresStore) ListRoster(ctx context.Context, tenantID string, examID string) (RosterReport, error) {
+	entries, err := s.listRosterEntries(ctx, tenantID, examID)
+	if err != nil {
+		return RosterReport{}, err
+	}
+	var summary RosterSummary
+	if err := s.db.QueryRowContext(ctx, `
+SELECT
+  (SELECT COUNT(DISTINCT st.id)
+   FROM exam_class ec
+   JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
+   WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
+     AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'),
+  (SELECT COUNT(*)
+   FROM submission sub
+   WHERE sub.tenant_id = $1 AND sub.exam_id = $2::uuid AND sub.deleted_at IS NULL)
+	`, tenantID, examID).Scan(&summary.Expected, &summary.Received); err != nil {
+		return RosterReport{}, err
+	}
+	for _, entry := range entries {
+		switch entry.Status {
+		case "graded":
+			summary.Graded++
+		case "absent":
+			summary.Absent++
+		case "missing_pages":
+			summary.MissingPages++
+			summary.Unresolved++
+		default:
+			summary.Unresolved++
+		}
+		if strings.HasPrefix(entry.Key, "submission:") {
+			summary.Unidentified++
+		}
+	}
+	return RosterReport{Entries: entries, Summary: summary}, nil
+}
+
+func (s *PostgresStore) SetAttendance(ctx context.Context, tenantID string, examID string, studentID string, actorID string, input AttendanceInput) (RosterReport, error) {
+	var valid bool
+	input, valid = normalizeAttendanceInput(input)
+	if !valid {
+		return RosterReport{}, ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RosterReport{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockExamTx(ctx, tx, tenantID, examID); err != nil {
+		return RosterReport{}, err
+	}
+	var examStatus string
+	if err := tx.QueryRowContext(ctx, `
+SELECT e.status
+FROM exam e
+WHERE e.tenant_id = $1 AND e.id = $2::uuid AND e.deleted_at IS NULL
+  AND EXISTS (
+    SELECT 1
+    FROM exam_class ec
+    JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
+    WHERE ec.tenant_id = e.tenant_id AND ec.exam_id = e.id
+      AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
+      AND st.id = $3::uuid
+  )
+FOR UPDATE
+`, tenantID, examID, studentID).Scan(&examStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return RosterReport{}, ErrNotFound
+		}
+		return RosterReport{}, err
+	}
+	if examStatus == "published" || examStatus == "archived" {
+		return RosterReport{}, ErrInvalidTransition
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO exam_student_attendance (
+  tenant_id, exam_id, student_id, status, reason, marked_by, marked_at
+)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::uuid, now())
+ON CONFLICT (tenant_id, exam_id, student_id) DO UPDATE
+SET status = EXCLUDED.status,
+    reason = EXCLUDED.reason,
+    marked_by = EXCLUDED.marked_by,
+    marked_at = now(),
+    updated_at = now(),
+    deleted_at = NULL
+`, tenantID, examID, studentID, input.Status, input.Reason, actorID); err != nil {
+		return RosterReport{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return RosterReport{}, err
+	}
+	return s.ListRoster(ctx, tenantID, examID)
 }
 
 func (s *PostgresStore) ConfirmGrades(ctx context.Context, tenantID string, examID string, actorID string, _ ConfirmInput) ([]SubmissionGrade, error) {
@@ -412,6 +509,100 @@ AND NOT EXISTS (
 		}
 	}
 	if requirePendingPublish {
+		rosterChecks := []struct {
+			code    string
+			message string
+			query   string
+		}{
+			{
+				code:    "missing_submission_unresolved",
+				message: "expected students have no matched submission",
+				query: `WITH roster AS (
+  SELECT DISTINCT st.id
+  FROM exam_class ec
+  JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
+  LEFT JOIN exam_student_attendance ea ON ea.tenant_id = ec.tenant_id AND ea.exam_id = ec.exam_id
+    AND ea.student_id = st.id AND ea.deleted_at IS NULL
+  WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
+    AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
+    AND COALESCE(ea.status, 'expected') <> 'absent'
+)
+SELECT COUNT(*) FROM roster r
+WHERE NOT EXISTS (
+  SELECT 1 FROM submission sub
+  WHERE sub.tenant_id = $1 AND sub.exam_id = $2::uuid
+    AND sub.student_id = r.id AND sub.deleted_at IS NULL
+)`,
+			},
+			{
+				code:    "unidentified_submission",
+				message: "submissions are not uniquely matched to an expected student",
+				query: `WITH roster AS (
+  SELECT DISTINCT st.id
+  FROM exam_class ec
+  JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
+  WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
+    AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
+),
+submission_counts AS (
+  SELECT student_id, COUNT(*) AS count
+  FROM submission
+  WHERE tenant_id = $1 AND exam_id = $2::uuid AND deleted_at IS NULL
+  GROUP BY student_id
+)
+SELECT COUNT(*)
+FROM submission sub
+LEFT JOIN submission_counts sc ON sc.student_id = sub.student_id
+LEFT JOIN exam_student_attendance ea ON ea.tenant_id = sub.tenant_id AND ea.exam_id = sub.exam_id
+  AND ea.student_id = sub.student_id AND ea.deleted_at IS NULL
+WHERE sub.tenant_id = $1 AND sub.exam_id = $2::uuid AND sub.deleted_at IS NULL
+  AND (
+    sub.student_id IS NULL
+    OR NOT EXISTS (SELECT 1 FROM roster r WHERE r.id = sub.student_id)
+    OR COALESCE(ea.status, 'expected') = 'absent'
+    OR COALESCE(sc.count, 0) > 1
+  )`,
+			},
+			{
+				code:    "missing_pages_unresolved",
+				message: "matched submissions have unresolved missing or rejected pages",
+				query: `WITH roster AS (
+  SELECT DISTINCT st.id
+  FROM exam_class ec
+  JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
+  LEFT JOIN exam_student_attendance ea ON ea.tenant_id = ec.tenant_id AND ea.exam_id = ec.exam_id
+    AND ea.student_id = st.id AND ea.deleted_at IS NULL
+  WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
+    AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
+    AND COALESCE(ea.status, 'expected') <> 'absent'
+),
+submission_counts AS (
+  SELECT student_id, COUNT(*) AS count
+  FROM submission
+  WHERE tenant_id = $1 AND exam_id = $2::uuid AND deleted_at IS NULL
+  GROUP BY student_id
+)
+SELECT COUNT(*)
+FROM submission sub
+JOIN roster r ON r.id = sub.student_id
+JOIN submission_counts sc ON sc.student_id = sub.student_id AND sc.count = 1
+WHERE sub.tenant_id = $1 AND sub.exam_id = $2::uuid AND sub.deleted_at IS NULL
+  AND (
+    sub.actual_page_count < sub.expected_page_count
+    OR sub.quality_status = 'failed'
+    OR sub.status = 'rejected'
+  )`,
+			},
+		}
+		for _, check := range rosterChecks {
+			count, err := scalarCountTx(ctx, tx, check.query, tenantID, examID)
+			if err != nil {
+				return QualityReport{}, err
+			}
+			if count > 0 {
+				issues = append(issues, QualityIssue{Code: check.code, Message: check.message, Blocking: true, Count: count})
+			}
+		}
 		total, err := s.countSubmissionGradesTx(ctx, tx, tenantID, examID)
 		if err != nil {
 			return QualityReport{}, err
@@ -429,6 +620,128 @@ WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND status NO
 		}
 	}
 	return QualityReport{Passed: len(issues) == 0, Issues: issues}, nil
+}
+
+func (s *PostgresStore) listRosterEntries(ctx context.Context, tenantID string, examID string) ([]RosterEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+  'student:' || st.id::text,
+  st.id::text, st.student_no, st.name, cls.id::text, cls.name,
+  CASE WHEN COALESCE(sub.submission_count, 0) = 1 THEN COALESCE(sub.id::text, '') ELSE '' END,
+  CASE WHEN COALESCE(sub.submission_count, 0) = 1 THEN COALESCE(sub.candidate_no, '') ELSE '' END,
+  CASE
+    WHEN COALESCE(ea.status, 'expected') = 'absent' AND COALESCE(sub.submission_count, 0) = 0 THEN 'absent'
+    WHEN COALESCE(sub.submission_count, 0) <> 1 OR COALESCE(ea.status, 'expected') = 'absent' THEN 'unmatched'
+    WHEN sub.actual_page_count < sub.expected_page_count OR sub.quality_status = 'failed' OR sub.status = 'rejected' THEN 'missing_pages'
+    WHEN sg.id IS NOT NULL THEN 'graded'
+    ELSE 'unmatched'
+  END,
+  CASE
+    WHEN COALESCE(ea.status, 'expected') = 'absent' AND COALESCE(sub.submission_count, 0) = 0 THEN 'absent'
+    WHEN COALESCE(ea.status, 'expected') = 'absent' THEN 'absent_has_submission'
+    WHEN COALESCE(sub.submission_count, 0) = 0 THEN 'missing_submission'
+    WHEN COALESCE(sub.submission_count, 0) > 1 THEN 'duplicate_submission'
+    WHEN sub.actual_page_count < sub.expected_page_count OR sub.quality_status = 'failed' OR sub.status = 'rejected' THEN 'missing_pages'
+    WHEN sg.id IS NOT NULL THEN 'graded'
+    ELSE 'grading_incomplete'
+  END,
+  COALESCE(sub.expected_page_count, 0), COALESCE(sub.actual_page_count, 0),
+  sg.total_score::float8, sg.max_score::float8,
+  COALESCE(ea.reason, ''), COALESCE(ea.marked_by::text, ''), ea.marked_at
+FROM exam_class ec
+JOIN school_class cls ON cls.tenant_id = ec.tenant_id AND cls.id = ec.class_id AND cls.deleted_at IS NULL
+JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
+LEFT JOIN LATERAL (
+  SELECT candidate.*, COUNT(*) OVER () AS submission_count
+  FROM submission candidate
+  WHERE candidate.tenant_id = ec.tenant_id
+    AND candidate.exam_id = ec.exam_id
+    AND candidate.student_id = st.id
+    AND candidate.deleted_at IS NULL
+  ORDER BY candidate.created_at DESC, candidate.id
+  LIMIT 1
+) sub ON true
+LEFT JOIN submission_grade sg ON sg.tenant_id = $1 AND sg.exam_id = $2::uuid
+  AND sg.submission_id = sub.id AND sg.deleted_at IS NULL
+LEFT JOIN exam_student_attendance ea ON ea.tenant_id = $1 AND ea.exam_id = $2::uuid
+  AND ea.student_id = st.id AND ea.deleted_at IS NULL
+WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
+  AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
+ORDER BY cls.name, st.student_no, st.name
+`, tenantID, examID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entries := []RosterEntry{}
+	for rows.Next() {
+		entry, err := scanRosterEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	unidentified, err := s.db.QueryContext(ctx, `
+WITH roster AS (
+  SELECT DISTINCT st.id, st.student_no, st.name AS student_name, cls.id AS class_id, cls.name AS class_name
+  FROM exam_class ec
+  JOIN school_class cls ON cls.tenant_id = ec.tenant_id AND cls.id = ec.class_id AND cls.deleted_at IS NULL
+  JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
+  WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
+    AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
+),
+submission_counts AS (
+  SELECT student_id, COUNT(*) AS count
+  FROM submission
+  WHERE tenant_id = $1 AND exam_id = $2::uuid AND deleted_at IS NULL
+  GROUP BY student_id
+)
+SELECT
+  'submission:' || sub.id::text,
+  COALESCE(sub.student_id::text, ''), COALESCE(r.student_no, ''), COALESCE(r.student_name, ''),
+  COALESCE(r.class_id::text, ''), COALESCE(r.class_name, ''),
+  sub.id::text, COALESCE(sub.candidate_no, ''),
+  'unmatched',
+  CASE
+    WHEN sub.student_id IS NULL THEN 'student_unidentified'
+    WHEN r.id IS NULL THEN 'student_not_in_roster'
+    WHEN COALESCE(ea.status, 'expected') = 'absent' THEN 'absent_has_submission'
+    ELSE 'duplicate_submission'
+  END,
+  sub.expected_page_count, sub.actual_page_count,
+  NULL::float8, NULL::float8, '', '', NULL::timestamptz
+FROM submission sub
+LEFT JOIN roster r ON r.id = sub.student_id
+LEFT JOIN submission_counts sc ON sc.student_id = sub.student_id
+LEFT JOIN exam_student_attendance ea ON ea.tenant_id = sub.tenant_id AND ea.exam_id = sub.exam_id
+  AND ea.student_id = sub.student_id AND ea.deleted_at IS NULL
+WHERE sub.tenant_id = $1 AND sub.exam_id = $2::uuid AND sub.deleted_at IS NULL
+  AND (
+    sub.student_id IS NULL OR r.id IS NULL
+    OR COALESCE(ea.status, 'expected') = 'absent'
+    OR COALESCE(sc.count, 0) > 1
+  )
+ORDER BY sub.created_at, sub.id
+`, tenantID, examID)
+	if err != nil {
+		return nil, err
+	}
+	defer unidentified.Close()
+	for unidentified.Next() {
+		entry, err := scanRosterEntry(unidentified)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, unidentified.Err()
 }
 
 func (s *PostgresStore) listGrades(ctx context.Context, tenantID string, examID string, withItems bool) ([]SubmissionGrade, error) {
@@ -574,6 +887,44 @@ func scalarCountTx(ctx context.Context, tx *sql.Tx, query string, args ...any) (
 
 type submissionGradeScanner interface {
 	Scan(dest ...any) error
+}
+
+func scanRosterEntry(row submissionGradeScanner) (RosterEntry, error) {
+	var out RosterEntry
+	var totalScore sql.NullFloat64
+	var maxScore sql.NullFloat64
+	var markedAt sql.NullTime
+	if err := row.Scan(
+		&out.Key,
+		&out.StudentID,
+		&out.StudentNo,
+		&out.StudentName,
+		&out.ClassID,
+		&out.ClassName,
+		&out.SubmissionID,
+		&out.CandidateNo,
+		&out.Status,
+		&out.ResolutionCode,
+		&out.ExpectedPageCount,
+		&out.ActualPageCount,
+		&totalScore,
+		&maxScore,
+		&out.AttendanceReason,
+		&out.MarkedBy,
+		&markedAt,
+	); err != nil {
+		return RosterEntry{}, err
+	}
+	if totalScore.Valid {
+		out.TotalScore = &totalScore.Float64
+	}
+	if maxScore.Valid {
+		out.MaxScore = &maxScore.Float64
+	}
+	if markedAt.Valid {
+		out.MarkedAt = &markedAt.Time
+	}
+	return out, nil
 }
 
 func scanSubmissionGrade(row submissionGradeScanner) (SubmissionGrade, error) {

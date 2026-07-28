@@ -265,6 +265,11 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	requireScoreManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("score:manage")(handler))
 	}
+	requireRosterManage := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequireAnyRole("platform_admin", "tenant_admin", "school_admin")(
+			auth.RequirePermission("score:manage")(handler),
+		))
+	}
 	requireStudentGradeAccess := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequireAnyPermission("student:grade:read", "score:manage")(handler))
 	}
@@ -496,6 +501,8 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/exams/{examId}/finalize", requireScoreManage(scoreHandler.FinalizeExam))
 	mux.Handle("GET /api/v1/exams/{examId}/grades", requireScoreManage(scoreHandler.ListExamGrades))
 	mux.Handle("GET /api/v1/exams/{examId}/grades/quality", requireScoreManage(scoreHandler.CheckQuality))
+	mux.Handle("GET /api/v1/exams/{examId}/roster", requireRosterManage(scoreHandler.ListRoster))
+	mux.Handle("PUT /api/v1/exams/{examId}/roster/{studentId}/attendance", requireRosterManage(scoreHandler.SetAttendance))
 	mux.Handle("POST /api/v1/exams/{examId}/confirm-grades", requireScoreManage(scoreHandler.ConfirmGrades))
 	mux.Handle("POST /api/v1/exams/{examId}/publish", requireScoreManage(scoreHandler.PublishGrades))
 	mux.Handle("GET /api/v1/exams/{examId}/grades/export", requireScoreManage(scoreHandler.ExportGrades))

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, App, Button, Divider, Empty, Input, List, Select, Space, type TableColumnsType } from "antd";
-import { Calculator, CheckCircle2, Download, FileWarning, LockKeyhole, RefreshCw, Search, Send, ShieldCheck } from "lucide-react";
+import { Alert, App, Button, Divider, Empty, Input, List, Modal, Select, Space, type TableColumnsType } from "antd";
+import { Calculator, CheckCircle2, ClipboardCheck, Download, FileWarning, LockKeyhole, RefreshCw, Search, Send, ShieldCheck, UserCheck, UserX } from "lucide-react";
 import { ApiClientError } from "../api/client";
 import { listAuditLogs, type AuditLog } from "../api/audit";
 import { examStatusLabels, examSubjectLabel } from "../constants/examStatus";
@@ -12,9 +12,13 @@ import {
   exportExamGrades,
   finalizeExamGrades,
   listExamGrades,
+  listExamRoster,
   publishExamGrades,
+  setExamAttendance,
   type QualityCheckResult,
   type QualityIssue,
+  type RosterEntry,
+  type RosterReport,
   type SubmissionGrade
 } from "../api/scores";
 import { listSubmissions, type Submission } from "../api/submissions";
@@ -31,8 +35,11 @@ interface IdentityMaps {
 }
 
 interface ScoreSummary {
-  totalSubmissions: number;
+  expectedStudents: number;
+  receivedSubmissions: number;
   completedGrades: number;
+  absentStudents: number;
+  unresolvedRoster: number;
   unfinishedReviews: number;
   pendingArbitrations: number;
   ocrFailures: number;
@@ -65,14 +72,37 @@ const qualityLabels: Record<string, string> = {
   ocr_failed_unhandled: "识别失败（未处理）",
   missing_final_grades: "部分题目还没有最终得分",
   grades_not_confirmed: "成绩未确认",
-  no_submission_grades: "无成绩可发布"
+  no_submission_grades: "无成绩可发布",
+  missing_submission_unresolved: "应考学生尚未匹配答卷",
+  unidentified_submission: "答卷身份未确认或存在重复",
+  missing_pages_unresolved: "答卷缺页或页面质量异常"
 };
 
 const auditActionLabels: Record<string, string> = {
   "score.finalized": "成绩汇总",
   "score.confirmed": "成绩确认",
   "score.published": "成绩发布",
-  "score.exported": "成绩导出"
+  "score.exported": "成绩导出",
+  "score.roster_attendance_updated": "名册出勤状态调整"
+};
+
+const rosterStatusLabels: Record<string, string> = {
+  graded: "已评分",
+  absent: "已标记缺考",
+  unmatched: "未匹配待处理",
+  missing_pages: "缺页待处理"
+};
+
+const rosterResolutionLabels: Record<string, string> = {
+  graded: "成绩已汇总",
+  absent: "已人工确认缺考",
+  missing_submission: "未收到答卷（请核查缺考或漏扫）",
+  grading_incomplete: "答卷已匹配，评分尚未完成",
+  duplicate_submission: "同一学生关联多份答卷",
+  student_unidentified: "答卷尚未关联学生",
+  student_not_in_roster: "答卷学生不在本场应考名册",
+  absent_has_submission: "已标记缺考但存在答卷",
+  missing_pages: "实收页数少于应收页数或质量检查失败"
 };
 
 function formatError(error: unknown) {
@@ -118,10 +148,13 @@ function issueCount(quality: QualityCheckResult | null, code: string) {
   return quality?.quality.issues.find((issue) => issue.code === code)?.count ?? 0;
 }
 
-function createSummary(submissions: Submission[], grades: SubmissionGrade[], quality: QualityCheckResult | null): ScoreSummary {
+function createSummary(submissions: Submission[], grades: SubmissionGrade[], quality: QualityCheckResult | null, roster: RosterReport | null): ScoreSummary {
   return {
-    totalSubmissions: submissions.length,
+    expectedStudents: roster?.summary.expected ?? submissions.length,
+    receivedSubmissions: roster?.summary.received ?? submissions.length,
     completedGrades: grades.length,
+    absentStudents: roster?.summary.absent ?? 0,
+    unresolvedRoster: roster?.summary.unresolved ?? 0,
     unfinishedReviews: issueCount(quality, "unfinished_review_tasks"),
     pendingArbitrations: issueCount(quality, "unfinished_arbitration_tasks"),
     ocrFailures: issueCount(quality, "ocr_failed_unhandled"),
@@ -183,6 +216,7 @@ export function ScoreManagementPage({
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [grades, setGrades] = useState<SubmissionGrade[]>([]);
   const [quality, setQuality] = useState<QualityCheckResult | null>(null);
+  const [roster, setRoster] = useState<RosterReport | null>(null);
   const [identities, setIdentities] = useState<IdentityMaps>({ students: {}, classes: {} });
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [lastWatermark, setLastWatermark] = useState("");
@@ -194,10 +228,12 @@ export function ScoreManagementPage({
   const [loadingScores, setLoadingScores] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actioning, setActioning] = useState<string | null>(null);
+  const [attendanceEditor, setAttendanceEditor] = useState<{ entry: RosterEntry; status: "expected" | "absent" } | null>(null);
+  const [attendanceReason, setAttendanceReason] = useState("");
   const scoreRequestRef = useRef(0);
 
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
-  const summary = useMemo(() => createSummary(submissions, grades, quality), [grades, quality, submissions]);
+  const summary = useMemo(() => createSummary(submissions, grades, quality, roster), [grades, quality, roster, submissions]);
   const scoreAuditLogs = useMemo(() => auditLogs.filter((item) => item.action.startsWith("score.")), [auditLogs]);
   const publishedOrLocked = selectedExam?.status === "published" || (grades.length > 0 && grades.every((grade) => grade.locked || grade.status === "published" || grade.status === "locked"));
 
@@ -242,6 +278,7 @@ export function ScoreManagementPage({
         setSubmissions([]);
         setGrades([]);
         setQuality(null);
+        setRoster(null);
         setAuditLogs([]);
         setLoadingScores(false);
         return;
@@ -249,10 +286,11 @@ export function ScoreManagementPage({
       setLoadingScores(true);
       setError(null);
       try {
-        const [submissionResult, gradeResult, qualityResult, identityResult, auditResult] = await Promise.allSettled([
+        const [submissionResult, gradeResult, qualityResult, rosterResult, identityResult, auditResult] = await Promise.allSettled([
           listSubmissions(examId),
           listExamGrades(examId),
           checkExamGradeQuality(examId, "publish"),
+          canManage ? listExamRoster(examId) : Promise.resolve({ roster: null }),
           loadIdentities(canReadStudentNames),
           canReadAudit ? listAuditLogs({ target_type: "exam", target_id: examId, limit: 20 }) : Promise.resolve({ audit_logs: [] })
         ]);
@@ -272,6 +310,11 @@ export function ScoreManagementPage({
         } else {
           throw qualityResult.reason;
         }
+        if (rosterResult.status === "fulfilled") {
+          setRoster(rosterResult.value.roster);
+        } else {
+          throw rosterResult.reason;
+        }
         if (identityResult.status === "fulfilled") {
           setIdentities(identityResult.value);
         }
@@ -285,7 +328,7 @@ export function ScoreManagementPage({
         if (requestId === scoreRequestRef.current) setLoadingScores(false);
       }
     },
-    [canReadAudit, canReadStudentNames]
+    [canManage, canReadAudit, canReadStudentNames]
   );
 
   useEffect(() => {
@@ -401,6 +444,68 @@ export function ScoreManagementPage({
         )
     });
   };
+
+  const saveAttendance = async () => {
+    if (!selectedExamId || !attendanceEditor?.entry.student_id || !attendanceReason.trim()) {
+      message.error("请填写本次名册调整原因");
+      return;
+    }
+    await runAction(
+      "attendance",
+      async () => {
+        const result = await setExamAttendance(selectedExamId, attendanceEditor.entry.student_id!, attendanceEditor.status, attendanceReason.trim());
+        setRoster(result.roster);
+        setAttendanceEditor(null);
+        setAttendanceReason("");
+      },
+      attendanceEditor.status === "absent" ? "已标记缺考" : "已恢复为应考"
+    );
+  };
+
+  const rosterColumns: TableColumnsType<RosterEntry> = [
+    {
+      title: "学生",
+      key: "student",
+      width: 180,
+      render: (_value, record) => record.student_name ? (
+        <div className="score-roster-student"><strong>{record.student_name}</strong><span>{record.student_no || "无学号"}</span></div>
+      ) : <span className="muted">身份待确认</span>
+    },
+    { title: "班级", dataIndex: "class_name", width: 130, render: (value?: string) => value || "-" },
+    { title: "答卷号", dataIndex: "candidate_no", width: 150, render: (value?: string) => value || "-" },
+    {
+      title: "对账状态",
+      dataIndex: "status",
+      width: 150,
+      render: (value: string) => <StatusTag tone={value === "graded" ? "success" : value === "absent" ? "neutral" : "danger"}>{rosterStatusLabels[value] ?? value}</StatusTag>
+    },
+    {
+      title: "核对说明",
+      dataIndex: "resolution_code",
+      render: (value: string, record) => (
+        <div className="score-roster-resolution">
+          <span>{rosterResolutionLabels[value] ?? value}</span>
+          {record.expected_page_count > 0 ? <small>{`页数 ${record.actual_page_count}/${record.expected_page_count}`}</small> : null}
+          {record.attendance_reason ? <small>{`处置原因：${record.attendance_reason}`}</small> : null}
+        </div>
+      )
+    },
+    {
+      title: "操作",
+      key: "actions",
+      width: 130,
+      render: (_value, record) => {
+        if (!canWrite || publishedOrLocked || !record.student_id || record.key.startsWith("submission:")) return "-";
+        if (record.status === "absent") {
+          return <Button size="small" icon={<UserCheck size={14} />} onClick={() => { setAttendanceEditor({ entry: record, status: "expected" }); setAttendanceReason(""); }}>恢复应考</Button>;
+        }
+        if (record.resolution_code === "missing_submission") {
+          return <Button size="small" danger icon={<UserX size={14} />} onClick={() => { setAttendanceEditor({ entry: record, status: "absent" }); setAttendanceReason(""); }}>标记缺考</Button>;
+        }
+        return <span className="muted">请先处理答卷</span>;
+      }
+    }
+  ];
 
   const columns: TableColumnsType<SubmissionGrade> = [
     { title: "匿名码", dataIndex: "anonymous_code", width: 150 },
@@ -564,24 +669,28 @@ export function ScoreManagementPage({
 
       <section className="score-summary-strip">
         <div>
-          <span>参考人数</span>
-          <strong>{summary.totalSubmissions}</strong>
+          <span>应考人数</span>
+          <strong>{summary.expectedStudents}</strong>
+        </div>
+        <div>
+          <span>实收答卷</span>
+          <strong>{summary.receivedSubmissions}</strong>
         </div>
         <div>
           <span>已生成成绩</span>
           <strong>{summary.completedGrades}</strong>
         </div>
         <div>
-          <span>阅卷未完成</span>
-          <strong>{summary.unfinishedReviews}</strong>
+          <span>已确认缺考</span>
+          <strong>{summary.absentStudents}</strong>
         </div>
         <div>
-          <span>等待仲裁</span>
-          <strong>{summary.pendingArbitrations}</strong>
+          <span>名册未解决</span>
+          <strong>{summary.unresolvedRoster}</strong>
         </div>
         <div>
-          <span>识别失败</span>
-          <strong>{summary.ocrFailures}</strong>
+          <span>流程待办</span>
+          <strong>{summary.unfinishedReviews + summary.pendingArbitrations + summary.ocrFailures}</strong>
         </div>
         <div>
           <span>{mode === "teacher" ? "当前状态" : publishedOrLocked ? "发布状态" : "是否可发布"}</span>
@@ -591,6 +700,28 @@ export function ScoreManagementPage({
 
       <section className={mode === "teacher" ? "score-workspace read-only" : "score-workspace"}>
         <main className="score-main">
+          <section className="score-table-panel score-roster-panel">
+            <div className="panel-head">
+              <div>
+                <h2>名册对账</h2>
+                <p>以本场考试关联班级为应考名单；未交卷、身份冲突和缺页未解决时不能发布成绩。</p>
+              </div>
+              <StatusTag tone={(roster?.summary.unresolved ?? 0) === 0 ? "success" : "danger"}>
+                {(roster?.summary.unresolved ?? 0) === 0 ? "对账完成" : `${roster?.summary.unresolved ?? 0} 项待处理`}
+              </StatusTag>
+            </div>
+            {loadingScores ? <LoadingState label="正在核对考试名册" /> : (
+              <ResponsiveTable
+                rowKey="key"
+                size="small"
+                columns={rosterColumns}
+                dataSource={roster?.entries ?? []}
+                pagination={{ pageSize: 8, showSizeChanger: false }}
+                locale={{ emptyText: <Empty description="本场考试尚未关联有效班级名册。" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+              />
+            )}
+          </section>
+
           <section className="score-quality-panel">
             <div className="panel-head">
               <div>
@@ -695,6 +826,34 @@ export function ScoreManagementPage({
           </details>
         </aside> : null}
       </section>
+
+      <Modal
+        open={Boolean(attendanceEditor)}
+        title={attendanceEditor?.status === "absent" ? "确认标记缺考" : "确认恢复应考"}
+        okText="确认"
+        cancelText="取消"
+        confirmLoading={actioning === "attendance"}
+        onOk={() => void saveAttendance()}
+        onCancel={() => { setAttendanceEditor(null); setAttendanceReason(""); }}
+      >
+        <Alert
+          type={attendanceEditor?.status === "absent" ? "warning" : "info"}
+          showIcon
+          icon={<ClipboardCheck size={18} />}
+          message={attendanceEditor?.entry.student_name ?? "学生"}
+          description={attendanceEditor?.status === "absent" ? "缺考学生不计入班级均分；若后续发现答卷，请先恢复应考再完成身份匹配。" : "恢复后该生必须匹配一份完整答卷，才能通过发布检查。"}
+        />
+        <label className="score-attendance-label" htmlFor="score-attendance-reason">调整原因（必填）</label>
+        <Input.TextArea
+          id="score-attendance-reason"
+          rows={3}
+          maxLength={300}
+          showCount
+          value={attendanceReason}
+          placeholder={attendanceEditor?.status === "absent" ? "例如：经监考记录与班主任确认，学生因病缺考" : "例如：已找到并确认该生答卷，恢复为应考"}
+          onChange={(event) => setAttendanceReason(event.target.value)}
+        />
+      </Modal>
     </div>
   );
 }
