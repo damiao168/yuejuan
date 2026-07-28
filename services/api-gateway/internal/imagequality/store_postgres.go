@@ -174,6 +174,46 @@ RETURNING id::text, tenant_id::text, submission_id::text, submission_page_id::te
 	return run, nil
 }
 
+func (s *PostgresStore) RenewLease(ctx context.Context, tenantID string, runID string, workerInstanceID string, leaseToken string, leaseExpiresAt time.Time, attemptNo int) (Run, error) {
+	if workerInstanceID == "" || leaseToken == "" || attemptNo <= 0 || !leaseExpiresAt.After(time.Now().UTC()) {
+		return Run{}, ErrInvalidInput
+	}
+	row := s.db.QueryRowContext(ctx, `
+UPDATE submission_page_quality_run
+SET lease_expires_at = $6, updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+  AND processing_status = 'processing'
+  AND worker_instance_id = $3
+  AND lease_token = $4
+  AND attempt_no = $5
+  AND worker_service = 'image-quality-worker'
+RETURNING id::text, tenant_id::text, submission_id::text, submission_page_id::text,
+  source_file_asset_id::text, source_sha256, COALESCE(normalized_file_asset_id::text, ''),
+  processing_status, COALESCE(quality_status, ''), profile_name, profile_version, profile_config_hash,
+  metric_schema_version, report_schema_version, quality_report, quality_issues, normalization_transform,
+  COALESCE(worker_service, ''), COALESCE(worker_instance_id, ''), attempt_no, COALESCE(result_version, ''),
+  COALESCE(result_payload_hash, ''), COALESCE(lease_token, ''), lease_expires_at, started_at, completed_at,
+  COALESCE(duration_ms, 0), COALESCE(error_code, ''), error_detail, created_at
+`, tenantID, runID, workerInstanceID, leaseToken, attemptNo, leaseExpiresAt)
+	var run Run
+	if err := scanRun(row, &run); err == nil {
+		return run, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return Run{}, err
+	}
+	current, err := s.GetRun(ctx, tenantID, runID)
+	if err != nil {
+		return Run{}, err
+	}
+	if current.ProcessingStatus != ProcessingProcessing {
+		return Run{}, ErrInvalidTransition
+	}
+	if current.WorkerInstanceID != workerInstanceID || current.LeaseToken != leaseToken || current.AttemptNo != attemptNo {
+		return Run{}, ErrLeaseMismatch
+	}
+	return Run{}, ErrConflict
+}
+
 func (s *PostgresStore) CompleteRun(ctx context.Context, tenantID string, runID string, input ResultInput) (Run, error) {
 	if err := validateResultInput(input); err != nil {
 		return Run{}, err

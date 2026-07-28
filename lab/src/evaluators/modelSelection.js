@@ -1,5 +1,10 @@
 export function compareModelSelectionReports(reports) {
   if (!Array.isArray(reports) || reports.length < 2) throw new Error("at least two model selection reports are required");
+  const candidateIds = reports.map((report) => report?.candidate_id);
+  if (candidateIds.some((id) => typeof id !== "string" || id.trim().length === 0) ||
+      new Set(candidateIds).size !== candidateIds.length) {
+    throw new Error("model selection reports require unique non-empty candidate ids");
+  }
   const datasetHashes = new Set(reports.map((report) => report.dataset?.sha256));
   if (datasetHashes.size !== 1 || datasetHashes.has(undefined)) throw new Error("model selection reports must use the same dataset hash");
   const scopes = new Set(reports.map((report) => report.evidence_scope ?? report.dataset?.evidence_scope ??
@@ -14,10 +19,14 @@ export function compareModelSelectionReports(reports) {
   const candidates = reports.map((report) => {
     const total = report.dataset.total_samples;
     const completed = report.operations.completed;
-    const completionRate = total ? completed / total : 0;
+    const countsValid = Number.isInteger(total) && total > 0 && Number.isInteger(completed) && completed >= 0 &&
+      Number.isInteger(report.operations.failed) && report.operations.failed >= 0;
+    const completionRate = countsValid ? completed / total : 0;
     const isModel = report.model_info?.mock === false;
+    const metricsValid = Number.isFinite(report.quality.mae) && report.quality.mae >= 0 &&
+      Number.isFinite(report.operations.latency_ms_p95) && report.operations.latency_ms_p95 >= 0;
     const eligible = isModel && report.dataset?.complete_dataset !== false && completionRate === 1 && report.operations.failed === 0 &&
-      report.quality.schema_validity_rate === 1 && report.quality.evidence_validity_rate === 1;
+      report.quality.schema_validity_rate === 1 && report.quality.evidence_validity_rate === 1 && metricsValid;
     return {
       candidate_id: report.candidate_id,
       role: isModel ? "llm_candidate" : "deterministic_reference",

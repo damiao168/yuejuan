@@ -3,12 +3,11 @@ from __future__ import annotations
 import io
 import time
 
-from PIL import Image, ImageDraw
 import pytest
-
 from page_processing.api import APIError
 from page_processing.config import Config
 from page_processing.runner import Runner, _LeaseHeartbeat
+from PIL import Image, ImageDraw
 
 
 def _sheet(marked: str | None = "B") -> bytes:

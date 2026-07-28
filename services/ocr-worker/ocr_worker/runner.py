@@ -5,7 +5,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 
 from .api import APIError, AuthenticationError
 from .engine import OCREngine
@@ -30,7 +30,12 @@ class WorkerConfig:
             raise ValueError("engine and engine_version must be configured")
         if self.lease_seconds < 30 or self.lease_seconds > 3600:
             raise ValueError("lease_seconds must be between 30 and 3600")
-        if self.heartbeat_interval <= 0 or self.heartbeat_timeout <= 0:
+        if (
+            not math.isfinite(self.heartbeat_interval)
+            or not math.isfinite(self.heartbeat_timeout)
+            or self.heartbeat_interval <= 0
+            or self.heartbeat_timeout <= 0
+        ):
             raise ValueError("heartbeat interval and timeout must be greater than zero")
         if self.heartbeat_interval >= self.lease_seconds:
             raise ValueError("heartbeat_interval must be shorter than lease_seconds")
@@ -88,7 +93,7 @@ class OCRRunner:
                 image_hash.update(image_bytes)
                 try:
                     blocks = self.engine.recognize(image_bytes)
-                except Exception:
+                except Exception:  # noqa: BLE001 - Paddle backends raise heterogeneous runtime exceptions.
                     heartbeat.stop()
                     self.api.fail_task(task_id, "ocr_engine_failed", runtime_task_id, lease_token, True)
                     return
@@ -129,7 +134,7 @@ class OCRRunner:
         raw = (
             f"{self.config.engine}|{self.config.engine_version}|{self.engine.model_version}|"
             f"{self.engine.device}|{self.config.preprocess_profile}"
-        ).encode("utf-8")
+        ).encode()
         return hashlib.sha256(raw).hexdigest()
 
     def _runtime_incompatibility(self, runtime_task: dict[str, Any]) -> str | None:
@@ -172,7 +177,7 @@ class _LeaseHeartbeat:
         self._thread: threading.Thread | None = None
         self._error: Exception | None = None
 
-    def __enter__(self) -> _LeaseHeartbeat:
+    def __enter__(self) -> Self:
         self._send()
         self._thread = threading.Thread(target=self._run, name=f"ocr-heartbeat-{self.worker_id}", daemon=True)
         self._thread.start()
@@ -204,7 +209,7 @@ class _LeaseHeartbeat:
         while not self._stop.wait(self.interval):
             try:
                 self._send()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - heartbeat transports may raise non-API exceptions.
                 self._error = exc
                 return
 

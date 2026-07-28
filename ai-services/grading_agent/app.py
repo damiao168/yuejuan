@@ -1,9 +1,9 @@
-from collections import OrderedDict
 import copy
 import hashlib
 import json
 import threading
 import time
+from collections import OrderedDict
 
 from .capabilities import CapabilityMatrix
 from .contract import normalize_model_output, validate_request

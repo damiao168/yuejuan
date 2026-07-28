@@ -113,6 +113,62 @@ func TestLoginMeLogout(t *testing.T) {
 	}
 }
 
+func TestLoginRejectsOversizedCredentialFields(t *testing.T) {
+	store := newTestStore(t)
+	router := newTestRouter(store)
+	tests := []map[string]string{
+		{"tenant_code": strings.Repeat("t", 129), "username": "teacher", "password": "ChangeMe123!"},
+		{"tenant_code": "demo", "username": strings.Repeat("u", 257), "password": "ChangeMe123!"},
+		{"tenant_code": "demo", "username": "teacher", "password": strings.Repeat("P", 73)},
+	}
+	for _, payload := range tests {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("marshal login payload: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"invalid_request"`) {
+			t.Fatalf("oversized login field expected 400 invalid_request, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestLoginRejectsOversizedRequestBodyBeforeCredentialValidation(t *testing.T) {
+	store := newTestStore(t)
+	router := newTestRouter(store)
+	body, err := json.Marshal(map[string]string{
+		"tenant_code": "demo",
+		"username":    "teacher",
+		"password":    strings.Repeat("P", 5*1024),
+	})
+	if err != nil {
+		t.Fatalf("marshal login payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), `"code":"request_body_too_large"`) {
+		t.Fatalf("oversized login request expected 413 request_body_too_large, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLoginRejectsTrailingJSONValue(t *testing.T) {
+	store := newTestStore(t)
+	router := newTestRouter(store)
+	body := `{"tenant_code":"demo","username":"teacher","password":"ChangeMe123!"}{}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"invalid_request"`) {
+		t.Fatalf("trailing login JSON expected 400 invalid_request, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestInactiveTenantBlocksLoginAndExistingSession(t *testing.T) {
 	store := newTestStore(t)
 	router := newTestRouter(store)
@@ -135,6 +191,67 @@ func TestInactiveTenantBlocksLoginAndExistingSession(t *testing.T) {
 	router.ServeHTTP(loginRec, loginReq)
 	if loginRec.Code != http.StatusUnauthorized || !strings.Contains(loginRec.Body.String(), `"code":"invalid_credentials"`) {
 		t.Fatalf("inactive tenant login expected generic 401, got %d: %s", loginRec.Code, loginRec.Body.String())
+	}
+}
+
+func TestOrganizationUserCreationRejectsOversizedFields(t *testing.T) {
+	store := newOrganizationAdminStore(t)
+	router := newTestRouter(store)
+	token := login(t, router, "demo", "admin", "AdminStart123!")
+	body, err := json.Marshal(map[string]string{
+		"username":     strings.Repeat("u", 257),
+		"display_name": "Teacher",
+		"password":     "TeacherStart123!",
+		"role_code":    "teacher",
+	})
+	if err != nil {
+		t.Fatalf("marshal user payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"invalid_request"`) {
+		t.Fatalf("oversized user field expected 400 invalid_request, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOrganizationUserCreationRejectsOversizedRequestBody(t *testing.T) {
+	store := newOrganizationAdminStore(t)
+	router := newTestRouter(store)
+	token := login(t, router, "demo", "admin", "AdminStart123!")
+	body, err := json.Marshal(map[string]string{
+		"username":     "teacher",
+		"display_name": strings.Repeat("T", 5*1024),
+		"password":     "TeacherStart123!",
+		"role_code":    "teacher",
+	})
+	if err != nil {
+		t.Fatalf("marshal user payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), `"code":"request_body_too_large"`) {
+		t.Fatalf("oversized user request expected 413 request_body_too_large, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOrganizationUserCreationRejectsTrailingJSONValue(t *testing.T) {
+	store := newOrganizationAdminStore(t)
+	router := newTestRouter(store)
+	token := login(t, router, "demo", "admin", "AdminStart123!")
+	body := `{"username":"teacher","display_name":"Teacher","password":"TeacherStart123!","role_code":"teacher"}{}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"invalid_request"`) {
+		t.Fatalf("trailing user JSON expected 400 invalid_request, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

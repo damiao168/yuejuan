@@ -3,15 +3,16 @@ from __future__ import annotations
 from io import BytesIO
 
 import numpy as np
-from PIL import Image
 import zxingcpp
+from PIL import Image
 
 MAX_BARCODES_PER_PAGE = 8
 MAX_BARCODE_TEXT_LENGTH = 2048
 
 
 def detect_barcodes(png: bytes) -> list[dict]:
-    image = np.asarray(Image.open(BytesIO(png)).convert("RGB"))
+    with Image.open(BytesIO(png)) as source:
+        image = np.asarray(source.convert("RGB"))
     observations: list[dict] = []
     for result in zxingcpp.read_barcodes(image)[:MAX_BARCODES_PER_PAGE]:
         text = str(result.text or "")

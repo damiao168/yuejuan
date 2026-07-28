@@ -164,7 +164,7 @@ def _parse_paddle3_page(page: dict[str, object]) -> list[OCRBlock]:
 
 def _bbox_from_points(value: object) -> list[float]:
     if not isinstance(value, list) or not value:
-        return [0.0, 0.0, 1.0, 1.0]
+        return [0.0, 0.0, 0.0, 0.0]
     xs: list[float] = []
     ys: list[float] = []
     for point in value:
@@ -172,7 +172,7 @@ def _bbox_from_points(value: object) -> list[float]:
             xs.append(float(point[0]))
             ys.append(float(point[1]))
     if not xs or not ys:
-        return [0.0, 0.0, 1.0, 1.0]
+        return [0.0, 0.0, 0.0, 0.0]
     left = min(xs)
     top = min(ys)
     return [left, top, max(xs) - left, max(ys) - top]

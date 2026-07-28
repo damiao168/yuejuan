@@ -1,14 +1,13 @@
-from contextlib import contextmanager
 import hashlib
 import json
-from pathlib import Path
-import socket
 import threading
+from contextlib import contextmanager
+from pathlib import Path
+from typing import ClassVar
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
 from .errors import AgentError
-
 
 MODEL_RISK_FLAGS = [
     "OCR_LOW_CONFIDENCE",
@@ -98,7 +97,7 @@ def grading_output_schema(grading_request):
 
 
 class PromptRegistry:
-    FILES = {
+    FILES: ClassVar[dict[str, str]] = {
         "base": "base_grading.md",
         "short_answer": "short_answer.md",
         "calculation": "calculation.md",
@@ -223,7 +222,7 @@ class LocalLlamaCppAdapter:
                 headers,
                 self.settings.model_timeout_seconds,
             )
-        except (TimeoutError, socket.timeout) as exc:
+        except TimeoutError as exc:
             raise AgentError(
                 "model_timeout",
                 "local model request timed out",

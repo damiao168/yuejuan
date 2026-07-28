@@ -50,11 +50,28 @@ export function checkCalibrationFairnessGate(calibration, fairness, level, confi
   const gate = config[level];
   if (!gate) throw new Error(`Unknown calibration gate: ${level}`);
   const reasons = [];
-  if (calibration.evaluation_records < gate.minimum_evaluation_records) reasons.push(`evaluation_records ${calibration.evaluation_records} < ${gate.minimum_evaluation_records}`);
-  if (calibration.ece > gate.maximum_ece) reasons.push(`ece ${calibration.ece} > ${gate.maximum_ece}`);
-  if (calibration.brier_score > gate.maximum_brier_score) reasons.push(`brier_score ${calibration.brier_score} > ${gate.maximum_brier_score}`);
-  if (fairness.insufficient_slices.length) reasons.push(`${fairness.insufficient_slices.length} slices are below minimum_records_per_slice ${gate.minimum_records_per_slice}`);
-  for (const [dimension, disparity] of Object.entries(fairness.disparities)) {
+  if (!Number.isInteger(calibration?.evaluation_records) || calibration.evaluation_records < gate.minimum_evaluation_records) {
+    reasons.push(`evaluation_records ${calibration?.evaluation_records} < ${gate.minimum_evaluation_records}`);
+  }
+  if (!Number.isFinite(calibration?.ece) || calibration.ece < 0 || calibration.ece > gate.maximum_ece) {
+    reasons.push(`ece ${calibration?.ece} > ${gate.maximum_ece}`);
+  }
+  if (!Number.isFinite(calibration?.brier_score) || calibration.brier_score < 0 || calibration.brier_score > gate.maximum_brier_score) {
+    reasons.push(`brier_score ${calibration?.brier_score} > ${gate.maximum_brier_score}`);
+  }
+  const insufficientSlices = Array.isArray(fairness?.insufficient_slices) ? fairness.insufficient_slices : null;
+  if (insufficientSlices === null) reasons.push("fairness insufficient_slices is missing");
+  else if (insufficientSlices.length) reasons.push(`${insufficientSlices.length} slices are below minimum_records_per_slice ${gate.minimum_records_per_slice}`);
+  const disparities = fairness?.disparities && typeof fairness.disparities === "object" ? fairness.disparities : null;
+  if (disparities === null) reasons.push("fairness disparities are missing");
+  for (const dimension of ["subject", "question_type", "ocr_band", "answer_length_band"]) {
+    if (disparities !== null && !(dimension in disparities)) reasons.push(`${dimension} disparity is missing`);
+  }
+  for (const [dimension, disparity] of Object.entries(disparities ?? {})) {
+    if (disparity?.normalized_mae_gap !== null && !Number.isFinite(disparity?.normalized_mae_gap)) {
+      reasons.push(`${dimension}.normalized_mae_gap is not finite`);
+      continue;
+    }
     if (disparity.normalized_mae_gap !== null && disparity.normalized_mae_gap > gate.maximum_slice_nmae_gap) {
       reasons.push(`${dimension}.normalized_mae_gap ${disparity.normalized_mae_gap} > ${gate.maximum_slice_nmae_gap}`);
     }

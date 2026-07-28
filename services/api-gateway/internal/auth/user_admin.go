@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -33,9 +32,11 @@ func (h *Handler) ListAssignableRoles(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateManagedUser(w http.ResponseWriter, r *http.Request) {
 	actor, _ := UserFromContext(r.Context())
 	var input CreateManagedUserInput
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
+	if err := decodeAuthJSON(w, r, &input, true); err != nil {
+		if authRequestBodyTooLarge(err) {
+			httpx.Error(w, r, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
+			return
+		}
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "invalid user fields")
 		return
 	}
@@ -44,6 +45,10 @@ func (h *Handler) CreateManagedUser(w http.ResponseWriter, r *http.Request) {
 	input.RoleCode = strings.TrimSpace(input.RoleCode)
 	if input.Username == "" || input.DisplayName == "" || input.RoleCode == "" || input.Password == "" {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "username, display_name, password and role_code are required")
+		return
+	}
+	if !managedUserFieldsWithinLimits(input) {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "user fields exceed supported size limits")
 		return
 	}
 	if !strongBootstrapPassword(input.Password) {

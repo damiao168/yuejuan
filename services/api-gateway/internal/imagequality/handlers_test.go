@@ -67,6 +67,50 @@ func TestRunQualityCheckCreatesRunsAndClaimOmitsStudentIdentity(t *testing.T) {
 	}
 }
 
+func TestRuntimeHeartbeatRenewsImageQualitySourceLease(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"submission:manage", "ocr:manage", "worker:execute"})
+	fileStore := files.NewMemoryStore()
+	submissionStore := submission.NewMemoryStore()
+	qualityStore := imagequality.NewMemoryStore()
+	runtimeStore := workerruntime.NewMemoryStore()
+	item, _ := submissionWithOriginalFile(t, fileStore, submissionStore, "source-hash-heartbeat")
+	router := testRouter(authStore, fileStore, submissionStore, qualityStore, runtimeStore)
+	token := login(t, router)
+
+	req := authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/run-quality-check", nil, token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("run-quality-check expected 202, got %d %s", rec.Code, rec.Body.String())
+	}
+	req = authedRequest(http.MethodPost, "/api/v1/internal/image-quality/jobs/claim", bytes.NewBufferString(`{"worker_instance_id":"worker-a","limit":1,"lease_seconds":300}`), token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	var claimed struct {
+		Jobs []imagequality.ClaimedJob `json:"jobs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&claimed); err != nil || len(claimed.Jobs) != 1 {
+		t.Fatalf("decode claimed job: %v %#v", err, claimed)
+	}
+	job := claimed.Jobs[0]
+
+	qualityStore.ForceExpireLeaseForTest(job.RunID)
+	heartbeatBody := `{"lease_token":"` + job.LeaseToken + `","worker_service":"image-quality-worker","worker_instance_id":"worker-a","state":"running","lease_seconds":600}`
+	req = authedRequest(http.MethodPost, "/api/v1/internal/worker/tasks/"+job.RuntimeTaskID+"/heartbeat", bytes.NewBufferString(heartbeatBody), token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("heartbeat expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	run, err := qualityStore.GetRun(context.Background(), handlerTenantID, job.RunID)
+	if err != nil {
+		t.Fatalf("get renewed quality run: %v", err)
+	}
+	if run.LeaseExpiresAt == nil || !run.LeaseExpiresAt.After(time.Now().UTC().Add(9*time.Minute)) {
+		t.Fatalf("heartbeat did not renew source lease: %#v", run.LeaseExpiresAt)
+	}
+}
+
 func TestQualityResultRequiresLeaseAndActivatesPage(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"submission:manage", "ocr:manage"})
 	fileStore := files.NewMemoryStore()

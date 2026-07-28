@@ -64,6 +64,21 @@ func TestBootstrapInitialAdminRejectsWeakPassword(t *testing.T) {
 	}
 }
 
+func TestBootstrapInitialAdminRejectsOversizedInputBeforeStoreAccess(t *testing.T) {
+	store := &fakeBootstrapStore{}
+
+	_, err := auth.BootstrapInitialAdmin(context.Background(), store, auth.BootstrapAdminInput{
+		Username: strings.Repeat("u", 257),
+		Password: "StrongPass123!",
+	})
+	if !errors.Is(err, auth.ErrInvalidBootstrapInput) {
+		t.Fatalf("expected ErrInvalidBootstrapInput, got %v", err)
+	}
+	if store.checkedTenantCode != "" || store.upsertCalled {
+		t.Fatalf("oversized input must fail before store calls, got check=%s upsert=%v", store.checkedTenantCode, store.upsertCalled)
+	}
+}
+
 type fakeBootstrapStore struct {
 	activeAdminExists bool
 	checkedTenantCode string

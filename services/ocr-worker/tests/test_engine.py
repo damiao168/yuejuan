@@ -57,6 +57,11 @@ class EngineTests(unittest.TestCase):
 
         self.assertEqual(blocks[0].bbox, [79.0, 77.0, 448.0, 48.0])
 
+    def test_missing_polygon_does_not_fabricate_a_valid_bounding_box(self):
+        blocks = _parse_paddle_result([{"rec_texts": ["text"], "rec_scores": [0.9]}])
+
+        self.assertEqual(blocks[0].bbox, [0.0, 0.0, 0.0, 0.0])
+
     def test_create_paddle_ocr_uses_exact_model_profile_and_device(self):
         calls = []
 

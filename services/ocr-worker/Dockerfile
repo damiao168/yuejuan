@@ -1,4 +1,4 @@
-ARG OCR_PYTHON_IMAGE=python:3.11-slim
+ARG OCR_PYTHON_IMAGE=python:3.11.15-slim-trixie
 FROM ${OCR_PYTHON_IMAGE}
 
 ARG INSTALL_PADDLEOCR=true
@@ -14,10 +14,12 @@ WORKDIR /app
 COPY services/ocr-worker/pyproject.toml ./pyproject.toml
 COPY services/ocr-worker/ocr_worker ./ocr_worker
 
-RUN if [ "$INSTALL_PADDLEOCR" = "true" ]; then \
-      pip install --no-cache-dir --index-url "$PIP_INDEX_URL" ".[paddle]"; \
+RUN python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
+      "pip==26.1.2" "setuptools==83.0.0" \
+    && if [ "$INSTALL_PADDLEOCR" = "true" ]; then \
+      python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" ".[paddle]"; \
     else \
-      pip install --no-cache-dir --index-url "$PIP_INDEX_URL" .; \
+      python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" .; \
     fi
 
 RUN sed -i \

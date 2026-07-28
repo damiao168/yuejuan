@@ -67,7 +67,11 @@ type loginRequest struct {
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeAuthJSON(w, r, &req, false); err != nil {
+		if authRequestBodyTooLarge(err) {
+			httpx.Error(w, r, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
+			return
+		}
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "invalid json body")
 		return
 	}
@@ -75,6 +79,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	req.Username = strings.TrimSpace(req.Username)
 	if req.TenantCode == "" || req.Username == "" || req.Password == "" {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "tenant_code, username and password are required")
+		return
+	}
+	if !loginFieldsWithinLimits(req.TenantCode, req.Username, req.Password) {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "login fields exceed supported size limits")
 		return
 	}
 	clientIP := remoteIP(r)

@@ -83,3 +83,16 @@ test("smoke subsets select distinct questions first and cannot win selection", (
   assert.equal(decision.candidates.find((candidate) => candidate.candidate_id === "4b").eligible, false);
   assert.equal(decision.selected_local_llm, "8b");
 });
+
+test("selection excludes candidates with missing ranking metrics", () => {
+  const incomplete = report("4b");
+  delete incomplete.quality.mae;
+  const decision = compareModelSelectionReports([report("rules", { mock: true }), incomplete]);
+  assert.equal(decision.selected_local_llm, null);
+  assert.equal(decision.candidates.find((candidate) => candidate.candidate_id === "4b").eligible, false);
+});
+
+test("selection rejects duplicate or missing candidate identities", () => {
+  assert.throws(() => compareModelSelectionReports([report("same"), report("same")]), /unique non-empty/);
+  assert.throws(() => compareModelSelectionReports([report("4b"), report("")]), /unique non-empty/);
+});

@@ -1,10 +1,9 @@
-from contextlib import contextmanager
 import copy
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 from grading_agent.config import Settings
-
 
 ROOT = Path(__file__).resolve().parents[2]
 

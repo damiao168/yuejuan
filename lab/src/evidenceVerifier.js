@@ -17,6 +17,11 @@ function pushUnique(list, value) {
 }
 
 export function verifyEvidence(input, output) {
+  const safeOutput = output !== null && typeof output === "object" && !Array.isArray(output) ? output : {};
+  const evidenceItems = Array.isArray(safeOutput.evidence) ? safeOutput.evidence : [];
+  const matchedItems = Array.isArray(safeOutput.matched_points) ? safeOutput.matched_points : [];
+  const missingItems = Array.isArray(safeOutput.missing_points) ? safeOutput.missing_points : [];
+  const deductionItems = Array.isArray(safeOutput.deductions) ? safeOutput.deductions : [];
   const invalidPoints = [];
   const warnings = [];
   const forcedRiskFlags = [];
@@ -28,7 +33,11 @@ export function verifyEvidence(input, output) {
   const evidenceById = new Map();
   let validMatchedPoints = 0;
 
-  for (const evidence of output.evidence ?? []) {
+  for (const evidence of evidenceItems) {
+    if (evidence === null || typeof evidence !== "object" || Array.isArray(evidence)) {
+      invalidPoints.push({ reason: "evidence_item_invalid" });
+      continue;
+    }
     if (evidenceById.has(evidence.evidence_id)) {
       invalidPoints.push({ evidence_id: evidence.evidence_id, reason: "duplicate_evidence_id" });
     }
@@ -57,9 +66,18 @@ export function verifyEvidence(input, output) {
   if (injection.detected) forcedNeedsHumanReview = true;
 
   let matchedScoreTotal = 0;
-  for (const matchedPoint of output.matched_points ?? []) {
+  for (const matchedPoint of matchedItems) {
+    if (matchedPoint === null || typeof matchedPoint !== "object" || Array.isArray(matchedPoint)) {
+      invalidPoints.push({ reason: "matched_point_invalid" });
+      continue;
+    }
     const rubricPointId = matchedPoint.rubric_point_id;
-    matchedScoreTotal += Number(matchedPoint.score ?? 0);
+    const matchedScore = Number(matchedPoint.score);
+    if (!Number.isFinite(matchedScore) || matchedScore < 0) {
+      invalidPoints.push({ rubric_point_id: rubricPointId, reason: "matched_point_score_invalid" });
+    } else {
+      matchedScoreTotal += matchedScore;
+    }
     if (!rubricPointIds.has(rubricPointId)) {
       invalidPoints.push({ rubric_point_id: rubricPointId, reason: "rubric_point_id_not_found" });
       continue;
@@ -71,7 +89,12 @@ export function verifyEvidence(input, output) {
       continue;
     }
     let idLinksValid = true;
-    for (const evidenceId of matchedPoint.evidence_ids ?? []) {
+    const evidenceIds = Array.isArray(matchedPoint.evidence_ids) ? matchedPoint.evidence_ids : [];
+    if (!Array.isArray(matchedPoint.evidence_ids)) {
+      invalidPoints.push({ rubric_point_id: rubricPointId, reason: "evidence_id_links_invalid" });
+      idLinksValid = false;
+    }
+    for (const evidenceId of evidenceIds) {
       const linkedById = evidenceById.get(evidenceId);
       if (!linkedById || linkedById.rubric_point_id !== rubricPointId) {
         invalidPoints.push({ rubric_point_id: rubricPointId, evidence_id: evidenceId, reason: "evidence_id_link_invalid" });
@@ -89,21 +112,29 @@ export function verifyEvidence(input, output) {
     if (idLinksValid) validMatchedPoints += 1;
   }
 
-  for (const missing of output.missing_points ?? []) {
+  for (const missing of missingItems) {
+    if (missing === null || typeof missing !== "object" || Array.isArray(missing)) {
+      invalidPoints.push({ reason: "missing_point_invalid" });
+      continue;
+    }
     if (!rubricPointIds.has(missing.rubric_point_id)) {
       invalidPoints.push({ rubric_point_id: missing.rubric_point_id, reason: "missing_point_not_in_rubric" });
     }
   }
   const deductionIds = new Set((input.rubric.deductions ?? []).map((deduction) => deduction.id));
-  for (const deduction of output.deductions ?? []) {
+  for (const deduction of deductionItems) {
+    if (deduction === null || typeof deduction !== "object" || Array.isArray(deduction)) {
+      invalidPoints.push({ reason: "deduction_invalid" });
+      continue;
+    }
     if (deduction.rubric_deduction_id && !deductionIds.has(deduction.rubric_deduction_id)) {
       invalidPoints.push({ rubric_deduction_id: deduction.rubric_deduction_id, reason: "deduction_not_in_rubric" });
     }
   }
 
   const allowance = Number(input.rubric.holistic_score_allowance ?? 0);
-  if (output.suggested_score > matchedScoreTotal + allowance) {
-    invalidPoints.push({ reason: "suggested_score_exceeds_matched_points", suggested_score: output.suggested_score });
+  if (safeOutput.suggested_score > matchedScoreTotal + allowance) {
+    invalidPoints.push({ reason: "suggested_score_exceeds_matched_points", suggested_score: safeOutput.suggested_score });
   }
   if (invalidPoints.length > 0) {
     pushUnique(forcedRiskFlags, "INSUFFICIENT_EVIDENCE");
@@ -111,7 +142,7 @@ export function verifyEvidence(input, output) {
     forcedNeedsHumanReview = true;
   }
 
-  const matchedCount = (output.matched_points ?? []).length;
+  const matchedCount = matchedItems.length;
   const evidenceValidityRate = matchedCount === 0 ? (answerText.trim() ? 1 : 0) : validMatchedPoints / matchedCount;
   return {
     verification_passed: invalidPoints.length === 0,
@@ -124,10 +155,12 @@ export function verifyEvidence(input, output) {
 }
 
 export function applyEvidenceVerification(input, output) {
-  const verification = verifyEvidence(input, output);
+  const safeOutput = output !== null && typeof output === "object" && !Array.isArray(output) ? output : {};
+  const verification = verifyEvidence(input, safeOutput);
+  const riskFlags = Array.isArray(safeOutput.risk_flags) ? safeOutput.risk_flags : [];
   return {
-    ...output,
-    risk_flags: [...new Set([...(output.risk_flags ?? []), ...verification.forced_risk_flags])],
-    needs_human_review: output.needs_human_review || verification.forced_needs_human_review
+    ...safeOutput,
+    risk_flags: [...new Set([...riskFlags, ...verification.forced_risk_flags])],
+    needs_human_review: safeOutput.needs_human_review === true || verification.forced_needs_human_review
   };
 }

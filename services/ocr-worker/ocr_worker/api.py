@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 from urllib import error, request
+from urllib.parse import urlsplit
 
 
 class APIError(RuntimeError):
@@ -135,7 +136,7 @@ class EduGradeClient:
         return json.loads(raw.decode("utf-8"))
 
     def _build_request(self, method: str, path_or_url: str, payload: dict[str, Any] | None, require_auth: bool = True) -> request.Request:
-        url = path_or_url if path_or_url.startswith("http") else f"{self.base_url}{path_or_url}"
+        url = _trusted_service_url(self.base_url, path_or_url)
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         headers = {"Accept": "application/json"}
         if payload is not None:
@@ -143,3 +144,28 @@ class EduGradeClient:
         if require_auth and self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         return request.Request(url, data=body, headers=headers, method=method)
+
+
+def _trusted_service_url(base_url: str, path_or_url: str) -> str:
+    candidate = path_or_url if path_or_url.startswith(("http://", "https://")) else f"{base_url.rstrip('/')}/{path_or_url.lstrip('/')}"
+    try:
+        base = urlsplit(base_url)
+        target = urlsplit(candidate)
+        default_ports = {"http": 80, "https": 443}
+        base_origin = (base.scheme.lower(), (base.hostname or "").lower(), base.port or default_ports.get(base.scheme.lower()))
+        target_origin = (
+            target.scheme.lower(),
+            (target.hostname or "").lower(),
+            target.port or default_ports.get(target.scheme.lower()),
+        )
+    except ValueError as exc:
+        raise APIError("service URL is invalid") from exc
+    if (
+        target.scheme.lower() not in default_ports
+        or target_origin != base_origin
+        or target.username is not None
+        or target.password is not None
+        or target.fragment
+    ):
+        raise APIError("service URL must remain on the configured API origin")
+    return candidate

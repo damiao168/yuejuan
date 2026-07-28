@@ -10,6 +10,7 @@ export function reliabilitySignal(observation) {
 }
 
 export function acceptableAgreement(observation, toleranceFraction = 0.1) {
+  if (!Number.isFinite(observation.max_score) || observation.max_score <= 0) return false;
   const normalizedError = Math.abs(observation.model_score - observation.gold_score) / observation.max_score;
   return observation.schema_valid && observation.evidence_valid && normalizedError <= toleranceFraction;
 }
@@ -55,6 +56,7 @@ export function fitIsotonicCalibration(observations) {
 
 export function predictCalibratedProbability(model, signal) {
   if (!model?.blocks?.length) throw new Error("calibration model has no blocks");
+  if (!Number.isFinite(signal)) throw new Error("calibration signal must be finite");
   if (signal < model.blocks[0].min_signal) return model.blocks[0].probability;
   for (let index = 0; index < model.blocks.length; index += 1) {
     const block = model.blocks[index];
@@ -66,6 +68,8 @@ export function predictCalibratedProbability(model, signal) {
 }
 
 export function evaluateCalibration(observations, model, bins = 10) {
+  if (!Array.isArray(observations) || observations.length === 0) throw new Error("evaluation observations are required");
+  if (!Number.isInteger(bins) || bins <= 0) throw new Error("calibration bins must be a positive integer");
   const predictions = observations.map((observation) => {
     const signal = reliabilitySignal(observation);
     return {

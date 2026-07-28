@@ -154,6 +154,44 @@ func TestTeacherRoleDoesNotRetainReviewManagementPermissions(t *testing.T) {
 	}
 }
 
+func TestScoringRunIndexesCoverRunScopedGradeLookups(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000050_scoring_run_grade_candidate_indexes.sql"))
+	if err != nil {
+		t.Fatalf("read scoring run index migration: %v", err)
+	}
+	sqlText := compactMigrationSQL(string(raw))
+	for _, want := range []string{
+		"idx_question_grade_scoring_run",
+		"question_grade (tenant_id, scoring_run_id, answer_segment_id)",
+		"idx_answer_candidate_scoring_run",
+		"answer_candidate (tenant_id, scoring_run_id, answer_segment_id)",
+		"WHERE scoring_run_id IS NOT NULL AND deleted_at IS NULL",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("scoring run index migration must contain %q", want)
+		}
+	}
+}
+
+func TestHumanGradeAILinkMigrationAddsNullableForeignKeyAndLookupIndex(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000051_human_grade_ai_link.sql"))
+	if err != nil {
+		t.Fatalf("read human grade AI link migration: %v", err)
+	}
+	sqlText := compactMigrationSQL(string(raw))
+	for _, want := range []string{
+		"ADD COLUMN IF NOT EXISTS ai_grade_id UUID",
+		"FOREIGN KEY (ai_grade_id) REFERENCES ai_grade(id)",
+		"idx_human_grade_ai_grade",
+		"human_grade (tenant_id, ai_grade_id)",
+		"WHERE ai_grade_id IS NOT NULL AND deleted_at IS NULL",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("human grade AI link migration must contain %q", want)
+		}
+	}
+}
+
 func compactMigrationSQL(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }

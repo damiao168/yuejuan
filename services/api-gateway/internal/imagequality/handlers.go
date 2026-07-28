@@ -137,18 +137,30 @@ func (h *Handler) ClaimJobs(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
-		_, heartbeatErr := h.runtime.Heartbeat(r.Context(), user.TenantID, task.ID, workerruntime.HeartbeatInput{
+		heartbeatTask, heartbeatErr := h.runtime.Heartbeat(r.Context(), user.TenantID, task.ID, workerruntime.HeartbeatInput{
 			LeaseToken: task.LeaseToken, WorkerService: "image-quality-worker", WorkerInstanceID: input.WorkerInstanceID, State: workerruntime.StatusRunning,
+			LeaseSeconds: input.LeaseSeconds,
 		})
 		if heartbeatErr != nil {
 			writeStoreError(w, r, heartbeatErr)
 			return
 		}
+		if heartbeatTask.LeaseExpiresAt == nil {
+			writeStoreError(w, r, workerruntime.ErrInvalidTransition)
+			return
+		}
+		run, leaseErr = h.store.RenewLease(r.Context(), user.TenantID, run.ID, input.WorkerInstanceID, task.LeaseToken, *heartbeatTask.LeaseExpiresAt, task.AttemptCount)
+		if leaseErr != nil {
+			_, _ = h.runtime.Fail(r.Context(), user.TenantID, task.ID, workerruntime.FailInput{
+				LeaseToken: task.LeaseToken, Retryable: true, ErrorCode: "source_lease_renewal_failed", ErrorDetail: map[string]any{"source_type": task.SourceType},
+			})
+			continue
+		}
 		jobs = append(jobs, ClaimedJob{
 			RuntimeTaskID: task.ID, ExamID: submissionItem.ExamID, RunID: run.ID, SubmissionID: run.SubmissionID, SubmissionPageID: run.SubmissionPageID,
 			PageNo: run.PageNo, SourceFileAssetID: run.SourceFileAssetID, SourceSHA256: run.SourceSHA256,
 			DownloadURL: "/api/v1/files/" + run.SourceFileAssetID + "/download", LeaseToken: task.LeaseToken,
-			LeaseExpiresAt: *task.LeaseExpiresAt, AttemptNo: task.AttemptCount,
+			LeaseExpiresAt: *heartbeatTask.LeaseExpiresAt, AttemptNo: task.AttemptCount,
 			Profile: Profile{Name: run.ProfileName, Version: run.ProfileVersion, ConfigHash: run.ProfileConfigHash, MetricSchemaVersion: run.MetricSchemaVersion, ReportSchemaVersion: run.ReportSchemaVersion},
 		})
 		h.auditAction(r, "worker.task_claimed", "agent_worker_task", task.ID, "claim image quality runtime task")

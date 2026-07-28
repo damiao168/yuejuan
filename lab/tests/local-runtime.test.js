@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   LAB_ROOT,
+  inspectLocalRuntime,
   loadLocalRuntimeManifest,
   resolveLocalRuntimePaths,
   validateLocalRuntimeManifest
@@ -30,4 +31,9 @@ test("runtime manifest rejects paths outside lab", () => {
   const result = validateLocalRuntimeManifest(manifest);
   assert.equal(result.valid, false);
   assert.ok(result.errors.some((error) => error.includes("model_path")));
+  assert.throws(() => resolveLocalRuntimePaths(manifest), /Invalid local runtime manifest/);
+  const inspection = inspectLocalRuntime(manifest);
+  assert.equal(inspection.manifest_validation.valid, false);
+  assert.equal(inspection.model.path, null);
+  assert.equal(inspection.model.exists, false);
 });

@@ -1,7 +1,6 @@
 package evidence
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -35,17 +34,6 @@ func (h *Handler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 	h.auditAction(r, "evidence.checked", "ai_grade", ctx.Grade.ID, "verify ai grade evidence")
 	httpx.JSON(w, http.StatusCreated, map[string]any{"job": job})
-}
-
-func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
-	if r.Body == nil {
-		return true
-	}
-	if err := json.NewDecoder(r.Body).Decode(target); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "invalid json body")
-		return false
-	}
-	return true
 }
 
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {

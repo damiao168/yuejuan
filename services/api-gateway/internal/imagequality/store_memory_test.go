@@ -114,6 +114,41 @@ func TestClaimCanRecoverExpiredLease(t *testing.T) {
 	}
 }
 
+func TestRenewLeaseKeepsLongRunningQualityJobActive(t *testing.T) {
+	store := imagequality.NewMemoryStore()
+	_, err := store.CreateRuns(context.Background(), tenantID, imagequality.CreateRunsInput{
+		SubmissionID: "submission-1",
+		Profile:      imagequality.DefaultProfile(),
+		Pages: []imagequality.PageSource{{
+			SubmissionPageID:  "page-1",
+			PageNo:            1,
+			SourceFileAssetID: "file-original-1",
+			SourceSHA256:      "source-hash-1",
+			DownloadURL:       "/api/v1/files/file-original-1/download",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create runs: %v", err)
+	}
+	claimed, err := store.Claim(context.Background(), tenantID, imagequality.ClaimInput{WorkerInstanceID: "worker-a", Limit: 1, LeaseSeconds: 300})
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim: %v %#v", err, claimed)
+	}
+
+	store.ForceExpireLeaseForTest(claimed[0].RunID)
+	renewedUntil := time.Now().UTC().Add(10 * time.Minute)
+	renewed, err := store.RenewLease(context.Background(), tenantID, claimed[0].RunID, "worker-a", claimed[0].LeaseToken, renewedUntil, claimed[0].AttemptNo)
+	if err != nil {
+		t.Fatalf("renew matching lease: %v", err)
+	}
+	if renewed.LeaseExpiresAt == nil || !renewed.LeaseExpiresAt.Equal(renewedUntil) {
+		t.Fatalf("source lease was not renewed: %#v", renewed.LeaseExpiresAt)
+	}
+	if _, err = store.RenewLease(context.Background(), tenantID, claimed[0].RunID, "worker-b", claimed[0].LeaseToken, renewedUntil, claimed[0].AttemptNo); !errors.Is(err, imagequality.ErrLeaseMismatch) {
+		t.Fatalf("mismatched worker must not renew source lease, got %v", err)
+	}
+}
+
 func TestCompleteResultIsIdempotentAndRejectsChangedPayload(t *testing.T) {
 	store := imagequality.NewMemoryStore()
 	_, err := store.CreateRuns(context.Background(), tenantID, imagequality.CreateRunsInput{

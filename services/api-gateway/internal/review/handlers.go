@@ -532,6 +532,7 @@ func (h *Handler) ListArbitrationTasks(w http.ResponseWriter, r *http.Request) {
 	filter := ArbitrationFilter{
 		Status:     r.URL.Query().Get("status"),
 		AssignedTo: r.URL.Query().Get("assigned_to"),
+		ExamID:     r.URL.Query().Get("exam_id"),
 	}
 	if arbitrationWorkerScoped(user) {
 		filter.AssignedTo = user.ID

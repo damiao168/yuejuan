@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import io
 
+import pytest
+from page_processing.omr import OMRExtractionError, OMRProfile, extract_marks
 from PIL import Image, ImageDraw
-
-from page_processing.omr import OMRExtractionError, extract_marks
-
 
 REGIONS = [
     {"label": "A", "x": 20, "y": 20, "width": 30, "height": 30},
@@ -64,3 +63,39 @@ def test_rejects_missing_or_unsafe_regions() -> None:
         raise AssertionError("unsafe region must fail")
     except OMRExtractionError as exc:
         assert str(exc) == "omr_option_region_out_of_bounds"
+
+
+def test_rejects_non_finite_regions_and_profile_thresholds() -> None:
+    with pytest.raises(OMRExtractionError, match="omr_option_region_invalid"):
+        extract_marks(sheet("A"), [{"label": "A", "x": float("nan"), "y": 0, "width": 10, "height": 10}])
+
+    with pytest.raises(OMRExtractionError, match="omr_profile_threshold_invalid"):
+        extract_marks(sheet("A"), REGIONS, profile=OMRProfile(marked_threshold=float("nan")))
+
+    with pytest.raises(OMRExtractionError, match="omr_profile_threshold_invalid"):
+        extract_marks(sheet("A"), REGIONS, profile=OMRProfile(border_fraction=0.5))
+
+    with pytest.raises(OMRExtractionError, match="omr_multiple_flag_invalid"):
+        extract_marks(sheet("A"), REGIONS, multiple="false")
+
+    with pytest.raises(OMRExtractionError, match="omr_option_region_invalid"):
+        extract_marks(sheet("A"), [{"label": "A", "x": True, "y": 0, "width": 10, "height": 10}])
+
+
+def test_rejects_unsafe_reference_dimensions_before_resize() -> None:
+    profile = OMRProfile(
+        mode="template_difference",
+        version="opencv-template-difference-bubble-v1",
+    )
+    reference_region = {"x": 0, "y": 0, "width": 1, "height": 1}
+    with pytest.raises(OMRExtractionError, match="omr_reference_dimensions_invalid"):
+        extract_marks(
+            sheet("A"),
+            REGIONS,
+            profile=profile,
+            reference_image_bytes=sheet(),
+            reference_content_type="image/png",
+            reference_page_width=100_000,
+            reference_page_height=100_000,
+            reference_question_region=reference_region,
+        )

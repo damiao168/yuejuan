@@ -682,6 +682,21 @@ func TestArbitrationWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 		t.Fatalf("submit second mark expected 201, got %d %s", rec.Code, rec.Body.String())
 	}
 	arbitrationID := decodeArbitrationIDFromSubmit(t, rec.Body.Bytes())
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/arbitration-tasks?exam_id=exam-1", "", managerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), arbitrationID) {
+		t.Fatalf("matching exam filter should include arbitration task, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/arbitration-tasks?exam_id=other-exam", "", managerToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), arbitrationID) {
+		t.Fatalf("non-matching exam filter should exclude arbitration task, got %d %s", rec.Code, rec.Body.String())
+	}
+
 	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/submit", `{"final_score":3,"reason":"manager must assign an arbitrator first"}`, managerToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)

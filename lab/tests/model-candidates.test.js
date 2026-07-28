@@ -16,3 +16,11 @@ test("model candidate paths cannot escape lab", () => {
   assert.equal(result.valid, false);
   assert.ok(result.errors.some((error) => error.includes("model_path")));
 });
+
+test("malformed model candidate returns validation errors instead of throwing", () => {
+  const registry = loadModelCandidates();
+  registry.candidates[0] = null;
+  const result = validateModelCandidates(registry);
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join("\n"), /must be an object/);
+});

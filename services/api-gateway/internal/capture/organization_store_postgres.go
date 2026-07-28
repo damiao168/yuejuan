@@ -127,7 +127,13 @@ func (s *PostgresStore) MergeSubmissions(ctx context.Context, tenantID, batchID,
 		}
 		ids = append(ids, id)
 	}
-	rows.Close()
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return MatchingQueue{}, err
+	}
+	if err = rows.Close(); err != nil {
+		return MatchingQueue{}, err
+	}
 	if len(ids) == 0 {
 		return MatchingQueue{}, ErrNotFound
 	}

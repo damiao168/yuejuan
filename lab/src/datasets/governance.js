@@ -26,6 +26,10 @@ export function validateDatasetSourceRegistry(registry) {
   const ids = new Set();
   for (const [index, source] of registry.sources.entries()) {
     const label = `sources[${index}]`;
+    if (!source || typeof source !== "object" || Array.isArray(source)) {
+      errors.push(`${label} must be an object`);
+      continue;
+    }
     if (!source.source_id) errors.push(`${label}.source_id is required`);
     if (ids.has(source.source_id)) errors.push(`duplicate source_id: ${source.source_id}`);
     ids.add(source.source_id);
@@ -111,6 +115,11 @@ function hashOrder(seed, key) {
 export function splitByQuestionGroup(samples, options = {}) {
   const seed = options.seed ?? "edugrade-group-split-v1";
   const ratios = options.ratios ?? { train: 0.7, validation: 0.15, test: 0.15 };
+  for (const name of ["train", "validation", "test"]) {
+    if (!Number.isFinite(ratios[name]) || ratios[name] < 0 || ratios[name] > 1) {
+      throw new Error(`split ratio ${name} must be between 0 and 1`);
+    }
+  }
   const ratioTotal = ratios.train + ratios.validation + ratios.test;
   if (Math.abs(ratioTotal - 1) > 1e-9) throw new Error("split ratios must total 1");
   const groups = new Map();

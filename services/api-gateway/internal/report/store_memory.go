@@ -176,12 +176,8 @@ func (s *MemoryStore) ExportCount() int {
 
 func (s *MemoryStore) copyDataset(examID string) dataset {
 	data := dataset{ExamID: examID}
-	for _, sub := range s.data.Submissions {
-		data.Submissions = append(data.Submissions, sub)
-	}
-	for _, grade := range s.data.Grades {
-		data.Grades = append(data.Grades, grade)
-	}
+	data.Submissions = append(data.Submissions, s.data.Submissions...)
+	data.Grades = append(data.Grades, s.data.Grades...)
 	return data
 }
 

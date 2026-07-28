@@ -12,7 +12,6 @@ from PIL import Image, ImageDraw
 
 from .omr import extract_marks
 
-
 OPTION_REGIONS = [
     {"label": "A", "x": 20, "y": 20, "width": 30, "height": 30},
     {"label": "B", "x": 70, "y": 20, "width": 30, "height": 30},

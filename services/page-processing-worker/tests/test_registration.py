@@ -1,8 +1,12 @@
 import cv2
 import numpy as np
 import pytest
-
-from page_processing.registration import RegistrationError, crop_regions, register_page, register_page_manual
+from page_processing.registration import (
+    RegistrationError,
+    crop_regions,
+    register_page,
+    register_page_manual,
+)
 
 
 def _png(image: np.ndarray) -> bytes:

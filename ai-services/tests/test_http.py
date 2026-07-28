@@ -6,7 +6,6 @@ from urllib import request as urlrequest
 
 from grading_agent.app import GradingAgentApplication
 from grading_agent.server import GradingAgentHTTPServer
-
 from helpers import FakeModel, settings, valid_request
 
 

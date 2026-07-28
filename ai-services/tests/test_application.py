@@ -4,7 +4,6 @@ import unittest
 
 from grading_agent.app import GradingAgentApplication
 from grading_agent.errors import AgentError
-
 from helpers import FakeModel, settings, valid_raw_output, valid_request
 
 

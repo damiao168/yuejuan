@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +42,8 @@ def extract_marks(
 ) -> dict[str, Any]:
     profile = profile or OMRProfile()
     _validate_profile(profile)
+    if not isinstance(multiple, bool):
+        raise OMRExtractionError("omr_multiple_flag_invalid")
     image = _decode_grayscale(image_bytes)
     height, width = image.shape
     if not option_regions:
@@ -78,8 +81,8 @@ def extract_marks(
             raise OMRExtractionError("omr_option_label_missing")
         x, y, w, h = _pixel_region(region, width, height)
         roi = binary[y : y + h, x : x + w]
-        inset_x = max(1, int(round(w * profile.border_fraction)))
-        inset_y = max(1, int(round(h * profile.border_fraction)))
+        inset_x = max(1, round(w * profile.border_fraction))
+        inset_y = max(1, round(h * profile.border_fraction))
         inner = roi[inset_y : h - inset_y, inset_x : w - inset_x]
         if inner.size == 0:
             raise OMRExtractionError("omr_option_region_too_small")
@@ -111,9 +114,7 @@ def extract_marks(
         selected = []
     elif not multiple and len(selected) > 1:
         decision = "multiple"
-    elif not multiple and len(selected) == 1 and margin < profile.minimum_margin:
-        decision = "ambiguous"
-    elif multiple and not selected:
+    elif not multiple and len(selected) == 1 and margin < profile.minimum_margin or multiple and not selected:
         decision = "ambiguous"
     elif selected:
         decision = "selected"
@@ -140,11 +141,31 @@ def extract_marks(
 
 
 def _validate_profile(profile: OMRProfile) -> None:
+    thresholds = (
+        profile.marked_threshold,
+        profile.ambiguous_threshold,
+        profile.minimum_margin,
+        profile.border_fraction,
+    )
+    if not all(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) for value in thresholds):
+        raise OMRExtractionError("omr_profile_threshold_invalid")
+    if not 0 < profile.marked_threshold <= 1:
+        raise OMRExtractionError("omr_profile_threshold_invalid")
+    if not 0 <= profile.ambiguous_threshold <= profile.marked_threshold:
+        raise OMRExtractionError("omr_profile_threshold_invalid")
+    if not 0 <= profile.minimum_margin <= 1:
+        raise OMRExtractionError("omr_profile_threshold_invalid")
+    if not 0 <= profile.border_fraction < 0.5:
+        raise OMRExtractionError("omr_profile_threshold_invalid")
+    if (
+        not isinstance(profile.reference_mask_dilation_pixels, int)
+        or isinstance(profile.reference_mask_dilation_pixels, bool)
+        or not 0 <= profile.reference_mask_dilation_pixels <= 4
+    ):
+        raise OMRExtractionError("omr_reference_mask_dilation_invalid")
     if profile.mode == "manual_only" and profile.version == "opencv-fill-v1":
         return
     if profile.mode == "template_difference" and profile.version == "opencv-template-difference-bubble-v1":
-        if profile.reference_mask_dilation_pixels < 0 or profile.reference_mask_dilation_pixels > 4:
-            raise OMRExtractionError("omr_reference_mask_dilation_invalid")
         return
     raise OMRExtractionError("omr_profile_unsupported")
 
@@ -152,11 +173,13 @@ def _validate_profile(profile: OMRProfile) -> None:
 def _decode_grayscale(data: bytes) -> np.ndarray:
     try:
         with Image.open(io.BytesIO(data)) as image:
-            image.load()
             if image.width < 8 or image.height < 8:
                 raise OMRExtractionError("omr_image_too_small")
+            if image.width * image.height > 50_000_000:
+                raise OMRExtractionError("omr_image_too_large")
+            image.load()
             return np.asarray(image.convert("L"), dtype=np.uint8)
-    except (UnidentifiedImageError, OSError) as exc:
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise OMRExtractionError("omr_image_decode_failed") from exc
 
 
@@ -170,6 +193,17 @@ def _decode_reference_crop(
 ) -> np.ndarray:
     if page_no < 1 or page_no > 100:
         raise OMRExtractionError("omr_reference_page_invalid")
+    if (
+        not isinstance(page_width, int)
+        or isinstance(page_width, bool)
+        or not isinstance(page_height, int)
+        or isinstance(page_height, bool)
+        or page_width < 0
+        or page_height < 0
+        or (page_width == 0) != (page_height == 0)
+        or page_width * page_height > 60_000_000
+    ):
+        raise OMRExtractionError("omr_reference_dimensions_invalid")
     try:
         pages, _ = decode_document(
             data,
@@ -187,17 +221,19 @@ def _decode_reference_crop(
     if page_width > 0 and page_height > 0 and reference.shape != (page_height, page_width):
         reference = cv2.resize(reference, (page_width, page_height), interpolation=cv2.INTER_AREA)
     try:
-        x = float(region["x"])
-        y = float(region["y"])
-        width = float(region["width"])
-        height = float(region["height"])
+        raw_values = [region[name] for name in ("x", "y", "width", "height")]
+        if any(isinstance(value, bool) for value in raw_values):
+            raise TypeError("boolean coordinates are invalid")
+        x, y, width, height = (float(value) for value in raw_values)
     except (KeyError, TypeError, ValueError) as exc:
         raise OMRExtractionError("omr_reference_region_invalid") from exc
+    if not all(math.isfinite(value) for value in (x, y, width, height)):
+        raise OMRExtractionError("omr_reference_region_invalid")
     if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
         raise OMRExtractionError("omr_reference_region_invalid")
     page_height, page_width = reference.shape
-    left, top = int(round(x * page_width)), int(round(y * page_height))
-    right, bottom = int(round((x + width) * page_width)), int(round((y + height) * page_height))
+    left, top = round(x * page_width), round(y * page_height)
+    right, bottom = round((x + width) * page_width), round((y + height) * page_height)
     left, top = max(0, left), max(0, top)
     right, bottom = min(page_width, right), min(page_height, bottom)
     if right <= left or bottom <= top:
@@ -226,18 +262,23 @@ def _align_reference_crop(reference: np.ndarray, target_shape: tuple[int, int]) 
 
 def _pixel_region(region: dict[str, Any], width: int, height: int) -> tuple[int, int, int, int]:
     try:
-        values = [float(region[name]) for name in ("x", "y", "width", "height")]
+        raw_values = [region[name] for name in ("x", "y", "width", "height")]
+        if any(isinstance(value, bool) for value in raw_values):
+            raise TypeError("boolean coordinates are invalid")
+        values = [float(value) for value in raw_values]
     except (KeyError, TypeError, ValueError) as exc:
         raise OMRExtractionError("omr_option_region_invalid") from exc
     x, y, w, h = values
+    if not all(math.isfinite(value) for value in values):
+        raise OMRExtractionError("omr_option_region_invalid")
     normalized = max(values) <= 1.0
     if normalized:
         x, w = x * width, w * width
         y, h = y * height, h * height
-    px = int(round(x))
-    py = int(round(y))
-    pw = int(round(w))
-    ph = int(round(h))
+    px = round(x)
+    py = round(y)
+    pw = round(w)
+    ph = round(h)
     if px < 0 or py < 0 or pw < 6 or ph < 6 or px + pw > width or py + ph > height:
         raise OMRExtractionError("omr_option_region_out_of_bounds")
     return px, py, pw, ph

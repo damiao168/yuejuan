@@ -572,8 +572,9 @@ func (s *PostgresStore) ListArbitrationTasks(ctx context.Context, tenantID strin
 WHERE tenant_id = $1 AND deleted_at IS NULL
   AND ($2 = '' OR status = $2)
   AND ($3 = '' OR COALESCE(assigned_to::text, '') = $3)
+  AND ($4 = '' OR exam_id::text = $4)
 ORDER BY created_at DESC
-`, tenantID, filter.Status, filter.AssignedTo)
+`, tenantID, filter.Status, filter.AssignedTo, filter.ExamID)
 	if err != nil {
 		return nil, err
 	}

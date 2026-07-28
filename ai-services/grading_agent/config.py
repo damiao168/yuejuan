@@ -1,5 +1,7 @@
-from dataclasses import dataclass
+import math
 import os
+from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 
 def _integer(name, default, minimum, maximum):
@@ -19,7 +21,7 @@ def _float(name, default, minimum, maximum):
         value = float(raw)
     except ValueError as exc:
         raise ValueError(f"{name} must be a number") from exc
-    if value < minimum or value > maximum:
+    if not math.isfinite(value) or value < minimum or value > maximum:
         raise ValueError(f"{name} must be between {minimum} and {maximum}")
     return value
 
@@ -73,8 +75,28 @@ class Settings:
             contract_root=os.getenv("EDUGRADE_GRADING_CONTRACT_ROOT", "/app/contracts/grading-agent/v1"),
             prompt_root=os.getenv("EDUGRADE_GRADING_PROMPT_ROOT", "/app/prompts"),
         )
-        if len(settings.service_token) < 32:
-            raise ValueError("EDUGRADE_GRADING_AGENT_TOKEN must contain at least 32 characters")
+        if (
+            len(settings.service_token) < 32
+            or settings.service_token != settings.service_token.strip()
+            or any(character.isspace() for character in settings.service_token)
+        ):
+            raise ValueError("EDUGRADE_GRADING_AGENT_TOKEN must contain at least 32 non-whitespace characters")
+        if not settings.host:
+            raise ValueError("EDUGRADE_GRADING_AGENT_HOST must not be empty")
+        try:
+            model_url = urlsplit(settings.model_base_url)
+            _ = model_url.port
+        except ValueError as exc:
+            raise ValueError("EDUGRADE_GRADING_MODEL_BASE_URL must be a valid HTTP(S) URL") from exc
+        if (
+            model_url.scheme not in {"http", "https"}
+            or not model_url.hostname
+            or model_url.username is not None
+            or model_url.password is not None
+            or model_url.query
+            or model_url.fragment
+        ):
+            raise ValueError("EDUGRADE_GRADING_MODEL_BASE_URL must be a valid HTTP(S) URL")
         if not settings.model_name or not settings.model_version or not settings.prompt_version:
             raise ValueError("model and prompt versions must be configured")
         return settings

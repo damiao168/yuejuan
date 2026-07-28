@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import io
 import hashlib
+import io
 
-from PIL import Image, ImageDraw
 import pytest
-
 from page_processing.config import Config
 from page_processing.omr import OMRExtractionError
 from page_processing.runner import Runner
+from PIL import Image, ImageDraw
 
 
 class FakeClient:

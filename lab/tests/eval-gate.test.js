@@ -28,6 +28,17 @@ test("production gate fails when sample count is too small", () => {
   assert.match(result.reasons.join("\n"), /sample_count/);
 });
 
+test("release gate fails closed when required numeric evidence is missing or non-finite", () => {
+  const report = runEvaluation({ datasetPath: "evals/synthetic/samples.jsonl", adapterName: "mock" });
+  const config = loadGateConfig("config/release-gates.json");
+  delete report.metrics.mock_marked_rate;
+  report.sample_count = Number.NaN;
+  const result = checkGate(report, "dev", config);
+  assert.equal(result.passed, false);
+  assert.match(result.reasons.join("\n"), /sample_count/);
+  assert.match(result.reasons.join("\n"), /mock_marked_rate/);
+});
+
 test("eval writer emits JSON, markdown, and failed cases", () => {
   const report = runEvaluation({ datasetPath: "evals/synthetic/samples.jsonl", adapterName: "mock", filters: { tag: "prompt_injection" } });
   const dir = mkdtempSync(join(tmpdir(), "grading-agent-lab-"));

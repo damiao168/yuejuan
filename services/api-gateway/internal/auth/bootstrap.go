@@ -39,6 +39,9 @@ func BootstrapInitialAdmin(ctx context.Context, store BootstrapStore, input Boot
 	if input.Username == "" {
 		return BootstrapAdminResult{}, ErrInvalidBootstrapInput
 	}
+	if !bootstrapFieldsWithinLimits(input) {
+		return BootstrapAdminResult{}, ErrInvalidBootstrapInput
+	}
 	if !strongBootstrapPassword(input.Password) {
 		return BootstrapAdminResult{}, ErrWeakBootstrapPassword
 	}

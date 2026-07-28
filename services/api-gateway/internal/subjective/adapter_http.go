@@ -18,6 +18,7 @@ import (
 )
 
 const gradingAgentSchemaVersion = "grading-agent-v1"
+const maxGradingAgentResponseBytes int64 = 1 << 20
 
 type HTTPAdapterConfig struct {
 	BaseURL       string
@@ -211,10 +212,13 @@ func (a *HTTPAdapter) request(ctx context.Context, requestID string, body []byte
 		return gradingAgentResponse{}, &GradingAgentError{Code: "adapter_transport_error", Retryable: true, cause: err}
 	}
 	defer resp.Body.Close()
-	limited := io.LimitReader(resp.Body, 1<<20)
+	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxGradingAgentResponseBytes+1))
+	if readErr != nil {
+		return gradingAgentResponse{}, &GradingAgentError{Code: "agent_response_read_failed", Retryable: true, cause: readErr}
+	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var remote gradingAgentErrorResponse
-		_ = json.NewDecoder(limited).Decode(&remote)
+		_ = json.Unmarshal(responseBody, &remote)
 		code := strings.TrimSpace(remote.Error.Code)
 		if code == "" {
 			code = "agent_http_error"
@@ -225,8 +229,11 @@ func (a *HTTPAdapter) request(ctx context.Context, requestID string, body []byte
 			Retryable: remote.Error.Retryable || resp.StatusCode >= http.StatusInternalServerError,
 		}
 	}
+	if int64(len(responseBody)) > maxGradingAgentResponseBytes {
+		return gradingAgentResponse{}, &GradingAgentError{Code: "agent_response_too_large"}
+	}
 	var response gradingAgentResponse
-	decoder := json.NewDecoder(limited)
+	decoder := json.NewDecoder(bytes.NewReader(responseBody))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&response); err != nil {
 		return gradingAgentResponse{}, &GradingAgentError{Code: "agent_response_invalid", cause: err}
@@ -238,7 +245,7 @@ func (a *HTTPAdapter) request(ctx context.Context, requestID string, body []byte
 }
 
 func (a *HTTPAdapter) mapResponse(input AdapterInput, response gradingAgentResponse) (AdapterOutput, error) {
-	if response.SchemaVersion != gradingAgentSchemaVersion || response.RequestID != input.RequestID || response.Status != "suggestion" || response.NeedsHumanReview != true || response.Mock || response.ModelVersion != a.policy.ModelVersion || response.PromptVersion != a.policy.PromptVersion || response.RubricVersion != input.Rubric.Version || response.CapabilityProfile != "local-pilot-v1" {
+	if response.SchemaVersion != gradingAgentSchemaVersion || response.RequestID != input.RequestID || response.Status != "suggestion" || !response.NeedsHumanReview || response.Mock || response.ModelVersion != a.policy.ModelVersion || response.PromptVersion != a.policy.PromptVersion || response.RubricVersion != input.Rubric.Version || response.CapabilityProfile != "local-pilot-v1" {
 		return AdapterOutput{}, &GradingAgentError{Code: "agent_response_contract_mismatch"}
 	}
 	if response.Delivery != "teacher_suggestion" && response.Delivery != "shadow_only" {

@@ -13,6 +13,11 @@ export class LocalModelError extends Error {
   }
 }
 
+function hasExactFields(value, fields) {
+  const actual = Object.keys(value);
+  return actual.length === fields.length && actual.every((field) => fields.includes(field));
+}
+
 export function gradingOutputJsonSchema(input) {
   const pointIds = input.rubric.points.map((point) => point.id);
   const pointId = { type: "string", enum: pointIds };
@@ -111,13 +116,40 @@ export function normalizeLocalModelOutput(raw, input, modelVersion) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new LocalModelError("local model output must be an object", "INVALID_OUTPUT");
   }
+  const expectedFields = new Set([
+    "suggested_score", "confidence", "matched_points", "missing_points", "deductions", "evidence",
+    "risk_flags", "needs_human_review", "student_feedback", "teacher_note"
+  ]);
+  const actualFields = Object.keys(raw);
+  if (actualFields.length !== expectedFields.size || actualFields.some((field) => !expectedFields.has(field))) {
+    throw new LocalModelError("local model output fields did not match the governed schema", "SCHEMA_INVALID");
+  }
+  for (const field of ["matched_points", "missing_points", "deductions", "evidence", "risk_flags"]) {
+    if (!Array.isArray(raw[field])) throw new LocalModelError(`local model ${field} must be an array`, "SCHEMA_INVALID");
+  }
+  if (raw.deductions.length !== 0) {
+    throw new LocalModelError("local model deductions are disabled for this profile", "SCHEMA_INVALID");
+  }
+  if (typeof raw.needs_human_review !== "boolean" || typeof raw.student_feedback !== "string" ||
+      raw.student_feedback.trim().length === 0 || typeof raw.teacher_note !== "string" ||
+      raw.teacher_note.trim().length === 0) {
+    throw new LocalModelError("local model governance fields were invalid", "SCHEMA_INVALID");
+  }
+  if (!Number.isFinite(raw.suggested_score) ||
+      !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1) {
+    throw new LocalModelError("local model score or confidence was outside the allowed range", "SCHEMA_INVALID");
+  }
   const rubricPoints = new Map(input.rubric.points.map((point) => [point.id, point]));
   const classified = new Set();
   const matchedPoints = [];
   const missingPoints = [];
   const rejectedEvidenceIds = new Set();
   const normalizedAnswer = normalizeText(input.answer_text);
-  for (const point of raw.matched_points ?? []) {
+  for (const point of raw.matched_points) {
+    if (!point || typeof point !== "object" || Array.isArray(point) ||
+        !hasExactFields(point, ["rubric_point_id", "score", "evidence_ids"])) {
+      throw new LocalModelError("local model matched point must be an object", "SCHEMA_INVALID");
+    }
     const rubricPoint = rubricPoints.get(point.rubric_point_id);
     if (!rubricPoint) throw new LocalModelError("local model referenced an unknown rubric point", "UNKNOWN_RUBRIC_POINT");
     if (classified.has(point.rubric_point_id)) throw new LocalModelError("local model classified a rubric point more than once", "DUPLICATE_RUBRIC_POINT");
@@ -126,6 +158,10 @@ export function normalizeLocalModelOutput(raw, input, modelVersion) {
     }
     if (!Array.isArray(point.evidence_ids) || point.evidence_ids.length === 0) {
       throw new LocalModelError("matched rubric point lacked evidence links", "EVIDENCE_LINK_MISSING");
+    }
+    if (point.evidence_ids.some((id) => typeof id !== "string" || id.trim().length === 0) ||
+        new Set(point.evidence_ids).size !== point.evidence_ids.length) {
+      throw new LocalModelError("matched rubric point contained invalid evidence links", "EVIDENCE_LINK_INVALID");
     }
     classified.add(point.rubric_point_id);
     if (rubricPoint.match_policy === "strict_alias") {
@@ -142,7 +178,12 @@ export function normalizeLocalModelOutput(raw, input, modelVersion) {
     matchedPoints.push({ ...point });
   }
 
-  for (const point of raw.missing_points ?? []) {
+  for (const point of raw.missing_points) {
+    if (!point || typeof point !== "object" || Array.isArray(point) ||
+        !hasExactFields(point, ["rubric_point_id", "reason"]) ||
+        typeof point.reason !== "string" || point.reason.trim().length === 0) {
+      throw new LocalModelError("local model missing point was invalid", "SCHEMA_INVALID");
+    }
     if (!rubricPoints.has(point.rubric_point_id)) throw new LocalModelError("local model referenced an unknown missing point", "UNKNOWN_RUBRIC_POINT");
     if (classified.has(point.rubric_point_id)) throw new LocalModelError("local model classified a rubric point more than once", "DUPLICATE_RUBRIC_POINT");
     classified.add(point.rubric_point_id);
@@ -152,7 +193,11 @@ export function normalizeLocalModelOutput(raw, input, modelVersion) {
     throw new LocalModelError("local model did not classify every rubric point", "INCOMPLETE_RUBRIC_CLASSIFICATION");
   }
 
-  const evidence = (raw.evidence ?? []).filter((item) => !rejectedEvidenceIds.has(item.evidence_id));
+  if (raw.evidence.some((item) => !item || typeof item !== "object" || Array.isArray(item) ||
+      !hasExactFields(item, ["evidence_id", "rubric_point_id", "text_excerpt", "location", "confidence"]))) {
+    throw new LocalModelError("local model evidence must contain objects", "SCHEMA_INVALID");
+  }
+  const evidence = raw.evidence.filter((item) => !rejectedEvidenceIds.has(item.evidence_id));
   const evidenceById = new Map();
   for (const item of evidence) {
     if (evidenceById.has(item.evidence_id)) throw new LocalModelError("local model emitted duplicate evidence ids", "DUPLICATE_EVIDENCE");

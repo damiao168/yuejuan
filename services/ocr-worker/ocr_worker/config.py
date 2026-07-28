@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -48,15 +49,33 @@ def load_settings() -> Settings:
 
 
 def _validate_settings(settings: Settings) -> None:
+    if not settings.api_base_url.startswith(("http://", "https://")):
+        raise ValueError("EDUGRADE_API_BASE_URL must use http or https")
+    for name, value in (
+        ("EDUGRADE_OCR_WORKER_TENANT_CODE", settings.tenant_code),
+        ("EDUGRADE_OCR_WORKER_USERNAME", settings.username),
+        ("EDUGRADE_OCR_WORKER_PASSWORD", settings.password),
+        ("EDUGRADE_OCR_WORKER_ID", settings.worker_id),
+        ("EDUGRADE_OCR_ENGINE", settings.engine),
+        ("EDUGRADE_OCR_ENGINE_VERSION", settings.engine_version),
+        ("EDUGRADE_OCR_MODEL_VERSION", settings.model_version),
+        ("EDUGRADE_OCR_PREPROCESS_PROFILE", settings.preprocess_profile),
+    ):
+        if not value.strip():
+            raise ValueError(f"{name} must not be empty")
+    if not math.isfinite(settings.min_confidence) or not 0 <= settings.min_confidence <= 1:
+        raise ValueError("EDUGRADE_OCR_MIN_CONFIDENCE must be between 0 and 1")
+    if not math.isfinite(settings.poll_interval) or settings.poll_interval <= 0:
+        raise ValueError("EDUGRADE_OCR_POLL_INTERVAL must be greater than 0")
     # OCR processing is sequential. Claiming more than one task would leave
     # later tasks without a heartbeat while the first model inference runs.
     if settings.batch_size != 1:
         raise ValueError("EDUGRADE_OCR_BATCH_SIZE must be 1 for the sequential OCR worker")
     if settings.lease_seconds < 30 or settings.lease_seconds > 3600:
         raise ValueError("EDUGRADE_OCR_LEASE_SECONDS must be between 30 and 3600")
-    if settings.heartbeat_interval <= 0:
+    if not math.isfinite(settings.heartbeat_interval) or settings.heartbeat_interval <= 0:
         raise ValueError("EDUGRADE_OCR_HEARTBEAT_INTERVAL must be greater than 0")
-    if settings.heartbeat_timeout <= 0:
+    if not math.isfinite(settings.heartbeat_timeout) or settings.heartbeat_timeout <= 0:
         raise ValueError("EDUGRADE_OCR_HEARTBEAT_TIMEOUT must be greater than 0")
     if settings.heartbeat_interval >= settings.lease_seconds:
         raise ValueError("EDUGRADE_OCR_HEARTBEAT_INTERVAL must be shorter than the lease")

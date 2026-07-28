@@ -20,25 +20,30 @@ class ImageQualityError(RuntimeError):
 
 def analyze_and_normalize(data: bytes) -> QualityAnalysisResult:
     try:
-        source = Image.open(io.BytesIO(data))
-        if source.width <= 0 or source.height <= 0 or source.width * source.height > MAX_IMAGE_PIXELS:
-            raise ImageQualityError("image_dimensions_out_of_range")
-        source.load()
+        with Image.open(io.BytesIO(data)) as source:
+            if source.width <= 0 or source.height <= 0 or source.width * source.height > MAX_IMAGE_PIXELS:
+                raise ImageQualityError("image_dimensions_out_of_range")
+            source.load()
+            source_width, source_height = source.size
+            source_format = source.format or "unknown"
+            exif_rotation = _exif_rotation_degrees(source)
+            normalized_image = ImageOps.exif_transpose(source).convert("RGB")
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise ImageQualityError("unreadable_image") from exc
 
-    source_width, source_height = source.size
-    exif_rotation = _exif_rotation_degrees(source)
-    normalized_image = ImageOps.exif_transpose(source).convert("RGB")
     pixel_width, pixel_height = normalized_image.size
 
-    gray = np.asarray(normalized_image.convert("L"))
-    metrics = _metrics(gray)
-    issues = _issues(metrics)
-    quality_status = "review" if issues else "passed"
+    try:
+        with normalized_image.convert("L") as grayscale_image:
+            gray = np.asarray(grayscale_image, dtype=np.uint8)
+            metrics = _metrics(gray)
+        issues = _issues(metrics)
+        quality_status = "review" if issues else "passed"
 
-    output = io.BytesIO()
-    normalized_image.save(output, format="PNG")
+        output = io.BytesIO()
+        normalized_image.save(output, format="PNG")
+    finally:
+        normalized_image.close()
 
     report: dict[str, Any] = {
         "metric_schema_version": METRIC_SCHEMA_VERSION,
@@ -48,7 +53,7 @@ def analyze_and_normalize(data: bytes) -> QualityAnalysisResult:
         "source_dpi": None,
         "source_dpi_method": "missing_metadata",
         "render_dpi": None,
-        "source_format": source.format or "unknown",
+        "source_format": source_format,
         "output_format": "image/png",
         "normalized_color_mode": "RGB",
         "metrics": metrics,

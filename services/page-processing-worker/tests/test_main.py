@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 
+import page_processing.__main__ as worker_main
 import pytest
-
 from page_processing.api import APIError
 from page_processing.config import Config
-import page_processing.__main__ as worker_main
 
 
 class FakeClient:

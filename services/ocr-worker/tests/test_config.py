@@ -4,7 +4,6 @@ from unittest.mock import patch
 
 from ocr_worker.config import load_settings
 
-
 BASE_ENV = {
     "EDUGRADE_API_BASE_URL": "http://api-gateway:8080",
     "EDUGRADE_OCR_WORKER_TENANT_CODE": "demo",
@@ -40,6 +39,16 @@ class ConfigTests(unittest.TestCase):
     )
     def test_heartbeat_timeout_must_finish_before_lease_expires(self):
         with self.assertRaisesRegex(ValueError, "interval plus timeout"):
+            load_settings()
+
+    @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_OCR_MIN_CONFIDENCE": "NaN"}, clear=True)
+    def test_non_finite_confidence_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "MIN_CONFIDENCE"):
+            load_settings()
+
+    @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_OCR_POLL_INTERVAL": "-1"}, clear=True)
+    def test_non_positive_poll_interval_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "POLL_INTERVAL"):
             load_settings()
 
 

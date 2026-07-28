@@ -40,7 +40,7 @@ class ImageQualityRunner:
         for job in jobs:
             try:
                 self._process_job(job)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - task boundary must report arbitrary decoder/client failures.
                 self._fail_job(job, exc)
             processed += 1
         return processed

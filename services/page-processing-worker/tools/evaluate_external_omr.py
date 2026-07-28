@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import io
 import json
 import re
 import time
@@ -12,9 +11,7 @@ from typing import Any
 
 import cv2
 import numpy as np
-
 from page_processing.omr import OMRProfile, extract_marks
-
 
 CANONICAL_WIDTH = 1960
 CANONICAL_HEIGHT = 3340

@@ -47,3 +47,22 @@ test("dev gate can validate mechanics while pilot rejects synthetic sample size"
   assert.equal(pilot.passed, false);
   assert.ok(pilot.reasons.some((reason) => reason.includes("evaluation_records")));
 });
+
+test("calibration and fairness gates reject missing or non-finite evidence", () => {
+  const config = JSON.parse(readFileSync("config/calibration-gates.json", "utf8"));
+  const result = checkCalibrationFairnessGate(
+    { evaluation_records: 8, ece: Number.NaN, brier_score: Number.NaN },
+    {},
+    "dev",
+    config
+  );
+  assert.equal(result.passed, false);
+  assert.match(result.reasons.join("\n"), /ece/);
+  assert.match(result.reasons.join("\n"), /insufficient_slices is missing/);
+});
+
+test("calibration evaluation rejects empty observations and invalid bins", () => {
+  const model = fitIsotonicCalibration(calibrationSet);
+  assert.throws(() => evaluateCalibration([], model), /observations are required/);
+  assert.throws(() => evaluateCalibration(evaluationSet, model, 0), /positive integer/);
+});

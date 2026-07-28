@@ -17,6 +17,10 @@ export function validateModelCandidates(registry) {
   const ids = new Set();
   for (const [index, candidate] of registry.candidates.entries()) {
     const label = `candidates[${index}]`;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      errors.push(`${label} must be an object`);
+      continue;
+    }
     if (!candidate.candidate_id) errors.push(`${label}.candidate_id is required`);
     if (ids.has(candidate.candidate_id)) errors.push(`duplicate candidate_id: ${candidate.candidate_id}`);
     ids.add(candidate.candidate_id);

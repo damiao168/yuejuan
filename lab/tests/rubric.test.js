@@ -36,3 +36,19 @@ test("rubric point match policy is explicit and validated", () => {
   rubric.points[0].match_policy = "guess";
   assert.equal(validateRubricDsl(rubric).valid, false);
 });
+
+test("malformed aliases return validation errors instead of throwing", () => {
+  const rubric = baseRubric();
+  rubric.points[0].aliases = 42;
+  const validation = validateRubricDsl(rubric);
+  assert.equal(validation.valid, false);
+  assert.match(validation.errors.join("\n"), /aliases must be an array/);
+});
+
+test("malformed alias items return validation errors instead of throwing", () => {
+  const rubric = baseRubric();
+  rubric.points[0].aliases = [42];
+  const validation = validateRubricDsl(rubric);
+  assert.equal(validation.valid, false);
+  assert.match(validation.errors.join("\n"), /non-empty string/);
+});

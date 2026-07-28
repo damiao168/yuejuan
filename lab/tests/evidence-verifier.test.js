@@ -59,3 +59,18 @@ test("duplicate evidence ids fail verification", () => {
   assert.equal(verification.verification_passed, false);
   assert.ok(verification.invalid_points.some((item) => item.reason === "duplicate_evidence_id"));
 });
+
+test("malformed adapter arrays fail verification without throwing", () => {
+  const verification = verifyEvidence(baseInput(), baseOutput({
+    evidence: [null],
+    matched_points: [null],
+    missing_points: [null],
+    deductions: [null]
+  }));
+  assert.equal(verification.verification_passed, false);
+  assert.ok(verification.invalid_points.some((item) => item.reason === "evidence_item_invalid"));
+
+  const adjusted = applyEvidenceVerification(baseInput(), { risk_flags: "invalid" });
+  assert.equal(adjusted.needs_human_review, false);
+  assert.deepEqual(adjusted.risk_flags, []);
+});

@@ -1,4 +1,4 @@
-ARG PAGE_PROCESSING_PYTHON_IMAGE=python:3.11-slim
+ARG PAGE_PROCESSING_PYTHON_IMAGE=python:3.11.15-slim-trixie
 FROM ${PAGE_PROCESSING_PYTHON_IMAGE}
 
 # Custom runtime bases may default to an unprivileged user. Package
@@ -18,7 +18,9 @@ WORKDIR /app
 
 COPY services/page-processing-worker/pyproject.toml ./pyproject.toml
 COPY services/page-processing-worker/page_processing ./page_processing
-RUN pip install --no-cache-dir --retries "${PIP_RETRIES}" --timeout "${PIP_TIMEOUT}" .
+RUN python -m pip install --no-cache-dir --retries "${PIP_RETRIES}" --timeout "${PIP_TIMEOUT}" \
+      "pip==26.1.2" "setuptools==83.0.0" \
+    && python -m pip install --no-cache-dir --retries "${PIP_RETRIES}" --timeout "${PIP_TIMEOUT}" .
 
 USER nobody
 CMD ["python", "-m", "page_processing"]

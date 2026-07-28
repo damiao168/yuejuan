@@ -10,7 +10,7 @@ function metric(report, key) {
 
 function requireMetric(reasons, report, key, predicate, message) {
   const value = metric(report, key);
-  if (value === undefined || !predicate(value)) {
+  if (!Number.isFinite(value) || !predicate(value)) {
     reasons.push(`${message}; actual ${key}=${value}`);
   }
 }
@@ -20,7 +20,7 @@ export function checkGate(report, level, config) {
   if (!gate) throw new Error(`Unknown release gate level: ${level}`);
   const reasons = [];
 
-  if ((report.sample_count ?? 0) < gate.minimum_samples) {
+  if (!Number.isInteger(report.sample_count) || report.sample_count < 0 || report.sample_count < gate.minimum_samples) {
     reasons.push(`sample_count must be >= ${gate.minimum_samples}; actual ${report.sample_count}`);
   }
   requireMetric(reasons, report, "schema_validity_rate", (value) => value >= gate.schema_validity_rate, "schema validity gate failed");
@@ -42,7 +42,7 @@ export function checkGate(report, level, config) {
   if (gate.require_no_score_above_max && metric(report, "no_score_above_max") !== true) {
     reasons.push("no_score_above_max must be true");
   }
-  if (gate.require_mock_marked && metric(report, "mock_marked_rate") < 1) {
+  if (gate.require_mock_marked && metric(report, "mock_marked_rate") !== 1) {
     reasons.push("mock_marked_rate must be 1");
   }
   if (gate.require_evidence_verifier && metric(report, "evidence_verifier_ran") !== true) {

@@ -2,6 +2,7 @@ package exam_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -151,13 +152,14 @@ func TestExamPermissionDenied(t *testing.T) {
 
 func TestExamTenantIsolation(t *testing.T) {
 	store := exam.NewMemoryStore()
-	if _, err := store.CreateExam(nil, "tenant-a", "user-a", exam.CreateInput{SchoolID: "school-a", Name: "A", Subject: "physics", ExamType: "formal_exam", TotalScore: 100, GradingMode: "ai_assisted", PublishPolicy: "after_admin_approval"}); err != nil {
+	ctx := context.Background()
+	if _, err := store.CreateExam(ctx, "tenant-a", "user-a", exam.CreateInput{SchoolID: "school-a", Name: "A", Subject: "physics", ExamType: "formal_exam", TotalScore: 100, GradingMode: "ai_assisted", PublishPolicy: "after_admin_approval"}); err != nil {
 		t.Fatalf("create a: %v", err)
 	}
-	if _, err := store.CreateExam(nil, "tenant-b", "user-b", exam.CreateInput{SchoolID: "school-b", Name: "B", Subject: "math", ExamType: "formal_exam", TotalScore: 100, GradingMode: "ai_assisted", PublishPolicy: "after_admin_approval"}); err != nil {
+	if _, err := store.CreateExam(ctx, "tenant-b", "user-b", exam.CreateInput{SchoolID: "school-b", Name: "B", Subject: "math", ExamType: "formal_exam", TotalScore: 100, GradingMode: "ai_assisted", PublishPolicy: "after_admin_approval"}); err != nil {
 		t.Fatalf("create b: %v", err)
 	}
-	items, err := store.ListExams(nil, "tenant-a", exam.ListFilter{})
+	items, err := store.ListExams(ctx, "tenant-a", exam.ListFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

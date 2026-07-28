@@ -36,7 +36,7 @@ const checks = [
   {
     name: 'image quality worker Dockerfile exists',
     file: 'services/image-quality-worker/Dockerfile',
-    includes: ['python -m image_quality'],
+    includes: ['CMD ["python", "-m", "image_quality"]'],
   },
   {
     name: 'compose quality profile exists',
@@ -74,4 +74,3 @@ if (failures.length > 0) {
 }
 
 console.log('STORY-050 image quality check passed.');
-

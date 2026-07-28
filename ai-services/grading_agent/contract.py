@@ -3,7 +3,6 @@ import math
 from .errors import AgentError
 from .guardrails import normalize_evidence_text
 
-
 SCHEMA_VERSION = "grading-agent-v1"
 OCR_REVIEW_THRESHOLD = 0.85
 SUBJECTS = {
@@ -84,8 +83,11 @@ def _string(value, field, request_id, minimum=1, maximum=128):
 
 
 def _number(value, field, request_id, minimum=0, maximum=1, exclusive_minimum=False):
+    if not _is_number(value):
+        operator = ">" if exclusive_minimum else ">="
+        _fail(f"{field} must be {operator} {minimum} and <= {maximum}", request_id)
     invalid_minimum = value <= minimum if exclusive_minimum else value < minimum
-    if not _is_number(value) or invalid_minimum or value > maximum:
+    if invalid_minimum or value > maximum:
         operator = ">" if exclusive_minimum else ">="
         _fail(f"{field} must be {operator} {minimum} and <= {maximum}", request_id)
 
@@ -255,17 +257,19 @@ def normalize_model_output(raw, request, route, model_version, prompt_version, p
         if not isinstance(item, dict) or set(item) != {"rubric_point_id", "score", "evidence_ids"}:
             _fail_model(f"matched_points[{index}] is invalid", request_id)
         point_id = item.get("rubric_point_id")
+        if not isinstance(point_id, str) or not point_id.strip():
+            _fail_model("matched rubric point id must be non-empty", request_id)
         point = rubric_points.get(point_id)
         if not point or point_id in classified:
             _fail_model("model referenced an unknown or duplicate rubric point", request_id)
         _number_model(item.get("score"), "matched point score", request_id, 0, point["score"])
         if not isinstance(item.get("evidence_ids"), list) or not item["evidence_ids"]:
             _fail_model("matched rubric point must link evidence", request_id)
-        if len(set(item["evidence_ids"])) != len(item["evidence_ids"]):
-            _fail_model("matched rubric point contains duplicate evidence links", request_id)
         for evidence_id in item["evidence_ids"]:
             if not isinstance(evidence_id, str) or not evidence_id.strip():
                 _fail_model("evidence id must be non-empty", request_id)
+        if len(set(item["evidence_ids"])) != len(item["evidence_ids"]):
+            _fail_model("matched rubric point contains duplicate evidence links", request_id)
         classified.add(point_id)
         if point["match_policy"] == "strict_alias":
             answer = normalize_evidence_text(request["answer_text"])
@@ -284,6 +288,8 @@ def normalize_model_output(raw, request, route, model_version, prompt_version, p
         if not isinstance(item, dict) or set(item) != {"rubric_point_id", "reason"}:
             _fail_model(f"missing_points[{index}] is invalid", request_id)
         point_id = item.get("rubric_point_id")
+        if not isinstance(point_id, str) or not point_id.strip():
+            _fail_model("missing rubric point id must be non-empty", request_id)
         point = rubric_points.get(point_id)
         if not point or point_id in classified:
             _fail_model("model referenced an unknown or duplicate missing rubric point", request_id)
@@ -301,11 +307,17 @@ def normalize_model_output(raw, request, route, model_version, prompt_version, p
         expected_evidence = {"evidence_id", "rubric_point_id", "text_excerpt", "location", "confidence"}
         if not isinstance(item, dict) or set(item) != expected_evidence:
             _fail_evidence(f"evidence[{index}] is invalid", request_id)
-        if item["evidence_id"] in rejected_evidence_ids:
+        evidence_id = item["evidence_id"]
+        rubric_point_id = item["rubric_point_id"]
+        if not isinstance(evidence_id, str) or not evidence_id.strip():
+            _fail_evidence("evidence id must be non-empty", request_id)
+        if not isinstance(rubric_point_id, str) or not rubric_point_id.strip():
+            _fail_evidence("evidence rubric point id must be non-empty", request_id)
+        if evidence_id in rejected_evidence_ids:
             continue
-        if item["evidence_id"] in evidence_by_id:
+        if evidence_id in evidence_by_id:
             _fail_evidence("model emitted duplicate evidence ids", request_id)
-        if item["rubric_point_id"] not in accepted_points:
+        if rubric_point_id not in accepted_points:
             continue
         if item["location"] != "answer_text":
             _fail_evidence("evidence must reference answer_text", request_id)
@@ -316,13 +328,13 @@ def normalize_model_output(raw, request, route, model_version, prompt_version, p
         if not excerpt or excerpt not in normalize_evidence_text(request["answer_text"]):
             _fail_evidence("evidence excerpt does not occur in the answer", request_id)
         normalized = {
-            "evidence_id": item["evidence_id"],
-            "rubric_point_id": item["rubric_point_id"],
+            "evidence_id": evidence_id,
+            "rubric_point_id": rubric_point_id,
             "text_excerpt": item["text_excerpt"],
             "location": "answer_text",
             "confidence": item["confidence"],
         }
-        evidence_by_id[item["evidence_id"]] = normalized
+        evidence_by_id[evidence_id] = normalized
         evidence.append(normalized)
 
     referenced_evidence_ids = set()

@@ -79,3 +79,50 @@ test("matched required rubric point must have evidence", () => {
   assert.equal(validation.valid, false);
   assert.match(validation.errors.join("\n"), /lacks evidence/);
 });
+
+test("malformed output arrays return validation errors instead of throwing", () => {
+  const validation = validateGradingOutput(baseOutput({ evidence: {}, matched_points: {} }), baseInput());
+  assert.equal(validation.valid, false);
+  assert.match(validation.errors.join("\n"), /must be an array/);
+});
+
+test("every rubric point must be classified exactly once", () => {
+  const duplicate = validateGradingOutput(baseOutput({
+    missing_points: [{ rubric_point_id: "p1", reason: "also missing" }]
+  }), baseInput());
+  assert.equal(duplicate.valid, false);
+  assert.match(duplicate.errors.join("\n"), /classified more than once/);
+
+  const incomplete = validateGradingOutput(baseOutput({
+    suggested_score: 1,
+    matched_points: [{ rubric_point_id: "p1", score: 1, evidence_ids: ["ev-p1"] }],
+    evidence: [baseOutput().evidence[0]]
+  }), baseInput());
+  assert.equal(incomplete.valid, false);
+  assert.match(incomplete.errors.join("\n"), /was not classified: p2/);
+});
+
+test("matched point score and evidence links must obey their rubric contract", () => {
+  const validation = validateGradingOutput(baseOutput({
+    suggested_score: 2,
+    matched_points: [
+      { rubric_point_id: "p1", score: 2, evidence_ids: ["ev-p1", "ev-p1"] },
+      { rubric_point_id: "p2", score: 0, evidence_ids: ["ev-p2"] }
+    ]
+  }), baseInput());
+  assert.equal(validation.valid, false);
+  assert.match(validation.errors.join("\n"), /exceeds rubric allowance/);
+  assert.match(validation.errors.join("\n"), /duplicate id/);
+});
+
+test("missing rubric points require a known id and a reason", () => {
+  const validation = validateGradingOutput(baseOutput({
+    suggested_score: 1,
+    matched_points: [{ rubric_point_id: "p1", score: 1, evidence_ids: ["ev-p1"] }],
+    missing_points: [{ rubric_point_id: "unknown", reason: "" }],
+    evidence: [baseOutput().evidence[0]]
+  }), baseInput());
+  assert.equal(validation.valid, false);
+  assert.match(validation.errors.join("\n"), /reason is required/);
+  assert.match(validation.errors.join("\n"), /does not exist/);
+});

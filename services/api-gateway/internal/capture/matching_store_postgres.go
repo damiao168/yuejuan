@@ -28,6 +28,10 @@ ORDER BY sc.name,st.student_no`, tenantID, queue.ExamID)
 		}
 		queue.Candidates = append(queue.Candidates, x)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return MatchingQueue{}, err
+	}
 	if err = rows.Close(); err != nil {
 		return MatchingQueue{}, err
 	}
@@ -44,7 +48,10 @@ WHERE cp.tenant_id=$1 AND cp.capture_batch_id=$2::uuid AND cp.deleted_at IS NULL
 			subs.Close()
 			return MatchingQueue{}, err
 		}
-		_ = json.Unmarshal(evidence, &x.IdentityEvidence)
+		if err = json.Unmarshal(evidence, &x.IdentityEvidence); err != nil {
+			subs.Close()
+			return MatchingQueue{}, err
+		}
 		if x.IdentityEvidence == nil {
 			x.IdentityEvidence = map[string]any{}
 		}
@@ -55,6 +62,10 @@ WHERE cp.tenant_id=$1 AND cp.capture_batch_id=$2::uuid AND cp.deleted_at IS NULL
 		}
 		x.Pages = pages
 		queue.Submissions = append(queue.Submissions, x)
+	}
+	if err = subs.Err(); err != nil {
+		subs.Close()
+		return MatchingQueue{}, err
 	}
 	if err = subs.Close(); err != nil {
 		return MatchingQueue{}, err
@@ -174,8 +185,12 @@ func (s *PostgresStore) ConfirmPageMatch(ctx context.Context, tenantID, pageID, 
 	if err != nil {
 		return Page{}, err
 	}
-	_, _ = tx.ExecContext(ctx, `UPDATE page_registration_run SET processing_status='invalidated',updated_at=now() WHERE tenant_id=$1 AND capture_page_id=$2::uuid AND processing_status<>'invalidated'`, tenantID, pageID)
-	_, _ = tx.ExecContext(ctx, `UPDATE answer_segment SET processing_status='invalidated',status='needs_manual_review',updated_at=now() WHERE tenant_id=$1 AND registration_run_id IN(SELECT id FROM page_registration_run WHERE tenant_id=$1 AND capture_page_id=$2::uuid)`, tenantID, pageID)
+	if _, err = tx.ExecContext(ctx, `UPDATE page_registration_run SET processing_status='invalidated',updated_at=now() WHERE tenant_id=$1 AND capture_page_id=$2::uuid AND processing_status<>'invalidated'`, tenantID, pageID); err != nil {
+		return Page{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE answer_segment SET processing_status='invalidated',status='needs_manual_review',updated_at=now() WHERE tenant_id=$1 AND registration_run_id IN(SELECT id FROM page_registration_run WHERE tenant_id=$1 AND capture_page_id=$2::uuid)`, tenantID, pageID); err != nil {
+		return Page{}, err
+	}
 	if err = s.aggregateBatchTx(ctx, tx, tenantID, current.CaptureBatchID); err != nil {
 		return Page{}, err
 	}

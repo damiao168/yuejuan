@@ -6,13 +6,19 @@ import sys
 import threading
 import time
 import traceback
+from typing import Self
 
 from page_processing.api import APIError, Client
 from page_processing.barcode import detect_barcodes
 from page_processing.config import Config
 from page_processing.decoder import DecodeError, decode_document
-from page_processing.registration import RegistrationError, crop_regions, register_page, register_page_manual
 from page_processing.omr import OMRExtractionError, OMRProfile, extract_marks
+from page_processing.registration import (
+    RegistrationError,
+    crop_regions,
+    register_page,
+    register_page_manual,
+)
 
 
 class _NullHeartbeat:
@@ -56,10 +62,10 @@ class Runner:
                     request_timeout=self.config.heartbeat_timeout,
                 ) as heartbeat:
                     handler(task, heartbeat)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - each task must be isolated and reported before the loop continues.
                 try:
                     self._fail(task, exc)
-                except Exception as fail_exc:
+                except Exception as fail_exc:  # noqa: BLE001 - reporting can fail after a lease or gateway outage.
                     # A lost lease or gateway outage must not crash the worker loop:
                     # the runtime re-assigns the task once the lease expires. Log
                     # the original failure too — it is the only remaining record
@@ -176,17 +182,19 @@ class Runner:
         source = self.client.download(str(payload["source_download_url"]))
         heartbeat.raise_if_failed()
         profile_data = payload.get("profile") or {}
+        if not isinstance(profile_data, dict):
+            raise OMRExtractionError("omr_profile_invalid")
         profile_hash = str(payload.get("profile_hash") or "").strip()
         if not profile_hash:
             raise OMRExtractionError("omr_profile_hash_missing")
         profile = OMRProfile(
             mode=str(profile_data.get("mode") or "manual_only"),
-            marked_threshold=float(profile_data.get("marked_threshold", 0.18)),
-            ambiguous_threshold=float(profile_data.get("ambiguous_threshold", 0.10)),
-            minimum_margin=float(profile_data.get("minimum_margin", 0.06)),
-            border_fraction=float(profile_data.get("border_fraction", 0.12)),
+            marked_threshold=profile_data.get("marked_threshold", 0.18),
+            ambiguous_threshold=profile_data.get("ambiguous_threshold", 0.10),
+            minimum_margin=profile_data.get("minimum_margin", 0.06),
+            border_fraction=profile_data.get("border_fraction", 0.12),
             version=str(profile_data.get("version") or "opencv-fill-v1"),
-            reference_mask_dilation_pixels=int(profile_data.get("reference_mask_dilation_pixels", 0)),
+            reference_mask_dilation_pixels=profile_data.get("reference_mask_dilation_pixels", 0),
         )
         reference_data = payload.get("reference")
         reference = reference_data if isinstance(reference_data, dict) else {}
@@ -203,7 +211,7 @@ class Runner:
         result = extract_marks(
             source,
             list(payload.get("option_regions") or []),
-            multiple=bool(payload.get("multiple")),
+            multiple=payload.get("multiple", False),
             profile=profile,
             reference_image_bytes=reference_bytes,
             reference_content_type=str(reference.get("content_type") or ""),
@@ -279,7 +287,7 @@ class _LeaseHeartbeat:
         self._error: Exception | None = None
         self._last_success = time.monotonic()
 
-    def __enter__(self) -> _LeaseHeartbeat:
+    def __enter__(self) -> Self:
         self._send()
         self._last_success = time.monotonic()
         self._thread = threading.Thread(
@@ -323,7 +331,7 @@ class _LeaseHeartbeat:
             try:
                 self._send()
                 self._last_success = time.monotonic()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - heartbeat transports may raise non-API exceptions.
                 if _lease_is_lost(exc) or self._renewal_window_exhausted():
                     self._error = exc
                     return

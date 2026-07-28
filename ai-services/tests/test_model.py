@@ -1,10 +1,13 @@
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
-from grading_agent.model import LocalLlamaCppAdapter, PromptRegistry, grading_output_schema
-
+from grading_agent.model import (
+    LocalLlamaCppAdapter,
+    PromptRegistry,
+    grading_output_schema,
+)
 from helpers import settings, valid_raw_output, valid_request
 
 

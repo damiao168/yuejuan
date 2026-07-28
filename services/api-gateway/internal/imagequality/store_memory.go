@@ -141,6 +141,27 @@ func (s *MemoryStore) LeaseRun(_ context.Context, tenantID string, runID string,
 	return cloneRun(run), nil
 }
 
+func (s *MemoryStore) RenewLease(_ context.Context, tenantID string, runID string, workerInstanceID string, leaseToken string, leaseExpiresAt time.Time, attemptNo int) (Run, error) {
+	if workerInstanceID == "" || leaseToken == "" || attemptNo <= 0 || !leaseExpiresAt.After(time.Now().UTC()) {
+		return Run{}, ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run, ok := s.runs[runID]
+	if !ok || run.TenantID != tenantID {
+		return Run{}, ErrNotFound
+	}
+	if run.ProcessingStatus != ProcessingProcessing {
+		return Run{}, ErrInvalidTransition
+	}
+	if run.WorkerInstanceID != workerInstanceID || run.LeaseToken != leaseToken || run.AttemptNo != attemptNo {
+		return Run{}, ErrLeaseMismatch
+	}
+	run.LeaseExpiresAt = &leaseExpiresAt
+	s.runs[runID] = run
+	return cloneRun(run), nil
+}
+
 func (s *MemoryStore) CompleteRun(_ context.Context, tenantID string, runID string, input ResultInput) (Run, error) {
 	if err := validateResultInput(input); err != nil {
 		return Run{}, err

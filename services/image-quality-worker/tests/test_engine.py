@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import io
 
-from PIL import Image, ImageDraw, ImageFilter
-
 import pytest
-
 from image_quality.engine import ImageQualityError, analyze_and_normalize
+from PIL import Image, ImageDraw, ImageFilter
 
 
 def test_clear_image_passes_and_outputs_rgb_png() -> None:
@@ -61,6 +59,12 @@ def test_oversized_dimensions_are_rejected_before_decode(monkeypatch) -> None:
     class OversizedImage:
         width = 100_000
         height = 100_000
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return None
 
     monkeypatch.setattr("image_quality.engine.Image.open", lambda _: OversizedImage())
     with pytest.raises(ImageQualityError, match="image_dimensions_out_of_range"):

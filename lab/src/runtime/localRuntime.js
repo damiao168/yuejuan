@@ -48,6 +48,8 @@ export function validateLocalRuntimeManifest(manifest) {
 }
 
 export function resolveLocalRuntimePaths(manifest = loadLocalRuntimeManifest()) {
+  const validation = validateLocalRuntimeManifest(manifest);
+  if (!validation.valid) throw new Error(`Invalid local runtime manifest: ${validation.errors.join("; ")}`);
   const runtimeDir = resolve(LAB_ROOT, normalize(manifest.runtime.install_dir));
   return {
     runtime_dir: runtimeDir,
@@ -58,6 +60,22 @@ export function resolveLocalRuntimePaths(manifest = loadLocalRuntimeManifest()) 
 }
 
 export function inspectLocalRuntime(manifest = loadLocalRuntimeManifest()) {
+  const manifestValidation = validateLocalRuntimeManifest(manifest);
+  if (!manifestValidation.valid) {
+    const unavailable = (expectedBytes = null) => ({
+      path: null,
+      exists: false,
+      bytes: null,
+      expected_bytes: expectedBytes,
+      size_matches: expectedBytes === null ? null : false
+    });
+    return {
+      manifest_validation: manifestValidation,
+      server: unavailable(),
+      benchmark: unavailable(),
+      model: unavailable(Number.isInteger(manifest?.model?.expected_bytes) ? manifest.model.expected_bytes : null)
+    };
+  }
   const paths = resolveLocalRuntimePaths(manifest);
   const inspect = (path, expectedBytes) => ({
     path,
@@ -67,7 +85,7 @@ export function inspectLocalRuntime(manifest = loadLocalRuntimeManifest()) {
     size_matches: expectedBytes === undefined ? null : existsSync(path) && statSync(path).size === expectedBytes
   });
   return {
-    manifest_validation: validateLocalRuntimeManifest(manifest),
+    manifest_validation: manifestValidation,
     server: inspect(paths.server_binary, undefined),
     benchmark: inspect(paths.benchmark_binary, undefined),
     model: inspect(paths.model_path, manifest.model.expected_bytes)

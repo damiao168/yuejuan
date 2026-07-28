@@ -434,6 +434,9 @@ func (s *MemoryStore) ListArbitrationTasks(_ context.Context, tenantID string, f
 		if filter.AssignedTo != "" && task.AssignedTo != filter.AssignedTo {
 			continue
 		}
+		if filter.ExamID != "" && task.ExamID != filter.ExamID {
+			continue
+		}
 		out = append(out, cloneArbitration(task))
 	}
 	sort.Slice(out, func(i, j int) bool {

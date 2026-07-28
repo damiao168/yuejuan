@@ -30,6 +30,14 @@ test("source registry allows only reviewed uses", () => {
   assert.throws(() => getApprovedDatasetSource("semeval_2013_task_7", "evaluation", registry), /not license-approved/);
 });
 
+test("malformed source registry entry returns validation errors instead of throwing", () => {
+  const registry = loadDatasetSourceRegistry();
+  registry.sources[0] = null;
+  const result = validateDatasetSourceRegistry(registry);
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join("\n"), /must be an object/);
+});
+
 test("privacy scanner detects common direct identifiers", () => {
   assert.deepEqual(scanSensitiveText("student email is learner@example.com"), ["email"]);
   assert.ok(scanSensitiveText("手机号：13812345678").includes("cn_mobile"));
@@ -68,6 +76,18 @@ test("grouped split is deterministic", () => {
   for (const name of ["train", "validation", "test"]) {
     assert.deepEqual(first.splits[name].map(questionGroupKey).sort(), second.splits[name].map(questionGroupKey).sort());
   }
+});
+
+test("grouped split rejects negative or non-finite ratios", () => {
+  const samples = [sample("s-1", "q-1")];
+  assert.throws(
+    () => splitByQuestionGroup(samples, { ratios: { train: 2, validation: -0.5, test: -0.5 } }),
+    /between 0 and 1/
+  );
+  assert.throws(
+    () => splitByQuestionGroup(samples, { ratios: { train: Number.NaN, validation: 0.5, test: 0.5 } }),
+    /between 0 and 1/
+  );
 });
 
 test("real samples require explicit question ids and anonymized status", () => {

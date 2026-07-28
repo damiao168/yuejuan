@@ -68,6 +68,10 @@ ORDER BY ast.version_no DESC LIMIT 1`, tenantID, examID).Scan(&templateID, &temp
 		}
 		pages = append(pages, p)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
 	if err = rows.Close(); err != nil {
 		return nil, err
 	}
@@ -89,7 +93,9 @@ ORDER BY ast.version_no DESC LIMIT 1`, tenantID, examID).Scan(&templateID, &temp
 			}
 		}
 		if templatePage == nil {
-			_, _ = tx.ExecContext(ctx, `UPDATE capture_page SET status='needs_review',updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, page.id)
+			if _, err = tx.ExecContext(ctx, `UPDATE capture_page SET status='needs_review',updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, page.id); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		if existing, findErr := scanRegistrationRun(tx.QueryRowContext(ctx, `SELECT `+registrationColumns+` FROM page_registration_run WHERE tenant_id=$1 AND capture_page_id=$2::uuid AND source_sha256=$3 AND template_content_hash=$4 AND page_no=$5 AND processing_status IN ('processing','completed') AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1`, tenantID, page.id, page.hash, templateHash, page.pageNo)); findErr == nil {

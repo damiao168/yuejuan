@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib import error, request
+from urllib.parse import urlsplit
 
 
 class APIError(RuntimeError):
@@ -127,7 +128,7 @@ class Client:
         return json.loads(raw.decode("utf-8")) if raw else {}
 
     def _request(self, method: str, path: str, body: bytes | None, auth: bool = True) -> request.Request:
-        url = path if path.startswith("http") else self.base_url + path
+        url = _trusted_service_url(self.base_url, path)
         headers = {"Accept": "application/json"}
         if auth and self.token:
             headers["Authorization"] = "Bearer " + self.token
@@ -165,3 +166,28 @@ def _retry_after_seconds(headers: Any) -> float | None:
     if retry_at.tzinfo is None:
         retry_at = retry_at.replace(tzinfo=timezone.utc)
     return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+
+
+def _trusted_service_url(base_url: str, path_or_url: str) -> str:
+    candidate = path_or_url if path_or_url.startswith(("http://", "https://")) else f"{base_url.rstrip('/')}/{path_or_url.lstrip('/')}"
+    try:
+        base = urlsplit(base_url)
+        target = urlsplit(candidate)
+        default_ports = {"http": 80, "https": 443}
+        base_origin = (base.scheme.lower(), (base.hostname or "").lower(), base.port or default_ports.get(base.scheme.lower()))
+        target_origin = (
+            target.scheme.lower(),
+            (target.hostname or "").lower(),
+            target.port or default_ports.get(target.scheme.lower()),
+        )
+    except ValueError as exc:
+        raise APIError("service URL is invalid") from exc
+    if (
+        target.scheme.lower() not in default_ports
+        or target_origin != base_origin
+        or target.username is not None
+        or target.password is not None
+        or target.fragment
+    ):
+        raise APIError("service URL must remain on the configured API origin")
+    return candidate

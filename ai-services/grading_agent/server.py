@@ -1,6 +1,7 @@
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hmac
 import json
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .app import GradingAgentApplication
 from .config import Settings
@@ -64,7 +65,18 @@ class GradingAgentHandler(BaseHTTPRequestHandler):
             self._json(200, suggestion, extra_headers={"Idempotent-Replay": "true" if replayed else "false"})
         except AgentError as exc:
             self._error(exc)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - HTTP boundary must convert unexpected failures to a safe response.
+            print(
+                json.dumps(
+                    {
+                        "event": "grading_agent_unhandled_error",
+                        "error_type": type(exc).__name__,
+                    },
+                    separators=(",", ":"),
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
             self._error(AgentError("internal_error", "grading-agent operation failed", status=500))
 
     def _authorize(self):

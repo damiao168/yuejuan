@@ -122,6 +122,19 @@ func TestHTTPAdapterReturnsSanitizedAgentFailure(t *testing.T) {
 	}
 }
 
+func TestHTTPAdapterRejectsOversizedSuccessResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeAgentSuccess(t, w, "sg-test-request-0001")
+		_, _ = w.Write([]byte(strings.Repeat(" ", int(maxGradingAgentResponseBytes))))
+	}))
+	defer server.Close()
+
+	_, err := testHTTPAdapter(server.URL, 0).Grade(context.Background(), validHTTPAdapterInput())
+	if err == nil || !strings.Contains(err.Error(), "agent_response_too_large") {
+		t.Fatalf("expected oversized response rejection, got %v", err)
+	}
+}
+
 func TestHTTPAdapterFailsBeforeNetworkWhenGradeLevelMissing(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

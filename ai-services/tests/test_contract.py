@@ -1,9 +1,9 @@
+import copy
 import unittest
 
 from grading_agent.capabilities import CapabilityMatrix
 from grading_agent.contract import normalize_model_output, validate_request
 from grading_agent.errors import AgentError
-
 from helpers import settings, valid_raw_output, valid_request
 
 
@@ -69,6 +69,36 @@ class ContractTests(unittest.TestCase):
         suggestion = self._normalize(request, valid_raw_output())
         self.assertIn("ocr_low_confidence", suggestion["risk_flags"])
         self.assertIn("prompt_injection_suspected", suggestion["risk_flags"])
+
+    def test_non_numeric_request_value_is_rejected_as_invalid_request(self):
+        request = valid_request()
+        request["max_score"] = "four"
+        with self.assertRaises(AgentError) as caught:
+            validate_request(request)
+        self.assertEqual(caught.exception.code, "invalid_request")
+        self.assertEqual(caught.exception.status, 400)
+
+    def test_unhashable_model_identifiers_are_rejected_by_the_model_contract(self):
+        request = valid_request()
+        malformed_outputs = []
+
+        matched_id = valid_raw_output()
+        matched_id["matched_points"][0]["rubric_point_id"] = ["p1"]
+        malformed_outputs.append(matched_id)
+
+        evidence_link = valid_raw_output()
+        evidence_link["matched_points"][0]["evidence_ids"] = [["e1"]]
+        malformed_outputs.append(evidence_link)
+
+        evidence_id = valid_raw_output()
+        evidence_id["evidence"][0]["evidence_id"] = {"id": "e1"}
+        malformed_outputs.append(evidence_id)
+
+        for raw in malformed_outputs:
+            with self.subTest(raw=copy.deepcopy(raw)):
+                with self.assertRaises(AgentError) as caught:
+                    self._normalize(request, raw)
+                self.assertIn(caught.exception.code, {"model_output_invalid", "evidence_verification_failed"})
 
 
 if __name__ == "__main__":

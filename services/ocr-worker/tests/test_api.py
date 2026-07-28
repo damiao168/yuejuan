@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from ocr_worker.api import EduGradeClient
+from ocr_worker.api import APIError, EduGradeClient
 
 
 class FakeResponse:
@@ -34,6 +34,12 @@ class APITests(unittest.TestCase):
         self.assertEqual(payload["lease_seconds"], 300)
         self.assertEqual(payload["state"], "running")
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 3.0)
+
+    def test_download_rejects_cross_origin_url_before_sending_worker_token(self):
+        client = EduGradeClient("http://api-gateway:8080", "demo", "worker", "secret", token="worker-token")
+
+        with self.assertRaisesRegex(APIError, "configured API origin"):
+            client.download("https://attacker.invalid/collect")
 
 
 if __name__ == "__main__":

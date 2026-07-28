@@ -339,6 +339,10 @@ ORDER BY q.sort_order, seg.created_at`, tenantID, examID, segmentID)
 		}
 		segments = append(segments, item)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return ScoringRun{}, err
+	}
 	if err = rows.Close(); err != nil {
 		return ScoringRun{}, err
 	}
@@ -845,6 +849,10 @@ ORDER BY o.created_at`, tenantID, runID)
 			return ScoringRun{}, nil, err
 		}
 		taskIDs = append(taskIDs, taskID)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return ScoringRun{}, nil, err
 	}
 	if err = rows.Close(); err != nil {
 		return ScoringRun{}, nil, err
@@ -1488,6 +1496,10 @@ func (s *PostgresStore) ProcessRuleCandidates(ctx context.Context, tenantID, run
 			return err
 		}
 		segmentIDs = append(segmentIDs, id)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
 	}
 	if err := rows.Close(); err != nil {
 		return err

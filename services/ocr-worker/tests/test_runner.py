@@ -1,6 +1,6 @@
-import unittest
-import time
 import threading
+import time
+import unittest
 
 from ocr_worker.api import APIError, AuthenticationError
 from ocr_worker.engine import OCRBlock

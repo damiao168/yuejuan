@@ -3,10 +3,9 @@ from __future__ import annotations
 import io
 import json
 
-from PIL import Image, ImageDraw
-
 from image_quality.config import EngineConfig
 from image_quality.runner import ImageQualityRunner
+from PIL import Image, ImageDraw
 
 
 def test_runner_claims_downloads_processes_uploads_and_submits() -> None:

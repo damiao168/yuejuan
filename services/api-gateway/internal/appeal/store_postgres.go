@@ -505,23 +505,28 @@ WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 		return AppealEvidence{}, err
 	}
 	var answerSource string
-	_ = s.db.QueryRowContext(ctx, `
+	err := s.db.QueryRowContext(ctx, `
 SELECT answer_text, source
 FROM answer_segment_answer
 WHERE tenant_id = $1 AND answer_segment_id::text = $2 AND deleted_at IS NULL
 ORDER BY created_at DESC
 LIMIT 1
 `, tenantID, answerSegmentID).Scan(&ev.RawAnswer, &answerSource)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return AppealEvidence{}, err
+	}
 	if answerSource == "ocr_text" {
 		ev.OCRText = ev.RawAnswer
 	}
 	var ocrText sql.NullString
-	_ = s.db.QueryRowContext(ctx, `
+	if err = s.db.QueryRowContext(ctx, `
 SELECT string_agg(orx.text, E'\n' ORDER BY orx.created_at)
 FROM ocr_result orx
 JOIN answer_segment seg ON seg.tenant_id = orx.tenant_id AND seg.submission_page_id = orx.submission_page_id
 WHERE orx.tenant_id = $1 AND seg.id::text = $2 AND orx.deleted_at IS NULL
-`, tenantID, answerSegmentID).Scan(&ocrText)
+`, tenantID, answerSegmentID).Scan(&ocrText); err != nil {
+		return AppealEvidence{}, err
+	}
 	if ocrText.Valid && ocrText.String != "" {
 		ev.OCRText = ocrText.String
 	}
@@ -564,7 +569,7 @@ LIMIT 5
 		return AppealEvidence{}, err
 	}
 	ev.HumanGrades = humanGrades
-	_ = s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 SELECT jsonb_build_object(
   'id', qr.id::text,
   'question_id', qr.question_id::text,
@@ -579,6 +584,9 @@ WHERE fg.tenant_id = $1 AND fg.id::text = $2 AND qr.deleted_at IS NULL
 ORDER BY qr.created_at DESC
 LIMIT 1
 `, tenantID, finalGradeID).Scan(jsonMapScanner(&ev.Rubric))
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return AppealEvidence{}, err
+	}
 	return ev, nil
 }
 

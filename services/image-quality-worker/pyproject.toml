@@ -2,15 +2,15 @@
 name = "edugrade-image-quality-worker"
 version = "0.1.0"
 description = "EduGrade answer-sheet image quality worker"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
-  "numpy>=1.26",
-  "opencv-python-headless>=4.9",
-  "pillow>=10.0",
+  "numpy==2.4.6",
+  "opencv-python-headless==5.0.0.93",
+  "pillow==12.3.0",
 ]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools==83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

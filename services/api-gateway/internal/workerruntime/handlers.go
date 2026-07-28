@@ -1,6 +1,7 @@
 package workerruntime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,12 +12,21 @@ import (
 )
 
 type Handler struct {
-	store Store
-	audit auth.Store
+	store              Store
+	audit              auth.Store
+	sourceLeaseRenewer SourceLeaseRenewer
 }
 
-func NewHandler(store Store, audit auth.Store) *Handler {
-	return &Handler{store: store, audit: audit}
+type SourceLeaseRenewer interface {
+	RenewSourceLease(ctx context.Context, task Task) error
+}
+
+func NewHandler(store Store, audit auth.Store, renewers ...SourceLeaseRenewer) *Handler {
+	handler := &Handler{store: store, audit: audit}
+	if len(renewers) > 0 {
+		handler.sourceLeaseRenewer = renewers[0]
+	}
+	return handler
 }
 
 func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +71,12 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeRuntimeError(w, r, err)
 		return
+	}
+	if h.sourceLeaseRenewer != nil {
+		if err := h.sourceLeaseRenewer.RenewSourceLease(r.Context(), task); err != nil {
+			writeRuntimeError(w, r, err)
+			return
+		}
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"task": task})
 }

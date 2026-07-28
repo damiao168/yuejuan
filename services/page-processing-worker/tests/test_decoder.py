@@ -4,9 +4,8 @@ import io
 
 import pypdfium2 as pdfium
 import pytest
-from PIL import Image
-
 from page_processing.decoder import DecodeError, decode_document
+from PIL import Image
 
 
 def test_decodes_single_image_to_rgb_png() -> None:
@@ -89,3 +88,16 @@ def test_rejects_limits_and_invalid_input() -> None:
     Image.new("RGB", (200, 200), "white").save(source, format="PNG")
     with pytest.raises(DecodeError, match="page_pixel_limit_exceeded"):
         decode_document(source.getvalue(), "image/png", max_page_pixels=100)
+
+
+def test_rejects_unsafe_render_configuration_and_pdf_size_before_rendering() -> None:
+    source = io.BytesIO()
+    document = pdfium.PdfDocument.new()
+    document.new_page(1_000, 1_000)
+    document.save(source)
+    document.close()
+
+    with pytest.raises(DecodeError, match="render_dpi_out_of_range"):
+        decode_document(source.getvalue(), "application/pdf", render_dpi=10_000)
+    with pytest.raises(DecodeError, match="page_pixel_limit_exceeded"):
+        decode_document(source.getvalue(), "application/pdf", render_dpi=72, max_page_pixels=100)

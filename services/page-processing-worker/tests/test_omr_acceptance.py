@@ -1,4 +1,7 @@
-from page_processing.omr_acceptance import build_synthetic_acceptance_cases, evaluate_synthetic_acceptance
+from page_processing.omr_acceptance import (
+    build_synthetic_acceptance_cases,
+    evaluate_synthetic_acceptance,
+)
 
 
 def test_story056_synthetic_omr_acceptance_has_100_mixed_submissions() -> None:

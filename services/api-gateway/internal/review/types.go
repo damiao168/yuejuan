@@ -305,6 +305,7 @@ type ReviewContext struct {
 type ArbitrationFilter struct {
 	Status     string
 	AssignedTo string
+	ExamID     string
 }
 
 type FinalGrade struct {

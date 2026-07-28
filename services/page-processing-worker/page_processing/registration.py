@@ -178,13 +178,18 @@ def crop_regions(registered_png: bytes, regions: list[dict]) -> list[dict]:
             y = float(region["y"])
             w = float(region["width"])
             h = float(region["height"])
-            question_id = str(region["question_id"])
+            raw_question_id = region["question_id"]
         except (KeyError, TypeError, ValueError) as exc:
             raise RegistrationError("invalid_template_region") from exc
-        if not question_id or x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > 1 or y + h > 1:
+        if not isinstance(raw_question_id, str):
             raise RegistrationError("invalid_template_region")
-        left, top = int(round(x * width)), int(round(y * height))
-        right, bottom = int(round((x + w) * width)), int(round((y + h) * height))
+        question_id = raw_question_id
+        if not np.isfinite([x, y, w, h]).all():
+            raise RegistrationError("invalid_template_region")
+        if not question_id.strip() or x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > 1 or y + h > 1:
+            raise RegistrationError("invalid_template_region")
+        left, top = round(x * width), round(y * height)
+        right, bottom = round((x + w) * width), round((y + h) * height)
         left, top = max(0, left), max(0, top)
         right, bottom = min(width, right), min(height, bottom)
         if right <= left or bottom <= top:

@@ -185,6 +185,10 @@ func (s *PostgresStore) QueueBatch(ctx context.Context, tenantID, batchID, actor
 		}
 		files = append(files, item)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return Batch{}, err
+	}
 	if err := rows.Close(); err != nil {
 		return Batch{}, err
 	}

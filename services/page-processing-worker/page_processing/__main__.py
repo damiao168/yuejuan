@@ -10,7 +10,6 @@ from page_processing.api import APIError, Client
 from page_processing.config import load_config
 from page_processing.runner import Runner
 
-
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_INITIAL_BACKOFF_SECONDS = 1.0
 LOGIN_MAX_BACKOFF_SECONDS = 30.0

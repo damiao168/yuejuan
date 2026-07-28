@@ -147,6 +147,7 @@ type Store interface {
 	CreateRuns(ctx context.Context, tenantID string, input CreateRunsInput) ([]Run, error)
 	Claim(ctx context.Context, tenantID string, input ClaimInput) ([]ClaimedJob, error)
 	LeaseRun(ctx context.Context, tenantID string, runID string, workerInstanceID string, leaseToken string, leaseExpiresAt time.Time, attemptNo int) (Run, error)
+	RenewLease(ctx context.Context, tenantID string, runID string, workerInstanceID string, leaseToken string, leaseExpiresAt time.Time, attemptNo int) (Run, error)
 	CompleteRun(ctx context.Context, tenantID string, runID string, input ResultInput) (Run, error)
 	GetRun(ctx context.Context, tenantID string, runID string) (Run, error)
 }

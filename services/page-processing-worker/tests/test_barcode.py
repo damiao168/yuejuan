@@ -1,8 +1,7 @@
 from io import BytesIO
 
-from PIL import Image
-
 from page_processing import barcode
+from PIL import Image
 
 
 class Point:

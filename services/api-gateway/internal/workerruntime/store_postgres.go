@@ -151,6 +151,10 @@ FOR UPDATE SKIP LOCKED
 		}
 		exhausted = append(exhausted, item)
 	}
+	if err = exhaustedRows.Err(); err != nil {
+		exhaustedRows.Close()
+		return nil, err
+	}
 	if err := exhaustedRows.Close(); err != nil {
 		return nil, err
 	}
@@ -208,6 +212,10 @@ FOR UPDATE SKIP LOCKED
 			return nil, err
 		}
 		claimable = append(claimable, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -535,6 +543,10 @@ ORDER BY queue_name
 			return Metrics{}, err
 		}
 		out.Queues = append(out.Queues, metric)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return Metrics{}, err
 	}
 	if err := rows.Close(); err != nil {
 		return Metrics{}, err

@@ -78,6 +78,37 @@ test("local adapter rejects incomplete rubric classification", async () => {
   await assert.rejects(() => adapter.grade(baseInput({ prompt_version: "prompt-local-structured-v1" })), /INCOMPLETE_RUBRIC_CLASSIFICATION/);
 });
 
+test("local adapter rejects malformed arrays through the governed schema", async () => {
+  const raw = successfulRawOutput({ matched_points: {} });
+  const adapter = new LocalModelAdapter({ maxRetries: 0, fetchImpl: async () => responseWith(raw) });
+  await assert.rejects(
+    () => adapter.grade(baseInput({ prompt_version: "prompt-local-structured-v1" })),
+    /SCHEMA_INVALID/
+  );
+});
+
+test("local adapter rejects missing-point reasons and model deductions", async () => {
+  const missingReason = successfulRawOutput({
+    matched_points: [{ rubric_point_id: "p1", score: 1, evidence_ids: ["ev-p1"] }],
+    missing_points: [{ rubric_point_id: "p2" }],
+    evidence: [{ evidence_id: "ev-p1", rubric_point_id: "p1", text_excerpt: "2x=6", location: "answer_text", confidence: 0.9 }]
+  });
+  const missingAdapter = new LocalModelAdapter({ maxRetries: 0, fetchImpl: async () => responseWith(missingReason) });
+  await assert.rejects(
+    () => missingAdapter.grade(baseInput({ prompt_version: "prompt-local-structured-v1" })),
+    /SCHEMA_INVALID/
+  );
+
+  const deductionsAdapter = new LocalModelAdapter({
+    maxRetries: 0,
+    fetchImpl: async () => responseWith(successfulRawOutput({ deductions: [{ reason: "invented" }] }))
+  });
+  await assert.rejects(
+    () => deductionsAdapter.grade(baseInput({ prompt_version: "prompt-local-structured-v1" })),
+    /SCHEMA_INVALID/
+  );
+});
+
 test("strict alias policy downgrades a semantically wrong numeric result", async () => {
   const input = baseInput({
     answer_text: "2x=6, but x=4",
