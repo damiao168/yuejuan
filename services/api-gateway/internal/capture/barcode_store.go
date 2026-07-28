@@ -59,11 +59,7 @@ func (s *PostgresStore) IssueStudentBarcodes(ctx context.Context, tenantID, temp
 		seen[studentID] = true
 		studentIDs = append(studentIDs, studentID)
 	}
-	requestStudents := append([]string(nil), studentIDs...)
-	sort.Strings(requestStudents)
-	requestPayload, _ := json.Marshal(requestStudents)
-	requestSum := sha256.Sum256(requestPayload)
-	requestHash := "sha256:" + hex.EncodeToString(requestSum[:])
+	requestHash := studentBarcodeRequestHash(studentIDs)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -189,6 +185,14 @@ VALUES ($1,$2::uuid,$3,$4::uuid,$5)
 		out.Students = append(out.Students, set)
 	}
 	return out, tx.Commit()
+}
+
+func studentBarcodeRequestHash(studentIDs []string) string {
+	requestStudents := append([]string(nil), studentIDs...)
+	sort.Strings(requestStudents)
+	requestPayload, _ := json.Marshal(requestStudents)
+	requestSum := sha256.Sum256(requestPayload)
+	return "sha256:" + hex.EncodeToString(requestSum[:])
 }
 
 func loadIssuedStudentBarcodesTx(ctx context.Context, tx *sql.Tx, tenantID, printBatchID string) (IssuedStudentBarcodes, error) {
@@ -382,21 +386,22 @@ SELECT EXISTS (
 `, tenantID, examID, claims.StudentID).Scan(&inRoster); err != nil || !inRoster {
 			return "student_not_in_roster"
 		}
-		var issued bool
-		if err := tx.QueryRowContext(ctx, `
-SELECT EXISTS (
-  SELECT 1
-  FROM answer_sheet_print_sheet
-  WHERE tenant_id=$1
-    AND id=$2::uuid
-    AND exam_id=$3::uuid
-    AND template_id=$4::uuid
-    AND template_content_hash=$5
-    AND student_id=$6::uuid
-    AND status IN ('issued','observed','conflict')
-)
-`, tenantID, claims.SheetSerial, examID, claims.TemplateID, claims.TemplateContentHash, claims.StudentID).Scan(&issued); err != nil || !issued {
+		var sheetStatus string
+		err := tx.QueryRowContext(ctx, `
+SELECT status
+FROM answer_sheet_print_sheet
+WHERE tenant_id=$1
+  AND id=$2::uuid
+  AND exam_id=$3::uuid
+  AND template_id=$4::uuid
+  AND template_content_hash=$5
+  AND student_id=$6::uuid
+`, tenantID, claims.SheetSerial, examID, claims.TemplateID, claims.TemplateContentHash, claims.StudentID).Scan(&sheetStatus)
+		if err != nil {
 			return "sheet_not_issued"
+		}
+		if sheetStatus == "revoked" {
+			return "sheet_revoked"
 		}
 	}
 	return ""

@@ -78,6 +78,40 @@ func (h *Handler) IssueStudentBarcodes(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"barcodes": out})
 }
 
+func (h *Handler) RevokeStudentSheet(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input StudentSheetLifecycleInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.RevokeStudentSheet(
+		r.Context(), user.TenantID, r.PathValue("id"), user.ID, input,
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "answer_sheet_print_sheet.revoked", "answer_sheet_print_sheet", out.SheetSerial, input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"sheet": out})
+}
+
+func (h *Handler) ReprintStudentSheet(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input ReprintStudentSheetInput
+	if !decodeStrict(w, r, &input) {
+		return
+	}
+	out, err := h.store.ReprintStudentSheet(
+		r.Context(), user.TenantID, r.PathValue("id"), user.ID, input,
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	h.auditAction(r, "answer_sheet_print_sheet.reprinted", "answer_sheet_print_sheet", r.PathValue("id"), input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"barcodes": out})
+}
+
 func (h *Handler) CreateRegistrationCorrection(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	var input CreateRegistrationCorrectionInput

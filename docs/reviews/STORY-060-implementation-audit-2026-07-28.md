@@ -35,7 +35,7 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 
 | 范围 | 状态 | 已有证据 | 未完成事实 |
 | --- | --- | --- | --- |
-| 1. 条码承载学生身份 | 签发与重复检测完成，完整打印闭环未完成 | migration 000054 持久化 print batch/sheet/page；签发限制 active exam roster 并支持幂等重放；未签发 serial 不受信任；capture page 保存类型化 student/template/serial；跨文件/跨 submission 重复页双方进入冲突；旧 v1 保持验证 | 尚无冲突解除后的 serial 状态重算、打印包 UI/可下载文件、作废/重印原因入口、插页后续页完整 E2E 和 30 份实体回扫报告 |
+| 1. 条码承载学生身份 | 身份台账与生命周期完成，完整打印闭环未完成 | migration 000054/000055 持久化 print batch/sheet/page 和替代链；签发限制 active exam roster 并支持幂等重放；未签发/已作废 serial 不受信任；capture page 保存类型化 student/template/serial；跨文件重复页双方进入冲突；删除/恢复重复页会重算冲突；作废与幂等重印保存操作者、原因和新旧 serial 关系；旧 v1 保持验证 | 尚无打印包 UI/可下载文件、插页后续页完整 E2E 和 30 份实体回扫报告 |
 | 2. 花名册对账与缺考 | 软件范围完成 | migration 000052/000053；管理员 roster API/UI；缺考原因和审计；缺考后不再触发 missing submission；未识别、缺页、重复答卷和缺少答卷进入发布门禁；500 人 PostgreSQL E2E | 历史已发布考试不会被追溯重开；这属于迁移/运营边界，不阻断本项 |
 | 3. OMR 校准范式修正 | 未完成 | 原有题目级校准、人工标注、双人审批/撤销和前端标注抽屉仍可用 | `CreateOMRCalibrationInput` 仍要求 `question_id`；session、scope、批准查询仍绑定 question；样本 SQL 仍要求 `decision='selected' AND confidence >= minimum`，排除了 ambiguous/blank/低置信样本；没有模板级校准场次和克隆语义 |
 | 4. 采集链路自救 | 未完成 | 页面配准任务已有 retry；Worker Runtime 有通用重试/重排 | `QueueBatch` 只查询 `status='uploaded'`；失败 capture file 不能通过批次重新排队；同 batch 同 sha256 无条件标 duplicate；没有修改 `submission_page.quality_override` 的业务 API/UI，现有字段仍只是空对象/读取能力；旧 submission 直传管线仍存在 |
@@ -100,10 +100,11 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 - [x] roster 限制和批量签发幂等。
 - [x] 持久化打印批次、sheet serial 和每页条码。
 - [x] capture page 绑定 serial 并检测跨文件/跨 submission 重复页冲突。
-- [ ] 作废/重印原因、操作者和审计入口。
+- [x] 删除/恢复重复页后的 serial、页面和 submission 冲突状态重算。
+- [x] 作废/重印原因、操作者、替代链和审计入口。
 - [ ] 插页/缺页/重复页的多页联合 E2E。
-- 打印包 UI 与可下载文件。
-- 30 份实体回扫作为外部验收证据。
+- [ ] 打印包 UI 与可下载文件。
+- [ ] 30 份实体回扫作为外部验收证据。
 
 ### STORY-060B：模板级 OMR 校准
 

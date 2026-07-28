@@ -49,6 +49,19 @@ func (s *PostgresStore) setPageDeleted(ctx context.Context, tenantID, pageID, ac
 	if err = invalidatePageTx(ctx, tx, tenantID, pageID); err != nil {
 		return Page{}, err
 	}
+	if current.SheetSerial != "" {
+		if err = s.reconcileSheetSerialTx(ctx, tx, tenantID, current.SheetSerial); err != nil {
+			return Page{}, err
+		}
+		out, err = scanPage(tx.QueryRowContext(ctx, `
+SELECT `+pageColumns+`
+FROM capture_page
+WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL
+`, tenantID, pageID))
+		if err != nil {
+			return Page{}, err
+		}
+	}
 	before, _ := json.Marshal(current)
 	after, _ := json.Marshal(out)
 	_, err = tx.ExecContext(ctx, `INSERT INTO capture_operation(tenant_id,capture_batch_id,operation,target_type,target_id,actor_id,reason,before_state,after_state)VALUES($1,$2::uuid,$3,'capture_page',$4::uuid,$5::uuid,$6,$7,$8)`, tenantID, current.CaptureBatchID, op, pageID, actorID, input.Reason, before, after)

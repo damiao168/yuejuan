@@ -232,4 +232,145 @@ WHERE p.tenant_id=$1::uuid AND p.sheet_serial=$2::uuid
 	if sheetStatus != "conflict" || conflictingSubmissions != 2 {
 		t.Fatalf("duplicate scan must persist a sheet and submission conflict: sheet=%s submissions=%d", sheetStatus, conflictingSubmissions)
 	}
+
+	deletedPage := e2ePostJSON(
+		t,
+		router,
+		http.MethodPost,
+		"/api/v1/capture-pages/"+e2eString(t, secondPage, "id")+"/delete",
+		adminToken,
+		story056JSON(t, map[string]any{
+			"revision": e2eFloat(t, secondPage, "revision"),
+			"reason":   "STORY-060 confirmed duplicate physical page",
+		}),
+		http.StatusOK,
+	)["page"].(map[string]any)
+	pages = e2eGetJSON(t, router, "/api/v1/capture-batches/"+batchID+"/pages", adminToken, http.StatusOK)["pages"].([]any)
+	firstPage = pages[0].(map[string]any)
+	secondPage = pages[1].(map[string]any)
+	firstIdentity := firstPage["page_identity"].(map[string]any)
+	if firstPage["status"] != "quality_checking" ||
+		firstIdentity["barcode_status"] != "verified" ||
+		firstIdentity["barcode_conflict_code"] != nil ||
+		secondPage["status"] != "deleted" {
+		t.Fatalf("deleting the confirmed duplicate must resolve the remaining serial conflict: %#v", pages)
+	}
+	var unassignedSubmissions int
+	if err := db.QueryRow(`
+SELECT count(DISTINCT s.id)
+FROM capture_page p
+JOIN submission s ON s.tenant_id=p.tenant_id AND s.id=p.submission_id
+WHERE p.tenant_id=$1::uuid AND p.sheet_serial=$2::uuid
+  AND p.deleted_at IS NULL AND s.identity_status='unassigned'
+`, fixture.TenantID, sheetSerial).Scan(&unassignedSubmissions); err != nil {
+		t.Fatalf("query reconciled submissions: %v", err)
+	}
+	if err := db.QueryRow(`
+SELECT status
+FROM answer_sheet_print_sheet
+WHERE tenant_id=$1::uuid AND id=$2::uuid
+`, fixture.TenantID, sheetSerial).Scan(&sheetStatus); err != nil {
+		t.Fatalf("query reconciled sheet: %v", err)
+	}
+	if sheetStatus != "observed" || unassignedSubmissions != 2 {
+		t.Fatalf("resolved duplicate must restore observed/unassigned state: sheet=%s submissions=%d", sheetStatus, unassignedSubmissions)
+	}
+
+	e2ePostJSON(
+		t,
+		router,
+		http.MethodPost,
+		"/api/v1/capture-pages/"+e2eString(t, deletedPage, "id")+"/restore",
+		adminToken,
+		story056JSON(t, map[string]any{
+			"revision": e2eFloat(t, deletedPage, "revision"),
+			"reason":   "STORY-060 restore verifies conflict recalculation",
+		}),
+		http.StatusOK,
+	)
+	pages = e2eGetJSON(t, router, "/api/v1/capture-batches/"+batchID+"/pages", adminToken, http.StatusOK)["pages"].([]any)
+	for _, rawPage := range pages {
+		page := rawPage.(map[string]any)
+		identity := page["page_identity"].(map[string]any)
+		if page["status"] != "needs_review" || identity["barcode_conflict_code"] != "sheet_page_duplicate" {
+			t.Fatalf("restoring the duplicate must restore both sides of the conflict: %#v", pages)
+		}
+	}
+
+	revoked := e2ePostJSON(
+		t,
+		router,
+		http.MethodPost,
+		"/api/v1/answer-sheet-print-sheets/"+sheetSerial+"/revoke",
+		adminToken,
+		`{"reason":"STORY-060 physical sheet damaged"}`,
+		http.StatusOK,
+	)["sheet"].(map[string]any)
+	if revoked["status"] != "revoked" || revoked["revoke_reason"] != "STORY-060 physical sheet damaged" {
+		t.Fatalf("sheet revocation metadata is incomplete: %#v", revoked)
+	}
+	pages = e2eGetJSON(t, router, "/api/v1/capture-batches/"+batchID+"/pages", adminToken, http.StatusOK)["pages"].([]any)
+	for _, rawPage := range pages {
+		page := rawPage.(map[string]any)
+		identity := page["page_identity"].(map[string]any)
+		if page["status"] != "needs_review" || identity["barcode_conflict_code"] != "sheet_revoked" {
+			t.Fatalf("revocation must invalidate every observed page of the old serial: %#v", pages)
+		}
+	}
+
+	reprintBody := story056JSON(t, map[string]any{
+		"reason":          "STORY-060 replace damaged physical sheet",
+		"idempotency_key": "story060-reprint-" + suffix,
+	})
+	reprinted := e2ePostJSON(
+		t,
+		router,
+		http.MethodPost,
+		"/api/v1/answer-sheet-print-sheets/"+sheetSerial+"/reprint",
+		adminToken,
+		reprintBody,
+		http.StatusOK,
+	)["barcodes"].(map[string]any)
+	replayedReprint := e2ePostJSON(
+		t,
+		router,
+		http.MethodPost,
+		"/api/v1/answer-sheet-print-sheets/"+sheetSerial+"/reprint",
+		adminToken,
+		reprintBody,
+		http.StatusOK,
+	)["barcodes"].(map[string]any)
+	reprintedStudent := reprinted["students"].([]any)[0].(map[string]any)
+	reprintedSerial := e2eString(t, reprintedStudent, "sheet_serial")
+	if reprintedSerial == sheetSerial ||
+		e2eString(t, replayedReprint, "print_batch_id") != e2eString(t, reprinted, "print_batch_id") ||
+		e2eString(t, replayedReprint["students"].([]any)[0].(map[string]any), "sheet_serial") != reprintedSerial {
+		t.Fatalf("reprint must create one new immutable serial and replay it idempotently: first=%#v replay=%#v", reprinted, replayedReprint)
+	}
+	e2eExpectStatus(
+		t,
+		router,
+		http.MethodPost,
+		"/api/v1/answer-sheet-print-sheets/"+sheetSerial+"/reprint",
+		adminToken,
+		story056JSON(t, map[string]any{
+			"reason":          "attempt a second replacement",
+			"idempotency_key": "story060-second-reprint-" + suffix,
+		}),
+		http.StatusConflict,
+	)
+	var supersedesSerial, operation, reprintReason string
+	if err := db.QueryRow(`
+SELECT s.supersedes_sheet_id::text,b.operation,b.reason
+FROM answer_sheet_print_sheet s
+JOIN answer_sheet_print_batch b
+  ON b.tenant_id=s.tenant_id AND b.id=s.print_batch_id
+WHERE s.tenant_id=$1::uuid AND s.id=$2::uuid
+`, fixture.TenantID, reprintedSerial).Scan(&supersedesSerial, &operation, &reprintReason); err != nil {
+		t.Fatalf("query replacement lineage: %v", err)
+	}
+	if supersedesSerial != sheetSerial || operation != "reprint" ||
+		reprintReason != "STORY-060 replace damaged physical sheet" {
+		t.Fatalf("replacement lineage is incomplete: supersedes=%s operation=%s reason=%s", supersedesSerial, operation, reprintReason)
+	}
 }

@@ -199,6 +199,31 @@ type IssuedStudentBarcodes struct {
 	IssuedAt            time.Time                 `json:"issued_at"`
 }
 
+type StudentSheetLifecycleInput struct {
+	Reason string `json:"reason"`
+}
+
+type ReprintStudentSheetInput struct {
+	Reason         string `json:"reason"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+type StudentSheet struct {
+	SheetSerial         string     `json:"sheet_serial"`
+	PrintBatchID        string     `json:"print_batch_id"`
+	ExamID              string     `json:"exam_id"`
+	TemplateID          string     `json:"template_id"`
+	TemplateContentHash string     `json:"template_content_hash"`
+	StudentID           string     `json:"student_id"`
+	Status              string     `json:"status"`
+	SupersedesSheetID   string     `json:"supersedes_sheet_id,omitempty"`
+	RevokedBy           string     `json:"revoked_by,omitempty"`
+	RevokedAt           *time.Time `json:"revoked_at,omitempty"`
+	RevokeReason        string     `json:"revoke_reason,omitempty"`
+	FirstObservedAt     *time.Time `json:"first_observed_at,omitempty"`
+	LastObservedAt      *time.Time `json:"last_observed_at,omitempty"`
+}
+
 type FileResultInput struct {
 	TaskID              string             `json:"task_id"`
 	LeaseToken          string             `json:"lease_token"`
@@ -397,6 +422,8 @@ type BatchDetail struct {
 type Store interface {
 	IssueTemplateBarcodes(ctx context.Context, tenantID, templateID string) (IssuedTemplateBarcodes, error)
 	IssueStudentBarcodes(ctx context.Context, tenantID, templateID, actorID string, input IssueStudentBarcodesInput) (IssuedStudentBarcodes, error)
+	RevokeStudentSheet(ctx context.Context, tenantID, sheetSerial, actorID string, input StudentSheetLifecycleInput) (StudentSheet, error)
+	ReprintStudentSheet(ctx context.Context, tenantID, sheetSerial, actorID string, input ReprintStudentSheetInput) (IssuedStudentBarcodes, error)
 	CreateBatch(ctx context.Context, tenantID, examID, actorID string, input CreateBatchInput) (Batch, error)
 	ListBatches(ctx context.Context, tenantID, examID string) ([]Batch, error)
 	GetBatch(ctx context.Context, tenantID, batchID string) (Batch, error)

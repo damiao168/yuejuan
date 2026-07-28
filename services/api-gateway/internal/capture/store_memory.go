@@ -32,6 +32,14 @@ func (s *MemoryStore) IssueStudentBarcodes(context.Context, string, string, stri
 	return IssuedStudentBarcodes{}, ErrInvalidTransition
 }
 
+func (s *MemoryStore) RevokeStudentSheet(context.Context, string, string, string, StudentSheetLifecycleInput) (StudentSheet, error) {
+	return StudentSheet{}, ErrInvalidTransition
+}
+
+func (s *MemoryStore) ReprintStudentSheet(context.Context, string, string, string, ReprintStudentSheetInput) (IssuedStudentBarcodes, error) {
+	return IssuedStudentBarcodes{}, ErrInvalidTransition
+}
+
 func (s *MemoryStore) CreateRegistrationCorrection(context.Context, string, string, string, CreateRegistrationCorrectionInput) (RegistrationCorrection, error) {
 	return RegistrationCorrection{}, ErrInvalidTransition
 }
