@@ -178,6 +178,7 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/publish", adminToken, `{"reason":"before confirmation"}`, http.StatusConflict)
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/confirm-grades", adminToken, `{"reason":"story041 synthetic confirmation"}`, http.StatusOK)
+	e2ePostJSON(t, router, http.MethodPut, "/api/v1/exams/"+examID+"/roster/"+otherStudentID+"/attendance", adminToken, `{"status":"absent","reason":"synthetic student intentionally has no answer sheet"}`, http.StatusOK)
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/publish", adminToken, `{"reason":"story041 synthetic publish"}`, http.StatusOK)
 	publishedExam := e2eGetJSON(t, router, "/api/v1/exams/"+examID, adminToken, http.StatusOK)["exam"].(map[string]any)
 	if publishedExam["status"] != "published" {
@@ -202,7 +203,7 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 		t.Fatalf("PostgreSQL appeal review should create score adjustment: %#v", appealReviewed)
 	}
 	audits := e2eGetJSON(t, router, "/api/v1/audit-logs?limit=200", adminToken, http.StatusOK)["audit_logs"].([]any)
-	e2eAssertAuditActions(t, audits, []string{"score.published", "appeal.assigned", "appeal.teacher_recommendation_submitted", "appeal.reviewed", "review.human_grade_submitted"})
+	e2eAssertAuditActions(t, audits, []string{"score.roster_attendance_updated", "score.published", "appeal.assigned", "appeal.teacher_recommendation_submitted", "appeal.reviewed", "review.human_grade_submitted"})
 }
 
 func e2ePostgresRouter(db *sql.DB) http.Handler {
