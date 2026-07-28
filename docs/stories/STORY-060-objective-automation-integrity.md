@@ -2,7 +2,7 @@
 
 ## Status
 
-Planned（2026-07-26 起草，待实现复审）
+In Progress（2026-07-28 实现事实审计：花名册对账完成；条码、OMR 校准和采集自救尚未收口）
 
 ## First-principles decision
 
@@ -117,6 +117,22 @@ Planned（2026-07-26 起草，待实现复审）
 - e2e：在 `internal/server` 新增 story060 场景（复用 e2ePostgresRouter），覆盖验收标准 1/2/5。
 - 规模验证：`tools/import-fujian-2024-math-simulation` 产出的数据上跑对账与发布门禁（该工具改造为走产品 API 属 STORY-061 范围，本期允许其现状）。
 
+## Implementation audit（2026-07-28）
+
+当前实现不能按本 Story 全量批准：
+
+- 花名册对账、显式缺考和发布门禁已完成真实 PostgreSQL E2E。
+- 学生条码 v2 已完成签名/验证和基础候选归属，但尚未持久化 sheet serial、限制考试 roster、生成打印包或完成实体回扫。
+- OMR 校准仍按 question 作用域，样本仍预筛高置信 `selected`，未完成计划中的 profile 级无偏校准。
+- capture file 失败重跑、失败后同 hash 重传和质量 override 业务入口均未完成。
+- `human_grade.ai_grade_id` 和假门禁删除已完成。
+
+逐项证据、风险和收口切片见：
+
+- [`docs/reviews/STORY-060-implementation-audit-2026-07-28.md`](../reviews/STORY-060-implementation-audit-2026-07-28.md)
+
+在 060A～060D 完成并补齐实体打印/扫描证据前，本 Story 保持 In Progress，STORY-061 只允许规划，不进入实现。
+
 ## Plan review
 
 ### Why this is the correct next Story
@@ -136,4 +152,4 @@ Planned（2026-07-26 起草，待实现复审）
 
 ## Decision
 
-待评审。实现顺序建议：第 1 项（条码定稿）→ 第 5 项（随行小项，部分已并行开工）→ 第 3 项（校准范式）→ 第 2 项（对账）→ 第 4 项（自救）。
+In Progress，尚未批准。2026-07-28 审计后顺序调整为：060A 条码归属闭环 → 060B 模板级 OMR 校准 → 060C 采集自救 → 060D 联合回归与实体证据。STORY-061 只允许保持规划状态。
