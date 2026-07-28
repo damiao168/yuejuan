@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Descriptions, Empty, Input, InputNumber, List, Select, Space, Table, Tabs, Tooltip, type TableColumnsType } from "antd";
-import { CheckCircle2, ClipboardCheck, Gavel, RefreshCw, Save, ScrollText, Search, ShieldCheck, UserCheck } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, App, Button, Collapse, Descriptions, Empty, Input, InputNumber, List, Select, Space, Tabs, type TableColumnsType } from "antd";
+import { CheckCircle2, ClipboardCheck, Gavel, RefreshCw, ScrollText, Search, UserCheck } from "lucide-react";
 import { ApiClientError } from "../api/client";
-import { getCurrentUser } from "../api/auth";
 import { listAuditLogs, type AuditLog } from "../api/audit";
 import { getExam } from "../api/exams";
 import { listQuestions, type Question, type RubricPoint } from "../api/papers";
@@ -36,7 +35,7 @@ interface DecisionDraft {
 }
 
 const statusOptions: { label: string; value: StatusFilter }[] = [
-  { label: "待处理", value: "active" },
+  { label: "未完成（待分配+已分配）", value: "active" },
   { label: "待分配", value: "pending" },
   { label: "已分配", value: "assigned" },
   { label: "已提交", value: "submitted" }
@@ -61,14 +60,27 @@ const auditActionLabels: Record<string, string> = {
   "review.double_mark_auto_finalized": "双评自动定分"
 };
 
+const auditTargetLabels: Record<string, string> = {
+  arbitration_task: "仲裁任务",
+  final_grade: "最终分"
+};
+
+const finalGradeSourceLabels: Record<string, string> = {
+  ai: "AI 评分",
+  human: "人工评分",
+  arbitration: "仲裁定分",
+  appeal: "申诉改分"
+};
+
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
-    return `${error.status} ${error.code}: ${error.message}`;
+    console.warn("仲裁页请求失败", error.status, error.code, error.message);
+    return error.message || "操作失败，请稍后重试";
   }
   if (error instanceof Error) {
-    return error.message;
+    return error.message || "操作失败，请稍后重试";
   }
-  return "未知错误";
+  return "操作失败，请稍后重试";
 }
 
 function formatTime(value?: string) {
@@ -111,14 +123,6 @@ function createInitialDraft(task?: ArbitrationTask): DecisionDraft {
   };
 }
 
-function suggestionText(task?: ArbitrationTask) {
-  const suggestion = task?.context?.ai_suggestion;
-  if (!suggestion || Object.keys(suggestion).length === 0) {
-    return "";
-  }
-  return JSON.stringify(suggestion, null, 2);
-}
-
 function activeStatusMatched(task: ArbitrationTask) {
   return task.status === "pending" || task.status === "assigned";
 }
@@ -130,9 +134,7 @@ async function loadQuestion(task: ArbitrationTask) {
 
 export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams, currentUser, initialExamId = "", personalScope = false }: { canAssign: boolean; canWork: boolean; canReadAudit: boolean; canReadExams: boolean; currentUser: SessionUser; initialExamId?: string; personalScope?: boolean }) {
   const { message } = App.useApp();
-  const hasSession = true;
-  const [actorId, setActorId] = useState(currentUser.id);
-  const [actorError, setActorError] = useState<string | null>(null);
+  const actorId = currentUser.id;
   const [scope, setScope] = useState<ScopeFilter>("mine");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
   const [keyword, setKeyword] = useState("");
@@ -150,29 +152,11 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [actioning, setActioning] = useState<string | null>(null);
-  const canSubmit = canWork && hasSession && (!personalScope || detail?.task.assigned_to === currentUser.id);
-
-  useEffect(() => {
-    if (!hasSession) {
-      return;
-    }
-    let cancelled = false;
-    void getCurrentUser()
-      .then((result) => {
-        if (!cancelled) {
-          setActorId(result.user.id);
-          setActorError(null);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setActorError(formatError(error));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [hasSession]);
+  const taskRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
+  const auditRequestRef = useRef(0);
+  const examNamesRequestRef = useRef(0);
+  const canSubmit = canWork && (!personalScope || detail?.task.assigned_to === currentUser.id);
 
   const filteredTasks = useMemo(() => {
     const text = keyword.trim().toLowerCase();
@@ -193,12 +177,14 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
   const selectedTask = useMemo(() => tasks.find((task) => task.id === selectedTaskId), [selectedTaskId, tasks]);
   const maxScore = detail?.question?.score ?? detail?.question?.rubric?.max_score ?? 0;
   const rubricPoints = detail?.question?.rubric?.points ?? [];
-  const aiText = suggestionText(detail?.task);
+  const aiSuggestion = detail?.task.context?.ai_suggestion;
 
   const loadAudits = useCallback(
     async (task: ArbitrationTask, grade?: FinalGrade) => {
-      if (!hasSession || !canReadAudit) {
+      const requestId = ++auditRequestRef.current;
+      if (!canReadAudit) {
         setAuditLogs([]);
+        setAuditLoading(false);
         return;
       }
       setAuditLoading(true);
@@ -212,18 +198,21 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
         const merged = results
           .flatMap((result) => result.audit_logs)
           .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        if (requestId !== auditRequestRef.current) return;
         setAuditLogs(merged);
       } catch (error) {
+        if (requestId !== auditRequestRef.current) return;
         setAuditError(formatError(error));
         setAuditLogs([]);
       } finally {
-        setAuditLoading(false);
+        if (requestId === auditRequestRef.current) setAuditLoading(false);
       }
     },
-    [canReadAudit, hasSession]
+    [canReadAudit]
   );
 
   const loadExamNames = useCallback(async (nextTasks: ArbitrationTask[]) => {
+    const requestId = ++examNamesRequestRef.current;
     if (!canReadExams) {
       setExamNames({});
       return;
@@ -240,41 +229,44 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
         next[result.value[0]] = result.value[1];
       }
     }
-    setExamNames(next);
+    if (requestId === examNamesRequestRef.current) setExamNames(next);
   }, [canReadExams]);
 
   const loadTasks = useCallback(async () => {
+    const requestId = ++taskRequestRef.current;
     setLoadingTasks(true);
     setTaskError(null);
-    if (!hasSession) {
-      setTasks([]);
-      setSelectedTaskId("");
-      setTaskError("当前没有有效登录会话，无法调用真实后端 API。");
-      setLoadingTasks(false);
-      return;
-    }
     try {
       const result = await listArbitrationTasks({
         status: statusFilter === "active" ? undefined : statusFilter,
-        assigned_to: personalScope ? currentUser.id : scope === "mine" ? actorId : undefined
+        assigned_to: personalScope ? currentUser.id : scope === "mine" ? actorId : undefined,
+        exam_id: initialExamId || undefined
       });
-      setTasks(result.arbitration_tasks);
-      setSelectedTaskId((current) => (result.arbitration_tasks.some((task) => task.id === current) ? current : result.arbitration_tasks[0]?.id ?? ""));
-      void loadExamNames(result.arbitration_tasks);
+      if (requestId !== taskRequestRef.current) return;
+      const scopedTasks = initialExamId
+        ? result.arbitration_tasks.filter((task) => task.exam_id === initialExamId)
+        : result.arbitration_tasks;
+      setTasks(scopedTasks);
+      setSelectedTaskId((current) => (scopedTasks.some((task) => task.id === current) ? current : scopedTasks[0]?.id ?? ""));
+      void loadExamNames(scopedTasks);
     } catch (error) {
+      if (requestId !== taskRequestRef.current) return;
       setTaskError(formatError(error));
       setTasks([]);
+      setSelectedTaskId("");
     } finally {
-      setLoadingTasks(false);
+      if (requestId === taskRequestRef.current) setLoadingTasks(false);
     }
-  }, [actorId, currentUser.id, hasSession, loadExamNames, personalScope, scope, statusFilter]);
+  }, [actorId, currentUser.id, initialExamId, loadExamNames, personalScope, scope, statusFilter]);
 
   const loadDetail = useCallback(
     async (taskId: string) => {
-      if (!taskId || !hasSession) {
+      const requestId = ++detailRequestRef.current;
+      if (!taskId) {
         setDetail(null);
         setFinalGrade(null);
         setAuditLogs([]);
+        setDetailLoading(false);
         return;
       }
       setDetailLoading(true);
@@ -282,33 +274,37 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
       setFinalGrade(null);
       try {
         const result = await getArbitrationTask(taskId);
+        if (requestId !== detailRequestRef.current) return;
         const warnings: string[] = [];
         let question: Question | undefined;
         try {
           question = canReadExams ? await loadQuestion(result.arbitration_task) : undefined;
+          if (requestId !== detailRequestRef.current) return;
           if (!question) {
-            warnings.push("未能通过 exam_id/question_id 找到题目与 Rubric。");
+            warnings.push("未找到该题的题目信息与评分标准，请联系管理员核对试卷设置。");
           }
         } catch (error) {
           warnings.push(formatError(error));
         }
         if (!result.arbitration_task.context?.raw_answer) {
-          warnings.push("仲裁上下文未返回原始答案。");
+          warnings.push("暂无该答卷的原始作答内容。");
         }
         if (!result.arbitration_task.context?.ocr_text) {
-          warnings.push("仲裁上下文未返回 OCR 文本。");
+          warnings.push("暂无该答卷的识别文本。");
         }
+        if (requestId !== detailRequestRef.current) return;
         setDetail({ task: result.arbitration_task, question, warnings });
         setDraft(createInitialDraft(result.arbitration_task));
         await loadAudits(result.arbitration_task);
       } catch (error) {
+        if (requestId !== detailRequestRef.current) return;
         setDetailError(formatError(error));
         setDetail(null);
       } finally {
-        setDetailLoading(false);
+        if (requestId === detailRequestRef.current) setDetailLoading(false);
       }
     },
-    [canReadExams, hasSession, loadAudits]
+    [canReadExams, loadAudits]
   );
 
   useEffect(() => {
@@ -336,7 +332,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
       return;
     }
     if (!actorId) {
-      message.error("无法识别当前后端用户 ID");
+      message.error("无法识别当前登录用户，请刷新页面后重试");
       return;
     }
     setActioning("assign");
@@ -399,7 +395,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
       width: 220,
       render: (value: string) => (
         <span className="arbitration-exam-cell" title={value}>
-          {examNames[value] ?? value}
+          {examNames[value] ?? (canReadExams ? "未匹配到考试" : "权限受限")}
         </span>
       )
     },
@@ -417,47 +413,70 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
       title: "状态",
       dataIndex: "status",
       width: 104,
-      render: (value: string) => <StatusTag tone={taskTone(value)}>{statusLabels[value] ?? value}</StatusTag>
+      render: (value: string) => <StatusTag tone={taskTone(value)}>{statusLabels[value] ?? "未知状态"}</StatusTag>
     }
   ];
 
   const renderContextTab = () => {
     if (!detail) {
-      return <EmptyState title="暂无详情" description="选择仲裁任务后展示答案上下文。" />;
+      return <EmptyState title="暂无详情" description="选择仲裁任务后展示作答与识别文本。" />;
     }
     return (
       <div className="arbitration-text-grid">
         <div>
           <strong>原始答案</strong>
-          <pre>{detail.task.context?.raw_answer || "当前仲裁上下文未返回原始答案。"}</pre>
+          <pre>{detail.task.context?.raw_answer || "暂无原始作答内容"}</pre>
         </div>
         <div>
-          <strong>OCR 文本</strong>
-          <pre>{detail.task.context?.ocr_text || "当前仲裁上下文未返回 OCR 文本。"}</pre>
+          <strong>识别文本</strong>
+          <pre>{detail.task.context?.ocr_text || "暂无识别文本"}</pre>
         </div>
       </div>
     );
   };
 
   const renderAiTab = () => {
-    if (!aiText) {
-      return <EmptyState title="暂无 AI 建议" description="当前仲裁上下文没有 ai_suggestion 字段。" />;
+    if (!aiSuggestion || Object.keys(aiSuggestion).length === 0) {
+      return <EmptyState title="暂无 AI 建议" description="该任务没有 AI 评分建议。" />;
     }
-    return <pre className="arbitration-json-view">{aiText}</pre>;
+    const suggestedScore = typeof aiSuggestion.suggested_score === "number" && Number.isFinite(aiSuggestion.suggested_score) ? aiSuggestion.suggested_score : undefined;
+    const confidence = typeof aiSuggestion.confidence === "number" && Number.isFinite(aiSuggestion.confidence) ? aiSuggestion.confidence : undefined;
+    const comments = typeof aiSuggestion.comments === "string" && aiSuggestion.comments.trim() ? aiSuggestion.comments : undefined;
+    const restEntries = Object.entries(aiSuggestion).filter(([key]) => !["suggested_score", "confidence", "comments"].includes(key));
+    return (
+      <div className="arbitration-ai-summary">
+        <Descriptions size="small" column={1}>
+          <Descriptions.Item label="建议分">{suggestedScore === undefined ? "暂无" : formatScore(suggestedScore)}</Descriptions.Item>
+          <Descriptions.Item label="置信度">{confidence === undefined ? "暂无" : `${Math.round(confidence * 100)}%`}</Descriptions.Item>
+          <Descriptions.Item label="评语">{comments ?? "暂无"}</Descriptions.Item>
+        </Descriptions>
+        {restEntries.length > 0 ? (
+          <Collapse
+            size="small"
+            ghost
+            items={[{
+              key: "raw",
+              label: "查看原始数据",
+              children: <pre className="arbitration-json-view">{JSON.stringify(Object.fromEntries(restEntries), null, 2)}</pre>
+            }]}
+          />
+        ) : null}
+      </div>
+    );
   };
 
   const renderRubricTab = () => {
     if (!detail?.question) {
-      return <EmptyState title="未读取到 Rubric" description="题目与 Rubric 需要通过真实题目 API 返回。" />;
+      return <EmptyState title="未获取到评分标准" description="请刷新重试，或联系管理员核对该题设置。" />;
     }
     if (rubricPoints.length === 0) {
-      return <EmptyState title="当前题目没有 Rubric points" description="可按题目满分提交仲裁最终分。" />;
+      return <EmptyState title="该题未设置评分点" description="可按题目满分直接给出仲裁最终分。" />;
     }
     return (
       <List
         size="small"
         dataSource={rubricPoints}
-        locale={{ emptyText: <Empty description="暂无 Rubric" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+        locale={{ emptyText: <Empty description="暂无评分点" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
         renderItem={(point) => (
           <List.Item>
             <div className="arbitration-rubric-item">
@@ -480,20 +499,16 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
         <div>
           <span>阅卷员 A</span>
           <strong>{formatScore(task.first_score)}</strong>
-          <small>{task.first_reviewer_id}</small>
-          <em>批注：当前 API 未返回</em>
         </div>
         <div>
           <span>阅卷员 B</span>
           <strong>{formatScore(task.second_score)}</strong>
-          <small>{task.second_reviewer_id}</small>
-          <em>批注：当前 API 未返回</em>
         </div>
         <div>
           <span>分差</span>
           <strong>{formatScore(task.score_difference)}</strong>
-          <small>{task.difference_reason || "未返回分差原因"}</small>
-          <em>{task.allow_same_arbitrator ? "允许同人仲裁" : "禁止前两名阅卷员仲裁"}</em>
+          <small>{task.difference_reason || "暂无分差说明"}</small>
+          <em>{task.allow_same_arbitrator ? "原阅卷员可参与仲裁" : "须由第三位教师仲裁"}</em>
         </div>
       </div>
     );
@@ -507,7 +522,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
       return <ErrorState message={auditError} onRetry={() => detail?.task && void loadAudits(detail.task, finalGrade ?? undefined)} />;
     }
     if (auditLogs.length === 0) {
-      return <EmptyState title="暂无审计记录" description="当前任务尚未返回匹配的 audit_log。" />;
+      return <EmptyState title="暂无操作记录" description="该任务暂无操作记录。" />;
     }
     return (
       <List
@@ -516,8 +531,8 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
         renderItem={(item) => (
           <List.Item>
             <div className="arbitration-audit-item">
-              <strong>{auditActionLabels[item.action] ?? item.action}</strong>
-              <span>{item.reason || item.target_type}</span>
+              <strong title={item.action}>{auditActionLabels[item.action] ?? "其他操作"}</strong>
+              <span>{item.reason || (auditTargetLabels[item.target_type] ?? "操作留痕")}</span>
               <small>{formatTime(item.created_at)}</small>
             </div>
           </List.Item>
@@ -531,7 +546,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
       <section className="arbitration-topbar">
         <div>
           <Space>
-            <h1>{personalScope ? "我的复核" : "双评仲裁"}</h1>
+            <h1>{personalScope ? "我的仲裁任务" : "双评仲裁"}</h1>
           </Space>
           <p>对比两次评分及其依据，确认最终得分。</p>
         </div>
@@ -539,31 +554,14 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
           <Button icon={<RefreshCw size={16} />} onClick={() => void refreshCurrent()} loading={loadingTasks || detailLoading}>
             刷新
           </Button>
-          {canAssign ? <Button icon={<UserCheck size={16} />} disabled={!detail || detail.task.status === "submitted"} loading={actioning === "assign"} onClick={() => void assignToMe()}>
-            分配给我
-          </Button> : null}
-          <Button type="primary" icon={<Save size={16} />} disabled={!canSubmit || !detail || detail.task.status === "submitted"} loading={actioning === "submit"} onClick={() => void submitDecision()}>
-            提交仲裁
-          </Button>
         </Space>
       </section>
-
-      {!hasSession ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="未检测到真实后端访问令牌"
-            description="对照两次评分、答题材料和评分细则完成最终裁定。"
-        />
-      ) : null}
-
-      {actorError ? <Alert type="warning" showIcon message="未能读取真实登录用户" description={`我的任务过滤暂用前端会话用户：${actorError}`} /> : null}
 
       <section className="arbitration-filterbar">
         {personalScope ? <span className="scope-fixed-label">仅显示分配给我的任务</span> : <Select className="toolbar-select" value={scope} options={scopeOptions} onChange={setScope} />}
         <Select className="toolbar-select" value={statusFilter} options={statusOptions} onChange={setStatusFilter} />
-        <Input prefix={<Search size={16} />} placeholder="搜索考试、匿名码、题号、任务 ID" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
-        <span className="muted">{filteredTasks.length} / {tasks.length} 个仲裁任务</span>
+        <Input prefix={<Search size={16} />} placeholder="搜索考试、匿名码或题号" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
+        <span className="muted arbitration-filter-count">{filteredTasks.length} / {tasks.length} 个仲裁任务</span>
       </section>
 
       <section className="arbitration-queue-panel">
@@ -602,16 +600,15 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
           </main>
         ) : (
           <main className="arbitration-main">
-            {detail.warnings.length > 0 ? <Alert type="warning" showIcon message="仲裁上下文不完整" description={detail.warnings.join("；")} /> : null}
+            {detail.warnings.length > 0 ? <Alert type="warning" showIcon message="部分评卷材料缺失" description={detail.warnings.join("；")} /> : null}
 
             <section className="arbitration-context-row">
               <Descriptions bordered size="small" column={4}>
-                <Descriptions.Item label="考试">{examNames[detail.task.exam_id] ?? detail.task.exam_id}</Descriptions.Item>
+                <Descriptions.Item label="考试"><span title={detail.task.exam_id}>{examNames[detail.task.exam_id] ?? (canReadExams ? "未匹配到考试" : "权限受限")}</span></Descriptions.Item>
                 <Descriptions.Item label="题号">{detail.task.question_no}</Descriptions.Item>
                 <Descriptions.Item label="匿名码">{detail.task.anonymous_code}</Descriptions.Item>
-                <Descriptions.Item label="状态">{statusLabels[detail.task.status] ?? detail.task.status}</Descriptions.Item>
-                <Descriptions.Item label="任务 ID">{detail.task.id}</Descriptions.Item>
-                <Descriptions.Item label="分配给">{detail.task.assigned_to || "未分配"}</Descriptions.Item>
+                <Descriptions.Item label="状态"><span title={detail.task.status}>{statusLabels[detail.task.status] ?? "未知状态"}</span></Descriptions.Item>
+                <Descriptions.Item label="分配给">{detail.task.assigned_to ? <span title={detail.task.assigned_to}>{detail.task.assigned_to === currentUser.id ? "我" : "已分配"}</span> : "未分配"}</Descriptions.Item>
                 <Descriptions.Item label="创建时间">{formatTime(detail.task.created_at)}</Descriptions.Item>
                 <Descriptions.Item label="更新时间">{formatTime(detail.task.updated_at)}</Descriptions.Item>
               </Descriptions>
@@ -621,18 +618,15 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
               <div className="panel-head">
                 <div>
                   <h2>证据与评分标准</h2>
-                  <p>满分 {maxScore || "未返回"}，当前分差 {formatScore(detail.task.score_difference)}</p>
+                  <p>满分 {maxScore || "未知"}，当前分差 {formatScore(detail.task.score_difference)}</p>
                 </div>
-                <Tooltip title="普通阅卷员没有 arbitration:manage 权限时无法进入该页面">
-                  <ShieldCheck size={18} />
-                </Tooltip>
               </div>
               <Tabs
                 size="small"
                 items={[
-                  { key: "context", label: "答案/OCR", children: renderContextTab() },
+                  { key: "context", label: "作答与识别文本", children: renderContextTab() },
                   { key: "ai", label: "AI 建议", children: renderAiTab() },
-                  { key: "rubric", label: "Rubric", children: renderRubricTab() }
+                  { key: "rubric", label: "评分标准", children: renderRubricTab() }
                 ]}
               />
             </section>
@@ -692,31 +686,31 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
               分配给我
             </Button> : null}
             <Button type="primary" icon={<CheckCircle2 size={16} />} disabled={!canSubmit || !detail || detail.task.status === "submitted"} loading={actioning === "submit"} onClick={() => void submitDecision()}>
-              提交
+              提交仲裁
             </Button>
           </Space>
 
           {finalGrade ? (
             <div className="final-grade-result">
-              <StatusTag tone="success">final_grade</StatusTag>
+              <StatusTag tone="success">最终分已写入</StatusTag>
               <strong>
                 {formatScore(finalGrade.score)} / {formatScore(finalGrade.max_score)}
               </strong>
-              <span>{finalGrade.source} · {finalGrade.locked ? "已锁定" : "未锁定"}</span>
+              <span>{finalGradeSourceLabels[finalGrade.source] ?? "仲裁定分"} · {finalGrade.locked ? "已锁定" : "未锁定"}</span>
             </div>
           ) : detail?.task.final_score !== undefined ? (
             <div className="final-grade-result">
               <StatusTag tone="success">已提交</StatusTag>
               <strong>{formatScore(detail.task.final_score)}</strong>
-              <span>{detail.task.reason || "仲裁说明未返回"}</span>
+              <span>{detail.task.reason || "未填写仲裁说明"}</span>
             </div>
           ) : null}
 
           <section className="arbitration-audit-panel">
             <div className="panel-head compact">
               <div>
-                <h2>审计记录</h2>
-                <p>读取真实 audit_log</p>
+                <h2>操作记录</h2>
+                <p>操作全程留痕</p>
               </div>
               <ScrollText size={18} />
             </div>

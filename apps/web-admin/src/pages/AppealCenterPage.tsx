@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Alert, App, Button, Descriptions, Input, InputNumber, List, Select, Space, Tabs, Tag, type TableColumnsType } from "antd";
-import { CheckCircle2, FileWarning, Gavel, LockKeyhole, RefreshCw, Search, Send, ShieldCheck, UserRoundCheck, XCircle } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Alert, App, Button, Descriptions, Input, InputNumber, List, Select, Space, Tag, type TableColumnsType } from "antd";
+import { CheckCircle2, FileWarning, Gavel, LockKeyhole, RefreshCw, Search, Send, UserRoundCheck, XCircle } from "lucide-react";
 import { ApiClientError } from "../api/client";
 import { listAuditLogs, type AuditLog } from "../api/audit";
 import { listExams, type Exam } from "../api/exams";
@@ -20,6 +20,7 @@ import {
 } from "../api/appeals";
 import { listManagedUsers, type ManagedUser } from "../api/users";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { examSubjectLabel } from "../constants/examStatus";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { SessionUser } from "../auth/session";
@@ -48,7 +49,7 @@ interface IdentityMaps {
 const statusLabels: Record<string, string> = {
   submitted: "已提交",
   under_review: "处理中",
-  need_more_info: "需补充",
+  need_more_info: "需补充材料",
   accepted: "已接受",
   rejected: "已驳回",
   score_adjusted: "已改分",
@@ -62,11 +63,21 @@ const targetLabels: Record<string, string> = {
 };
 
 const reviewOptions = [
-  { value: "under_review", label: "标记处理中" },
-  { value: "need_more_info", label: "要求补充" },
-  { value: "accepted", label: "接受申诉" },
-  { value: "rejected", label: "驳回申诉" },
-  { value: "score_adjusted", label: "调整分数" }
+  {
+    label: "流转中",
+    options: [
+      { value: "under_review", label: "标记处理中" },
+      { value: "need_more_info", label: "要求补充材料" }
+    ]
+  },
+  {
+    label: "最终结论",
+    options: [
+      { value: "accepted", label: "接受申诉" },
+      { value: "rejected", label: "驳回申诉" },
+      { value: "score_adjusted", label: "调整分数" }
+    ]
+  }
 ];
 
 const recommendationLabels: Record<string, string> = {
@@ -81,14 +92,42 @@ const recommendationOptions = Object.entries(recommendationLabels).map(([value, 
 const appealWorkerRoles = new Set(["teacher", "grader", "arbitrator"]);
 const workerRoleLabels: Record<string, string> = { teacher: "教师", grader: "阅卷员", arbitrator: "仲裁员" };
 
+const auditActionLabels: Record<string, string> = {
+  "appeal.submitted": "申诉提交",
+  "appeal.assigned": "申诉分派",
+  "appeal.reviewed": "申诉处理",
+  "appeal.score_adjusted": "申诉改分",
+  "appeal.closed": "申诉关闭",
+  "score_adjustment.created": "改分记录生成"
+};
+
+const auditTargetLabels: Record<string, string> = {
+  appeal: "申诉",
+  score_adjustment: "改分记录"
+};
+
+const finalGradeSourceLabels: Record<string, string> = {
+  ai: "AI 评分",
+  human: "人工评分",
+  arbitration: "仲裁定分",
+  appeal: "申诉改分"
+};
+
+const finalGradeStatusLabels: Record<string, string> = {
+  finalized: "已定分",
+  locked: "已锁定",
+  pending: "待定分"
+};
+
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
-    return `${error.status} ${error.code}: ${error.message}`;
+    console.warn("申诉中心请求失败", error.status, error.code, error.message);
+    return error.message || "操作失败，请稍后重试";
   }
   if (error instanceof Error) {
-    return error.message;
+    return error.message || "操作失败，请稍后重试";
   }
-  return "未知错误";
+  return "操作失败，请稍后重试";
 }
 
 function formatTime(value?: string) {
@@ -107,7 +146,7 @@ function formatScore(value?: number | null) {
 }
 
 function statusTone(status: string): StatusTone {
-  if (status === "accepted" || status === "score_adjusted" || status === "closed") {
+  if (status === "accepted" || status === "score_adjusted") {
     return "success";
   }
   if (status === "rejected") {
@@ -120,13 +159,6 @@ function statusTone(status: string): StatusTone {
     return "processing";
   }
   return "neutral";
-}
-
-function formatJSON(value?: unknown) {
-  if (value === undefined || value === null) {
-    return "";
-  }
-  return JSON.stringify(value, null, 2);
 }
 
 function mapNumber(value: unknown) {
@@ -179,6 +211,44 @@ function recordList(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [];
 }
 
+function formatFileSize(size: number) {
+  if (size >= 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (size >= 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${size} B`;
+}
+
+function AttachmentInfo({ value }: { value: Record<string, unknown> }) {
+  const name = textValue(value.file_name) ?? textValue(value.filename) ?? textValue(value.name);
+  const size = mapNumber(value.size) ?? mapNumber(value.file_size);
+  const uploadedAt = textValue(value.uploaded_at) ?? textValue(value.created_at);
+  const description = textValue(value.description) ?? textValue(value.remark);
+  const lines: string[] = [];
+  if (name) {
+    lines.push(`文件名：${name}`);
+  }
+  if (size !== undefined) {
+    lines.push(`大小：${formatFileSize(size)}`);
+  }
+  if (uploadedAt) {
+    lines.push(`上传时间：${formatTime(uploadedAt)}`);
+  }
+  if (description) {
+    lines.push(`说明：${description}`);
+  }
+  if (lines.length === 0) {
+    return <span className="muted">附件信息格式异常</span>;
+  }
+  return (
+    <div className="appeal-attachment-info">
+      {lines.map((line) => <span key={line}>{line}</span>)}
+    </div>
+  );
+}
+
 function ScoreEvidence({ items, ai = false }: { items: Record<string, unknown>[]; ai?: boolean }) {
   return (
     <div className="appeal-evidence-list">
@@ -203,10 +273,12 @@ function ScoreEvidence({ items, ai = false }: { items: Record<string, unknown>[]
 function FinalGradeEvidence({ value }: { value: Record<string, unknown> }) {
   const score = mapNumber(value.score);
   const maximum = mapNumber(value.max_score);
+  const source = textValue(value.source);
+  const status = textValue(value.status);
   return (
     <div className="appeal-final-grade">
       <strong>{formatScore(score)}{maximum === undefined ? "" : ` / ${formatScore(maximum)}`}</strong>
-      <span>{textValue(value.source) ?? "最终评分"} · {textValue(value.status) ?? "状态未知"}</span>
+      <span>{(source ? finalGradeSourceLabels[source] : undefined) ?? "最终评分"} · {(status ? finalGradeStatusLabels[status] : undefined) ?? "状态未知"}</span>
     </div>
   );
 }
@@ -227,7 +299,6 @@ function RubricEvidence({ value }: { value: Record<string, unknown> }) {
 
 export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAudit, canReadIdentities, canReadExams, currentUser, initialExamId = "" }: AppealCenterPageProps) {
   const { message, modal } = App.useApp();
-  const hasSession = true;
   const [appeals, setAppeals] = useState<Appeal[]>([]);
   const [selectedAppealId, setSelectedAppealId] = useState("");
   const [selectedAppeal, setSelectedAppeal] = useState<Appeal | null>(null);
@@ -248,13 +319,16 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [actioning, setActioning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const listRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
+  const auditRequestRef = useRef(0);
 
   const examOptions = useMemo(
     () => {
-      const options = new Map(Object.values(identities.exams).map((exam) => [exam.id, `${exam.name} · ${exam.subject}`]));
+      const options = new Map(Object.values(identities.exams).map((exam) => [exam.id, `${exam.name} · ${examSubjectLabel(exam.subject)}`]));
       appeals.forEach((appeal) => {
         if (!options.has(appeal.exam_id)) {
-          options.set(appeal.exam_id, `${appeal.exam_name ?? appeal.exam_id}${appeal.subject ? ` · ${appeal.subject}` : ""}`);
+          options.set(appeal.exam_id, `${appeal.exam_name ?? "未命名考试"}${appeal.subject ? ` · ${examSubjectLabel(appeal.subject)}` : ""}`);
         }
       });
       return Array.from(options, ([value, label]) => ({ value, label }));
@@ -267,12 +341,11 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
   const currentScore = finalScore(selectedAppeal, "score");
   const maxScore = finalScore(selectedAppeal, "max_score");
   const isTerminalAppeal = selectedAppeal ? ["accepted", "rejected", "score_adjusted", "closed"].includes(selectedAppeal.status) : false;
-  const canAct = canManage && hasSession && Boolean(selectedAppeal);
+  const canAct = canManage && Boolean(selectedAppeal);
   const canReview = canAct && !isTerminalAppeal;
   const canClose = canAct && selectedAppeal?.status !== "closed";
   const canAssign = canAct && !isTerminalAppeal && Boolean(assignedTo);
   const canSubmitRecommendation = canWork
-    && hasSession
     && Boolean(selectedAppeal)
     && selectedAppeal?.assigned_to === currentUser.id
     && !isTerminalAppeal;
@@ -285,7 +358,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
   const workerOptions = useMemo(
     () => appealWorkers.map((worker) => ({
       value: worker.id,
-      label: `${worker.display_name} · ${worker.roles.map((role) => workerRoleLabels[role] ?? role).join("/")}`
+      label: `${worker.display_name} · ${worker.roles.map((role) => workerRoleLabels[role] ?? "其他角色").join("/")}`
     })),
     [appealWorkers]
   );
@@ -311,22 +384,22 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
   const columns = useMemo<TableColumnsType<Appeal>>(
     () => mode === "teacher" ? [
       {
-        title: "答卷",
+        title: "匿名码",
         dataIndex: "anonymous_code",
         width: 130,
-        render: (value: string | undefined, record: Appeal) => value || `申诉 ${record.id.slice(0, 8)}`
+        render: (value: string | undefined) => value || "未生成匿名码"
       },
-      { title: "考试", dataIndex: "exam_name", render: (value: string | undefined, record: Appeal) => value || record.exam_id },
+      { title: "考试", dataIndex: "exam_name", render: (value: string | undefined, record: Appeal) => value || <span className="muted" title={record.exam_id}>未匹配到考试</span> },
       { title: "题号", dataIndex: "question_no", width: 80, render: (value?: string) => value || "整卷" },
       { title: "申诉原因", dataIndex: "reason", ellipsis: true },
-      { title: "复核建议", dataIndex: "teacher_recommendation", width: 110, render: (value?: string) => value ? <Tag color="blue">{recommendationLabels[value] ?? value}</Tag> : <span className="muted">待提交</span> },
-      { title: "状态", dataIndex: "status", width: 100, render: (value: string) => <StatusTag tone={statusTone(value)}>{statusLabels[value] ?? value}</StatusTag> }
+      { title: "复核建议", dataIndex: "teacher_recommendation", width: 110, render: (value?: string) => value ? <Tag color="blue" title={value}>{recommendationLabels[value] ?? "其他建议"}</Tag> : <span className="muted">待提交</span> },
+      { title: "状态", dataIndex: "status", width: 100, render: (value: string) => <StatusTag tone={statusTone(value)}>{statusLabels[value] ?? "未知状态"}</StatusTag> }
     ] : [
       {
         key: "student",
         title: "学生",
         dataIndex: "student_id",
-        render: (value: string) => identities.students[value]?.name ?? <span className="muted">{canReadIdentities ? value : "权限受限"}</span>
+        render: (value: string) => identities.students[value]?.name ?? <span className="muted" title={value}>{canReadIdentities ? "未匹配到学生" : "权限受限"}</span>
       },
       {
         key: "class",
@@ -338,10 +411,10 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
           return student ? identities.classes[student.class_id]?.name ?? "-" : <span className="muted">权限受限</span>;
         }
       },
-      { title: "考试", dataIndex: "exam_id", render: (value: string, record: Appeal) => identities.exams[value]?.name ?? record.exam_name ?? <span className="muted">{value}</span> },
+      { title: "考试", dataIndex: "exam_id", render: (value: string, record: Appeal) => identities.exams[value]?.name ?? record.exam_name ?? <span className="muted" title={value}>未匹配到考试</span> },
       { title: "题号", dataIndex: "question_no", width: 80, render: (value?: string) => value || "整卷" },
       { title: "申诉原因", dataIndex: "reason", ellipsis: true },
-      { title: "状态", dataIndex: "status", width: 100, render: (value: string) => <StatusTag tone={statusTone(value)}>{statusLabels[value] ?? value}</StatusTag> },
+      { title: "状态", dataIndex: "status", width: 100, render: (value: string) => <StatusTag tone={statusTone(value)}>{statusLabels[value] ?? "未知状态"}</StatusTag> },
       { title: "提交时间", dataIndex: "created_at", width: 160, render: (value: string) => formatTime(value) }
     ],
     [canReadIdentities, identities.classes, identities.exams, identities.students, mode]
@@ -360,16 +433,9 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
   );
 
   const loadList = useCallback(async () => {
+    const requestId = ++listRequestRef.current;
     setLoadingList(true);
     setError(null);
-    if (!hasSession) {
-      setAppeals([]);
-      setSelectedAppealId("");
-      setStatistics(null);
-      setError("当前没有有效登录会话，无法调用真实后端 API。");
-      setLoadingList(false);
-      return;
-    }
     try {
       const [identityResult, appealResult, statsResult, workersResult] = await Promise.allSettled([
         loadIdentities(canReadIdentities, canReadExams),
@@ -380,6 +446,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
         canManage ? getAppealStatistics(examFilter === "all" ? undefined : examFilter) : Promise.resolve({ statistics: null as unknown as AppealStatistics }),
         canManage ? listManagedUsers() : Promise.resolve({ users: [] as ManagedUser[] })
       ]);
+      if (requestId !== listRequestRef.current) return;
       if (identityResult.status === "fulfilled") {
         setIdentities(identityResult.value);
       }
@@ -401,17 +468,19 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
         message.warning(`身份映射读取不完整：${identityResult.value.error}`);
       }
     } catch (currentError) {
+      if (requestId !== listRequestRef.current) return;
       setAppeals([]);
       setSelectedAppealId("");
       setStatistics(null);
       setError(formatError(currentError));
     } finally {
-      setLoadingList(false);
+      if (requestId === listRequestRef.current) setLoadingList(false);
     }
-  }, [canManage, canReadExams, canReadIdentities, examFilter, hasSession, message, statusFilter]);
+  }, [canManage, canReadExams, canReadIdentities, examFilter, message, statusFilter]);
 
   const loadAuditForAppeal = useCallback(
     async (appeal: Appeal) => {
+      const requestId = ++auditRequestRef.current;
       if (!canReadAudit) {
         setAuditLogs([]);
         return;
@@ -421,6 +490,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
         ...(appeal.adjustments ?? []).map((item) => listAuditLogs({ target_type: "score_adjustment", target_id: item.id, limit: 5 }))
       ];
       const results = await Promise.allSettled(auditRequests);
+      if (requestId !== auditRequestRef.current) return;
       setAuditLogs(
         results
           .flatMap((result) => (result.status === "fulfilled" ? result.value.audit_logs : []))
@@ -432,15 +502,18 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
 
   const loadDetail = useCallback(
     async (id: string) => {
-      if (!id || !hasSession) {
+      const requestId = ++detailRequestRef.current;
+      if (!id) {
         setSelectedAppeal(null);
         setAuditLogs([]);
+        setLoadingDetail(false);
         return;
       }
       setLoadingDetail(true);
       setError(null);
       try {
         const result = await getAppeal(id);
+        if (requestId !== detailRequestRef.current) return;
         setSelectedAppeal(result.appeal);
         setReviewStatus(result.appeal.status === "submitted" ? "under_review" : "accepted");
         setReviewReason("");
@@ -450,15 +523,20 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
         setRecommendedScore(result.appeal.teacher_recommended_score ?? finalScore(result.appeal, "score") ?? null);
         await loadAuditForAppeal(result.appeal);
       } catch (currentError) {
+        if (requestId !== detailRequestRef.current) return;
         setSelectedAppeal(null);
         setAuditLogs([]);
         setError(formatError(currentError));
       } finally {
-        setLoadingDetail(false);
+        if (requestId === detailRequestRef.current) setLoadingDetail(false);
       }
     },
-    [hasSession, loadAuditForAppeal]
+    [loadAuditForAppeal]
   );
+
+  useEffect(() => {
+    setExamFilter(initialExamId || "all");
+  }, [initialExamId]);
 
   useEffect(() => {
     void loadList();
@@ -569,7 +647,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
       payload.adjusted_score = adjustedScore;
       modal.confirm({
         title: "确认调整分数",
-        content: `当前最终分 ${formatScore(currentScore)}，将调整为 ${formatScore(adjustedScore)}。确认后后端会写 score_adjustment 和 audit_log。`,
+        content: `当前最终分 ${formatScore(currentScore)}，将调整为 ${formatScore(adjustedScore)}。确认后系统将生成改分记录并留存操作痕迹，可在审计中追溯。`,
         okText: "确认改分",
         cancelText: "取消",
         onOk: () => runReview(payload)
@@ -589,7 +667,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
     }
     modal.confirm({
       title: "关闭申诉",
-      content: "关闭后该申诉进入 closed 状态，结果仍对学生可见。",
+      content: "关闭后申诉将标记为“已关闭”，处理结果仍对学生可见。",
       okText: "确认关闭",
       cancelText: "取消",
       onOk: async () => {
@@ -611,10 +689,10 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
 
   const renderAudit = () => {
     if (!canReadAudit) {
-      return <EmptyState title="无审计读取权限" description="申诉处理和改分仍由后端写审计；当前用户不能读取审计日志。" />;
+      return <EmptyState title="无法查看操作记录" description="当前账号没有查看审计日志的权限，如需查看请联系系统管理员。" />;
     }
     if (auditLogs.length === 0) {
-      return <EmptyState title="暂无审计记录" description="当前申诉尚未返回匹配的 appeal 或 score_adjustment 审计。" />;
+      return <EmptyState title="暂无操作记录" description="该申诉还没有处理或改分的留痕记录。" />;
     }
     return (
       <List
@@ -623,8 +701,8 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
         renderItem={(item) => (
           <List.Item>
             <div className="appeal-audit-row">
-              <strong>{item.action}</strong>
-              <span>{item.reason || item.target_type}</span>
+              <strong title={item.action}>{auditActionLabels[item.action] ?? "其他操作"}</strong>
+              <span>{item.reason || (auditTargetLabels[item.target_type] ?? "操作留痕")}</span>
               <small>{formatTime(item.created_at)}</small>
             </div>
           </List.Item>
@@ -638,32 +716,32 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
       return <LoadingState label="正在读取申诉详情" />;
     }
     if (!selectedAppeal) {
-      return <EmptyState title="请选择申诉" description="从左侧列表选择一条真实申诉后查看证据与处理记录。" />;
+      return <EmptyState title="请选择申诉" description="从左侧列表选择一条申诉，查看证据与处理记录。" />;
     }
     return (
       <div className="appeal-detail-stack">
         <section className="appeal-panel">
           <div className="panel-head">
             <div>
-              <h2>{targetLabels[selectedAppeal.target_type] ?? selectedAppeal.target_type}</h2>
-              <p>
-                {identities.exams[selectedAppeal.exam_id]?.name ?? selectedAppeal.exam_name ?? selectedAppeal.exam_id} · {selectedAppeal.subject || "未标注学科"} · {selectedAppeal.question_no || "整卷"}
+              <h2 title={selectedAppeal.target_type}>{targetLabels[selectedAppeal.target_type] ?? "申诉对象"}</h2>
+              <p title={selectedAppeal.exam_id}>
+                {identities.exams[selectedAppeal.exam_id]?.name ?? selectedAppeal.exam_name ?? "未匹配到考试"} · {selectedAppeal.subject ? examSubjectLabel(selectedAppeal.subject) : "未标注学科"} · {selectedAppeal.question_no || "整卷"}
               </p>
             </div>
-            <StatusTag tone={statusTone(selectedAppeal.status)}>{statusLabels[selectedAppeal.status] ?? selectedAppeal.status}</StatusTag>
+            <StatusTag tone={statusTone(selectedAppeal.status)}>{statusLabels[selectedAppeal.status] ?? "未知状态"}</StatusTag>
           </div>
           <Descriptions size="small" column={2} className="appeal-descriptions">
-            <Descriptions.Item label={mode === "teacher" ? "匿名答卷" : "学生"}>
-              {mode === "teacher" ? selectedAppeal.anonymous_code || `申诉 ${selectedAppeal.id.slice(0, 8)}` : selectedStudent?.name ?? (canReadIdentities ? selectedAppeal.student_id : "权限受限")}
+            <Descriptions.Item label={mode === "teacher" ? "匿名码" : "学生"}>
+              {mode === "teacher" ? selectedAppeal.anonymous_code || "未生成匿名码" : selectedStudent?.name ?? <span className="muted" title={selectedAppeal.student_id}>{canReadIdentities ? "未匹配到学生" : "权限受限"}</span>}
             </Descriptions.Item>
-            {mode === "admin" ? <Descriptions.Item label="班级">{selectedClass?.name ?? (selectedStudent ? selectedStudent.class_id : "权限受限")}</Descriptions.Item> : null}
+            {mode === "admin" ? <Descriptions.Item label="班级">{selectedClass?.name ?? <span className="muted" title={selectedStudent?.class_id}>{selectedStudent ? "未匹配到班级" : "权限受限"}</span>}</Descriptions.Item> : null}
             <Descriptions.Item label="提交时间">{formatTime(selectedAppeal.created_at)}</Descriptions.Item>
-            <Descriptions.Item label="处理教师">{selectedAppeal.assigned_to ? workerNames[selectedAppeal.assigned_to] ?? (selectedAppeal.assigned_to === currentUser.id ? currentUser.name : selectedAppeal.assigned_to) : "尚未分派"}</Descriptions.Item>
+            <Descriptions.Item label="处理教师">{selectedAppeal.assigned_to ? workerNames[selectedAppeal.assigned_to] ?? (selectedAppeal.assigned_to === currentUser.id ? currentUser.name : <span title={selectedAppeal.assigned_to}>已分派</span>) : "尚未分派"}</Descriptions.Item>
             <Descriptions.Item label="申诉原因" span={mode === "teacher" ? 1 : 2}>
               {selectedAppeal.reason}
             </Descriptions.Item>
             <Descriptions.Item label="附件" span={2}>
-              {selectedAppeal.attachment ? <pre className="appeal-inline-json">{formatJSON(selectedAppeal.attachment)}</pre> : <span className="muted">无附件元数据</span>}
+              {selectedAppeal.attachment ? <AttachmentInfo value={selectedAppeal.attachment} /> : <span className="muted">无附件</span>}
             </Descriptions.Item>
           </Descriptions>
         </section>
@@ -674,13 +752,13 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
               <h2>教师复核建议</h2>
               <p>{selectedAppeal.teacher_recommendation_at ? formatTime(selectedAppeal.teacher_recommendation_at) : "等待处理教师提交"}</p>
             </div>
-            {selectedAppeal.teacher_recommendation ? <Tag color="blue">{recommendationLabels[selectedAppeal.teacher_recommendation] ?? selectedAppeal.teacher_recommendation}</Tag> : null}
+            {selectedAppeal.teacher_recommendation ? <Tag color="blue" title={selectedAppeal.teacher_recommendation}>{recommendationLabels[selectedAppeal.teacher_recommendation] ?? "其他建议"}</Tag> : null}
           </div>
           {selectedAppeal.teacher_recommendation ? (
             <div className="appeal-result-strip teacher-recommendation-result">
               <div>
                 <span>复核建议</span>
-                <strong>{recommendationLabels[selectedAppeal.teacher_recommendation] ?? selectedAppeal.teacher_recommendation}</strong>
+                <strong title={selectedAppeal.teacher_recommendation}>{recommendationLabels[selectedAppeal.teacher_recommendation] ?? "其他建议"}</strong>
               </div>
               <div>
                 <span>建议分数</span>
@@ -705,7 +783,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
             <EvidenceBlock title="原始答卷" empty="暂无原始答卷文本">
               {selectedAppeal.evidence?.raw_answer ? <p className="appeal-evidence-text">{selectedAppeal.evidence.raw_answer}</p> : null}
             </EvidenceBlock>
-            <EvidenceBlock title="OCR 文本" empty="暂无 OCR 文本">
+            <EvidenceBlock title="识别文本" empty="暂无识别文本">
               {selectedAppeal.evidence?.ocr_text ? <p className="appeal-evidence-text">{selectedAppeal.evidence.ocr_text}</p> : null}
             </EvidenceBlock>
             <EvidenceBlock title="AI 评分" empty="暂无 AI 评分">
@@ -733,7 +811,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
           <div className="appeal-result-strip">
             <div>
               <span>当前状态</span>
-              <strong>{statusLabels[selectedAppeal.status] ?? selectedAppeal.status}</strong>
+              <strong title={selectedAppeal.status}>{statusLabels[selectedAppeal.status] ?? "未知状态"}</strong>
             </div>
             <div>
               <span>处理说明</span>
@@ -750,7 +828,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
           <div className="panel-head">
             <div>
               <h2>历史修改记录</h2>
-              <p>{selectedAppeal.adjustments?.length ?? 0} 条 score_adjustment</p>
+              <p>{selectedAppeal.adjustments?.length ?? 0} 条改分记录</p>
             </div>
           </div>
           <ResponsiveTable
@@ -759,7 +837,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
             columns={adjustmentColumns}
             dataSource={selectedAppeal.adjustments ?? []}
             pagination={false}
-            locale={{ emptyText: <EmptyState title="暂无改分记录" description="当前申诉尚未产生 score_adjustment。" /> }}
+            locale={{ emptyText: <EmptyState title="暂无改分记录" description="该申诉尚未产生改分记录。" /> }}
           />
         </section>
       </div>
@@ -781,7 +859,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
             value={examFilter}
             options={[{ value: "all", label: "全部考试" }, ...examOptions]}
             onChange={setExamFilter}
-            disabled={!hasSession || examOptions.length === 0}
+            disabled={examOptions.length === 0}
           />
           <Select
             className="appeal-filter-select narrow"
@@ -795,15 +873,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
         </Space>
       </section>
 
-      {!hasSession ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="未检测到真实后端访问令牌"
-          description="集中查看申诉材料、处理进度和成绩调整记录。"
-        />
-      ) : null}
-      {!canRead ? <Alert type="error" showIcon message="无申诉读取权限" description="当前账号缺少 appeal:read，不能读取申诉列表和详情。" /> : null}
+      {!canRead ? <Alert type="error" showIcon message="无申诉查看权限" description="当前账号没有申诉查看权限，无法读取申诉列表和详情，请联系管理员开通。" /> : null}
       {error ? <ErrorState message={error} onRetry={refresh} /> : null}
 
       {mode === "admin" ? <section className="appeal-summary-strip">
@@ -820,8 +890,8 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
           <strong>{statistics ? statistics.score_adjusted_count : "-"}</strong>
         </div>
         <div>
-          <span>平均处理小时</span>
-          <strong>{statistics ? formatScore(statistics.average_handle_hours) : "-"}</strong>
+          <span>平均处理时长</span>
+          <strong>{statistics && Number.isFinite(statistics.average_handle_hours) ? `${formatScore(statistics.average_handle_hours)} 小时` : "-"}</strong>
         </div>
       </section> : <section className="appeal-summary-strip teacher-summary">
         <div>
@@ -871,7 +941,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
           <div className="panel-head">
             <div>
               <h2>处理申诉</h2>
-              <p>处理说明会进入学生可见结果和审计链路。</p>
+              <p>处理说明将展示给学生，并计入操作留痕。</p>
             </div>
             <Gavel size={20} />
           </div>
@@ -908,6 +978,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
           <Button type="primary" icon={<CheckCircle2 size={16} />} disabled={!canReview} loading={actioning === "review"} onClick={submitReview}>
             提交处理
           </Button>
+          <span className="muted">结论确定后可关闭申诉归档</span>
           <Button danger icon={<XCircle size={16} />} disabled={!canClose} loading={actioning === "close"} onClick={closeSelectedAppeal}>
             关闭申诉
           </Button>
@@ -915,40 +986,17 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
             type="info"
             showIcon
             icon={<FileWarning size={18} />}
-            message="改分审计"
-            description="调整分数必须二次确认；后端会创建 score_adjustment，并写 appeal.reviewed 与 appeal.score_adjusted 审计。"
+            message="改分须知"
+            description="调整分数需二次确认，所有改分操作都会自动留痕，可在操作记录中追溯。"
           />
-          <Tabs
-            size="small"
-            items={[
-              { key: "audit", label: "审计", children: renderAudit() },
-              {
-                key: "scope",
-                label: "权限",
-                children: (
-                  <div className="appeal-scope-note">
-                    <LockKeyhole size={16} />
-                    <span>学生只能读取自己的申诉由后端 data_scope 强制；本页按 appeal:manage 控制处理动作。</span>
-                  </div>
-                )
-              },
-              {
-                key: "watermark",
-                label: "留痕",
-                children: (
-                  <div className="appeal-scope-note">
-                    <ShieldCheck size={16} />
-                    <span>前端不直接写分数或审计，只提交真实 review/close API。</span>
-                  </div>
-                )
-              }
-            ]}
-          />
+          <div className="appeal-action-divider" />
+          <strong>操作记录</strong>
+          {renderAudit()}
         </aside> : <aside className="appeal-action-panel teacher-action-panel">
           <div className="panel-head">
             <div>
               <h2>提交复核建议</h2>
-              <p>{selectedAppeal ? selectedAppeal.anonymous_code || `申诉 ${selectedAppeal.id.slice(0, 8)}` : "选择一条申诉任务"}</p>
+              <p>{selectedAppeal ? selectedAppeal.anonymous_code || "未生成匿名码" : "选择一条申诉任务"}</p>
             </div>
             <Send size={20} />
           </div>

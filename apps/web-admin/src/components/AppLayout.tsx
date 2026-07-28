@@ -57,11 +57,11 @@ export function AppLayout({
     .filter((item): item is NonNullable<typeof item> => item !== null);
   const navigation = (
     <>
-      <button className="brand-block brand-button" onClick={() => { setNavigationOpen(false); onNavigate("/dashboard"); }} aria-label={`返回${experienceLabel(experience)}工作台`}>
+      <button type="button" className="brand-block brand-button" onClick={() => { setNavigationOpen(false); onNavigate("/dashboard"); }} aria-label={`返回${experienceLabel(experience)}工作台`}>
         <div className="brand-mark">E</div>
         <div className="brand-copy">
           <strong>EduGrade</strong>
-          <span>{experienceLabel(experience)}</span>
+          <span>{availableExperiences.length > 1 ? user.school : experienceLabel(experience)}</span>
         </div>
       </button>
       {availableExperiences.length > 1 ? (
@@ -69,7 +69,7 @@ export function AppLayout({
           <Segmented
             block
             size="small"
-            aria-label="切换产品端"
+            aria-label="切换管理端或教师端"
             value={experience}
             options={availableExperiences.map((value) => ({ value, label: experienceLabel(value) }))}
             onChange={(value) => { setNavigationOpen(false); onExperienceChange(value as ProductExperience); }}
@@ -123,16 +123,21 @@ export function AppLayout({
               {immersive ? <Space size="middle">
                 <Button type="text" icon={<ArrowLeft size={17} />} aria-label="退出阅卷" onClick={() => onNavigate("/dashboard")}>退出阅卷</Button>
                 <strong>{experienceLabel(experience)} · {currentPresentation.title}</strong>
-              </Space> : <Breadcrumb items={[{ title: experienceLabel(experience) }, { title: user.school }, { title: currentPresentation.title }]} />}
+              </Space> : <Breadcrumb items={[{ title: currentPresentation.group }, { title: currentPresentation.title }]} />}
               {currentRoute.mock ? <MockBadge compact={true} /> : null}
             </div>
             <Space className="topbar-actions">
               <Dropdown
                 menu={{
                   items: [
-                    { key: "account", label: `账号：${user.username}`, disabled: true },
-                    ...(user.displayName && user.displayName !== user.username ? [{ key: "display-name", label: `姓名：${user.displayName}`, disabled: true }] : []),
-                    { key: "logout", label: "退出" }
+                    {
+                      key: "account",
+                      type: "group",
+                      label: user.displayName && user.displayName !== user.username
+                        ? `${user.displayName}（${user.username}）· ${user.school}`
+                        : `${user.username} · ${user.school}`
+                    },
+                    { key: "logout", label: "退出登录" }
                   ],
                   onClick: ({ key }) => {
                     if (key === "logout") {

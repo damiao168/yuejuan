@@ -47,16 +47,16 @@ export interface AppRoute {
 
 export const routes: AppRoute[] = [
   {
-    key: "dashboard", path: "/dashboard", title: "运营总览", group: "工作台", icon: <Home size={18} />, permissions: [], mock: false, productionReady: true,
-    experiences: { admin: { title: "运营总览", group: "工作台" }, teacher: { title: "我的工作", group: "工作台" } }
+    key: "dashboard", path: "/dashboard", title: "工作总览", group: "工作台", icon: <Home size={18} />, permissions: [], mock: false, productionReady: true,
+    experiences: { admin: { title: "工作总览", group: "工作台" }, teacher: { title: "我的工作", group: "工作台" } }
   },
   {
-    key: "exams", path: "/exams", title: "考试管理", group: "考试运营", icon: <ClipboardCheck size={18} />, permissions: ["exam:manage"], mock: false, productionReady: true,
-    experiences: { admin: { title: "考试管理", group: "考试运营" }, teacher: { title: "我的考试", group: "教学工作" } }
+    key: "exams", path: "/exams", title: "考试管理", group: "考试组织", icon: <ClipboardCheck size={18} />, permissions: ["exam:manage"], mock: false, productionReady: true,
+    experiences: { admin: { title: "考试管理", group: "考试组织" }, teacher: { title: "我的考试", group: "教学工作" } }
   },
   {
-    key: "papers", path: "/papers", title: "试卷管理", group: "考试运营", icon: <FileText size={18} />, permissions: ["exam:manage", "file:manage"], navigation: false, mock: false, productionReady: true,
-    experiences: { admin: { title: "试卷管理", group: "考试运营" }, teacher: { title: "试卷与评分标准", group: "教学工作" } }, navigationExperiences: ["teacher"]
+    key: "papers", path: "/papers", title: "试卷管理", group: "考试组织", icon: <FileText size={18} />, permissions: ["exam:manage", "file:manage"], navigation: false, mock: false, productionReady: true,
+    experiences: { admin: { title: "试卷管理", group: "考试组织" }, teacher: { title: "试卷与评分标准", group: "教学工作" } }, navigationExperiences: ["teacher"]
   },
   {
     key: "capture",
@@ -67,7 +67,7 @@ export const routes: AppRoute[] = [
     permissions: ["submission:manage", "file:manage", "ocr:manage", "segment:manage"],
     mock: false,
     productionReady: true,
-    experiences: { admin: { title: "答卷采集", group: "考试运营" } }
+    experiences: { admin: { title: "答卷采集", group: "考试组织" } }
   },
   {
     key: "grading",
@@ -88,6 +88,7 @@ export const routes: AppRoute[] = [
     group: "阅卷",
     icon: <BookOpenCheck size={18} />,
     permissions: ["review:manage"],
+    navigation: false,
     mock: true,
     productionReady: false,
     replacementPath: "/grading",
@@ -95,7 +96,7 @@ export const routes: AppRoute[] = [
   },
   {
     key: "arbitration", path: "/arbitration", title: "质量与仲裁", group: "阅卷与质量", icon: <Gavel size={18} />, permissions: [], anyPermissions: ["arbitration:manage", "arbitration:work"], mock: false, productionReady: true,
-    experiences: { admin: { title: "质量与仲裁", group: "阅卷与质量" }, teacher: { title: "我的复核", group: "阅卷工作" } }
+    experiences: { admin: { title: "质量与仲裁", group: "阅卷与质量" }, teacher: { title: "我的仲裁", group: "阅卷工作" } }
   },
   {
     key: "scores", path: "/scores", title: "成绩发布", group: "结果管理", icon: <Gauge size={18} />, permissions: ["score:manage", "exam:manage", "submission:manage"], mock: false, productionReady: true,
@@ -106,7 +107,7 @@ export const routes: AppRoute[] = [
     experiences: { admin: { title: "统计报告", group: "结果管理" }, teacher: { title: "班级学情", group: "教学结果" } }
   },
   {
-    key: "quality", path: "/quality", title: "质量控制", group: "阅卷与质量", icon: <Activity size={18} />, permissions: ["quality:read"], mock: true, productionReady: false,
+    key: "quality", path: "/quality", title: "质量控制", group: "阅卷与质量", icon: <Activity size={18} />, permissions: ["quality:read"], navigation: false, mock: true, productionReady: false,
     experiences: { admin: { title: "质量控制", group: "阅卷与质量" } }
   },
   {
@@ -114,24 +115,24 @@ export const routes: AppRoute[] = [
     experiences: { admin: { title: "申诉管理", group: "结果管理" }, teacher: { title: "申诉处理", group: "教学结果" } }
   },
   {
-    key: "organization", path: "/organization/setup", title: "组织与用户", group: "平台治理", icon: <Users size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
-    experiences: { admin: { title: "组织与用户", group: "平台治理" } }
+    key: "organization", path: "/organization/setup", title: "组织与用户", group: "系统管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
+    experiences: { admin: { title: "组织与用户", group: "系统管理" } }
   },
   {
-    key: "permissions", path: "/permissions", title: "用户权限", group: "平台治理", icon: <Users size={18} />, permissions: ["org:manage"], mock: true, productionReady: false,
-    experiences: { admin: { title: "用户权限", group: "平台治理" } }
+    key: "permissions", path: "/permissions", title: "用户权限", group: "系统管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: true, productionReady: false,
+    experiences: { admin: { title: "用户权限", group: "系统管理" } }
   },
   {
-    key: "settings", path: "/settings", title: "系统设置", group: "平台治理", icon: <Settings size={18} />, permissions: ["system:manage"], mock: true, productionReady: false,
-    experiences: { admin: { title: "系统设置", group: "平台治理" } }
+    key: "settings", path: "/settings", title: "系统设置", group: "系统管理", icon: <Settings size={18} />, permissions: ["system:manage"], mock: true, productionReady: false,
+    experiences: { admin: { title: "系统设置", group: "系统管理" } }
   },
   {
-    key: "systemStatus", path: "/system/status", title: "系统运维", group: "平台治理", icon: <ServerCog size={18} />, permissions: ["system:read"], allowedRoles: ["platform_admin"], mock: false, productionReady: true,
-    experiences: { admin: { title: "系统运维", group: "平台治理" } }
+    key: "systemStatus", path: "/system/status", title: "系统运维", group: "系统管理", icon: <ServerCog size={18} />, permissions: ["system:read"], allowedRoles: ["platform_admin"], mock: false, productionReady: true,
+    experiences: { admin: { title: "系统运维", group: "系统管理" } }
   },
   {
-    key: "audit", path: "/audit", title: "操作审计", group: "平台治理", icon: <ScrollText size={18} />, permissions: ["audit:read"], mock: false, productionReady: true,
-    experiences: { admin: { title: "操作审计", group: "平台治理" } }
+    key: "audit", path: "/audit", title: "操作审计", group: "系统管理", icon: <ScrollText size={18} />, permissions: ["audit:read"], mock: false, productionReady: true,
+    experiences: { admin: { title: "操作审计", group: "系统管理" } }
   }
 ];
 
@@ -145,7 +146,7 @@ export const examWorkspaceRoute: AppRoute = {
   navigation: false,
   mock: false,
   productionReady: true,
-  experiences: { admin: { title: "考试工作区", group: "考试运营" }, teacher: { title: "考试工作区", group: "教学工作" } }
+  experiences: { admin: { title: "考试工作区", group: "考试组织" }, teacher: { title: "考试工作区", group: "教学工作" } }
 };
 
 export const examWorkspaceSections: Record<ProductExperience, readonly string[]> = {
@@ -219,7 +220,11 @@ export function examWorkspaceFromPath(pathname: string): { examId: string; secti
   if (!match) {
     return null;
   }
-  return { examId: decodeURIComponent(match[1]), section: match[2] };
+  try {
+    return { examId: decodeURIComponent(match[1]), section: match[2] };
+  } catch {
+    return null;
+  }
 }
 
 export function routeGroups(experience: ProductExperience) {

@@ -139,7 +139,11 @@ function filenameFromDisposition(disposition: string | null): string | undefined
   }
   const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
   if (utf8Match?.[1]) {
-    return decodeURIComponent(utf8Match[1]);
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
   }
   const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
   return plainMatch?.[1];

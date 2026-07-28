@@ -31,15 +31,17 @@ export function hasExperienceAccess(user: SessionUser, experience: ProductExperi
 }
 
 export function experienceFromPath(pathname: string): ProductExperience | null {
-  if (pathname === "/admin" || pathname.startsWith("/admin/")) return "admin";
-  if (pathname === "/teacher" || pathname.startsWith("/teacher/")) return "teacher";
+  const normalized = normalizePath(pathname);
+  if (normalized === "/admin" || normalized.startsWith("/admin/")) return "admin";
+  if (normalized === "/teacher" || normalized.startsWith("/teacher/")) return "teacher";
   return null;
 }
 
 export function canonicalPathFromPath(pathname: string): string {
-  const experience = experienceFromPath(pathname);
-  if (!experience) return normalizePath(pathname);
-  const canonical = pathname.slice(experiencePrefixes[experience].length);
+  const normalized = normalizePath(pathname);
+  const experience = experienceFromPath(normalized);
+  if (!experience) return normalized;
+  const canonical = normalized.slice(experiencePrefixes[experience].length);
   return normalizePath(canonical || "/dashboard");
 }
 
@@ -54,5 +56,7 @@ export function experienceLabel(experience: ProductExperience): string {
 
 function normalizePath(pathname: string): string {
   if (!pathname) return "/dashboard";
-  return pathname.startsWith("/") ? pathname : `/${pathname}`;
+  const withoutQuery = pathname.split(/[?#]/, 1)[0];
+  const normalized = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
+  return normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
 }

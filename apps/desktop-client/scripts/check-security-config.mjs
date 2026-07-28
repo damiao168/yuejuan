@@ -1,0 +1,102 @@
+import { readFile, readdir } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const tauriConfig = JSON.parse(await readFile(join(appRoot, "src-tauri", "tauri.conf.json"), "utf8"));
+const capability = JSON.parse(await readFile(join(appRoot, "src-tauri", "capabilities", "default.json"), "utf8"));
+const failures = [];
+
+function fail(message) {
+  failures.push(message);
+}
+
+function sources(policy, directive) {
+  const value = policy?.[directive];
+  if (Array.isArray(value)) return value;
+  return typeof value === "string" ? value.split(/\s+/).filter(Boolean) : [];
+}
+
+function requireSources(policy, directive, expected) {
+  const actual = sources(policy, directive);
+  for (const source of expected) {
+    if (!actual.includes(source)) fail(`${directive} must include ${source}`);
+  }
+  if (actual.includes("*")) fail(`${directive} must not contain a wildcard source`);
+}
+
+const security = tauriConfig.app?.security;
+if (!security || !security.csp || !security.devCsp) {
+  fail("production and development CSP must both be configured");
+} else {
+  requireSources(security.csp, "default-src", ["'self'"]);
+  requireSources(security.csp, "connect-src", ["ipc:", "http://ipc.localhost", "http:", "https:"]);
+  requireSources(security.csp, "img-src", ["'self'", "blob:", "data:"]);
+  requireSources(security.csp, "object-src", ["'none'"]);
+  requireSources(security.csp, "base-uri", ["'none'"]);
+  requireSources(security.csp, "frame-ancestors", ["'none'"]);
+  requireSources(security.csp, "script-src-attr", ["'none'"]);
+  if (sources(security.csp, "script-src").some((source) => source.includes("unsafe-"))) {
+    fail("production script-src must not allow unsafe-inline or unsafe-eval");
+  }
+  requireSources(security.devCsp, "connect-src", ["ipc:", "http://ipc.localhost", "ws://127.0.0.1:5180"]);
+}
+
+if (security?.dangerousDisableAssetCspModification !== false) {
+  fail("Tauri CSP asset modification must remain enabled");
+}
+if (JSON.stringify(security?.capabilities) !== JSON.stringify(["default"])) {
+  fail("tauri.conf.json must explicitly enable only the default capability");
+}
+
+const mainWindows = (tauriConfig.app?.windows ?? []).filter((window) => window.label === "main");
+if (mainWindows.length !== 1) fail("exactly one explicitly labelled main window is required");
+if (capability.local !== true || capability.remote !== undefined) {
+  fail("the default capability must be local-only");
+}
+if (JSON.stringify(capability.windows) !== JSON.stringify(["main"])) {
+  fail("the default capability must apply only to the main window");
+}
+if (JSON.stringify(capability.platforms) !== JSON.stringify(["windows"])) {
+  fail("the default capability must be Windows-only");
+}
+if (!Array.isArray(capability.permissions) || capability.permissions.length !== 0) {
+  fail("no Tauri core or plugin permission is currently required");
+}
+
+const expectedCommands = new Set(["append_local_log", "capability_statuses", "runtime_diagnostics"]);
+const invokedCommands = new Set();
+
+async function inspectSources(directory) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await inspectSources(path);
+      continue;
+    }
+    if (!/\.(?:ts|tsx)$/.test(entry.name)) continue;
+    const source = await readFile(path, "utf8");
+    for (const match of source.matchAll(/\b(?:invoke|invokeOptional)(?:<[^>]+>)?\(\s*["']([^"']+)["']/g)) {
+      invokedCommands.add(match[1]);
+    }
+    if (source.includes("@tauri-apps/plugin-")) {
+      fail(`${path} imports a Tauri plugin but the capability grants no plugin permission`);
+    }
+  }
+}
+
+await inspectSources(join(appRoot, "src"));
+for (const command of invokedCommands) {
+  if (!expectedCommands.has(command)) fail(`unexpected application command invoked by the frontend: ${command}`);
+}
+for (const command of expectedCommands) {
+  if (!invokedCommands.has(command)) fail(`expected application command is not invoked by the frontend: ${command}`);
+}
+
+if (failures.length) {
+  console.error("Desktop security configuration check failed:");
+  failures.forEach((failure) => console.error(`- ${failure}`));
+  process.exit(1);
+}
+
+console.log("Desktop security configuration checks passed.");

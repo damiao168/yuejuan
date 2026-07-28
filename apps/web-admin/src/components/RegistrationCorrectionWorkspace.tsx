@@ -5,7 +5,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
-import { App, Button, Input, InputNumber, Space, Spin, Switch } from "antd";
+import { Alert, App, Button, Input, InputNumber, Space, Spin, Switch } from "antd";
 import {
   ArrowLeft,
   Check,
@@ -39,6 +39,11 @@ const initialPoints: NormalizedPoint[] = [
 ];
 const labels = ["左上", "右上", "右下", "左下"];
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
+const correctionErrorLabels: Record<string, string> = {
+  coverage_too_low: "对齐后覆盖不足，请把四个点贴近答卷四角后重试",
+};
+const correctionErrorText = (code: string) =>
+  correctionErrorLabels[code] ?? "预览失败，请调整对应点后重试";
 const errorText = (error: unknown) =>
   error instanceof ApiClientError
     ? error.message
@@ -126,7 +131,11 @@ function PointCanvas({
     <section className="correction-canvas-column">
       <header>
         <strong>{title}</strong>
-        <span>{editable ? "拖动或使用方向键调整" : "模板锚点已锁定"}</span>
+        <span>
+          {editable
+            ? "拖动圆点，或选中后用方向键微调（按住 Shift 加速）"
+            : "模板参考点已锁定（开启『同时调整模板参考点』后可调）"}
+        </span>
       </header>
       <div className="correction-canvas-scroll">
         <div
@@ -149,6 +158,7 @@ function PointCanvas({
           )}
           {points.map((point, index) => (
             <button
+              type="button"
               key={labels[index]}
               className={`correction-point point-${index + 1}`}
               style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }}
@@ -206,6 +216,12 @@ export function RegistrationCorrectionWorkspace({
   useEffect(() => {
     let active = true;
     const urls: string[] = [];
+    setContext(undefined);
+    setSourceURL(undefined);
+    setTemplateURL(undefined);
+    setCorrection(undefined);
+    setReason("");
+    setPreviewURL(undefined);
     void (async () => {
       try {
         const result = await getRegistrationCorrectionContext(runId);
@@ -219,12 +235,15 @@ export function RegistrationCorrectionWorkspace({
           ),
         ]);
         urls.push(source, template);
-        if (active) {
-          setSourceURL(source);
-          setTemplateURL(template);
+        if (!active) {
+          urls.forEach(URL.revokeObjectURL);
+          urls.length = 0;
+          return;
         }
+        setSourceURL(source);
+        setTemplateURL(template);
       } catch (error) {
-        message.error(errorText(error));
+        if (active) message.error(errorText(error));
       }
     })();
     return () => {
@@ -271,8 +290,18 @@ export function RegistrationCorrectionWorkspace({
       if (
         current.status !== "preview_ready" ||
         !current.preview_registered_file_asset_id
-      )
-        throw new Error(current.error_code || "校正预览未完成");
+      ) {
+        if (current.error_code)
+          console.warn(
+            "registration correction preview failed:",
+            current.error_code,
+          );
+        throw new Error(
+          current.error_code
+            ? correctionErrorText(current.error_code)
+            : "校正预览未完成，请稍后重试",
+        );
+      }
       const url = await imageURL(current.preview_registered_file_asset_id);
       if (!mountedRef.current) {
         URL.revokeObjectURL(url);
@@ -319,7 +348,7 @@ export function RegistrationCorrectionWorkspace({
       setCorrection(result.correction);
       setReason("");
       await onChanged();
-      message.success("已恢复应用前的配准证据");
+      message.success("已撤销校正，恢复原始处理结果");
     } catch (error) {
       message.error(errorText(error));
     } finally {
@@ -346,8 +375,8 @@ export function RegistrationCorrectionWorkspace({
           返回批次
         </Button>
         <div>
-          <span>人工配准校正</span>
-          <h1>第 {context?.page_no ?? "-"} 页边界</h1>
+          <span>人工版面对齐</span>
+          <h1>第 {context?.page_no ?? "-"} 页边界校正</h1>
         </div>
         <Space>
           <Button
@@ -365,9 +394,15 @@ export function RegistrationCorrectionWorkspace({
           />
         </Space>
       </header>
+      <Alert
+        type="warning"
+        className="correction-mobile-note"
+        message="精确边界校正需要在电脑上操作，当前设备可查看状态和预览结果。"
+        showIcon
+      />
       <div className="correction-layout">
         <PointCanvas
-          title="标准化答卷"
+          title="学生答卷页"
           url={sourceURL}
           points={sourcePoints}
           editable={canManage && correction?.status !== "applied"}
@@ -375,7 +410,7 @@ export function RegistrationCorrectionWorkspace({
           onChange={setSourcePoints}
         />
         <PointCanvas
-          title="锁定模板"
+          title="答题卡模板"
           url={templateURL}
           points={templatePoints}
           editable={canManage && advanced && correction?.status !== "applied"}
@@ -397,20 +432,23 @@ export function RegistrationCorrectionWorkspace({
             </Button>
           </div>
           <label className="correction-mode">
-            <span>高级模板锚点</span>
+            <span>同时调整模板参考点</span>
             <Switch
               checked={advanced}
               onChange={setAdvanced}
               disabled={!canManage || correction?.status === "applied"}
             />
           </label>
+          <p className="correction-mode-hint">
+            仅当模板本身印刷或位置有偏移时开启；一般只需调整左侧答卷的四个点。
+          </p>
           {labels.map((label, index) => (
             <div className="correction-point-row" key={label}>
               <strong>
                 <i className={`point-swatch point-${index + 1}`} />
                 {index + 1} {label}
               </strong>
-              <span>源</span>
+              <span>答卷</span>
               <InputNumber
                 min={0}
                 max={1}
@@ -467,18 +505,20 @@ export function RegistrationCorrectionWorkspace({
                 : correction?.status === "applied"
                   ? "校正已应用"
                   : correction?.status === "undone"
-                    ? "已恢复原证据"
+                    ? "已撤销校正"
                     : correction?.status === "failed"
                       ? "预览检查未通过"
                       : "等待生成预览"}
             </strong>
             {correction?.coverage ? (
-              <span>页面覆盖 {Math.round(correction.coverage * 100)}%</span>
+              <span>校正后覆盖页面 {Math.round(correction.coverage * 100)}%</span>
             ) : (
-              <span>预览不会改变正式题区证据</span>
+              <span>预览仅供查看，点击『应用校正』后才会生效</span>
             )}
             {correction?.error_code ? (
-              <span>{correction.error_code}</span>
+              <span title={correction.error_code}>
+                {correctionErrorText(correction.error_code)}
+              </span>
             ) : null}
           </div>
           {previewURL ? (
@@ -487,14 +527,17 @@ export function RegistrationCorrectionWorkspace({
               <img src={previewURL} alt="人工校正预览" />
             </div>
           ) : null}
-          <Input.TextArea
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            rows={2}
-            placeholder="应用或撤销原因"
-            maxLength={300}
-            disabled={!canManage}
-          />
+          <label className="correction-reason-field">
+            <span>操作原因（必填，记入操作记录）</span>
+            <Input.TextArea
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              rows={2}
+              placeholder="例如：扫描歪斜，人工重新对齐边界"
+              maxLength={300}
+              disabled={!canManage}
+            />
+          </label>
           <Space wrap>
             <Button
               icon={<Eye size={16} />}

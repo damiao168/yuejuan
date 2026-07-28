@@ -1,19 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Button, Descriptions, Space, Table, Tag, type TableColumnsType } from "antd";
-import { Activity, Database, RefreshCw, ScanText, ShieldCheck, Signal, TimerReset } from "lucide-react";
+import { Alert, Button, Descriptions, Space, Tag, Tooltip, type TableColumnsType } from "antd";
+import { Activity, Database, RefreshCw, ScanText, ShieldCheck, Signal } from "lucide-react";
 import { ApiClientError } from "../api/client";
 import { getSystemStatus, type DependencyStatus, type SystemStatus } from "../api/system";
 import { ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 
+const dependencyNames: Record<string, string> = {
+  postgres: "数据库",
+  redis: "缓存队列",
+  minio: "文件存储",
+  qdrant: "检索服务",
+  ai_service: "智能评分服务",
+  ocr_worker: "文字识别服务"
+};
+
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
-    return `${error.status} ${error.code}: ${error.message}`;
+    console.warn("系统状态请求失败", error.status, error.code);
+    return error.message || "操作失败，请稍后重试";
   }
-  if (error instanceof Error) {
+  if (error instanceof Error && error.message) {
     return error.message;
   }
-  return "未知错误";
+  return "操作失败，请稍后重试";
 }
 
 function formatTime(value: string) {
@@ -91,9 +101,12 @@ export function SystemStatusPage() {
       title: "服务",
       dataIndex: "name",
       render: (value: string) => (
-        <Space>
+        <Space align="start">
           <Database size={16} />
-          <strong>{value}</strong>
+          <div>
+            <strong>{dependencyNames[value] ?? value}</strong>
+            <div><small>{value}</small></div>
+          </div>
         </Space>
       )
     },
@@ -117,7 +130,7 @@ export function SystemStatusPage() {
       <section className="system-status-topbar">
         <div>
           <h1>系统状态</h1>
-          <p>查看 API Gateway 运行状态、核心依赖连通性和日志边界。</p>
+          <p>查看平台服务运行状态、各项依赖是否连通，以及日志记录说明。</p>
         </div>
         <Button icon={<RefreshCw size={16} />} loading={loading} onClick={() => void load()}>
           刷新
@@ -132,8 +145,7 @@ export function SystemStatusPage() {
           <section className="system-status-summary">
             <div>
               <span>整体状态</span>
-              <strong>{status.status === "healthy" ? "健康" : "降级"}</strong>
-              <Tag color={status.status === "healthy" ? "success" : "warning"}>{status.status}</Tag>
+              <strong title={status.status}>{status.status === "healthy" ? "健康" : "降级"}</strong>
             </div>
             <div>
               <span>服务</span>
@@ -158,9 +170,11 @@ export function SystemStatusPage() {
                 <div>
                   <Space>
                     <ScanText size={18} />
-                    <h2>OCR 自动处理</h2>
+                    <h2>文字识别服务</h2>
                   </Space>
-                  <p>{ocrWorker.worker_service} · {ocrWorker.queue_name} 队列 · 失联阈值 {ocrWorker.stale_after_sec} 秒</p>
+                  <Tooltip title={`服务：${ocrWorker.worker_service} · 队列：${ocrWorker.queue_name}`}>
+                    <p>负责自动识别答卷内容；超过 {ocrWorker.stale_after_sec} 秒没有心跳即判定为失联</p>
+                  </Tooltip>
                 </div>
                 <Tag color={ocrWorker.automation_available ? "success" : ocrWorker.availability === "stale" ? "warning" : "error"}>
                   {ocrWorker.automation_available ? "在线" : ocrWorker.availability === "stale" ? "心跳失联" : "不可用"}
@@ -172,7 +186,7 @@ export function SystemStatusPage() {
                 <span>待处理<strong>{ocrWorker.queued_tasks}</strong></span>
                 <span>处理中<strong>{ocrWorker.in_flight_tasks}</strong></span>
                 <span>近一小时失败<strong>{ocrWorker.failed_last_hour}</strong></span>
-                <span>死信<strong>{ocrWorker.dead_letter_tasks}</strong></span>
+                <Tooltip title="重试多次仍失败、需人工介入的任务数"><span>多次失败已搁置<strong>{ocrWorker.dead_letter_tasks}</strong></span></Tooltip>
               </div>
               <Alert
                 type={ocrWorker.automation_available ? "success" : ocrWorker.availability === "stale" ? "warning" : "error"}
@@ -183,7 +197,7 @@ export function SystemStatusPage() {
               />
             </section>
           ) : (
-            <Alert type="warning" showIcon message="未返回 OCR Worker 状态" description="请确认 API Gateway 与 Worker Runtime 已升级并连通。" />
+            <Alert type="warning" showIcon message="暂未获取到文字识别服务状态" description="识别服务可能未部署或未连通，请联系平台技术支持处理。" />
           )}
 
           <section className="system-status-grid">
@@ -230,13 +244,6 @@ export function SystemStatusPage() {
             icon={<ShieldCheck size={18} />}
             message="日志隐私边界"
             description={status.observability.sensitive_log_policy}
-          />
-          <Alert
-            type="warning"
-            showIcon
-            icon={<TimerReset size={18} />}
-            message="慢查询日志预留"
-          description="当前可识别响应较慢的请求，数据库语句级耗时分析尚未接入。"
           />
         </>
       ) : null}

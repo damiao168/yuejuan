@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Alert, App, Button, Select, Space, Table, Tag, type TableColumnsType } from "antd";
-import { Download, FileWarning, RefreshCw, ShieldCheck } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Alert, App, Button, Select, Space, Tag, type TableColumnsType } from "antd";
+import { Download, RefreshCw } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -24,14 +24,13 @@ import {
   type ClassReport,
   type ErrorClue,
   type GradingQualityReport,
-  type KnowledgeMastery,
   type OverviewReport,
   type QuestionAnalysis,
   type ReportMetric
 } from "../api/reports";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
+import { examSubjectLabel } from "../constants/examStatus";
 import { ResponsiveTable } from "../components/ResponsiveTable";
-import { StatusTag } from "../components/StatusTag";
 
 interface LearningReportsPageProps {
   canRead: boolean;
@@ -64,13 +63,36 @@ const chartCyan = "#13c2c2";
 
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
-    return `${error.status} ${error.code}: ${error.message}`;
+    console.error("请求失败", error.status, error.code, error.message);
+    return error.message || "操作失败，请稍后重试";
   }
   if (error instanceof Error) {
-    return error.message;
+    return error.message || "操作失败，请稍后重试";
   }
-  return "未知错误";
+  return "操作失败，请稍后重试";
 }
+
+const questionTypeLabels: Record<string, string> = {
+  single_choice: "单选题",
+  multiple_choice: "多选题",
+  true_false: "判断题",
+  fill_blank: "填空题",
+  numeric: "数值题",
+  formula: "公式题",
+  short_answer: "简答题",
+  calculation: "计算题",
+  essay: "作文题",
+  discussion: "论述题",
+  coding: "编程题",
+  subjective: "主观题",
+  objective: "客观题"
+};
+
+const errorSourceLabels: Record<string, string> = {
+  ai: "AI 识别",
+  ocr: "卷面识别",
+  teacher: "教师标注"
+};
 
 function formatScore(value?: number | null) {
   if (value === undefined || value === null || !Number.isFinite(value)) {
@@ -102,12 +124,12 @@ function formatMetric(metric?: ReportMetric, mode: "percent" | "score" = "percen
 
 function metricDetail(metric?: ReportMetric) {
   if (!metric?.available) {
-    return metric?.reason ? `来源不足：${metric.reason}` : "来源数据不足";
+    return "统计样本不足";
   }
   if (metric.denominator) {
     return `${metric.numerator ?? 0} / ${metric.denominator}`;
   }
-  return "真实统计";
+  return "";
 }
 
 function saveBlob(blob: Blob, filename: string) {
@@ -123,9 +145,9 @@ function saveBlob(blob: Blob, filename: string) {
 
 function emptyReason(reason?: string) {
   if (reason === "no_published_grades") {
-    return "当前考试尚无已发布且锁定的成绩，报告 API 返回空状态。";
+    return "该考试的成绩尚未发布。请先在『成绩发布』页发布成绩，报告会自动生成。";
   }
-  return reason ? `报告 API 返回空状态：${reason}` : "当前考试暂无可展示报告数据。";
+  return "当前考试暂无报告数据。";
 }
 
 function aggregateKnowledge(classes: ClassReport[]): KnowledgeRow[] {
@@ -156,7 +178,7 @@ function flattenErrors(questions: QuestionAnalysis[], classes: ClassReport[]): E
     (question.frequent_errors ?? []).map((item: ErrorClue, index) => ({
       key: `${question.question_id}-${item.text}-${index}`,
       question_no: item.question_no || question.question_no,
-      source: item.source,
+      source: errorSourceLabels[item.source] ?? "题目分析",
       text: item.text,
       count: item.count ?? 1,
       score_rate: question.score_rate
@@ -203,14 +225,13 @@ function ChartPanel({
           <p>{description}</p>
         </div>
       </div>
-      {empty ? <EmptyState title={emptyTitle} description="当前报告 API 没有返回可绘制的数据。" /> : <div className="reports-chart">{children}</div>}
+      {empty ? <EmptyState title={emptyTitle} description="暂无数据，成绩发布后自动生成。" /> : <div className="reports-chart">{children}</div>}
     </section>
   );
 }
 
 export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: LearningReportsPageProps) {
   const { message, modal } = App.useApp();
-  const hasSession = true;
   const [exams, setExams] = useState<Exam[]>([]);
   const [selectedExamId, setSelectedExamId] = useState(initialExamId);
   const [overview, setOverview] = useState<OverviewReport | null>(null);
@@ -222,10 +243,11 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [lastExport, setLastExport] = useState<{ filename?: string; watermark?: string } | null>(null);
+  const reportRequestRef = useRef(0);
 
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
   const isEmptyReport = Boolean(overview?.empty?.empty);
-  const canExportReport = canRead && canExport && hasSession && Boolean(selectedExamId) && Boolean(overview) && !isEmptyReport;
+  const canExportReport = canRead && canExport && Boolean(selectedExamId) && Boolean(overview) && !isEmptyReport;
 
   const classComparisonData = useMemo(() => {
     const source: ClassComparison[] =
@@ -287,21 +309,26 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
         value: quality.human_modification_rate.available ? percentValue(quality.human_modification_rate.value) : 0,
         available: quality.human_modification_rate.available
       },
-      { name: "OCR失败", value: quality.ocr_failure_rate.available ? percentValue(quality.ocr_failure_rate.value) : 0, available: quality.ocr_failure_rate.available }
+      { name: "识别失败", value: quality.ocr_failure_rate.available ? percentValue(quality.ocr_failure_rate.value) : 0, available: quality.ocr_failure_rate.available }
     ].filter((item) => item.available);
   }, [quality]);
 
   const questionColumns = useMemo<TableColumnsType<QuestionAnalysis>>(
     () => [
       { title: "题号", dataIndex: "question_no", width: 80 },
-      { title: "题型", dataIndex: "question_type", width: 110 },
+      {
+        title: "题型",
+        dataIndex: "question_type",
+        width: 110,
+        render: (value: string) => <span title={value}>{questionTypeLabels[value] ?? "其他题型"}</span>
+      },
       { title: "得分率", dataIndex: "score_rate", width: 90, render: (value: number) => formatPercent(value) },
       { title: "难度", dataIndex: "difficulty", width: 90, render: (value: number) => formatPercent(value) },
       { title: "区分度", dataIndex: "discrimination", width: 90, render: (value: number) => formatPercent(value) },
       {
         title: "知识点",
         dataIndex: "knowledge_points",
-        render: (value: string[]) => (value?.length ? value.map((item) => <Tag key={item}>{item}</Tag>) : <span className="muted">未返回</span>)
+        render: (value: string[]) => (value?.length ? value.map((item) => <Tag key={item}>{item}</Tag>) : <span className="muted">未标注</span>)
       }
     ],
     []
@@ -333,31 +360,29 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
   const loadExamList = useCallback(async () => {
     setLoadingExams(true);
     setError(null);
-    if (!hasSession) {
-      setExams([]);
-      setSelectedExamId("");
-      setError("当前没有有效登录会话，无法调用真实后端 API。");
-      setLoadingExams(false);
-      return;
-    }
     try {
       const result = await listExams();
       setExams(result.exams);
-      setSelectedExamId((current) => current || result.exams[0]?.id || "");
+      setSelectedExamId((current) => {
+        if (initialExamId && result.exams.some((exam) => exam.id === initialExamId)) return initialExamId;
+        return result.exams.some((exam) => exam.id === current) ? current : result.exams[0]?.id || "";
+      });
     } catch (currentError) {
       setError(formatError(currentError));
     } finally {
       setLoadingExams(false);
     }
-  }, [hasSession]);
+  }, [initialExamId]);
 
   const loadReports = useCallback(
     async (examId: string) => {
-      if (!examId || !hasSession) {
+      const requestId = ++reportRequestRef.current;
+      if (!examId) {
         setOverview(null);
         setClassReports([]);
         setQuestions([]);
         setQuality(null);
+        setLoadingReports(false);
         return;
       }
       setLoadingReports(true);
@@ -369,26 +394,32 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
           listQuestionReports(examId),
           getGradingQualityReport(examId)
         ]);
+        if (requestId !== reportRequestRef.current) return;
         setOverview(overviewResult.overview);
         setClassReports(classResult.classes);
         setQuestions(questionResult.questions);
         setQuality(qualityResult.grading_quality);
       } catch (currentError) {
+        if (requestId !== reportRequestRef.current) return;
         setError(formatError(currentError));
         setOverview(null);
         setClassReports([]);
         setQuestions([]);
         setQuality(null);
       } finally {
-        setLoadingReports(false);
+        if (requestId === reportRequestRef.current) setLoadingReports(false);
       }
     },
-    [hasSession]
+    []
   );
 
   useEffect(() => {
     void loadExamList();
   }, [loadExamList]);
+
+  useEffect(() => {
+    if (initialExamId) setSelectedExamId(initialExamId);
+  }, [initialExamId]);
 
   useEffect(() => {
     void loadReports(selectedExamId);
@@ -408,7 +439,7 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
     }
     modal.confirm({
       title: "导出学情报告",
-      content: "导出会写 report.exported 审计，并在 CSV 与响应头中包含水印。请确认当前报告数据可发布给授权人员。",
+      content: "将导出该考试的学情报告（CSV 表格文件）。导出文件带追溯水印，导出操作会被系统记录。请确认仅提供给有权查看的人员。",
       okText: "确认导出",
       cancelText: "取消",
       onOk: async () => {
@@ -418,7 +449,7 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
           const filename = result.filename ?? `exam-${selectedExamId}-report.csv`;
           setLastExport({ filename, watermark: result.watermark });
           saveBlob(result.blob, filename);
-          message.success("学情报告 CSV 已导出");
+          message.success(`学情报告已导出（文件：${filename}）`);
         } catch (currentError) {
           message.error(formatError(currentError));
         } finally {
@@ -452,7 +483,7 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
             className="reports-exam-select"
             placeholder="选择考试"
             value={selectedExamId || undefined}
-            options={exams.map((exam) => ({ value: exam.id, label: `${exam.name} · ${exam.subject}` }))}
+            options={exams.map((exam) => ({ value: exam.id, label: `${exam.name} · ${examSubjectLabel(exam.subject)}` }))}
             loading={loadingExams}
             onChange={setSelectedExamId}
           />
@@ -460,21 +491,14 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
             刷新
           </Button>
           <Button type="primary" icon={<Download size={16} />} disabled={!canExportReport} loading={exporting} onClick={exportReport}>
-            导出 CSV
+            导出报告
           </Button>
         </Space>
       </section>
 
-      {!hasSession ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="未检测到真实后端访问令牌"
-            description="基于已发布成绩查看考试、班级和题目分析。"
-        />
-      ) : null}
+      {lastExport?.watermark ? <p className="muted reports-watermark-note">最近导出水印编号：{lastExport.watermark}</p> : null}
 
-      {!canRead ? <Alert type="error" showIcon message="无报告读取权限" description="当前账号缺少 report:read，不能读取学情报告。" /> : null}
+      {!canRead ? <Alert type="error" showIcon message="无报告查看权限" description="当前账号没有查看学情报告的权限，请联系管理员开通。" /> : null}
       {error ? <ErrorState message={error} onRetry={refresh} /> : null}
       {overview?.empty?.empty ? <Alert type="info" showIcon message="报告为空" description={emptyReason(overview.empty.reason)} /> : null}
 
@@ -503,13 +527,13 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
             </ResponsiveContainer>
           </ChartPanel>
 
-          <ChartPanel title="班级对比" description="平均分、及格率与优秀率" empty={classComparisonData.length === 0} emptyTitle="暂无班级对比">
+          <ChartPanel title="班级对比" description="柱高分别对应左轴分数与右轴百分比" empty={classComparisonData.length === 0} emptyTitle="暂无班级对比">
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={classComparisonData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="name" />
-                <YAxis yAxisId="score" />
-                <YAxis yAxisId="rate" orientation="right" />
+                <YAxis yAxisId="score" label={{ value: "分数", angle: -90, position: "insideLeft" }} />
+                <YAxis yAxisId="rate" orientation="right" domain={[0, 100]} label={{ value: "百分比", angle: 90, position: "insideRight" }} />
                 <ChartTooltip />
                 <Bar yAxisId="score" dataKey="average" name="平均分" fill={chartBlue} radius={[4, 4, 0, 0]} />
                 <Bar yAxisId="rate" dataKey="passRate" name="及格率%" fill={chartGreen} radius={[4, 4, 0, 0]} />
@@ -530,7 +554,7 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
             </ResponsiveContainer>
           </ChartPanel>
 
-          <ChartPanel title="知识点掌握率" description="来自班级报告的薄弱知识点真实聚合" empty={knowledgeData.length === 0} emptyTitle="暂无知识点数据">
+          <ChartPanel title="知识点掌握率" description="各班薄弱知识点汇总，掌握率最低的排在前面。" empty={knowledgeData.length === 0} emptyTitle="暂无知识点数据">
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={knowledgeData.map((item) => ({ name: item.knowledge_point, mastery: percentValue(item.mastery_rate), questions: item.question_count }))}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -546,11 +570,11 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
             <div className="panel-head">
               <div>
                 <h2>阅卷质量分析</h2>
-                <p>只展示后端标记为 available 的真实质量指标。</p>
+                <p>基于本次阅卷过程统计，数据不足的指标不显示。</p>
               </div>
             </div>
             {!quality ? (
-              <EmptyState title="暂无阅卷质量" description="当前报告 API 没有返回阅卷质量数据。" />
+              <EmptyState title="暂无阅卷质量" description="暂无阅卷质量数据。" />
             ) : (
               <>
                 <div className="reports-quality-strip">
@@ -572,16 +596,16 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
                   <div>
                     <span>仲裁数量</span>
                     <strong>{quality.arbitration_count}</strong>
-                    <small>{quality.double_mark_session_count} 个双评会话</small>
+                    <small>共 {quality.double_mark_session_count} 份双评试卷</small>
                   </div>
                   <div>
-                    <span>OCR 失败率</span>
+                    <span>识别失败率</span>
                     <strong>{formatMetric(quality.ocr_failure_rate)}</strong>
                     <small>{metricDetail(quality.ocr_failure_rate)}</small>
                   </div>
                 </div>
                 {qualityData.length === 0 ? (
-                  <EmptyState title="暂无可绘制质量指标" description="质量指标存在但来源不足，后端返回 available=false。" />
+                  <EmptyState title="暂无法绘制质量图表" description="阅卷数据样本不足，指标暂不展示。" />
                 ) : (
                   <div className="reports-chart compact">
                     <ResponsiveContainer width="100%" height={180}>
@@ -599,7 +623,7 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
             )}
           </section>
 
-          <ChartPanel title="题目质量分析" description="难度与区分度来自真实题目分析 API" empty={questionScoreData.length === 0} emptyTitle="暂无题目质量">
+          <ChartPanel title="题目质量分析" description="难度越高表示题目越容易失分，区分度越高表示越能区分学生水平。" empty={questionScoreData.length === 0} emptyTitle="暂无题目质量">
             <ResponsiveContainer width="100%" height={260}>
               <LineChart data={questionScoreData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -616,11 +640,11 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
             <div className="panel-head">
               <div>
                 <h2>客观题选项分布</h2>
-                <p>只展示真实 answer payload 中能解析出的选项。</p>
+                <p>统计每道客观题各选项的作答人数。</p>
               </div>
             </div>
             {objectiveQuestions.length === 0 ? (
-              <EmptyState title="暂无选项分布" description="报告 API 未返回客观题选项分布时不生成示例图。" />
+              <EmptyState title="暂无选项分布" description="该考试没有客观题或选项作答数据。" />
             ) : (
               <div className="reports-option-list">
                 {objectiveQuestions.map((question) => {
@@ -629,7 +653,7 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
                     <div className="reports-option-block" key={question.question_id}>
                       <div>
                         <strong>{question.question_no}</strong>
-                        <span>{question.question_type}</span>
+                        <span title={question.question_type}>{questionTypeLabels[question.question_type] ?? "其他题型"}</span>
                       </div>
                       {(question.option_distribution ?? []).map((item) => (
                         <div className="reports-option-row" key={`${question.question_id}-${item.option}`}>
@@ -660,7 +684,7 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
               columns={questionColumns}
               dataSource={questions}
               pagination={{ pageSize: 6 }}
-              locale={{ emptyText: <EmptyState title="暂无题目明细" description="当前报告 API 没有返回题目分析。" /> }}
+              locale={{ emptyText: <EmptyState title="暂无题目明细" description="暂无题目分析数据。" /> }}
             />
           </section>
 
@@ -677,7 +701,7 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
               columns={classColumns}
               dataSource={classReports}
               pagination={false}
-              locale={{ emptyText: <EmptyState title="暂无班级明细" description="当前报告 API 没有返回班级报告。" /> }}
+              locale={{ emptyText: <EmptyState title="暂无班级明细" description="暂无班级报告数据。" /> }}
             />
           </section>
 
@@ -694,28 +718,7 @@ export function LearningReportsPage({ canRead, canExport, initialExamId = "" }: 
               columns={errorColumns}
               dataSource={errorRows}
               pagination={false}
-              locale={{ emptyText: <EmptyState title="暂无高频错误" description="当前报告 API 没有返回错误线索或高频错题。" /> }}
-            />
-          </section>
-
-          <section className="reports-panel reports-export-panel">
-            <div className="panel-head">
-              <div>
-                <h2>导出审计</h2>
-                <p>报告导出会写入审计并返回水印。</p>
-              </div>
-              <ShieldCheck size={20} />
-            </div>
-            <Alert
-              type="info"
-              showIcon
-              icon={<FileWarning size={18} />}
-              message="导出报告"
-              description={
-                lastExport?.watermark
-                  ? `最近导出：${lastExport.filename ?? "report.csv"}；水印：${lastExport.watermark}`
-                  : "导出使用真实 report export API，响应头返回 X-EduGrade-Watermark。"
-              }
+              locale={{ emptyText: <EmptyState title="暂无高频错误" description="暂无高频错误数据。" /> }}
             />
           </section>
         </section>

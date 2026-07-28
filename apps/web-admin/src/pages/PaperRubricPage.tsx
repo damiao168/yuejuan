@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   App,
@@ -10,7 +10,6 @@ import {
   Select,
   Space,
   Switch,
-  Table,
   Upload,
   type TableColumnsType,
   type UploadProps
@@ -60,10 +59,18 @@ const questionTypeOptions = [
 
 const rubricStatusOptions = [
   { label: "草稿", value: "draft" },
-  { label: "提交审批", value: "pending_review" },
+  { label: "待审批", value: "pending_review" },
   { label: "已批准", value: "approved" },
   { label: "锁定", value: "locked" }
 ];
+
+const paperStatusMeta: Record<string, { label: string; tone: StatusTone }> = {
+  registered: { label: "已登记", tone: "success" },
+  processing: { label: "处理中", tone: "processing" },
+  failed: { label: "处理失败", tone: "danger" }
+};
+
+const toleranceQuestionTypes = ["numeric", "formula", "calculation"];
 
 interface QuestionFormValues {
   exam_paper_id?: string;
@@ -72,11 +79,16 @@ interface QuestionFormValues {
   score: number;
   stem: string;
   knowledge_points: string[];
-  answer_area_json: string;
+  answer_area_page: number;
+  answer_area_x: number;
+  answer_area_y: number;
+  answer_area_w: number;
+  answer_area_h: number;
   sort_order: number;
   standard_answer: string;
   equivalent_answers: string[];
-  tolerance_json: string;
+  tolerance_absolute?: number | null;
+  tolerance_relative?: number | null;
 }
 
 function labelFrom(options: { label: string; value: string }[], value?: string) {
@@ -85,12 +97,20 @@ function labelFrom(options: { label: string; value: string }[], value?: string) 
 
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
-    return `${error.status} ${error.code}: ${error.message}`;
+    console.error("请求失败", error.status, error.code, error.message);
+    return error.message || "操作失败，请稍后重试";
   }
-  if (error instanceof Error) {
+  if (error instanceof Error && error.message) {
     return error.message;
   }
-  return "未知错误";
+  return "操作失败，请稍后重试";
+}
+
+function rubricStatusLabel(status?: string) {
+  if (!status) {
+    return "未配置";
+  }
+  return rubricStatusOptions.find((item) => item.value === status)?.label ?? "未知状态";
 }
 
 function rubricTone(status?: string): StatusTone {
@@ -108,21 +128,6 @@ function jsonText(value: unknown, fallback: string) {
     return fallback;
   }
   return JSON.stringify(value, null, 2);
-}
-
-function parseObjectJSON(value: string, label: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(value || "{}") as unknown;
-    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-      throw new Error(`${label}必须是 JSON 对象`);
-    }
-    return parsed as Record<string, unknown>;
-  } catch (error) {
-    if (error instanceof Error) {
-      throw new Error(`${label}解析失败：${error.message}`);
-    }
-    throw new Error(`${label}解析失败`);
-  }
 }
 
 function parseArrayJSON(value: string, label: string): unknown[] {
@@ -155,8 +160,7 @@ export function PaperRubricPage({
 }) {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<QuestionFormValues>();
-  const hasSession = true;
-  const canWrite = canManage && hasSession;
+  const watchedQuestionType = Form.useWatch("question_type", form);
   const [exams, setExams] = useState<Exam[]>([]);
   const [selectedExamId, setSelectedExamId] = useState(initialExamId);
   const [papers, setPapers] = useState<PaperVersion[]>([]);
@@ -167,14 +171,15 @@ export function PaperRubricPage({
   const [configLoading, setConfigLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
+  const configRequestRef = useRef(0);
   const [savingQuestion, setSavingQuestion] = useState(false);
   const [savingRubric, setSavingRubric] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [rubricStatus, setRubricStatus] = useState("draft");
   const [rubricPoints, setRubricPoints] = useState<RubricPoint[]>([]);
-  const [deductionsJson, setDeductionsJson] = useState("[]");
-  const [examplesJson, setExamplesJson] = useState("[]");
+  const [deductionsJson, setDeductionsJson] = useState("");
+  const [examplesJson, setExamplesJson] = useState("");
   const [scoringRules, setScoringRules] = useState<ScoringRule[]>([]);
   const [scoringRuleConfig, setScoringRuleConfig] = useState<Record<string, unknown>>({});
   const [savingScoringRule, setSavingScoringRule] = useState(false);
@@ -185,7 +190,8 @@ export function PaperRubricPage({
     [editorMode, questions, selectedQuestionId]
   );
   const selectedLocked = selectedQuestion?.rubric?.status === "locked";
-  const questionDisabled = !canWrite || selectedLocked;
+  const questionDisabled = !canManage || selectedLocked;
+  const showTolerance = toleranceQuestionTypes.includes(watchedQuestionType ?? "");
   const objectiveRuleType = selectedQuestion && ["single_choice", "true_false", "multiple_choice", "fill_blank", "numeric"].includes(selectedQuestion.question_type) ? selectedQuestion.question_type : "";
   const draftScoringRule = scoringRules.find((rule) => rule.status === "draft");
   const publishedScoringRule = scoringRules.find((rule) => rule.status === "published");
@@ -193,34 +199,33 @@ export function PaperRubricPage({
   const loadExams = useCallback(async () => {
     setLoading(true);
     setError(null);
-    if (!hasSession) {
-      setExams([]);
-      setSelectedExamId("");
-      setError("当前没有有效登录会话，无法调用真实后端 API。");
-      setLoading(false);
-      return;
-    }
     try {
       const result = await listExams();
       setExams(result.exams);
-      setSelectedExamId((current) => current || result.exams[0]?.id || "");
+      setSelectedExamId((current) => {
+        if (initialExamId && result.exams.some((exam) => exam.id === initialExamId)) return initialExamId;
+        return result.exams.some((exam) => exam.id === current) ? current : result.exams[0]?.id || "";
+      });
     } catch (currentError) {
       setError(formatError(currentError));
     } finally {
       setLoading(false);
     }
-  }, [hasSession]);
+  }, [initialExamId]);
 
   const loadConfig = useCallback(async (examId: string) => {
-    if (!examId || !hasSession) {
+    const requestId = ++configRequestRef.current;
+    if (!examId) {
       setPapers([]);
       setQuestions([]);
+      setConfigLoading(false);
       return;
     }
     setConfigLoading(true);
     setConfigError(null);
     try {
       const [paperResult, questionResult] = await Promise.all([listPapers(examId), listQuestions(examId)]);
+      if (requestId !== configRequestRef.current) return;
       setPapers(paperResult.papers);
       setQuestions(questionResult.questions);
       setValidation(null);
@@ -237,15 +242,20 @@ export function PaperRubricPage({
         return current && questionResult.questions.some((question) => question.id === current) ? current : questionResult.questions[0].id;
       });
     } catch (currentError) {
+      if (requestId !== configRequestRef.current) return;
       setConfigError(formatError(currentError));
     } finally {
-      setConfigLoading(false);
+      if (requestId === configRequestRef.current) setConfigLoading(false);
     }
-  }, [hasSession]);
+  }, []);
 
   useEffect(() => {
     void loadExams();
   }, [loadExams]);
+
+  useEffect(() => {
+    if (initialExamId) setSelectedExamId(initialExamId);
+  }, [initialExamId]);
 
   useEffect(() => {
     void loadConfig(selectedExamId);
@@ -253,6 +263,10 @@ export function PaperRubricPage({
 
   useEffect(() => {
     if (selectedQuestion) {
+      const answerArea = selectedQuestion.answer_area ?? {};
+      const rawTolerance = selectedQuestion.answer_key?.tolerance;
+      const tolerance: Record<string, unknown> =
+        rawTolerance && typeof rawTolerance === "object" && !Array.isArray(rawTolerance) ? (rawTolerance as Record<string, unknown>) : {};
       form.setFieldsValue({
         exam_paper_id: selectedQuestion.exam_paper_id,
         question_no: selectedQuestion.question_no,
@@ -260,16 +274,22 @@ export function PaperRubricPage({
         score: selectedQuestion.score,
         stem: selectedQuestion.stem ?? "",
         knowledge_points: selectedQuestion.knowledge_points,
-        answer_area_json: jsonText(selectedQuestion.answer_area, "{\n  \"page\": 1,\n  \"x\": 0,\n  \"y\": 0,\n  \"w\": 0,\n  \"h\": 0\n}"),
+        answer_area_page: Number(answerArea.page ?? 1),
+        answer_area_x: Number(answerArea.x ?? 0),
+        answer_area_y: Number(answerArea.y ?? 0),
+        answer_area_w: Number(answerArea.w ?? 0),
+        answer_area_h: Number(answerArea.h ?? 0),
         sort_order: selectedQuestion.sort_order,
         standard_answer: String(selectedQuestion.answer_key?.standard_answer ?? ""),
         equivalent_answers: (selectedQuestion.answer_key?.equivalent_answers ?? []).map((item) => String(item)),
-        tolerance_json: jsonText(selectedQuestion.answer_key?.tolerance, "{}")
+        tolerance_absolute: tolerance.absolute === undefined || tolerance.absolute === null ? undefined : Number(tolerance.absolute),
+        tolerance_relative:
+          tolerance.relative === undefined || tolerance.relative === null ? undefined : Number((Number(tolerance.relative) * 100).toFixed(6))
       });
       setRubricStatus(selectedQuestion.rubric?.status ?? "draft");
       setRubricPoints(selectedQuestion.rubric?.points ?? []);
-      setDeductionsJson(jsonText(selectedQuestion.rubric?.deductions, "[]"));
-      setExamplesJson(jsonText(selectedQuestion.rubric?.examples, "[]"));
+      setDeductionsJson(jsonText(selectedQuestion.rubric?.deductions, ""));
+      setExamplesJson(jsonText(selectedQuestion.rubric?.examples, ""));
       return;
     }
     form.setFieldsValue({
@@ -279,16 +299,21 @@ export function PaperRubricPage({
       score: 10,
       stem: "",
       knowledge_points: [],
-      answer_area_json: "{\n  \"page\": 1,\n  \"x\": 0,\n  \"y\": 0,\n  \"w\": 0,\n  \"h\": 0\n}",
+      answer_area_page: 1,
+      answer_area_x: 0,
+      answer_area_y: 0,
+      answer_area_w: 0,
+      answer_area_h: 0,
       sort_order: questions.length + 1,
       standard_answer: "",
       equivalent_answers: [],
-      tolerance_json: "{}"
+      tolerance_absolute: undefined,
+      tolerance_relative: undefined
     });
     setRubricStatus("draft");
     setRubricPoints([{ id: "p1", description: "", score: 10, required: true }]);
-    setDeductionsJson("[]");
-    setExamplesJson("[]");
+    setDeductionsJson("");
+    setExamplesJson("");
   }, [form, papers, questions.length, selectedQuestion]);
 
   useEffect(() => {
@@ -344,10 +369,22 @@ export function PaperRubricPage({
 
   const paperColumns: TableColumnsType<PaperVersion> = [
     { title: "版本", dataIndex: "version_no", width: 72, render: (value: number) => `v${value}` },
-    { title: "文件名", render: (_, paper) => paper.file.original_name || paper.file_asset_id },
+    { title: "文件名", render: (_, paper) => paper.file.original_name || "未命名文件" },
     { title: "类型", render: (_, paper) => paper.file.content_type || "-" },
     { title: "大小", render: (_, paper) => (paper.file.size_bytes ? `${Math.round(paper.file.size_bytes / 1024)} KB` : "-") },
-    { title: "状态", dataIndex: "status", width: 100, render: (value: string) => <StatusTag tone="processing">{value}</StatusTag> }
+    {
+      title: "状态",
+      dataIndex: "status",
+      width: 100,
+      render: (value: string) => {
+        const meta = paperStatusMeta[value] ?? { label: "未知状态", tone: "neutral" as StatusTone };
+        return (
+          <span title={value}>
+            <StatusTag tone={meta.tone}>{meta.label}</StatusTag>
+          </span>
+        );
+      }
+    }
   ];
 
   const rubricColumns: TableColumnsType<RubricPoint> = [
@@ -416,8 +453,8 @@ export function PaperRubricPage({
   };
 
   async function handleUpload(file: File) {
-    if (!selectedExam || !hasSession) {
-      message.error("请先选择考试并配置真实后端访问令牌");
+    if (!selectedExam) {
+      message.error("请先在上方选择考试，再上传试卷文件");
       return;
     }
     setUploading(true);
@@ -440,14 +477,29 @@ export function PaperRubricPage({
       return;
     }
     const values = await form.validateFields();
-    let answerArea: Record<string, unknown>;
-    let tolerance: Record<string, unknown>;
-    try {
-      answerArea = parseObjectJSON(values.answer_area_json, "答题区域 JSON");
-      tolerance = parseObjectJSON(values.tolerance_json, "容差 JSON");
-    } catch (currentError) {
-      message.error(formatError(currentError));
-      return;
+    const answerAreaBase = editorMode === "edit" ? selectedQuestion?.answer_area ?? {} : {};
+    const answerArea: Record<string, unknown> = {
+      ...answerAreaBase,
+      page: values.answer_area_page,
+      x: values.answer_area_x,
+      y: values.answer_area_y,
+      w: values.answer_area_w,
+      h: values.answer_area_h
+    };
+    const rawTolerance = editorMode === "edit" ? selectedQuestion?.answer_key?.tolerance : undefined;
+    const tolerance: Record<string, unknown> =
+      rawTolerance && typeof rawTolerance === "object" && !Array.isArray(rawTolerance) ? { ...(rawTolerance as Record<string, unknown>) } : {};
+    if (toleranceQuestionTypes.includes(values.question_type)) {
+      if (values.tolerance_absolute === undefined || values.tolerance_absolute === null) {
+        delete tolerance.absolute;
+      } else {
+        tolerance.absolute = values.tolerance_absolute;
+      }
+      if (values.tolerance_relative === undefined || values.tolerance_relative === null) {
+        delete tolerance.relative;
+      } else {
+        tolerance.relative = Number((values.tolerance_relative / 100).toFixed(8));
+      }
     }
     const payload: QuestionPayload = {
       exam_paper_id: values.exam_paper_id,
@@ -510,7 +562,7 @@ export function PaperRubricPage({
     }
     const total = pointTotal(rubricPoints);
     if (Math.abs(total - selectedQuestion.score) > 0.0001) {
-      message.error("Rubric 采分点总分必须等于题目分值");
+      message.error("评分细则采分点总分必须等于题目分值");
       return;
     }
     let deductions: unknown[];
@@ -531,7 +583,7 @@ export function PaperRubricPage({
         deductions,
         examples
       });
-      message.success(rubricStatus === "locked" ? "Rubric 已锁定" : "Rubric 新版本已提交");
+      message.success(rubricStatus === "locked" ? "评分细则已锁定" : "评分细则新版本已提交");
       await loadConfig(selectedExam.id);
       onExamChanged?.();
     } catch (currentError) {
@@ -548,7 +600,11 @@ export function PaperRubricPage({
     try {
       const result = await validatePaperConfig(selectedExam.id);
       setValidation(result.result);
-      message.success(result.result.valid ? "试卷配置校验通过" : "试卷配置存在问题");
+      if (result.result.valid) {
+        message.success("试卷配置检查通过");
+      } else {
+        message.warning("试卷配置存在问题，请查看下方详情");
+      }
     } catch (currentError) {
       message.error(formatError(currentError));
     }
@@ -565,26 +621,17 @@ export function PaperRubricPage({
           <Space>
             <h1>试卷管理</h1>
           </Space>
-          <p>上传试卷、配置题目、维护标准答案和 Rubric。</p>
+          <p>上传试卷、配置题目、维护标准答案和评分细则。</p>
         </div>
         <Space wrap>
           <Button icon={<RefreshCw size={16} />} onClick={() => void loadExams()} loading={loading}>
             刷新
           </Button>
-          <Button icon={<CheckCircle2 size={16} />} disabled={!selectedExam || !hasSession} onClick={() => void runValidation()}>
+          <Button icon={<CheckCircle2 size={16} />} disabled={!selectedExam} onClick={() => void runValidation()}>
             完整性检查
           </Button>
         </Space>
       </section>
-
-      {!hasSession ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="未检测到真实后端访问令牌"
-            description="维护试卷文件、题目结构、标准答案和评分细则。"
-        />
-      ) : null}
 
       <section className="workspace-section filter-panel">
         <div className="paper-topline">
@@ -597,7 +644,7 @@ export function PaperRubricPage({
             loading={loading}
           />
           <Upload {...uploadProps}>
-            <Button icon={<FileUp size={16} />} disabled={!canWrite || !selectedExam} loading={uploading}>
+            <Button icon={<FileUp size={16} />} disabled={!canManage || !selectedExam} loading={uploading}>
               上传试卷文件
             </Button>
           </Upload>
@@ -613,7 +660,7 @@ export function PaperRubricPage({
         <ErrorState message={error} onRetry={() => void loadExams()} />
       ) : !selectedExam ? (
         <section className="workspace-section">
-          <EmptyState title="暂无考试" description="后端没有返回可配置试卷的考试。" />
+          <EmptyState title="暂无考试" description="还没有可配置的考试。请先在「考试管理」中创建考试。" />
         </section>
       ) : configLoading ? (
         <section className="workspace-section">
@@ -636,7 +683,7 @@ export function PaperRubricPage({
               columns={paperColumns}
               size="middle"
               pagination={false}
-              locale={{ emptyText: <EmptyState title="暂无试卷文件" description="上传后会显示真实试卷版本。" /> }}
+              locale={{ emptyText: <EmptyState title="暂无试卷文件" description="上传试卷文件后，版本记录会显示在这里。" /> }}
             />
           </section>
 
@@ -646,7 +693,17 @@ export function PaperRubricPage({
               showIcon
               message={validation.valid ? "试卷配置完整" : "试卷配置存在问题"}
               description={
-                validation.valid ? "后端校验未发现配置问题。" : validation.issues.map((issue) => `${issue.code}: ${issue.message}`).join("；")
+                validation.valid ? (
+                  "检查完成，未发现配置问题。"
+                ) : (
+                  <ul className="validation-issue-list">
+                    {validation.issues.map((issue, index) => (
+                      <li key={`${issue.code}-${index}`} title={issue.code}>
+                        {issue.message}
+                      </li>
+                    ))}
+                  </ul>
+                )
               }
             />
           ) : null}
@@ -661,7 +718,7 @@ export function PaperRubricPage({
                 <Button
                   size="small"
                   icon={<Plus size={14} />}
-                  disabled={!canWrite}
+                  disabled={!canManage}
                   onClick={() => {
                     setEditorMode("create");
                     setSelectedQuestionId(null);
@@ -688,7 +745,9 @@ export function PaperRubricPage({
                     </div>
                     <div>
                       <span>{question.score} 分</span>
-                      <StatusTag tone={rubricTone(question.rubric?.status)}>{question.rubric?.status ?? "无 Rubric"}</StatusTag>
+                      <span title={question.rubric?.status}>
+                        <StatusTag tone={rubricTone(question.rubric?.status)}>{rubricStatusLabel(question.rubric?.status)}</StatusTag>
+                      </span>
                     </div>
                   </List.Item>
                 )}
@@ -699,10 +758,10 @@ export function PaperRubricPage({
               <div className="section-head">
                 <div>
                   <h2>{editorMode === "edit" ? "题目配置" : "新建题目"}</h2>
-                  <p>{selectedLocked ? "Rubric 已锁定，题目和 Rubric 不可编辑。" : "保存题目修改会生成新的答案版本。"}</p>
+                  <p>{selectedLocked ? "评分细则已锁定，题目和细则不可编辑。" : "保存题目修改会生成新的答案版本。"}</p>
                 </div>
                 <Space>
-                  {selectedLocked ? <StatusTag tone="success">locked</StatusTag> : null}
+                  {selectedLocked ? <StatusTag tone="success">已锁定</StatusTag> : null}
                   {editorMode === "edit" ? (
                     <Button danger icon={<Trash2 size={16} />} disabled={questionDisabled} onClick={confirmDeleteQuestion}>
                       删除
@@ -719,7 +778,7 @@ export function PaperRubricPage({
                   <Form.Item label="关联试卷版本" name="exam_paper_id">
                     <Select
                       allowClear
-                      options={papers.map((paper) => ({ label: `v${paper.version_no} ${paper.file.original_name || paper.file_asset_id}`, value: paper.id }))}
+                      options={papers.map((paper) => ({ label: `v${paper.version_no} ${paper.file.original_name || "未命名文件"}`, value: paper.id }))}
                       placeholder="可不关联"
                     />
                   </Form.Item>
@@ -742,8 +801,25 @@ export function PaperRubricPage({
                 <Form.Item label="题干" name="stem">
                   <Input.TextArea rows={3} />
                 </Form.Item>
-                <Form.Item label="答题区域 JSON" name="answer_area_json" rules={[{ required: true, message: "请输入答题区域 JSON" }]}>
-                  <Input.TextArea rows={5} spellCheck={false} />
+                <Form.Item label="答题区域位置" required>
+                  <div className="form-grid">
+                    <Form.Item label="所在页码" name="answer_area_page" rules={[{ required: true, message: "请输入所在页码" }]}>
+                      <InputNumber min={1} precision={0} className="full-width-control" />
+                    </Form.Item>
+                    <Form.Item label="左边距" name="answer_area_x" rules={[{ required: true, message: "请输入左边距" }]}>
+                      <InputNumber min={0} className="full-width-control" />
+                    </Form.Item>
+                    <Form.Item label="上边距" name="answer_area_y" rules={[{ required: true, message: "请输入上边距" }]}>
+                      <InputNumber min={0} className="full-width-control" />
+                    </Form.Item>
+                    <Form.Item label="宽度" name="answer_area_w" rules={[{ required: true, message: "请输入宽度" }]}>
+                      <InputNumber min={0} className="full-width-control" />
+                    </Form.Item>
+                    <Form.Item label="高度" name="answer_area_h" rules={[{ required: true, message: "请输入高度" }]}>
+                      <InputNumber min={0} className="full-width-control" />
+                    </Form.Item>
+                  </div>
+                  <p className="muted">也可以在「答题卡模板」中拖拽框选，更直观。</p>
                 </Form.Item>
                 <Form.Item label="标准答案" name="standard_answer" rules={[{ required: true, message: "请输入标准答案" }]}>
                   <Input.TextArea rows={3} />
@@ -751,9 +827,18 @@ export function PaperRubricPage({
                 <Form.Item label="等价答案" name="equivalent_answers">
                   <Select mode="tags" placeholder="输入后回车" />
                 </Form.Item>
-                <Form.Item label="容差 JSON" name="tolerance_json">
-                  <Input.TextArea rows={3} spellCheck={false} />
-                </Form.Item>
+                {showTolerance ? (
+                  <Form.Item label="答案误差范围（选填）">
+                    <div className="form-grid">
+                      <Form.Item label="允许绝对误差" name="tolerance_absolute">
+                        <InputNumber min={0} className="full-width-control" />
+                      </Form.Item>
+                      <Form.Item label="允许相对误差（%）" name="tolerance_relative">
+                        <InputNumber min={0} className="full-width-control" />
+                      </Form.Item>
+                    </div>
+                  </Form.Item>
+                ) : null}
               </Form>
 
               {selectedQuestion && objectiveRuleType ? <section className="scoring-rule-editor">
@@ -764,8 +849,8 @@ export function PaperRubricPage({
                   </div>
                   <Space>
                     {publishedScoringRule ? <StatusTag tone="success">{`已发布 v${publishedScoringRule.version}`}</StatusTag> : <StatusTag tone="warning">未发布</StatusTag>}
-                    <Button icon={<Save size={16} />} disabled={!canWrite} loading={savingScoringRule} onClick={() => void saveScoringRule(false)}>保存草稿</Button>
-                    <Button type="primary" icon={<LockKeyhole size={16} />} disabled={!canWrite} loading={savingScoringRule} onClick={() => void saveScoringRule(true)}>发布规则</Button>
+                    <Button icon={<Save size={16} />} disabled={!canManage} loading={savingScoringRule} onClick={() => void saveScoringRule(false)}>保存草稿</Button>
+                    <Button type="primary" icon={<LockKeyhole size={16} />} disabled={!canManage} loading={savingScoringRule} onClick={() => void saveScoringRule(true)}>发布规则</Button>
                   </Space>
                 </div>
                 {objectiveRuleType === "multiple_choice" ? <div className="scoring-rule-grid">
@@ -784,37 +869,52 @@ export function PaperRubricPage({
                   <label><span>相对误差</span><InputNumber min={0} max={1} step={0.001} precision={6} value={Number(scoringRuleConfig.relative ?? 0)} onChange={(value) => setRuleConfig("relative", Number(value ?? 0))} /></label>
                   <label><span>单位必须填写</span><Switch checked={Boolean(scoringRuleConfig.unit_required)} onChange={(value) => setRuleConfig("unit_required", value)} /></label>
                 </div> : null}
-                {["single_choice", "true_false"].includes(objectiveRuleType) ? <Alert type="info" showIcon message="使用标准答案精确判定" description="空白、多涂、擦除或低置信结果不会自动判零，将进入人工确认。" /> : null}
+                {["single_choice", "true_false"].includes(objectiveRuleType) ? <Alert type="info" showIcon message="使用标准答案精确判定" description="空白、多涂、擦除或识别把握不足的答卷不会自动判零分，将转入人工确认。" /> : null}
               </section> : null}
 
               <div className="rubric-editor">
                 <div className="section-head">
                   <div>
-                    <h2>Rubric</h2>
+                    <h2>评分细则</h2>
                     <p>
-                      采分点合计 {pointTotal(rubricPoints)} / {selectedQuestion?.score ?? "未保存题目"} 分
+                      {selectedQuestion ? `采分点合计 ${pointTotal(rubricPoints)} / ${selectedQuestion.score} 分` : "先保存题目，再配置评分细则"}
                     </p>
                   </div>
                   <Space>
+                    <span className="muted">提交为</span>
                     <Select value={rubricStatus} options={rubricStatusOptions} disabled={questionDisabled} onChange={setRubricStatus} className="rubric-status-select" />
                     <Button icon={<Plus size={16} />} disabled={questionDisabled} onClick={addPoint}>
-                      采分点
+                      添加采分点
                     </Button>
                     <Button type="primary" icon={rubricStatus === "locked" ? <LockKeyhole size={16} /> : <Save size={16} />} disabled={questionDisabled || !selectedQuestion || scoreMismatch} loading={savingRubric} onClick={() => void saveRubric()}>
-                      提交 Rubric
+                      {rubricStatus === "locked" ? "锁定评分细则" : rubricStatus === "pending_review" ? "提交审批" : "保存评分细则"}
                     </Button>
                   </Space>
                 </div>
-                {scoreMismatch ? <Alert type="error" showIcon message="Rubric 分值不匹配" description="采分点总分必须等于题目分值，当前不会提交后端。" /> : null}
+                {scoreMismatch ? <Alert type="error" showIcon message="评分细则分值不匹配" description="采分点总分必须等于题目分值，调整后才能保存。" /> : null}
                 <ResponsiveTable<RubricPoint> rowKey="id" dataSource={rubricPoints} columns={rubricColumns} pagination={false} size="middle" />
                 <div className="form-grid rubric-json-grid">
                   <label>
-                    <span>扣分点 JSON</span>
-                    <Input.TextArea value={deductionsJson} disabled={questionDisabled} rows={4} spellCheck={false} onChange={(event) => setDeductionsJson(event.target.value)} />
+                    <span>扣分点（JSON 格式，选填）</span>
+                    <Input.TextArea
+                      value={deductionsJson}
+                      disabled={questionDisabled}
+                      rows={4}
+                      spellCheck={false}
+                      placeholder={'示例：[{"description": "缺少必要步骤", "score": -2}]'}
+                      onChange={(event) => setDeductionsJson(event.target.value)}
+                    />
                   </label>
                   <label>
-                    <span>样例答案 JSON</span>
-                    <Input.TextArea value={examplesJson} disabled={questionDisabled} rows={4} spellCheck={false} onChange={(event) => setExamplesJson(event.target.value)} />
+                    <span>样例答案（JSON 格式，选填）</span>
+                    <Input.TextArea
+                      value={examplesJson}
+                      disabled={questionDisabled}
+                      rows={4}
+                      spellCheck={false}
+                      placeholder={'示例：["满分示例答案", "部分得分示例答案"]'}
+                      onChange={(event) => setExamplesJson(event.target.value)}
+                    />
                   </label>
                 </div>
               </div>

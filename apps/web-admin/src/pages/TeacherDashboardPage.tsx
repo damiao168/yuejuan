@@ -6,6 +6,7 @@ import { listArbitrationTasks, listReviewTasks, type ArbitrationTask, type Revie
 import { hasAnyPermission, hasEveryPermission, type SessionUser } from "../auth/session";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
+import { examStatusLabels, examStatusTone, examSubjectLabel } from "../constants/examStatus";
 import type { StatusTone } from "../types";
 
 interface TeacherHomeData {
@@ -27,23 +28,27 @@ interface PersonalTask {
 const activeReviewStatuses = ["assigned", "in_progress", "returned"];
 const activeArbitrationStatuses = ["assigned", "in_progress", "pending"];
 
-const statusLabels: Record<string, string> = {
-  assigned: "待处理",
+const taskStatusLabels: Record<string, string> = {
+  assigned: "待阅卷",
   in_progress: "处理中",
   returned: "已退回",
   pending: "待领取",
   submitted: "已提交",
-  completed: "已完成",
-  grading: "阅卷中",
-  reviewing: "复核中",
-  finalized: "待发布",
-  published: "已发布"
+  completed: "已完成"
 };
 
-function tone(status: string): StatusTone {
-  if (["submitted", "completed", "published"].includes(status)) return "success";
-  if (["returned", "reviewing", "pending"].includes(status)) return "warning";
-  if (["assigned", "in_progress", "grading"].includes(status)) return "processing";
+const sourceLabels: Record<string, string> = {
+  ai_low_confidence: "智能评分待人工确认",
+  double_mark_required: "双评任务",
+  evidence_verification_failed: "证据核验未通过",
+  manual_sample: "人工抽检",
+  returned: "退回重评"
+};
+
+function taskTone(status: string): StatusTone {
+  if (["submitted", "completed"].includes(status)) return "success";
+  if (["returned", "pending"].includes(status)) return "warning";
+  if (["assigned", "in_progress"].includes(status)) return "processing";
   return "neutral";
 }
 
@@ -59,7 +64,7 @@ async function fetchTeacherHome(user: SessionUser): Promise<TeacherHomeData> {
   const warnings: string[] = [];
   if (results[0].status === "rejected") warnings.push("我的考试暂时不可用");
   if (results[1].status === "rejected") warnings.push("我的阅卷任务暂时不可用");
-  if (results[2].status === "rejected") warnings.push("我的复核任务暂时不可用");
+  if (results[2].status === "rejected") warnings.push("我的仲裁任务暂时不可用");
   return {
     exams: results[0].status === "fulfilled" ? results[0].value.exams : [],
     reviewTasks: results[1].status === "fulfilled" ? results[1].value.tasks : [],
@@ -101,15 +106,15 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
       id: task.id,
       kind: "review" as const,
       title: `第 ${task.question_no} 题阅卷`,
-      detail: `${task.anonymous_code} · ${task.source}`,
+      detail: sourceLabels[task.source] ? `密号 ${task.anonymous_code} · ${sourceLabels[task.source]}` : `密号 ${task.anonymous_code}`,
       status: task.status,
       path: "/grading"
     })),
     ...activeArbitrations.map((task) => ({
       id: task.id,
       kind: "arbitration" as const,
-      title: `第 ${task.question_no} 题复核`,
-      detail: `${task.anonymous_code} · 分差 ${task.score_difference}`,
+      title: `第 ${task.question_no} 题仲裁`,
+      detail: `密号 ${task.anonymous_code} · 分差 ${task.score_difference}`,
       status: task.status,
       path: "/arbitration"
     }))
@@ -120,7 +125,7 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
     ...(hasEveryPermission(user, ["exam:manage"]) ? [{ label: "我的考试", path: "/exams", icon: <ClipboardList size={16} /> }] : []),
     ...(hasEveryPermission(user, ["exam:manage", "file:manage"]) ? [{ label: "试卷与评分标准", path: "/papers", icon: <FileText size={16} /> }] : []),
     ...(hasAnyPermission(user, ["review:manage", "review:work"]) ? [{ label: "我的阅卷", path: "/grading", icon: <BookOpenCheck size={16} /> }] : []),
-    ...(hasAnyPermission(user, ["arbitration:manage", "arbitration:work"]) ? [{ label: "我的复核", path: "/arbitration", icon: <Gavel size={16} /> }] : [])
+    ...(hasAnyPermission(user, ["arbitration:manage", "arbitration:work"]) ? [{ label: "我的仲裁", path: "/arbitration", icon: <Gavel size={16} /> }] : [])
   ];
 
   if (!data && loading) return <LoadingState label="正在加载我的工作" />;
@@ -142,7 +147,7 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
 
       <section className="teacher-summary" aria-label="我的工作摘要">
         <div><span>待阅卷</span><strong>{activeReviews.length}</strong></div>
-        <div><span>待复核</span><strong>{activeArbitrations.length}</strong></div>
+        <div><span>待仲裁</span><strong>{activeArbitrations.length}</strong></div>
         <div><span>已提交阅卷</span><strong>{completedReviews}</strong></div>
         <div><span>进行中考试</span><strong>{activeExams.length}</strong></div>
       </section>
@@ -151,9 +156,8 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
         <div className="reviewer-progress-head">
           <div>
             <h2>我的阅卷进度</h2>
-            <p>已完成 / 已分配总任务</p>
           </div>
-          <strong>{completedReviews} / {reviewTotal} 题</strong>
+          <strong>已提交 {completedReviews} / 共 {reviewTotal} 题</strong>
         </div>
         <Progress percent={reviewProgress} status={reviewProgress === 100 ? "success" : "active"} />
       </section>
@@ -171,23 +175,23 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
 
       <div className="teacher-dashboard-grid">
         <section className="teacher-task-pane">
-          <div className="section-head"><div><h2>我的任务</h2><p>按分配时间显示个人阅卷与复核工作</p></div><strong>{tasks.length}</strong></div>
+          <div className="section-head"><div><h2>我的任务</h2><p>分配给你的阅卷与仲裁任务</p></div><strong>{tasks.length}</strong></div>
           {tasks.length ? <div className="teacher-task-list">{tasks.slice(0, 8).map((task) => (
-            <button key={`${task.kind}-${task.id}`} onClick={() => onNavigate(task.path)}>
+            <button type="button" key={`${task.kind}-${task.id}`} onClick={() => onNavigate(task.path)}>
               <span className="teacher-task-icon">{task.kind === "review" ? <BookOpenCheck size={17} /> : <Gavel size={17} />}</span>
               <span><strong>{task.title}</strong><small>{task.detail}</small></span>
-              <StatusTag tone={tone(task.status)}>{statusLabels[task.status] ?? task.status}</StatusTag>
+              <StatusTag tone={taskTone(task.status)}>{taskStatusLabels[task.status] ?? "处理中"}</StatusTag>
               <ArrowRight size={16} />
             </button>
-          ))}</div> : <EmptyState title="当前没有分配任务" description="新的阅卷或复核任务分配后会显示在这里。" />}
+          ))}</div> : <EmptyState title="当前没有分配任务" description="新的阅卷或仲裁任务分配后会显示在这里。" />}
         </section>
 
         <section className="teacher-exam-pane">
           <div className="section-head"><div><h2>我的考试</h2><p>仅显示当前账号可访问的考试</p></div></div>
           {activeExams.length ? <div className="teacher-exam-list">{activeExams.slice(0, 6).map((exam) => (
-            <button key={exam.id} onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/overview`)}>
-              <span><strong>{exam.name}</strong><small>{exam.subject} · {exam.class_ids.length} 个班级</small></span>
-              <StatusTag tone={tone(exam.status)}>{statusLabels[exam.status] ?? exam.status}</StatusTag>
+            <button type="button" key={exam.id} onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/overview`)}>
+              <span><strong>{exam.name}</strong><small>{examSubjectLabel(exam.subject)} · {exam.class_ids.length} 个班级</small></span>
+              <StatusTag tone={examStatusTone(exam.status)}>{examStatusLabels[exam.status] ?? "进行中"}</StatusTag>
               <ArrowRight size={16} />
             </button>
           ))}</div> : <EmptyState title="暂无授权考试" description="获得考试或班级授权后会显示在这里。" />}

@@ -1,5 +1,5 @@
-import { Fragment, useMemo } from "react";
-import { Empty, Grid, Spin, Table, type TableColumnsType, type TableProps } from "antd";
+import { Fragment, useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { Empty, Grid, Pagination, Spin, Table, type TableColumnsType, type TableProps } from "antd";
 import type { ColumnGroupType, ColumnType } from "antd/es/table";
 import type { Key, ReactNode } from "react";
 
@@ -63,13 +63,54 @@ export function ResponsiveTable<T extends object>({
   rowClassName,
   className,
   mobilePrimaryCount = 3,
+  pagination,
   scroll: _scroll,
   ...tableProps
 }: ResponsiveTableProps<T>) {
   const screens = Grid.useBreakpoint();
-  const mobile = !screens.xxl;
+  const mobile = !screens.lg;
   const flatColumns = useMemo(() => flattenColumns(columns), [columns]);
   const desktopColumns = useMemo(() => flexibleColumns(columns), [columns]);
+  const paginationConfig = pagination === false ? null : (pagination ?? {});
+  const [mobilePage, setMobilePage] = useState(paginationConfig?.defaultCurrent ?? 1);
+  const [mobilePageSize, setMobilePageSize] = useState(paginationConfig?.defaultPageSize ?? 10);
+  const pageSize = paginationConfig?.pageSize ?? mobilePageSize;
+  const total = paginationConfig?.total ?? dataSource.length;
+  const currentPage = paginationConfig?.current ?? mobilePage;
+  const controlledPagination = paginationConfig?.current !== undefined;
+  const serverPaginated = typeof paginationConfig?.total === "number" && paginationConfig.total > dataSource.length;
+  const mobileDataSource = !paginationConfig || serverPaginated
+    ? dataSource
+    : dataSource.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  useEffect(() => {
+    if (!paginationConfig || controlledPagination) return;
+    const lastPage = Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
+    setMobilePage((current) => Math.min(current, lastPage));
+  }, [controlledPagination, pageSize, paginationConfig !== null, total]);
+
+  const accessibleOnRow = onRow
+    ? (record: T, index?: number) => {
+        const rowProps = onRow(record, index);
+        if (!rowProps.onClick) return rowProps;
+        const originalKeyDown = rowProps.onKeyDown;
+        return {
+          ...rowProps,
+          tabIndex: rowProps.tabIndex ?? 0,
+          onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
+            originalKeyDown?.(event);
+            if (
+              event.target === event.currentTarget
+              && !event.defaultPrevented
+              && (event.key === "Enter" || event.key === " ")
+            ) {
+              event.preventDefault();
+              event.currentTarget.click();
+            }
+          }
+        };
+      }
+    : undefined;
 
   if (!mobile) {
     return (
@@ -80,10 +121,11 @@ export function ResponsiveTable<T extends object>({
         rowKey={rowKey}
         loading={loading}
         locale={locale}
-        onRow={onRow}
+        onRow={accessibleOnRow}
         rowClassName={rowClassName}
         className={`responsive-desktop-table ${className ?? ""}`.trim()}
         tableLayout="fixed"
+        pagination={pagination}
       />
     );
   }
@@ -97,18 +139,20 @@ export function ResponsiveTable<T extends object>({
   }
 
   return (
-    <div className="responsive-record-list" role="list">
-      {dataSource.map((record, index) => {
+    <>
+      <div className="responsive-record-list" role="list">
+      {mobileDataSource.map((record, pageIndex) => {
+        const index = serverPaginated ? pageIndex : (currentPage - 1) * pageSize + pageIndex;
         const primaryColumns = flatColumns.filter((column, columnIndex) => columnIndex < mobilePrimaryCount || columnLabel(column) === "操作");
         const detailColumns = flatColumns.filter((column) => !primaryColumns.includes(column));
-        const rowProps = onRow?.(record, index) ?? {};
+        const rowProps = accessibleOnRow?.(record, index) ?? {};
         const className = typeof rowClassName === "function" ? rowClassName(record, index, 0) : rowClassName;
         return (
           <article
             {...rowProps}
             className={`responsive-record ${className ?? ""}`.trim()}
             key={recordKey(rowKey, record, index)}
-            role="listitem"
+            role={rowProps.onClick ? "button" : "listitem"}
           >
             <dl>
               {primaryColumns.map((column, columnIndex) => (
@@ -136,6 +180,29 @@ export function ResponsiveTable<T extends object>({
           </article>
         );
       })}
-    </div>
+      </div>
+      {paginationConfig && total > pageSize ? (
+        <Pagination
+          className="responsive-record-pagination"
+          current={currentPage}
+          pageSize={pageSize}
+          total={total}
+          showSizeChanger={paginationConfig.showSizeChanger}
+          showQuickJumper={paginationConfig.showQuickJumper}
+          showTotal={paginationConfig.showTotal}
+          pageSizeOptions={paginationConfig.pageSizeOptions}
+          onChange={(page, nextPageSize) => {
+            setMobilePage(page);
+            setMobilePageSize(nextPageSize);
+            paginationConfig.onChange?.(page, nextPageSize);
+          }}
+          onShowSizeChange={(page, nextPageSize) => {
+            setMobilePage(page);
+            setMobilePageSize(nextPageSize);
+            paginationConfig.onShowSizeChange?.(page, nextPageSize);
+          }}
+        />
+      ) : null}
+    </>
   );
 }

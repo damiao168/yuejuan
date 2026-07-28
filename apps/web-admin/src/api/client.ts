@@ -29,7 +29,7 @@ export class ApiClient {
   private readonly getToken?: () => string | null;
 
   constructor(options: ApiClientOptions = {}) {
-    this.baseUrl = options.baseUrl ?? import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8080";
+    this.baseUrl = normalizeBaseUrl(options.baseUrl ?? import.meta.env.VITE_API_BASE_URL ?? "");
     this.getToken = options.getToken;
   }
 
@@ -94,6 +94,11 @@ export class ApiClient {
 }
 
 export const apiClient = new ApiClient();
+
+export function normalizeBaseUrl(value: string) {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  return trimmed;
+}
 
 function filenameFromDisposition(disposition: string | null): string | undefined {
   if (!disposition) {

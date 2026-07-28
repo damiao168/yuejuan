@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Empty, Progress, Spin } from "antd";
+import { Alert, Button, Empty, Progress, Spin } from "antd";
 import { CheckCircle2, CircleAlert, Clock3, FileStack, RefreshCw } from "lucide-react";
 import { downloadFileBlob } from "../api/files";
 import type { ScoringRun, ScoringRunItem } from "../api/review";
@@ -26,13 +26,54 @@ interface CandidateGroup {
 
 const stateLabel: Record<string, string> = {
   confirmed: "已评分",
-  review: "待人工",
+  review: "待确认",
   failed: "失败",
   processing: "处理中",
+  queued: "排队中",
   pending: "等待处理",
   cancelled: "已取消",
   cancelling: "正在取消"
 };
+
+const activityDetailLabels: Record<string, string> = {
+  answer_low_confidence: "识别把握不足，转人工",
+  low_confidence: "识别把握不足，转人工",
+  rule_not_auto_confirmed: "评分细则未确认，转人工",
+  auto_grade_confirmation_failed: "自动评分未通过确认，转人工",
+  auto_grade_engine_unavailable: "自动评分暂不可用，转人工",
+  omr_ambiguous: "填涂无法判定，转人工",
+  omr_multiple: "检测到多处填涂，转人工",
+  omr_blank: "未检测到填涂，转人工",
+  ocr_failed: "卷面识别失败",
+  ocr_timeout: "识别超时",
+  timeout: "处理超时",
+  retryable_error: "处理出错，正在自动重试",
+  terminal_error: "处理失败，可重试",
+  dead_letter: "多次失败，需人工处理",
+  queued: "排队等待处理",
+  leased: "正在处理",
+  running: "正在处理",
+  succeeded: "处理完成",
+  pending: "等待教师确认",
+  assigned: "等待教师确认",
+  in_progress: "教师确认中",
+  returned: "已退回，等待重新确认"
+};
+
+function activityDetail(item: ScoringRunItem): { label: string; raw?: string } {
+  const raw = item.reason_code || item.error_code || item.runtime_status || item.review_status || "";
+  const mapped = raw ? activityDetailLabels[raw.toLowerCase()] : undefined;
+  if (mapped) {
+    return { label: mapped, raw };
+  }
+  if (item.state === "failed") {
+    return { label: "处理失败，可重试", raw: raw || undefined };
+  }
+  if (item.state === "review") {
+    return { label: "等待教师确认", raw: raw || undefined };
+  }
+  return { label: "正在处理", raw: raw || undefined };
+}
 
 function groupCandidates(items: ScoringRunItem[]) {
   const grouped = new Map<string, ScoringRunItem[]>();
@@ -70,6 +111,7 @@ export function ScoringPaperMonitor({ run, items, loading, onRefresh }: ScoringP
   const [selectedCode, setSelectedCode] = useState("");
   const [pageUrls, setPageUrls] = useState<Record<string, string>>({});
   const [pageLoading, setPageLoading] = useState(false);
+  const [pageError, setPageError] = useState("");
 
   useEffect(() => {
     if (!candidates.length) {
@@ -91,21 +133,37 @@ export function ScoringPaperMonitor({ run, items, loading, onRefresh }: ScoringP
     }
     return [...unique.values()].sort((left, right) => left.pageNo - right.pageNo);
   }, [selected]);
+  const pageKey = pages.map((page) => page.assetId).join("|");
 
   useEffect(() => {
     let disposed = false;
     const urls: string[] = [];
     setPageUrls({});
-    if (!pages.length) return;
+    setPageError("");
+    if (!pages.length) {
+      setPageLoading(false);
+      return;
+    }
     setPageLoading(true);
-    void Promise.all(pages.map(async (page) => {
+    void Promise.allSettled(pages.map(async (page) => {
       const file = await downloadFileBlob(page.assetId);
+      if (disposed) return null;
       const url = URL.createObjectURL(file.blob);
       urls.push(url);
       return [page.assetId, url] as const;
     }))
-      .then((entries) => {
-        if (!disposed) setPageUrls(Object.fromEntries(entries));
+      .then((results) => {
+        if (disposed) return;
+        const entries = results.flatMap((result) =>
+          result.status === "fulfilled" && result.value ? [result.value] : []
+        );
+        const failedCount = results.length - entries.length;
+        setPageUrls(Object.fromEntries(entries));
+        if (failedCount > 0) {
+          setPageError(failedCount === results.length
+            ? "整卷影像暂时无法加载，请刷新后重试。"
+            : `${failedCount} 页影像暂时无法加载，其余页面已正常显示。`);
+        }
       })
       .finally(() => {
         if (!disposed) setPageLoading(false);
@@ -114,7 +172,7 @@ export function ScoringPaperMonitor({ run, items, loading, onRefresh }: ScoringP
       disposed = true;
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [pages]);
+  }, [pageKey]);
 
   const processed = items.filter((item) => item.state !== "queued" && item.state !== "processing").length;
   const progress = items.length ? Math.round((processed / items.length) * 100) : 0;
@@ -136,7 +194,7 @@ export function ScoringPaperMonitor({ run, items, loading, onRefresh }: ScoringP
           <p>红色批注定位到原答题区域；“≈”表示 AI 建议分，仍需教师确认。</p>
         </div>
         <div className="scoring-monitor-progress">
-          <div><strong>{processed}</strong><span>/ {items.length} 题已识别 · {run?.review_count ?? 0} 题待人工</span></div>
+          <div><strong>{processed}</strong><span>/ {items.length} 题已识别 · {run?.review_count ?? 0} 题待确认</span></div>
           <Progress percent={progress} showInfo={false} strokeColor="#1677ff" trailColor="#e8edf5" />
           <Button icon={<RefreshCw size={15} />} loading={loading} onClick={onRefresh}>刷新</Button>
         </div>
@@ -156,7 +214,7 @@ export function ScoringPaperMonitor({ run, items, loading, onRefresh }: ScoringP
                 <span className="scoring-candidate-index">{String(index + 1).padStart(2, "0")}</span>
                 <span className="scoring-candidate-copy">
                   <strong>{candidate.code}</strong>
-                  <small>{candidate.processed}/{candidate.items.length} 已识别 · {candidate.review} 待人工</small>
+                  <small>{candidate.processed}/{candidate.items.length} 已识别 · {candidate.review} 待确认</small>
                 </span>
                 {candidate.failed > 0
                   ? <CircleAlert size={16} className="danger" />
@@ -168,7 +226,7 @@ export function ScoringPaperMonitor({ run, items, loading, onRefresh }: ScoringP
           })}
         </aside>
 
-        <main className="scoring-paper-stage">
+        <section className="scoring-paper-stage">
           <div className="scoring-paper-stage-head">
             <div>
               <strong>{selected?.code}</strong>
@@ -182,6 +240,7 @@ export function ScoringPaperMonitor({ run, items, loading, onRefresh }: ScoringP
           </div>
           <div className="scoring-paper-scroll">
             {pageLoading ? <div className="scoring-page-loading"><Spin /><span>正在装载整卷影像</span></div> : null}
+            {pageError ? <Alert type="warning" showIcon message={pageError} /> : null}
             {pages.map((page) => {
               const pageItems = selected?.items.filter((item) => item.page_file_asset_id === page.assetId) ?? [];
               return (
@@ -207,24 +266,27 @@ export function ScoringPaperMonitor({ run, items, loading, onRefresh }: ScoringP
               );
             })}
           </div>
-        </main>
+        </section>
 
         <aside className="scoring-activity-rail">
           <div className="scoring-activity-summary">
             <span>这张答卷</span>
             <div><strong>{selected?.confirmed ?? 0}</strong><small>已确认</small></div>
-            <div><strong>{selected?.review ?? 0}</strong><small>待人工</small></div>
+            <div><strong>{selected?.review ?? 0}</strong><small>待确认</small></div>
             <div><strong className={selected?.failed ? "danger" : ""}>{selected?.failed ?? 0}</strong><small>失败</small></div>
           </div>
           <div className="scoring-activity-list">
-            <h4>当前流程</h4>
-            {activeItems.length ? activeItems.map((item) => (
-              <div className="scoring-activity-item" key={item.answer_segment_id}>
-                <span className={`scoring-activity-dot ${item.state}`} />
-                <div><strong>{item.question_no} · {stateLabel[item.state] ?? item.state}</strong><small>{item.reason_code || item.error_code || item.runtime_status || item.review_status || "等待评分结果"}</small></div>
-                <StatusTag tone={item.state === "failed" ? "danger" : item.state === "review" ? "warning" : "processing"}>{`${item.page_no} 页`}</StatusTag>
-              </div>
-            )) : <div className="scoring-activity-done"><CheckCircle2 size={24} /><span>当前答卷已全部确认</span></div>}
+            <h4>待处理题目</h4>
+            {activeItems.length ? activeItems.map((item) => {
+              const detail = activityDetail(item);
+              return (
+                <div className="scoring-activity-item" key={item.answer_segment_id}>
+                  <span className={`scoring-activity-dot ${item.state}`} />
+                  <div><strong>{item.question_no} · {stateLabel[item.state] ?? "处理中"}</strong><small title={detail.raw}>{detail.label}</small></div>
+                  <StatusTag tone={item.state === "failed" ? "danger" : item.state === "review" ? "warning" : "processing"}>{`第 ${item.page_no} 页`}</StatusTag>
+                </div>
+              );
+            }) : <div className="scoring-activity-done"><CheckCircle2 size={24} /><span>当前答卷已全部确认</span></div>}
           </div>
         </aside>
       </div>

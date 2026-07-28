@@ -347,6 +347,7 @@ export interface ArbitrationTask {
 export interface ArbitrationTaskFilter {
   status?: string;
   assigned_to?: string;
+  exam_id?: string;
 }
 
 export interface AssignArbitrationPayload {

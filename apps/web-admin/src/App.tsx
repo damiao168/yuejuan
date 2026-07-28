@@ -6,6 +6,7 @@ import { listSchools } from "./api/org";
 import { ApiClientError } from "./api/client";
 import { hasAnyPermission, hasEveryPermission, sessionFromAuthUser, type SessionUser } from "./auth/session";
 import { clearReviewDraftFallbacks } from "./auth/reviewDraftFallback";
+import { clearRememberedLogin, loadRememberedLogin, saveRememberedLogin } from "./auth/rememberedLogin";
 import { AppLayout } from "./components/AppLayout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ForbiddenState, LoadingState, NotFoundState } from "./components/PageState";
@@ -48,6 +49,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | undefined>();
+  const [loginDefaults, setLoginDefaults] = useState<Partial<LoginFormValues>>();
   const [path, setPath] = useState(pathFromHash);
   const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0);
 
@@ -82,9 +84,38 @@ function App() {
           setUser(sessionFromAuthUser(response.user));
         }
       })
-      .catch(() => {
-        if (active) {
+      .catch(async () => {
+        const remembered = await loadRememberedLogin();
+        if (!active) {
+          return;
+        }
+        if (!remembered) {
           setUser(null);
+          return;
+        }
+        setLoginDefaults({ ...remembered, remember_password: true });
+        try {
+          const response = await loginWithPassword(remembered);
+          if (!active) {
+            return;
+          }
+          const nextUser = sessionFromAuthUser(response.user);
+          const nextPath = pathForExperience("/dashboard", defaultExperience(nextUser));
+          setUser(nextUser);
+          window.location.hash = nextPath;
+          setPath(nextPath);
+        } catch (error) {
+          if (!active) {
+            return;
+          }
+          setUser(null);
+          if (error instanceof ApiClientError && error.code === "invalid_credentials") {
+            clearRememberedLogin();
+            setLoginDefaults(undefined);
+            setLoginError("保存的登录信息已失效，请重新输入密码。");
+          } else {
+            setLoginError("自动登录失败，请检查网络连接后重试。");
+          }
         }
       })
       .finally(() => {
@@ -131,15 +162,31 @@ function App() {
   const login = async (values: LoginFormValues) => {
     setLoginLoading(true);
     setLoginError(undefined);
+    const { remember_password, ...credentials } = values;
     try {
-      const response = await loginWithPassword(values);
+      const response = await loginWithPassword(credentials);
       const nextUser = sessionFromAuthUser(response.user);
       const nextPath = pathForExperience("/dashboard", defaultExperience(nextUser));
+      if (remember_password) {
+        try {
+          await saveRememberedLogin(credentials);
+          setLoginDefaults({ ...credentials, remember_password: true });
+        } catch {
+          clearRememberedLogin();
+        }
+      } else {
+        clearRememberedLogin();
+        setLoginDefaults(undefined);
+      }
       setUser(nextUser);
       window.location.hash = nextPath;
       setPath(nextPath);
     } catch (error) {
-      setLoginError(error instanceof ApiClientError && error.code === "invalid_credentials" ? "租户、账号或密码不正确。" : "暂时无法登录，请检查网络连接后重试。");
+      if (remember_password && error instanceof ApiClientError && error.code === "invalid_credentials") {
+        clearRememberedLogin();
+        setLoginDefaults(undefined);
+      }
+      setLoginError(error instanceof ApiClientError && error.code === "invalid_credentials" ? "学校代码、账号或密码不正确。" : "暂时无法登录，请检查网络连接后重试。");
     } finally {
       setLoginLoading(false);
     }
@@ -151,6 +198,11 @@ function App() {
       clearReviewDraftFallbacks(user.id);
     }
     setUser(null);
+  };
+
+  const forgetRememberedLogin = () => {
+    clearRememberedLogin();
+    setLoginDefaults(undefined);
   };
 
   if (authLoading) {
@@ -167,7 +219,13 @@ function App() {
     return (
       <ConfigProvider>
         <AntApp>
-          <LoginPage onLogin={login} loading={loginLoading} error={loginError} />
+          <LoginPage
+            onLogin={login}
+            onForgetRemembered={forgetRememberedLogin}
+            initialValues={loginDefaults}
+            loading={loginLoading}
+            error={loginError}
+          />
         </AntApp>
       </ConfigProvider>
     );
@@ -274,7 +332,7 @@ function App() {
     ) : route.path === "/system/status" ? (
       <SystemStatusPage />
     ) : (
-      <ModulePage route={route} />
+      <ModulePage route={route} experience={navigationExperience} onNavigate={navigate} />
     );
 
   return (

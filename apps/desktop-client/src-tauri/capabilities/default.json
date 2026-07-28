@@ -1,7 +1,9 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default desktop permissions for EduGrade client skeleton.",
+  "description": "Allow the local main window to invoke only application-owned commands; no Tauri core or plugin permissions are required.",
+  "local": true,
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "platforms": ["windows"],
+  "permissions": []
 }

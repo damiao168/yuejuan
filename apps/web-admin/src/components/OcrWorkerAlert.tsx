@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button } from "antd";
 import { Activity } from "lucide-react";
 import { getOcrAvailability, type WorkerServiceStatus } from "../api/system";
@@ -6,14 +6,18 @@ import { getOcrAvailability, type WorkerServiceStatus } from "../api/system";
 export function OcrWorkerAlert({ enabled }: { enabled: boolean }) {
   const [worker, setWorker] = useState<WorkerServiceStatus | null>(null);
   const [statusError, setStatusError] = useState(false);
+  const requestRef = useRef(0);
 
   const load = useCallback(async () => {
     if (!enabled) return;
+    const requestId = ++requestRef.current;
     try {
       const status = await getOcrAvailability();
+      if (requestId !== requestRef.current) return;
       setWorker(status.worker);
       setStatusError(false);
     } catch {
+      if (requestId !== requestRef.current) return;
       setStatusError(true);
     }
   }, [enabled]);
@@ -22,7 +26,10 @@ export function OcrWorkerAlert({ enabled }: { enabled: boolean }) {
     if (!enabled) return;
     void load();
     const timer = window.setInterval(() => void load(), 30_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      requestRef.current += 1;
+      window.clearInterval(timer);
+    };
   }, [enabled, load]);
 
   if (!enabled || (!statusError && (!worker || worker.automation_available))) return null;
@@ -34,13 +41,13 @@ export function OcrWorkerAlert({ enabled }: { enabled: boolean }) {
       type={stale || statusError ? "warning" : "error"}
       showIcon
       icon={<Activity size={18} />}
-      message={statusError ? "无法确认 OCR 自动处理状态" : stale ? "OCR Worker 心跳已失联" : "OCR 自动处理已暂停"}
+      message={statusError ? "暂时无法获取自动识别状态" : stale ? "自动识别服务可能已中断" : "自动识别已暂停"}
       description={statusError ? (
-        "系统状态暂时无法读取。依赖 OCR 的填空题请按人工流程处理，并检查系统状态。"
+        "暂时无法获取识别服务状态。填空题如未自动识别，请先按人工方式评阅，稍后点击『重新检查』。"
       ) : (
         <div className="ocr-worker-alert-detail">
           <span>{worker!.impact}</span>
-          <strong>待处理 {worker!.queued_tasks} · 处理中 {worker!.in_flight_tasks} · 死信 {worker!.dead_letter_tasks}</strong>
+          <strong>待处理 {worker!.queued_tasks} · 处理中 {worker!.in_flight_tasks} · 多次失败 {worker!.dead_letter_tasks}</strong>
           <span>处理建议：{worker!.action}</span>
         </div>
       )}

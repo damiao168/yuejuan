@@ -10,12 +10,11 @@ import {
   Select,
   Space,
   Steps,
-  Table,
   Tag,
   Upload
 } from "antd";
 import type { TableColumnsType } from "antd";
-import { ArrowRight, CheckCircle2, Download, FileUp, Plus, RefreshCw } from "lucide-react";
+import { ArrowRight, CheckCircle2, Download, FileUp, RefreshCw } from "lucide-react";
 import Papa from "papaparse";
 import { createExam, listExams } from "../api/exams";
 import {
@@ -58,7 +57,7 @@ interface ImportRow {
   error?: string;
 }
 
-const setupSteps = ["机构信息", "学年与年级", "班级", "学生", "基础用户", "第一场考试", "完成"];
+const setupSteps = ["机构信息", "学年与年级", "班级", "学生", "人员账号", "第一场考试", "完成"];
 
 function messageOf(error: unknown) {
   return error instanceof Error ? error.message : "请求失败";
@@ -288,7 +287,7 @@ export function OrganizationSetupPage({ onNavigate }: { onNavigate: (path: strin
         return (
           <div>
             <h2>导入学生</h2>
-            <p className="section-copy">先下载模板，或上传现有 CSV 后映射字段。只有校验通过的行会提交。</p>
+            <p className="section-copy">先下载模板填写，或直接上传现有名单，然后指定学号、姓名、班级对应哪一列。只有校验通过的行会被导入。</p>
             <Space wrap>
               <Button icon={<Download size={16} />} onClick={() => downloadCSV("学生导入模板.csv", [{ student_no: "20260001", name: "张同学", class_code: data.classes[0]?.code ?? "G10-01" }])}>下载模板</Button>
               <Upload accept=".csv,text/csv" maxCount={1} showUploadList={false} beforeUpload={(file) => { void readCSV(file); return false; }}>
@@ -315,9 +314,9 @@ export function OrganizationSetupPage({ onNavigate }: { onNavigate: (path: strin
         );
       case 4:
         return (
-          <Form key="user" layout="vertical" preserve={false} onFinish={(values) => void runSave(() => createManagedUser(values), "基础用户已创建")}>
-            <h2>基础用户</h2>
-            <p className="section-copy">创建首位业务人员。初始密码不会显示在日志中，请通过受控方式交付。</p>
+          <Form key="user" layout="vertical" preserve={false} onFinish={(values) => void runSave(() => createManagedUser(values), "人员账号已创建")}>
+            <h2>人员账号</h2>
+            <p className="section-copy">创建第一位教务或阅卷教师账号。请当面告知或通过安全渠道发送初始密码，并提醒对方首次登录后立即修改。</p>
             {data.users.length > 1 ? <Alert type="success" showIcon message={`当前机构已有 ${data.users.length} 个用户`} /> : null}
             <div className="form-grid compact-form-grid">
               <Form.Item name="username" label="登录账号" rules={[{ required: true }]}><Input autoComplete="off" /></Form.Item>
@@ -353,17 +352,17 @@ export function OrganizationSetupPage({ onNavigate }: { onNavigate: (path: strin
   return (
     <div className="page-stack setup-page">
       <section className="page-heading">
-        <div><h1>组织与用户</h1><p>建立机构基础数据，并从上次完成的位置继续。</p></div>
+        <div><h1>机构启用</h1><p>建立机构基础数据，并从上次完成的位置继续。</p></div>
         <Button icon={<RefreshCw size={16} />} loading={loading} onClick={() => void load()}>刷新进度</Button>
       </section>
       {error ? <Alert type="warning" showIcon message="部分数据刷新失败" description={error} /> : null}
       <div className="setup-progress-line">
         <span>{completed.slice(0, 6).filter(Boolean).length}/6 已完成</span>
-        {completed[6] ? <strong><CheckCircle2 size={16} /> 可进入考试配置</strong> : <span>完成当前步骤后自动保存</span>}
+        {completed[6] ? <strong><CheckCircle2 size={16} /> 可进入考试配置</strong> : <span>每步提交后进度自动记录，下次可从此处继续</span>}
       </div>
       <div className="onboarding-shell">
         <aside className="onboarding-rail">
-          <Steps direction="vertical" current={step} items={setupSteps.map((title, index) => ({ title, status: completed[index] ? "finish" : index === step ? "process" : "wait" }))} onChange={setStep} />
+          <Steps direction="vertical" current={step} items={setupSteps.map((title, index) => ({ title, status: completed[index] ? "finish" : index === step ? "process" : "wait", disabled: index > 0 && !completed[index - 1] && !completed[index] }))} onChange={setStep} />
         </aside>
         <main className="onboarding-panel">{stepContent}</main>
       </div>

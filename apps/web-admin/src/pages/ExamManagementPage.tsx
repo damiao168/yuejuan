@@ -33,37 +33,23 @@ import { listClasses, listGrades, listSchools, type Grade, type School, type Sch
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
-import type { StatusTone } from "../types";
+import { examStatusLabels, examStatusTone, examSubjectOptions } from "../constants/examStatus";
 import type { ProductExperience } from "../router/experience";
 
 const statusFlow = ["draft", "configured", "ready", "collecting", "grading", "reviewing", "finalized", "published", "archived"];
 
-const statusLabels: Record<string, string> = {
-  draft: "草稿",
-  configured: "配置中",
-  ready: "准备完成",
-  collecting: "采集中",
-  grading: "阅卷中",
-  reviewing: "复核中",
-  finalized: "已定稿",
-  published: "已发布",
-  archived: "已归档"
+const advanceLabels: Record<string, string> = {
+  draft: "开始配置",
+  collecting: "结束采集，进入阅卷",
+  grading: "进入复核",
+  reviewing: "定稿成绩"
 };
 
-const subjectOptions = [
-  { label: "语文", value: "chinese" },
-  { label: "数学", value: "math" },
-  { label: "英语", value: "english" },
-  { label: "物理", value: "physics" },
-  { label: "化学", value: "chemistry" },
-  { label: "生物", value: "biology" },
-  { label: "历史", value: "history" },
-  { label: "地理", value: "geography" },
-  { label: "政治", value: "politics" }
-];
+const subjectOptions = examSubjectOptions;
 
 const examTypeOptions = [
   { label: "正式考试", value: "formal_exam" },
+  { label: "校内考试", value: "school_exam" },
   { label: "联考", value: "joint_exam" },
   { label: "模拟考试", value: "mock_exam" },
   { label: "阶段测验", value: "quiz" },
@@ -109,22 +95,6 @@ function labelFrom(options: { label: string; value: string }[], value: string) {
   return options.find((item) => item.value === value)?.label ?? value;
 }
 
-function statusTone(status: string): StatusTone {
-  if (status === "published" || status === "finalized") {
-    return "success";
-  }
-  if (status === "archived") {
-    return "neutral";
-  }
-  if (status === "draft" || status === "configured") {
-    return "info";
-  }
-  if (status === "reviewing") {
-    return "warning";
-  }
-  return "processing";
-}
-
 function nextStatus(status: string) {
   if (status === "configured" || status === "ready" || status === "finalized") {
     return null;
@@ -139,12 +109,13 @@ function isLocked(status: string) {
 
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
-    return `${error.status} ${error.code}: ${error.message}`;
+    console.error(`考试操作失败：${error.status} ${error.code}`, error);
+    return error.message || "操作失败，请稍后重试";
   }
-  if (error instanceof Error) {
+  if (error instanceof Error && error.message) {
     return error.message;
   }
-  return "未知错误";
+  return "操作失败，请稍后重试";
 }
 
 function formatTime(value?: string) {
@@ -159,6 +130,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<ExamFormValues>();
   const watchedSchoolId = Form.useWatch("school_id", form);
+  const watchedGradingMode = Form.useWatch("grading_mode", form);
   const [filters, setFilters] = useState<Filters>({ search: "", schoolId: "", subject: "", gradeId: "", status: "", examType: "" });
   const [exams, setExams] = useState<Exam[]>([]);
   const [schools, setSchools] = useState<School[]>([]);
@@ -173,22 +145,12 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [actioningId, setActioningId] = useState<string | null>(null);
-  const hasSession = true;
-  const canWrite = canManage && hasSession;
+  const canWrite = canManage;
   const teacherMode = mode === "teacher";
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
-    if (!hasSession) {
-      setExams([]);
-      setSchools([]);
-      setGrades([]);
-      setClasses([]);
-      setError("当前没有有效登录会话，无法调用真实后端 API。");
-      setLoading(false);
-      return;
-    }
     try {
       const examResult = await listExams({ status: filters.status || undefined, school_id: teacherMode ? undefined : filters.schoolId || undefined });
       setExams(examResult.exams);
@@ -290,8 +252,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
       const keywordMatched =
         !keyword ||
         exam.name.toLowerCase().includes(keyword) ||
-        exam.subject.toLowerCase().includes(keyword) ||
-        exam.created_by.toLowerCase().includes(keyword);
+        labelFrom(subjectOptions, exam.subject).toLowerCase().includes(keyword);
       const subjectMatched = !filters.subject || exam.subject === filters.subject;
       const typeMatched = !filters.examType || exam.exam_type === filters.examType;
       const gradeMatched =
@@ -320,10 +281,6 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
   };
 
   const submitForm = async () => {
-    if (!hasSession) {
-      message.error("未配置真实后端访问令牌，无法提交考试。");
-      return;
-    }
     const values = await form.validateFields();
     const payload: ExamPayload = {
       school_id: values.school_id,
@@ -357,7 +314,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
   const changeStatus = (exam: Exam, status: string) => {
     modal.confirm({
       title: "确认推进考试状态",
-      content: `将“${exam.name}”推进到“${statusLabels[status] ?? status}”。`,
+      content: `将“${exam.name}”推进到“${examStatusLabels[status] ?? "下一阶段"}”。`,
       okText: "确认",
       cancelText: "取消",
       onOk: async () => {
@@ -420,14 +377,14 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
       )
     },
     { title: "总分", dataIndex: "total_score", width: 65, align: "right" },
-    { title: "状态", dataIndex: "status", width: 105, render: (value: string) => <StatusTag tone={statusTone(value)}>{statusLabels[value] ?? value}</StatusTag> },
+    { title: "状态", dataIndex: "status", width: 105, render: (value: string) => <StatusTag tone={examStatusTone(value)}>{examStatusLabels[value] ?? "未知状态"}</StatusTag> },
     { title: "阅卷模式", dataIndex: "grading_mode", width: 165, render: (value: string) => <span className="exam-mode-text">{labelFrom(gradingModeOptions, value)}</span> },
     {
       title: "创建信息",
       width: 165,
       render: (_, exam) => (
         <div className="exam-created-cell">
-          <strong>{exam.created_by === currentUser.id ? currentUser.name : "已授权人员"}</strong>
+          <strong>{exam.created_by === currentUser.id ? currentUser.name : "本校管理员"}</strong>
           <span>{formatTime(exam.created_at)}</span>
         </div>
       )
@@ -440,6 +397,9 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
         const locked = isLocked(exam.status);
         const moreItems: MenuProps["items"] = [
           { key: "detail", label: "查看详情", icon: <Eye size={14} /> },
+          ...(canWrite && next && next !== "archived"
+            ? [{ key: "advance", label: advanceLabels[exam.status] ?? `推进到${examStatusLabels[next] ?? "下一阶段"}` }]
+            : []),
           ...(canWrite ? [{ key: "edit", label: "编辑考试", icon: <Pencil size={14} />, disabled: locked }] : []),
           ...(canWrite && exam.status !== "archived" ? [{ key: "archive", label: "归档考试", icon: <Archive size={14} />, danger: true }] : [])
         ];
@@ -448,23 +408,19 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
             <Button size="small" type="primary" ghost icon={<LayoutDashboard size={14} />} onClick={() => onOpenWorkspace(exam.id)}>
               工作区
             </Button>
-            {canWrite && next && next !== "archived" ? (
-              <Button size="small" loading={actioningId === exam.id} onClick={() => changeStatus(exam, next)}>
-                推进到{statusLabels[next] ?? next}
-              </Button>
-            ) : null}
             <Dropdown
               trigger={["click"]}
               menu={{
                 items: moreItems,
                 onClick: ({ key }) => {
                   if (key === "detail") void openDetail(exam);
+                  if (key === "advance" && next) changeStatus(exam, next);
                   if (key === "edit") setDrawer({ mode: "edit", exam });
                   if (key === "archive") archive(exam);
                 }
               }}
             >
-              <Button size="small" aria-label={`${exam.name} 更多操作`} icon={<MoreHorizontal size={15} />} />
+              <Button size="small" loading={actioningId === exam.id} aria-label={`${exam.name} 更多操作`} icon={<MoreHorizontal size={15} />} />
             </Dropdown>
           </Space>
         );
@@ -491,20 +447,11 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
         </Space>
       </section>
 
-      {!hasSession ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="未检测到真实后端访问令牌"
-            description="维护考试范围、阅卷方式、发布策略和当前状态。"
-        />
-      ) : null}
-
       <section className="workspace-section filter-panel">
         <div className="filter-grid exam-filter-primary">
           <Input
             prefix={<Search size={16} />}
-            placeholder="搜索考试名称、学科、创建人"
+            placeholder="搜索考试名称或学科"
             value={filters.search}
             onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
           />
@@ -512,7 +459,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
             placeholder="状态"
             allowClear
             value={filters.status || undefined}
-            options={statusFlow.map((status) => ({ label: statusLabels[status], value: status }))}
+            options={statusFlow.map((status) => ({ label: examStatusLabels[status] ?? "未知状态", value: status }))}
             onChange={(value) => setFilters((current) => ({ ...current, status: value ?? "" }))}
           />
         </div>
@@ -529,7 +476,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
 
       {loading ? (
         <section className="workspace-section">
-          <LoadingState label="正在读取考试和组织数据" />
+          <LoadingState label="正在加载考试列表" />
         </section>
       ) : error ? (
         <ErrorState message={error} onRetry={() => void loadData()} />
@@ -537,8 +484,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
         <section className="workspace-section">
           <div className="section-head">
             <div>
-              <h2>{teacherMode ? "已授权考试" : "考试任务"}</h2>
-              <p>{filteredExams.length} 条考试记录</p>
+              <h2>{teacherMode ? "已授权考试" : "考试列表"}</h2>
             </div>
           </div>
           <ResponsiveTable<Exam>
@@ -546,7 +492,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
             dataSource={filteredExams}
             columns={columns}
             pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (total) => `共 ${total} 场考试` }}
-            locale={{ emptyText: <EmptyState title="暂无考试" description="当前筛选条件下没有后端返回的考试记录。" /> }}
+            locale={{ emptyText: <EmptyState title="暂无考试" description={canWrite ? "没有符合条件的考试。试试调整筛选条件，或点击右上角“新建考试”。" : "没有符合条件的考试，请联系管理员为你授权。"} /> }}
             size="middle"
             className="exam-management-table"
           />
@@ -592,7 +538,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
               label="阅卷模式"
               name="grading_mode"
               rules={[{ required: true, message: "请选择阅卷模式" }]}
-              extra="当前版本双评/多评需在阅卷环节按题目配置双评策略，本字段仅作登记、不会自动触发双评流程"
+              extra={watchedGradingMode === "double_mark" || watchedGradingMode === "blind_double_mark" ? "双评需在“阅卷”环节为题目逐题开启后才会生效。" : undefined}
             >
               <Select options={gradingModeOptions} placeholder="选择阅卷模式" />
             </Form.Item>
@@ -625,34 +571,27 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
           <div className="detail-stack">
             <Descriptions bordered column={1} size="small">
               <Descriptions.Item label="考试名称">{detailExam.name}</Descriptions.Item>
-              <Descriptions.Item label="学校">{schoolById.get(detailExam.school_id)?.name ?? detailExam.school_id}</Descriptions.Item>
+              <Descriptions.Item label="学校">{schoolById.get(detailExam.school_id)?.name ?? "本校"}</Descriptions.Item>
               <Descriptions.Item label="学科">{labelFrom(subjectOptions, detailExam.subject)}</Descriptions.Item>
               <Descriptions.Item label="考试类型">{labelFrom(examTypeOptions, detailExam.exam_type)}</Descriptions.Item>
               <Descriptions.Item label="年级">{gradeNamesForExam(detailExam)}</Descriptions.Item>
               <Descriptions.Item label="班级数量">{detailExam.class_ids.length}</Descriptions.Item>
               <Descriptions.Item label="总分">{detailExam.total_score}</Descriptions.Item>
               <Descriptions.Item label="状态">
-                <StatusTag tone={statusTone(detailExam.status)}>{statusLabels[detailExam.status] ?? detailExam.status}</StatusTag>
+                <StatusTag tone={examStatusTone(detailExam.status)}>{examStatusLabels[detailExam.status] ?? "未知状态"}</StatusTag>
               </Descriptions.Item>
               <Descriptions.Item label="阅卷模式">{labelFrom(gradingModeOptions, detailExam.grading_mode)}</Descriptions.Item>
               <Descriptions.Item label="允许申诉">{detailExam.appeal_enabled ? "是" : "否"}</Descriptions.Item>
               <Descriptions.Item label="成绩发布策略">{labelFrom(publishPolicyOptions, detailExam.publish_policy)}</Descriptions.Item>
-              <Descriptions.Item label="创建人">{detailExam.created_by}</Descriptions.Item>
+              <Descriptions.Item label="创建人">{detailExam.created_by === currentUser.id ? currentUser.name : "本校管理员"}</Descriptions.Item>
               <Descriptions.Item label="创建时间">{formatTime(detailExam.created_at)}</Descriptions.Item>
             </Descriptions>
 
-            <div className="detail-status-grid">
-              {["试卷配置状态", "答卷采集状态", "阅卷进度", "成绩发布状态"].map((item) => (
-                <div className="detail-status-item" key={item}>
-                  <span>{item}</span>
-                  <StatusTag tone="neutral">待后续 API 支持</StatusTag>
-                </div>
-              ))}
-            </div>
-
-            <Button icon={<FileClock size={16} />} onClick={() => (window.location.hash = "/audit")}>
-              审计记录入口
-            </Button>
+            {!teacherMode ? (
+              <Button icon={<FileClock size={16} />} onClick={() => (window.location.hash = "/audit")}>
+                查看操作日志
+              </Button>
+            ) : null}
           </div>
         ) : null}
       </Drawer>

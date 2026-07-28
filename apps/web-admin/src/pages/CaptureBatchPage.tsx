@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   App,
   Button,
@@ -10,8 +10,8 @@ import {
   Progress,
   Select,
   Space,
-  Table,
   Tabs,
+  Tooltip,
   Upload,
   type TableColumnsType,
   type UploadProps,
@@ -81,8 +81,22 @@ const statusLabels: Record<string, string> = {
   queued: "等待处理",
   duplicate: "重复文件",
   failed: "处理失败",
-  grouped: "已组织",
-  registration: "正在配准",
+  grouped: "已归入答卷",
+  registration: "正在对齐版面",
+  deleted: "已删除",
+  quality_rejected: "质量不合格",
+};
+
+const errorLabels: Record<string, string> = {
+  pdf_decode_failed: "PDF 无法解析，请重新导出后再导入",
+  unsupported_type: "文件格式不支持，请转为 PDF 或图片",
+};
+
+const contentTypeLabels: Record<string, string> = {
+  "application/pdf": "PDF",
+  "image/jpeg": "JPG 图片",
+  "image/png": "PNG 图片",
+  "image/tiff": "TIFF 图片",
 };
 
 function formatError(error: unknown) {
@@ -96,21 +110,15 @@ function statusTone(
   if (status === "completed" || status === "ready" || status === "grouped")
     return "success";
   if (status === "failed" || status === "cancelled") return "danger";
-  if (status === "needs_review" || status === "duplicate") return "warning";
+  if (
+    status === "needs_review" ||
+    status === "duplicate" ||
+    status === "quality_rejected"
+  )
+    return "warning";
   if (status === "processing" || status === "queued" || status === "uploading")
     return "processing";
   return "neutral";
-}
-
-function batchProgress(batch: CaptureBatch) {
-  if (batch.status === "completed") return 100;
-  if (batch.file_count === 0) return 0;
-  const processed = Math.max(0, batch.file_count - batch.failed_count);
-  return batch.status === "processing"
-    ? Math.min(85, Math.round((processed / batch.file_count) * 70))
-    : batch.page_count > 0
-      ? 70
-      : 25;
 }
 
 function MatchingWorkspace({
@@ -168,6 +176,7 @@ function MatchingWorkspace({
         </div>
         {queue.submissions.map((item, index) => (
           <button
+            type="button"
             key={item.id}
             className={
               item.id === selected.id
@@ -211,16 +220,35 @@ function MatchingWorkspace({
             >
               第 {page.sequence_no} 页
             </Button>
+            <span className="muted-text">页码</span>
             <InputNumber
+              key={`${page.id}-${page.assigned_page_no ?? "unset"}`}
               min={1}
-              value={page.assigned_page_no}
-              onChange={(value) => value && void onConfirmPage(page, value)}
+              defaultValue={page.assigned_page_no ?? undefined}
+              onBlur={(event) => {
+                const next = Number(event.target.value);
+                if (
+                  Number.isInteger(next) &&
+                  next >= 1 &&
+                  next !== page.assigned_page_no
+                )
+                  void onConfirmPage(page, next);
+              }}
+              onPressEnter={(event) => {
+                const next = Number(event.currentTarget.value);
+                if (
+                  Number.isInteger(next) &&
+                  next >= 1 &&
+                  next !== page.assigned_page_no
+                )
+                  void onConfirmPage(page, next);
+              }}
               disabled={!canManage || actioning}
               aria-label="确认答卷页码"
             />
             <Space>
-              <StatusTag tone={page.status === "ready" ? "success" : "warning"}>
-                {page.status}
+              <StatusTag tone={statusTone(page.status)}>
+                {statusLabels[page.status] ?? page.status}
               </StatusTag>
               {selected.pages.length > 1 && index > 0 && onSplit ? (
                 <Button
@@ -235,7 +263,7 @@ function MatchingWorkspace({
         <div className="matching-evidence-note">
           <ScanLine size={17} />
           <span>
-            姓名、学号或条码仅作为候选证据；人工确认后才写入正式身份。
+            系统识别到的姓名、学号或条码仅供参考，最终以您在名册中确认的学生为准。
           </span>
         </div>
       </section>
@@ -343,31 +371,44 @@ export function CaptureBatchPage({
   const [activeTab, setActiveTab] = useState("files");
   const [reopenOpen, setReopenOpen] = useState(false);
   const [reopenReason, setReopenReason] = useState("");
+  const batchesRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
+  const matchingRequestRef = useRef(0);
+  const processingRequestRef = useRef(0);
+  const previewRequestRef = useRef(0);
   const batchCanManage = canManage && !["completed", "cancelled"].includes(detail?.batch.status ?? "");
 
   const loadBatches = useCallback(async () => {
+    const requestId = ++batchesRequestRef.current;
     setLoading(true);
     setError(undefined);
     try {
       const result = await listCaptureBatches(examId);
+      if (requestId !== batchesRequestRef.current) return;
       setBatches(result.batches);
-      setSelectedId((current) => current || result.batches[0]?.id || "");
+      setSelectedId((current) =>
+        result.batches.some((batch) => batch.id === current) ? current : result.batches[0]?.id || ""
+      );
     } catch (currentError) {
+      if (requestId !== batchesRequestRef.current) return;
       setError(formatError(currentError));
     } finally {
-      setLoading(false);
+      if (requestId === batchesRequestRef.current) setLoading(false);
     }
   }, [examId]);
 
   const loadDetail = useCallback(
     async (batchId: string, quiet = false) => {
+      const requestId = ++detailRequestRef.current;
       if (!batchId) {
         setDetail(undefined);
+        setDetailLoading(false);
         return;
       }
       if (!quiet) setDetailLoading(true);
       try {
         const result = await getCaptureBatch(batchId);
+        if (requestId !== detailRequestRef.current) return;
         setDetail(result);
         setBatches((current) =>
           current.map((item) =>
@@ -375,9 +416,10 @@ export function CaptureBatchPage({
           ),
         );
       } catch (currentError) {
+        if (requestId !== detailRequestRef.current) return;
         if (!quiet) message.error(formatError(currentError));
       } finally {
-        if (!quiet) setDetailLoading(false);
+        if (!quiet && requestId === detailRequestRef.current) setDetailLoading(false);
       }
     },
     [message],
@@ -385,19 +427,36 @@ export function CaptureBatchPage({
 
   const loadMatching = useCallback(
     async (batchId: string) => {
-      if (!batchId) return;
+      const requestId = ++matchingRequestRef.current;
+      if (!batchId) {
+        setMatching(undefined);
+        setMatchingLoading(false);
+        return;
+      }
       setMatchingLoading(true);
       try {
-        setMatching(await getMatchingQueue(batchId));
+        const result = await getMatchingQueue(batchId);
+        if (requestId === matchingRequestRef.current) setMatching(result);
       } catch (currentError) {
+        if (requestId !== matchingRequestRef.current) return;
         message.error(formatError(currentError));
       } finally {
-        setMatchingLoading(false);
+        if (requestId === matchingRequestRef.current) setMatchingLoading(false);
       }
     },
     [message],
   );
 
+  useEffect(() => {
+    detailRequestRef.current += 1;
+    matchingRequestRef.current += 1;
+    previewRequestRef.current += 1;
+    setSelectedId("");
+    setDetail(undefined);
+    setMatching(undefined);
+    setProcessingSummaries({});
+    setPreview(undefined);
+  }, [examId]);
   useEffect(() => {
     void loadBatches();
   }, [loadBatches]);
@@ -494,13 +553,13 @@ export function CaptureBatchPage({
     if (!detail) return;
     modal.confirm({
       title: "确认完成批次",
-      content: "完成后该批次将进入只读状态，请确认活动页面均已处理并完成学生匹配。",
+      content: "完成后批次将不可再修改。请确认所有页面已处理完毕，且每份答卷都已确认学生身份。",
       okText: "完成批次",
       cancelText: "返回检查",
       onOk: async () => {
         setActioning(true);
         try {
-          await completeCaptureBatch(detail.batch.id, "所有活动页面处理完成并已人工确认");
+          await completeCaptureBatch(detail.batch.id, "所有页面处理完成并已人工确认");
           await Promise.all([loadBatches(), loadDetail(detail.batch.id)]);
           message.success("批次已完成");
         } catch (currentError) {
@@ -538,7 +597,7 @@ export function CaptureBatchPage({
     try {
       const result = await processSubmissionPages(submissionId);
       await loadDetail(detail!.batch.id);
-      message.success(`已提交 ${result.runs.length} 个页面配准任务`);
+      message.success(`已开始处理 ${result.runs.length} 页（版面对齐与题目切分）`);
     } catch (currentError) {
       message.error(formatError(currentError));
     } finally {
@@ -547,12 +606,17 @@ export function CaptureBatchPage({
   }
 
   async function showPage(page: CapturePage) {
+    const requestId = ++previewRequestRef.current;
     try {
       const blob = await downloadFileBlob(page.decoded_file_asset_id);
-      if (preview?.url) URL.revokeObjectURL(preview.url);
-      setPreview({ url: URL.createObjectURL(blob.blob), page });
+      if (requestId !== previewRequestRef.current) return;
+      const url = URL.createObjectURL(blob.blob);
+      setPreview((current) => {
+        if (current?.url) URL.revokeObjectURL(current.url);
+        return { url, page };
+      });
     } catch (currentError) {
-      message.error(formatError(currentError));
+      if (requestId === previewRequestRef.current) message.error(formatError(currentError));
     }
   }
 
@@ -617,7 +681,7 @@ export function CaptureBatchPage({
         loadMatching(selectedId),
         loadDetail(selectedId, true),
       ]);
-      message.success("页码已确认");
+      message.success(`第 ${pageNo} 页页码已保存`);
     } catch (currentError) {
       message.error(formatError(currentError));
     } finally {
@@ -683,7 +747,17 @@ export function CaptureBatchPage({
 
   const fileColumns: TableColumnsType<CaptureFile> = [
     { title: "文件", dataIndex: "original_name", ellipsis: true },
-    { title: "类型", dataIndex: "content_type", width: 150 },
+    {
+      title: "类型",
+      dataIndex: "content_type",
+      width: 150,
+      render: (value: string) => (
+        <span title={value}>
+          {contentTypeLabels[value] ??
+            (value ? value.split("/").pop()!.toUpperCase() : "-")}
+        </span>
+      ),
+    },
     { title: "页数", dataIndex: "page_count", width: 72 },
     {
       title: "状态",
@@ -696,15 +770,24 @@ export function CaptureBatchPage({
     },
     {
       title: "问题",
-      width: 160,
+      width: 200,
       render: (_, item) =>
-        item.error_code ||
-        (item.status === "duplicate" ? "内容与批次内文件重复" : "-"),
+        item.error_code ? (
+          <Tooltip title={item.error_code}>
+            <span>
+              {errorLabels[item.error_code] ?? "处理失败，请删除后重新导入"}
+            </span>
+          </Tooltip>
+        ) : item.status === "duplicate" ? (
+          "内容与批次内文件重复"
+        ) : (
+          "-"
+        ),
     },
   ];
   const pageColumns: TableColumnsType<CapturePage> = [
-    { title: "顺序", dataIndex: "sequence_no", width: 70 },
-    { title: "来源页", dataIndex: "source_index", width: 80 },
+    { title: "扫描顺序", dataIndex: "sequence_no", width: 90 },
+    { title: "原文件页码", dataIndex: "source_index", width: 100 },
     { title: "答卷页码", dataIndex: "assigned_page_no", width: 90 },
     {
       title: "旋转",
@@ -758,6 +841,19 @@ export function CaptureBatchPage({
     },
   ];
 
+  const progressPercent = useMemo(() => {
+    if (!detail) return null;
+    if (detail.batch.status === "completed") return 100;
+    if (detail.batch.page_count === 0) return null;
+    return Math.min(
+      100,
+      Math.round(
+        (detail.pages.filter((item) => item.status === "ready").length /
+          detail.batch.page_count) *
+          100,
+      ),
+    );
+  }, [detail]);
   const summary = useMemo(
     () =>
       detail
@@ -793,9 +889,22 @@ export function CaptureBatchPage({
         : [],
     [detail],
   );
-  useEffect(() => { void Promise.all(submissions.map(async (id) => [id, await getProcessingSummary(id)] as const)).then((items) => setProcessingSummaries(Object.fromEntries(items))).catch(() => setProcessingSummaries({})); }, [submissions]);
+  useEffect(() => {
+    const requestId = ++processingRequestRef.current;
+    if (!submissions.length) {
+      setProcessingSummaries({});
+      return;
+    }
+    void Promise.allSettled(
+      submissions.map(async (id) => [id, await getProcessingSummary(id)] as const)
+    ).then((results) => {
+      if (requestId !== processingRequestRef.current) return;
+      const items = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+      setProcessingSummaries(Object.fromEntries(items));
+    });
+  }, [submissions]);
 
-  async function resolveRegistration(runId: string, action: "confirm" | "retry") { setActioning(true); try { if (action === "confirm") await confirmRegistration(runId, "人工核对配准边界与题区正确"); else await retryRegistration(runId); const items = await Promise.all(submissions.map(async (id) => [id, await getProcessingSummary(id)] as const)); setProcessingSummaries(Object.fromEntries(items)); await loadDetail(selectedId, true); message.success(action === "confirm" ? "配准已确认" : "配准已重新排队"); } catch (currentError) { message.error(formatError(currentError)); } finally { setActioning(false); } }
+  async function resolveRegistration(runId: string, action: "confirm" | "retry") { setActioning(true); try { if (action === "confirm") await confirmRegistration(runId, "人工核对版面对齐边界与题目区域正确"); else await retryRegistration(runId); const items = await Promise.all(submissions.map(async (id) => [id, await getProcessingSummary(id)] as const)); setProcessingSummaries(Object.fromEntries(items)); await loadDetail(selectedId, true); message.success(action === "confirm" ? "版面对齐已确认" : "已重新排队对齐"); } catch (currentError) { message.error(formatError(currentError)); } finally { setActioning(false); } }
 
   if (loading) return <LoadingState label="正在加载采集批次" />;
   if (error)
@@ -811,7 +920,7 @@ export function CaptureBatchPage({
       <section className="page-heading">
         <div>
           <h1>答卷采集批次</h1>
-          <p>批量导入扫描文件，拆分页面并处理匹配和质量问题。</p>
+          <p>上传扫描文件，系统自动拆页并匹配学生；完成后到『处理』页查看识别进度。</p>
         </div>
         <Space>
           <Button
@@ -845,6 +954,7 @@ export function CaptureBatchPage({
             </div>
             {batches.map((batch) => (
               <button
+                type="button"
                 key={batch.id}
                 className={
                   batch.id === selectedId
@@ -855,7 +965,7 @@ export function CaptureBatchPage({
               >
                 <span>
                   <strong>{batch.name}</strong>
-                  <small>{new Date(batch.created_at).toLocaleString()}</small>
+                  <small>{new Date(batch.created_at).toLocaleString("zh-CN", { hour12: false })}</small>
                 </span>
                 <StatusTag tone={statusTone(batch.status)}>
                   {statusLabels[batch.status]}
@@ -877,10 +987,9 @@ export function CaptureBatchPage({
                         {statusLabels[detail.batch.status]}
                       </StatusTag>
                     </Space>
-                    <Progress
-                      percent={batchProgress(detail.batch)}
-                      size="small"
-                    />
+                    {progressPercent !== null ? (
+                      <Progress percent={progressPercent} size="small" />
+                    ) : null}
                   </div>
                   <Space wrap>
                     <Upload {...uploadProps}>
@@ -936,7 +1045,7 @@ export function CaptureBatchPage({
                   items={[
                     {
                       key: "files",
-                      label: `文件与页面 (${detail.files.length})`,
+                      label: "文件与页面",
                       children: (
                         <div className="capture-detail-stack">
                           <ResponsiveTable
@@ -979,8 +1088,8 @@ export function CaptureBatchPage({
                                   <span>
                                     {pages.length} 页 ·{" "}
                                     {complete
-                                      ? "已完成配准与切题"
-                                      : summary ? `就绪 ${summary.ready_pages} · 阻断 ${summary.blocked_pages} · 处理中 ${summary.pending_pages}` : "等待配准或人工确认"}
+                                      ? "已完成版面对齐与题目切分"
+                                      : summary ? `已完成 ${summary.ready_pages} 页 · 需人工处理 ${summary.blocked_pages} 页 · 处理中 ${summary.pending_pages} 页` : "等待版面对齐或人工确认"}
                                   </span>
                                 </div>
                                 <Space wrap>
@@ -1001,8 +1110,8 @@ export function CaptureBatchPage({
                                             }
                                           >
                                             {item.action === "confirm_registration"
-                                              ? `确认第 ${item.page_no} 页`
-                                              : `重试第 ${item.page_no} 页`}
+                                              ? `确认第 ${item.page_no} 页对齐`
+                                              : `重试第 ${item.page_no} 页对齐`}
                                           </Button>
                                         )}
                                         <Button
@@ -1014,7 +1123,7 @@ export function CaptureBatchPage({
                                         </Button>
                                       </Space>
                                     ))}
-                                  <Button icon={<Workflow size={16} />} loading={actioning} disabled={!batchCanManage || complete} onClick={() => void startPageProcessing(submissionId)}>{complete ? "处理完成" : "配准并切题"}</Button>
+                                  <Button icon={<Workflow size={16} />} loading={actioning} disabled={!batchCanManage || complete} onClick={() => void startPageProcessing(submissionId)}>{complete ? "处理完成" : "对齐版面并切题"}</Button>
                                 </Space>
                               </div>
                             );
@@ -1023,13 +1132,13 @@ export function CaptureBatchPage({
                       ) : (
                         <Empty
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          description="拆页完成后可执行页面配准与切题"
+                          description="拆页完成后，系统将自动对齐版面并按题切分"
                         />
                       ),
                     },
                     {
                       key: "matching",
-                      label: `学生匹配 (${matching?.submissions.filter((item) => item.identity_status !== "matched").length ?? 0})`,
+                      label: `学生匹配（待确认 ${matching?.submissions.filter((item) => item.identity_status !== "matched").length ?? 0}）`,
                       children: matchingLoading ? (
                         <LoadingState label="正在加载考试名册" />
                       ) : matching ? (
@@ -1055,8 +1164,8 @@ export function CaptureBatchPage({
                         <div className="capture-issue-queue">
                           {detail.files.filter((file) => file.status === "failed").map((file) => (
                             <div className="capture-file-issue" key={file.id}>
-                              <div><strong>{file.original_name}</strong><span>文件处理失败 · {file.error_code || "未知错误"}</span></div>
-                              <Button icon={<FileUp size={15} />} disabled={!batchCanManage} onClick={() => setActiveTab("files")}>替换源文件</Button>
+                              <div><strong>{file.original_name}</strong><span title={file.error_code || undefined}>文件处理失败：{(file.error_code && errorLabels[file.error_code]) || "请重新导入正确的文件"}</span></div>
+                              <Button icon={<FileUp size={15} />} disabled={!batchCanManage} onClick={() => { setActiveTab("files"); message.info("请点击右上角「导入文件」重新上传该文件"); }}>重新导入文件</Button>
                             </div>
                           ))}
                           {issuePages.length > 0 && <ResponsiveTable
@@ -1136,6 +1245,7 @@ export function CaptureBatchPage({
         title={preview ? `页面 ${preview.page.sequence_no}` : "页面预览"}
         open={Boolean(preview)}
         onCancel={() => {
+          previewRequestRef.current += 1;
           if (preview?.url) URL.revokeObjectURL(preview.url);
           setPreview(undefined);
         }}

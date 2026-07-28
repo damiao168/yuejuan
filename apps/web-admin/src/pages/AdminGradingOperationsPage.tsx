@@ -6,34 +6,31 @@ import { listExams, type Exam } from "../api/exams";
 import { getScoringSummary, type ScoringSummary } from "../api/review";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
-import type { StatusTone } from "../types";
+import { examStatusLabels, examStatusTone, examSubjectLabel } from "../constants/examStatus";
 
 interface ExamOperation {
   exam: Exam;
   summary?: ScoringSummary;
 }
 
-const statusLabels: Record<string, string> = {
-  draft: "草稿",
-  configured: "配置中",
-  ready: "准备完成",
-  collecting: "采集中",
-  grading: "阅卷中",
-  reviewing: "质量检查",
-  finalized: "待发布",
-  published: "已发布"
+const runStatusLabels: Record<string, string> = {
+  queued: "排队等待",
+  processing: "评分进行中",
+  running: "评分进行中",
+  needs_review: "待人工复核",
+  completed: "评分完成",
+  failed: "评分有失败项",
+  cancelling: "正在取消",
+  cancelled: "已取消"
 };
 
-function tone(status: string): StatusTone {
-  if (status === "published") return "success";
-  if (status === "reviewing" || status === "finalized") return "warning";
-  if (status === "grading") return "processing";
-  return "neutral";
-}
-
 function formatError(error: unknown) {
-  if (error instanceof ApiClientError) return `${error.status} ${error.code}: ${error.message}`;
-  return error instanceof Error ? error.message : "阅卷运营数据加载失败";
+  if (error instanceof ApiClientError) {
+    console.warn("阅卷运营请求失败", error.status, error.code);
+    return error.message || "操作失败，请稍后重试";
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return "阅卷运营数据加载失败";
 }
 
 function completion(summary?: ScoringSummary) {
@@ -76,7 +73,9 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
 
   const filtered = useMemo(() => {
     const query = keyword.trim().toLowerCase();
-    return operations.filter(({ exam }) => !query || exam.name.toLowerCase().includes(query) || exam.subject.toLowerCase().includes(query));
+    return operations.filter(({ exam }) => !query
+      || exam.name.toLowerCase().includes(query)
+      || examSubjectLabel(exam.subject).toLowerCase().includes(query));
   }, [keyword, operations]);
 
   const metrics = useMemo(() => operations.reduce((result, item) => {
@@ -97,7 +96,7 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
         <div>
           <span className="dashboard-kicker">管理端</span>
           <h1>阅卷运营</h1>
-          <p>按考试监控评分运行、人工复核和失败项，再进入考试工作区处理。</p>
+          <p>按考试查看自动评分进度、待人工复核和失败项；需要处理时进入对应考试的工作区。</p>
         </div>
         <Button icon={<RefreshCw size={16} />} loading={loading} onClick={() => void load()}>刷新</Button>
       </section>
@@ -126,11 +125,11 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
             <article className="operations-row" key={exam.id}>
               <div className="operations-exam">
                 <Space size="small" wrap>
-                  <StatusTag tone={tone(exam.status)}>{statusLabels[exam.status] ?? exam.status}</StatusTag>
-                  <span>{exam.subject}</span>
+                  <StatusTag tone={examStatusTone(exam.status)}>{examStatusLabels[exam.status] ?? "进行中"}</StatusTag>
+                  <span title={exam.subject}>{examSubjectLabel(exam.subject)}</span>
                 </Space>
                 <h2>{exam.name}</h2>
-                <span>{exam.class_ids.length} 个班级 · {run ? `运行状态：${run.status}` : "尚未生成评分运行"}</span>
+                <span title={run?.status}>{exam.class_ids.length} 个班级 · {run ? `自动评分：${runStatusLabels[run.status] ?? "进行中"}` : "尚未开始自动评分"}</span>
               </div>
               <div className="operations-progress">
                 <div><span>已确认进度</span><strong>{progress}%</strong></div>
@@ -148,7 +147,7 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
               </div>
             </article>
           );
-        }) : <EmptyState title="没有匹配的考试" description="进行中的考试及其评分运行会显示在这里。" />}
+        }) : <EmptyState title="没有匹配的考试" description="进行中的考试及其自动评分进度会显示在这里。" />}
       </section>
     </div>
   );

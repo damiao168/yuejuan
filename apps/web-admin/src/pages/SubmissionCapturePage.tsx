@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   App,
@@ -12,7 +12,7 @@ import {
   Progress,
   Select,
   Space,
-  Table,
+  Tooltip,
   Upload,
   type TableColumnsType,
   type UploadProps
@@ -93,7 +93,7 @@ const qualityFilterOptions: { label: string; value: QualityFilter }[] = [
   { label: "模糊", value: "blurry" },
   { label: "缺页", value: "missing_page" },
   { label: "重复页", value: "duplicate_page" },
-  { label: "OCR 失败", value: "ocr_failed" },
+  { label: "识别失败", value: "ocr_failed" },
   { label: "需要人工处理", value: "needs_manual_handling" }
 ];
 
@@ -101,9 +101,26 @@ const submissionStatusLabels: Record<string, string> = {
   created: "已创建",
   pages_uploaded: "已上传",
   quality_checked: "质量通过",
-  ready_for_ocr: "待 OCR",
+  ready_for_ocr: "待识别",
   rejected: "已拒绝"
 };
+
+const pageStatusLabels: Record<string, string> = {
+  uploaded: "已上传",
+  quality_checked: "质量通过",
+  quality_failed: "质量未通过",
+  replaced: "已替换"
+};
+
+function pageStatusTone(status: string): StatusTone {
+  if (status === "quality_checked") {
+    return "success";
+  }
+  if (status === "quality_failed" || status === "failed" || status === "rejected") {
+    return "danger";
+  }
+  return "neutral";
+}
 
 const qualityStatusLabels: Record<string, string> = {
   unchecked: "未检查",
@@ -120,12 +137,13 @@ const ocrStatusLabels: Record<string, string> = {
 
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
-    return `${error.status} ${error.code}: ${error.message}`;
+    console.warn(`API 请求失败 ${error.status} ${error.code}`, error);
+    return error.message || "操作失败，请稍后重试";
   }
   if (error instanceof Error) {
-    return error.message;
+    return error.message || "操作失败，请稍后重试";
   }
-  return "未知错误";
+  return "操作失败，请稍后重试";
 }
 
 function formatTime(value?: string) {
@@ -194,34 +212,16 @@ function ocrLabel(tasks: OcrTask[]) {
   return `${ocrStatusLabels[task.status] ?? task.status}${suffix}`;
 }
 
-function segmentTone(segments: AnswerSegment[]): StatusTone {
-  if (segments.length === 0) {
-    return "neutral";
-  }
-  if (segments.some((item) => item.status === "rejected" || item.status === "needs_manual_review")) {
-    return "warning";
-  }
-  return "success";
-}
-
-function segmentLabel(segments: AnswerSegment[]) {
-  if (segments.length === 0) {
-    return "未切分";
-  }
-  const manual = segments.filter((item) => item.status === "needs_manual_review" || item.status === "rejected").length;
-  return manual > 0 ? `${segments.length} 段 / ${manual} 需处理` : `${segments.length} 段`;
-}
-
 function derivedIssues(row: SubmissionView): QualityIssue[] {
   const issues = [...(row.submission.quality_issues ?? [])];
   for (const page of row.pages) {
     issues.push(...(page.quality_issues ?? []).map((issue) => ({ code: issue.code, message: `第 ${page.page_no} 页：${issue.message}` })));
   }
   if (row.ocrTasks.some((task) => task.status === "failed")) {
-    issues.push({ code: "ocr_failed", message: "OCR 任务失败" });
+    issues.push({ code: "ocr_failed", message: "文字识别失败" });
   }
   if (row.ocrTasks.some((task) => task.requires_human_review)) {
-    issues.push({ code: "needs_manual_handling", message: "OCR 结果需要人工处理" });
+    issues.push({ code: "needs_manual_handling", message: "识别结果需要人工处理" });
   }
   if (row.segments.some((segment) => segment.status === "needs_manual_review" || segment.status === "rejected")) {
     issues.push({ code: "needs_manual_handling", message: "切分结果需要人工处理" });
@@ -284,8 +284,7 @@ export function SubmissionCapturePage({
   initialExamId?: string;
 }) {
   const { message } = App.useApp();
-  const hasSession = true;
-  const canWrite = canManage && hasSession;
+  const canWrite = canManage;
   const [filters, setFilters] = useState<Filters>({ search: "", quality: "all" });
   const [expectedPages, setExpectedPages] = useState(1);
   const [exams, setExams] = useState<Exam[]>([]);
@@ -303,6 +302,8 @@ export function SubmissionCapturePage({
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [ocrDrawer, setOcrDrawer] = useState<{ row: SubmissionView; tasks: OcrTask[]; loading: boolean; error?: string } | null>(null);
+  const captureRequestRef = useRef(0);
+  const previewRequestRef = useRef(0);
 
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
   const studentById = useMemo(() => new Map(students.map((student) => [student.id, student])), [students]);
@@ -310,28 +311,26 @@ export function SubmissionCapturePage({
   const loadExams = useCallback(async () => {
     setLoading(true);
     setError(null);
-    if (!hasSession) {
-      setExams([]);
-      setSelectedExamId("");
-      setError("当前没有有效登录会话，无法调用真实后端 API。");
-      setLoading(false);
-      return;
-    }
     try {
       const result = await listExams();
       setExams(result.exams);
-      setSelectedExamId((current) => current || result.exams[0]?.id || "");
+      setSelectedExamId((current) => {
+        if (initialExamId && result.exams.some((exam) => exam.id === initialExamId)) return initialExamId;
+        return result.exams.some((exam) => exam.id === current) ? current : result.exams[0]?.id || "";
+      });
     } catch (currentError) {
       setError(formatError(currentError));
     } finally {
       setLoading(false);
     }
-  }, [hasSession]);
+  }, [initialExamId]);
 
   const loadCaptureData = useCallback(
     async (examId: string) => {
-      if (!examId || !hasSession) {
+      const requestId = ++captureRequestRef.current;
+      if (!examId) {
         setRows([]);
+        setCaptureLoading(false);
         return;
       }
       setCaptureLoading(true);
@@ -342,6 +341,7 @@ export function SubmissionCapturePage({
           listSubmissions(examId),
           canReadStudentNames ? listStudents() : Promise.resolve({ students: [] })
         ]);
+        if (requestId !== captureRequestRef.current) return;
         if (submissionResult.status === "rejected") {
           throw submissionResult.reason;
         }
@@ -352,19 +352,25 @@ export function SubmissionCapturePage({
           setStudentLookupError(formatError(studentResult.reason));
         }
         const views = await Promise.all(submissionResult.value.submissions.map((submission) => buildSubmissionView(submission)));
+        if (requestId !== captureRequestRef.current) return;
         setRows(views);
       } catch (currentError) {
+        if (requestId !== captureRequestRef.current) return;
         setCaptureError(formatError(currentError));
       } finally {
-        setCaptureLoading(false);
+        if (requestId === captureRequestRef.current) setCaptureLoading(false);
       }
     },
-    [canReadStudentNames, hasSession]
+    [canReadStudentNames]
   );
 
   useEffect(() => {
     void loadExams();
   }, [loadExams]);
+
+  useEffect(() => {
+    if (initialExamId) setSelectedExamId(initialExamId);
+  }, [initialExamId]);
 
   useEffect(() => {
     void loadCaptureData(selectedExamId);
@@ -436,6 +442,7 @@ export function SubmissionCapturePage({
   const uploadProps: UploadProps = {
     multiple: true,
     showUploadList: false,
+    accept: ".pdf,.png,.jpg,.jpeg,.tif,.tiff",
     customRequest: (request) => {
       void uploadAnswerFile(request);
     }
@@ -477,7 +484,7 @@ export function SubmissionCapturePage({
     if (!canReadStudentNames) {
       return "无姓名权限";
     }
-    return studentById.get(submission.student_id)?.name ?? "暂未关联";
+    return studentById.get(submission.student_id)?.name ?? "已关联（姓名未加载）";
   };
 
   const runAction = async (key: string, action: () => Promise<void>, successText: string) => {
@@ -493,14 +500,17 @@ export function SubmissionCapturePage({
   };
 
   const openPages = (row: SubmissionView) => {
+    previewRequestRef.current += 1;
     setPageDrawer(row);
     setPreview(null);
   };
 
   const previewPage = async (page: SubmissionPage) => {
+    const requestId = ++previewRequestRef.current;
     setPreviewLoading(true);
     try {
       const file = await downloadFileBlob(page.file_asset_id);
+      if (requestId !== previewRequestRef.current) return;
       setPreview((current) => {
         if (current?.url) {
           URL.revokeObjectURL(current.url);
@@ -508,9 +518,9 @@ export function SubmissionCapturePage({
         return { url: URL.createObjectURL(file.blob), contentType: file.contentType, filename: file.filename };
       });
     } catch (currentError) {
-      message.error(formatError(currentError));
+      if (requestId === previewRequestRef.current) message.error(formatError(currentError));
     } finally {
-      setPreviewLoading(false);
+      if (requestId === previewRequestRef.current) setPreviewLoading(false);
     }
   };
 
@@ -532,7 +542,7 @@ export function SubmissionCapturePage({
         await replaceSubmissionPage(pageDrawer.submission.id, page.page_no, upload.file.id);
         await refreshSingle(pageDrawer.submission.id);
       },
-      "页面文件已替换，质量门禁已重置"
+      "页面已替换，系统将重新检查图片质量"
     );
   };
 
@@ -548,13 +558,16 @@ export function SubmissionCapturePage({
 
   const columns: TableColumnsType<SubmissionView> = [
     {
-      title: "匿名码 / 准考证",
+      title: (
+        <Tooltip title="上传时取自文件名，关联学生后显示准考证号">
+          <span>答卷编号</span>
+        </Tooltip>
+      ),
       fixed: "left",
       width: 210,
       render: (_, row) => (
         <div className="capture-identity-cell">
           <strong>{row.submission.candidate_no || "暂未生成"}</strong>
-          <span>采集后自动关联考生身份</span>
         </div>
       )
     },
@@ -570,7 +583,11 @@ export function SubmissionCapturePage({
       render: (_, row) => {
         const task = latestTask(row.ocrTasks);
         if (row.submission.quality_status !== "passed") {
-          return <StatusTag tone={qualityTone(row.submission.quality_status)}>等待确认图片质量</StatusTag>;
+          return (
+            <StatusTag tone={qualityTone(row.submission.quality_status)}>
+              {row.submission.quality_status === "failed" ? "图片质量未通过，需处理" : "等待检查图片质量"}
+            </StatusTag>
+          );
         }
         if (task?.status === "completed" && row.segments.length > 0) {
           return <StatusTag tone="success">识别处理已完成</StatusTag>;
@@ -596,7 +613,7 @@ export function SubmissionCapturePage({
             {issues.length > 3 ? <StatusTag tone="neutral">{`+${issues.length - 3}`}</StatusTag> : null}
           </Space>
         ) : (
-          <span className="muted-text">未发现阻断问题</span>
+          <span className="muted-text">暂无问题</span>
         );
       }
     },
@@ -623,7 +640,7 @@ export function SubmissionCapturePage({
             return runAction(`ready-${id}`, async () => {
               await updateSubmissionStatus(id, "ready_for_ocr");
               await refreshSingle(id);
-            }, "答卷已进入自动处理队列");
+            }, "答卷已转入待识别，可点击『开始识别』继续");
           }
           if (needsOcr) {
             return runAction(`ocr-${id}`, async () => {
@@ -642,9 +659,9 @@ export function SubmissionCapturePage({
         };
 
         const primaryLabel = qualityPending
-          ? "确认图片"
+          ? "检查图片质量"
           : needsReady
-            ? "继续自动处理"
+            ? "转入待识别"
             : needsOcr
               ? "开始识别"
               : needsSegments
@@ -679,8 +696,7 @@ export function SubmissionCapturePage({
 
   const pageColumns: TableColumnsType<SubmissionPage> = [
     { title: "页码", dataIndex: "page_no", width: 72 },
-    { title: "文件", dataIndex: "file_asset_id", render: (value: string) => <span className="mono-cell">{value}</span> },
-    { title: "状态", dataIndex: "status", width: 110, render: (value: string) => <StatusTag tone="processing">{value}</StatusTag> },
+    { title: "状态", dataIndex: "status", width: 110, render: (value: string) => <StatusTag tone={pageStatusTone(value)}>{pageStatusLabels[value] ?? value}</StatusTag> },
     {
       title: "质量问题",
       width: 180,
@@ -722,9 +738,17 @@ export function SubmissionCapturePage({
   ];
 
   const ocrTaskColumns: TableColumnsType<OcrTask> = [
-    { title: "任务", dataIndex: "id", width: 160, render: (value: string) => <span className="mono-cell">{value}</span> },
+    {
+      title: "任务",
+      dataIndex: "id",
+      width: 130,
+      render: (value: string, _task, index) => (
+        <Tooltip title={value}>
+          <span>识别任务 {index + 1}</span>
+        </Tooltip>
+      )
+    },
     { title: "状态", width: 110, render: (_, task) => <StatusTag tone={ocrTone(task)}>{ocrLabel([task])}</StatusTag> },
-    { title: "引擎", width: 180, render: (_, task) => `${task.engine} / ${task.engine_version}` },
     { title: "结果数", dataIndex: "result_count", width: 90 },
     { title: "创建时间", dataIndex: "created_at", width: 170, render: formatTime }
   ];
@@ -734,11 +758,17 @@ export function SubmissionCapturePage({
       <section className="page-heading">
         <div>
           <Space>
-            <h1>答卷采集</h1>
+            <h1>答卷处理</h1>
           </Space>
-          <p>优先处理异常答卷，其余识别和题目切分由系统自动完成。</p>
+          <p>上传后按行内按钮逐步推进质量检查、文字识别与题目切分；异常答卷会在『问题说明』列标出。</p>
         </div>
         <Space wrap>
+          <Tooltip title="上传时用于校验答卷页数是否齐全">
+            <label className="inline-number-field capture-advanced-control">
+              <span>每份答卷页数</span>
+              <InputNumber min={1} max={200} precision={0} value={expectedPages} onChange={(value) => setExpectedPages(Number(value ?? 1))} />
+            </label>
+          </Tooltip>
           <Button icon={<RefreshCw size={16} />} onClick={() => void loadCaptureData(selectedExamId)} loading={captureLoading}>
             刷新
           </Button>
@@ -752,17 +782,8 @@ export function SubmissionCapturePage({
 
       <OcrWorkerAlert enabled={canManage} />
 
-      {!hasSession ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="未检测到真实后端访问令牌"
-            description="上传答卷并跟踪页面质量、文字识别和答案切分进度。"
-        />
-      ) : null}
-
       {studentLookupError ? (
-        <Alert type="info" showIcon message="学生姓名未完全加载" description={`答卷采集仍可继续，姓名列将按权限或关联状态显示：${studentLookupError}`} />
+        <Alert type="info" showIcon message="学生姓名未完全加载" description="部分学生姓名暂时无法加载，不影响答卷采集，稍后刷新重试即可。" />
       ) : null}
 
       <section className="workspace-section filter-panel">
@@ -788,10 +809,6 @@ export function SubmissionCapturePage({
             options={qualityFilterOptions}
             onChange={(value) => setFilters((current) => ({ ...current, quality: value }))}
           />
-          <label className="inline-number-field capture-advanced-control">
-            <span>默认页数</span>
-            <InputNumber min={1} max={200} precision={0} value={expectedPages} onChange={(value) => setExpectedPages(Number(value ?? 1))} />
-          </label>
         </div>
       </section>
 
@@ -839,7 +856,7 @@ export function SubmissionCapturePage({
         <div className="metric-tile">
           <span>已完成识别</span>
           <strong>{summary.ocrDone}</strong>
-          <small>{summary.ocrDone} 份文字识别完成</small>
+          <small>已切分 {summary.segmented} 份</small>
         </div>
       </section>
 
@@ -851,7 +868,7 @@ export function SubmissionCapturePage({
         <ErrorState message={error} onRetry={() => void loadExams()} />
       ) : !selectedExam ? (
         <section className="workspace-section">
-          <EmptyState title="暂无考试" description="后端没有返回可采集答卷的考试。" />
+          <EmptyState title="暂无考试" description="暂无可采集的考试。请先在『考试管理』创建考试并完成开考准备。" />
         </section>
       ) : captureLoading ? (
         <section className="workspace-section">
@@ -863,9 +880,10 @@ export function SubmissionCapturePage({
         <section className="workspace-section">
           <div className="section-head">
             <div>
-              <h2>{summary.issueCount > 0 ? "需要处理的答卷" : "学生答卷"}</h2>
+              <h2>学生答卷</h2>
               <p>
-                {filteredRows.length} / {rows.length} 条记录，OCR 完成 {summary.ocrDone} 份
+                {filteredRows.length} / {rows.length} 条记录，已完成识别 {summary.ocrDone} 份
+                {summary.issueCount > 0 ? `；其中 ${summary.issueCount} 份需要处理，可用质量状态下拉筛选查看` : ""}
               </p>
             </div>
           </div>
@@ -876,16 +894,21 @@ export function SubmissionCapturePage({
             pagination={{ pageSize: 10, showSizeChanger: false }}
             size="small"
             rowClassName={(row) => (row.detailError ? "row-with-warning" : "")}
-            locale={{ emptyText: <EmptyState title="暂无答卷" description="当前考试还没有真实 submission 记录。" /> }}
+            locale={{ emptyText: <EmptyState title="暂无答卷" description="当前考试还没有答卷。点击右上角『批量上传』导入扫描件。" /> }}
           />
         </section>
       )}
 
-      <Drawer title="答卷页面" open={Boolean(pageDrawer)} width={860} onClose={() => setPageDrawer(null)}>
+      <Drawer title="答卷页面" open={Boolean(pageDrawer)} width={860} onClose={() => {
+        previewRequestRef.current += 1;
+        setPreviewLoading(false);
+        setPageDrawer(null);
+        setPreview(null);
+      }}>
         {pageDrawer ? (
           <div className="detail-stack">
             <Descriptions bordered size="small" column={2}>
-              <Descriptions.Item label="匿名码/准考证">{pageDrawer.submission.candidate_no || "暂未生成"}</Descriptions.Item>
+              <Descriptions.Item label="答卷编号">{pageDrawer.submission.candidate_no || "暂未生成"}</Descriptions.Item>
               <Descriptions.Item label="学生姓名">{studentName(pageDrawer.submission)}</Descriptions.Item>
               <Descriptions.Item label="采集状态">{submissionStatusLabels[pageDrawer.submission.status] ?? pageDrawer.submission.status}</Descriptions.Item>
               <Descriptions.Item label="质量状态">{qualityStatusLabels[pageDrawer.submission.quality_status] ?? pageDrawer.submission.quality_status}</Descriptions.Item>
@@ -903,7 +926,13 @@ export function SubmissionCapturePage({
                 <div className="section-head">
                   <div>
                     <h2>{preview.filename ?? "页面预览"}</h2>
-                    <p>{preview.contentType}</p>
+                    <p title={preview.contentType}>
+                      {preview.contentType === "application/pdf"
+                        ? "PDF 文档"
+                        : preview.contentType.startsWith("image/")
+                          ? "扫描图片"
+                          : "其他文件"}
+                    </p>
                   </div>
                   <Button icon={<Eye size={16} />} onClick={() => window.open(preview.url, "_blank", "noopener,noreferrer")}>
                     新窗口打开
@@ -922,16 +951,16 @@ export function SubmissionCapturePage({
         ) : null}
       </Drawer>
 
-      <Drawer title="OCR 任务与结果" open={Boolean(ocrDrawer)} width={920} onClose={() => setOcrDrawer(null)}>
+      <Drawer title="文字识别详情" open={Boolean(ocrDrawer)} width={920} onClose={() => setOcrDrawer(null)}>
         {ocrDrawer?.loading ? (
-          <LoadingState label="正在读取 OCR 任务详情" />
+          <LoadingState label="正在读取识别详情" />
         ) : ocrDrawer?.error ? (
           <ErrorState message={ocrDrawer.error} />
         ) : ocrDrawer ? (
           <div className="detail-stack">
             <Descriptions bordered size="small" column={2}>
-              <Descriptions.Item label="匿名码/准考证">{ocrDrawer.row.submission.candidate_no || "暂未生成"}</Descriptions.Item>
-              <Descriptions.Item label="OCR 状态">{ocrLabel(ocrDrawer.row.ocrTasks)}</Descriptions.Item>
+              <Descriptions.Item label="答卷编号">{ocrDrawer.row.submission.candidate_no || "暂未生成"}</Descriptions.Item>
+              <Descriptions.Item label="识别状态">{ocrLabel(ocrDrawer.row.ocrTasks)}</Descriptions.Item>
             </Descriptions>
             <ResponsiveTable<OcrTask>
               rowKey="id"
@@ -939,16 +968,16 @@ export function SubmissionCapturePage({
               columns={ocrTaskColumns}
               pagination={false}
               size="small"
-              locale={{ emptyText: <EmptyState title="暂无 OCR 任务" description="还没有通过真实接口创建 OCR 任务。" /> }}
+              locale={{ emptyText: <EmptyState title="暂无识别任务" description="该答卷还没有文字识别任务。" /> }}
             />
             {ocrDrawer.tasks.flatMap((task) => task.results ?? []).length > 0 ? (
               <div className="ocr-result-list">
-                {ocrDrawer.tasks.map((task) => (
+                {ocrDrawer.tasks.map((task, index) => (
                   <section className="ocr-result-block" key={task.id}>
                     <div className="section-head">
                       <div>
-                        <h2>{task.id}</h2>
-                        <p>{task.results?.length ?? 0} 条 OCR 结果</p>
+                        <h2 title={task.id}>识别任务 {index + 1}</h2>
+                        <p>创建于 {formatTime(task.created_at)} · {task.results?.length ?? 0} 条识别结果</p>
                       </div>
                     </div>
                     <ResponsiveTable
@@ -957,17 +986,24 @@ export function SubmissionCapturePage({
                       pagination={false}
                       size="small"
                       columns={[
-                        { title: "页面", dataIndex: "submission_page_id", width: 150 },
+                        {
+                          title: "页面",
+                          dataIndex: "submission_page_id",
+                          width: 100,
+                          render: (value: string) => {
+                            const pageNo = ocrDrawer.row.pages.find((page) => page.id === value)?.page_no;
+                            return <span title={value}>{pageNo ? `第 ${pageNo} 页` : "-"}</span>;
+                          }
+                        },
                         { title: "文本", dataIndex: "text" },
-                        { title: "置信度", dataIndex: "confidence", width: 100, render: (value: number) => value.toFixed(2) },
-                        { title: "BBox", dataIndex: "bbox", width: 180, render: (value: number[]) => `[${value.join(", ")}]` }
+                        { title: "置信度", dataIndex: "confidence", width: 100, render: (value: number) => `${Math.round(value * 100)}%` }
                       ]}
                     />
                   </section>
                 ))}
               </div>
             ) : (
-              <EmptyState title="暂无 OCR 结果" description="任务创建后需由真实 OCR worker 启动并回写结果。" />
+              <EmptyState title="暂无识别结果" description="识别任务已创建，系统处理完成后结果将显示在这里。" />
             )}
           </div>
         ) : null}

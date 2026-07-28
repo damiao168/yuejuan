@@ -18,7 +18,6 @@ import {
 import {
   BookOpenCheck,
   CloudUpload,
-  Database,
   FileUp,
   HardDrive,
   ListChecks,
@@ -31,8 +30,7 @@ import {
   ShieldAlert,
   Stethoscope,
   UploadCloud,
-  Wifi,
-  Zap
+  Wifi
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { getCurrentUser, login } from "./api/auth";
@@ -133,6 +131,7 @@ function App() {
   const [isCheckingQuality, setIsCheckingQuality] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const fileBufferRef = useRef(new Map<string, File>());
+  const uploadInFlightRef = useRef(new Set<string>());
   const queueRef = useRef(queue);
 
   const client = useMemo(
@@ -157,8 +156,13 @@ function App() {
 
   const logEvent = useCallback(
     async (level: LocalLogEntry["level"], message: string, context?: string) => {
-      await appendLocalLog({ level, message, context });
-      refreshLogs();
+      try {
+        await appendLocalLog({ level, message, context });
+      } catch (error) {
+        console.warn("local log write failed", error);
+      } finally {
+        refreshLogs();
+      }
     },
     [refreshLogs]
   );
@@ -178,6 +182,14 @@ function App() {
   useEffect(() => {
     queueRef.current = queue;
   }, [queue]);
+
+  useEffect(() => () => {
+    for (const item of queueRef.current) {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    }
+    fileBufferRef.current.clear();
+    uploadInFlightRef.current.clear();
+  }, []);
 
   const saveServerForSession = async () => {
     window.sessionStorage.setItem("edugrade.desktop.server_url", serverUrl);
@@ -301,6 +313,7 @@ function App() {
         (item) => item.requiresReselect && item.fileName === file.name && item.fileSize === file.size && item.kind === "scan_upload"
       );
       if (recovered) {
+        if (recovered.previewUrl) URL.revokeObjectURL(recovered.previewUrl);
         fileBufferRef.current.set(recovered.id, file);
         updateQueue((current) =>
           current.map((item) =>
@@ -351,7 +364,13 @@ function App() {
   const uploadQueueItem = useCallback(
     async (id: string) => {
       const item = queueRef.current.find((candidate) => candidate.id === id);
-      if (!item || item.kind !== "scan_upload" || item.status === "succeeded") {
+      if (
+        !item ||
+        item.kind !== "scan_upload" ||
+        item.status === "succeeded" ||
+        item.status === "uploading" ||
+        uploadInFlightRef.current.has(id)
+      ) {
         return;
       }
       if (!token) {
@@ -403,6 +422,7 @@ function App() {
         );
         return;
       }
+      uploadInFlightRef.current.add(id);
       updateQueue((current) =>
         current.map((candidate) =>
           candidate.id === id ? { ...candidate, status: "uploading", progress: Math.max(candidate.progress, 1), detail: "正在上传到后端文件 API", updatedAt: new Date().toISOString() } : candidate
@@ -460,6 +480,7 @@ function App() {
               : candidate
           )
         );
+        fileBufferRef.current.delete(id);
         await logEvent("info", "scan queue item uploaded", `${item.fileName ?? item.title} -> ${fileAssetId}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : "上传失败";
@@ -476,6 +497,8 @@ function App() {
           )
         );
         await logEvent("error", "scan queue item failed", `${item.fileName ?? item.title}: ${message}`);
+      } finally {
+        uploadInFlightRef.current.delete(id);
       }
     },
     [client, isOnline, logEvent, token, updateQueue]
@@ -539,7 +562,14 @@ function App() {
   };
 
   const clearSucceededQueueItems = () => {
-    updateQueue((current) => current.filter((item) => item.status !== "succeeded"));
+    updateQueue((current) => {
+      for (const item of current) {
+        if (item.status !== "succeeded") continue;
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+        fileBufferRef.current.delete(item.id);
+      }
+      return current.filter((item) => item.status !== "succeeded");
+    });
   };
 
   const activeCapabilityWarnings = capabilities.filter((item) => item.status === "not_configured");
@@ -1074,16 +1104,6 @@ function CapabilityTag(props: { status: string }) {
   return <Tag color="warning">未配置/待接入</Tag>;
 }
 
-function CapabilityTile(props: { icon: React.ReactNode; title: string; detail: string }) {
-  return (
-    <div className="capability-tile">
-      <span>{props.icon}</span>
-      <h4>{props.title}</h4>
-      <p>{props.detail}</p>
-    </div>
-  );
-}
-
 function QueueList(props: { items: SyncQueueItem[] }) {
   if (!props.items.length) {
     return <Empty description="暂无队列项目" />;
@@ -1362,7 +1382,11 @@ function persistScanQueue(items: SyncQueueItem[]) {
     const { previewUrl: _previewUrl, ...rest } = item;
     return rest;
   });
-  window.localStorage.setItem(scanQueueStorageKey, JSON.stringify(serializable.slice(0, 300)));
+  try {
+    window.localStorage.setItem(scanQueueStorageKey, JSON.stringify(serializable.slice(0, 300)));
+  } catch (error) {
+    console.warn("scan queue persistence failed", error);
+  }
 }
 
 export default App;

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Empty, Input, List, Progress, Select, Space, Table, Tabs, type TableColumnsType } from "antd";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, App, Button, Divider, Empty, Input, List, Select, Space, type TableColumnsType } from "antd";
 import { Calculator, CheckCircle2, Download, FileWarning, LockKeyhole, RefreshCw, Search, Send, ShieldCheck } from "lucide-react";
 import { ApiClientError } from "../api/client";
 import { listAuditLogs, type AuditLog } from "../api/audit";
+import { examStatusLabels, examSubjectLabel } from "../constants/examStatus";
 import { listExams, type Exam } from "../api/exams";
 import { listClasses, listStudents, type SchoolClass, type Student } from "../api/org";
 import {
@@ -59,10 +60,10 @@ const sourceLabels: Record<string, string> = {
 };
 
 const qualityLabels: Record<string, string> = {
-  unfinished_review_tasks: "未完成阅卷",
-  unfinished_arbitration_tasks: "未完成仲裁",
-  ocr_failed_unhandled: "OCR 失败",
-  missing_final_grades: "缺失最终题目分",
+  unfinished_review_tasks: "还有阅卷任务未完成",
+  unfinished_arbitration_tasks: "还有仲裁任务未完成",
+  ocr_failed_unhandled: "识别失败（未处理）",
+  missing_final_grades: "部分题目还没有最终得分",
   grades_not_confirmed: "成绩未确认",
   no_submission_grades: "无成绩可发布"
 };
@@ -76,12 +77,13 @@ const auditActionLabels: Record<string, string> = {
 
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
-    return `${error.status} ${error.code}: ${error.message}`;
+    console.error("请求失败", error.status, error.code, error.message);
+    return error.message || "操作失败，请稍后重试";
   }
   if (error instanceof Error) {
-    return error.message;
+    return error.message || "操作失败，请稍后重试";
   }
-  return "未知错误";
+  return "操作失败，请稍后重试";
 }
 
 function formatScore(value?: number | null) {
@@ -175,8 +177,7 @@ export function ScoreManagementPage({
   initialExamId?: string;
 }) {
   const { message, modal } = App.useApp();
-  const hasSession = true;
-  const canWrite = canManage && hasSession;
+  const canWrite = canManage;
   const [exams, setExams] = useState<Exam[]>([]);
   const [selectedExamId, setSelectedExamId] = useState(initialExamId);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -187,12 +188,13 @@ export function ScoreManagementPage({
   const [lastWatermark, setLastWatermark] = useState("");
   const [keyword, setKeyword] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [confirmReason, setConfirmReason] = useState("checked by subject lead");
-  const [publishReason, setPublishReason] = useState("approved for release");
+  const [confirmReason, setConfirmReason] = useState("");
+  const [publishReason, setPublishReason] = useState("");
   const [loadingExams, setLoadingExams] = useState(true);
   const [loadingScores, setLoadingScores] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actioning, setActioning] = useState<string | null>(null);
+  const scoreRequestRef = useRef(0);
 
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
   const summary = useMemo(() => createSummary(submissions, grades, quality), [grades, quality, submissions]);
@@ -219,31 +221,29 @@ export function ScoreManagementPage({
   const loadExamList = useCallback(async () => {
     setLoadingExams(true);
     setError(null);
-    if (!hasSession) {
-      setExams([]);
-      setSelectedExamId("");
-      setError("当前没有有效登录会话，无法调用真实后端 API。");
-      setLoadingExams(false);
-      return;
-    }
     try {
       const result = await listExams();
       setExams(result.exams);
-      setSelectedExamId((current) => current || result.exams[0]?.id || "");
+      setSelectedExamId((current) => {
+        if (initialExamId && result.exams.some((exam) => exam.id === initialExamId)) return initialExamId;
+        return result.exams.some((exam) => exam.id === current) ? current : result.exams[0]?.id || "";
+      });
     } catch (currentError) {
       setError(formatError(currentError));
     } finally {
       setLoadingExams(false);
     }
-  }, [hasSession]);
+  }, [initialExamId]);
 
   const loadScores = useCallback(
     async (examId: string) => {
-      if (!examId || !hasSession) {
+      const requestId = ++scoreRequestRef.current;
+      if (!examId) {
         setSubmissions([]);
         setGrades([]);
         setQuality(null);
         setAuditLogs([]);
+        setLoadingScores(false);
         return;
       }
       setLoadingScores(true);
@@ -256,6 +256,7 @@ export function ScoreManagementPage({
           loadIdentities(canReadStudentNames),
           canReadAudit ? listAuditLogs({ target_type: "exam", target_id: examId, limit: 20 }) : Promise.resolve({ audit_logs: [] })
         ]);
+        if (requestId !== scoreRequestRef.current) return;
         if (submissionResult.status === "fulfilled") {
           setSubmissions(submissionResult.value.submissions);
         } else {
@@ -278,17 +279,22 @@ export function ScoreManagementPage({
           setAuditLogs(auditResult.value.audit_logs);
         }
       } catch (currentError) {
+        if (requestId !== scoreRequestRef.current) return;
         setError(formatError(currentError));
       } finally {
-        setLoadingScores(false);
+        if (requestId === scoreRequestRef.current) setLoadingScores(false);
       }
     },
-    [canReadAudit, canReadStudentNames, hasSession]
+    [canReadAudit, canReadStudentNames]
   );
 
   useEffect(() => {
     void loadExamList();
   }, [loadExamList]);
+
+  useEffect(() => {
+    if (initialExamId) setSelectedExamId(initialExamId);
+  }, [initialExamId]);
 
   useEffect(() => {
     void loadScores(selectedExamId);
@@ -358,7 +364,7 @@ export function ScoreManagementPage({
     }
     modal.confirm({
       title: "确认发布成绩",
-      content: "发布后成绩会锁定，后续修改必须走申诉或改分留痕流程。",
+      content: `将发布《${selectedExam?.name ?? "未选择考试"}》共 ${grades.length} 份成绩，发布后学生成绩即被锁定，如需修改须走成绩申诉流程。确定发布吗？`,
       okText: "发布",
       cancelText: "取消",
       onOk: () =>
@@ -379,8 +385,8 @@ export function ScoreManagementPage({
       return;
     }
     modal.confirm({
-      title: "导出成绩 CSV",
-      content: "导出动作会写入审计日志，并在 CSV 响应头中附带水印信息。",
+      title: "导出成绩",
+      content: "将导出该考试的全部成绩（CSV 表格文件）。导出文件带追溯水印，导出操作会被系统记录。确定导出吗？",
       okText: "导出",
       cancelText: "取消",
       onOk: () =>
@@ -391,7 +397,7 @@ export function ScoreManagementPage({
             setLastWatermark(result.watermark ?? "");
             saveBlob(result.blob, result.filename ?? `exam-${selectedExamId}-grades.csv`);
           },
-          "成绩 CSV 已导出"
+          "成绩已导出"
         )
     });
   };
@@ -438,7 +444,7 @@ export function ScoreManagementPage({
         <div className="score-item-strip">
           {(record.items ?? []).length > 0 ? (
             (record.items ?? []).map((item) => (
-              <span key={item.id} title={`${sourceLabels[item.source] ?? item.source} · ${item.status}`}>
+              <span key={item.id} title={`${sourceLabels[item.source] ?? item.source} · ${statusLabels[item.status] ?? item.status}`}>
                 {item.question_no}: {formatScore(item.score)}/{formatScore(item.max_score)}
               </span>
             ))
@@ -452,7 +458,11 @@ export function ScoreManagementPage({
       title: "状态",
       dataIndex: "status",
       width: 120,
-      render: (value: string) => <StatusTag tone={statusTone(value)}>{statusLabels[value] ?? value}</StatusTag>
+      render: (value: string) => (
+        <span title={value}>
+          <StatusTag tone={statusTone(value)}>{statusLabels[value] ?? "未知状态"}</StatusTag>
+        </span>
+      )
     },
     {
       title: "锁定",
@@ -464,12 +474,12 @@ export function ScoreManagementPage({
 
   const statusOptions = useMemo(() => {
     const statuses = Array.from(new Set(grades.map((grade) => grade.status)));
-    return [{ label: "全部状态", value: "all" }, ...statuses.map((status) => ({ label: statusLabels[status] ?? status, value: status }))];
+    return [{ label: "全部状态", value: "all" }, ...statuses.map((status) => ({ label: statusLabels[status] ?? "未知状态", value: status }))];
   }, [grades]);
 
   const renderQuality = () => {
     if (!quality) {
-      return <EmptyState title="暂无质量检查" description="选择考试后会读取发布前质量检查。" />;
+      return <EmptyState title="暂无质量检查" description="选择考试后，这里会列出发布前需要处理的问题。" />;
     }
     if (quality.quality.passed) {
       return (
@@ -477,7 +487,7 @@ export function ScoreManagementPage({
           <ShieldCheck size={22} />
           <div>
             <strong>{publishedOrLocked ? "成绩已发布，质量校验通过" : "发布前质量检查通过"}</strong>
-            <span>{publishedOrLocked ? "成绩已发布并锁定，发布前阻断项均已处理。" : "当前成绩已满足发布闸门。"}</span>
+            <span>{publishedOrLocked ? "成绩已发布并锁定，所有检查项均已处理。" : "所有检查项均已通过，可以发布成绩。"}</span>
           </div>
         </div>
       );
@@ -489,11 +499,10 @@ export function ScoreManagementPage({
         locale={{ emptyText: <Empty description="暂无质量问题" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
         renderItem={(issue: QualityIssue) => (
           <List.Item>
-            <div className="score-quality-issue">
-              <StatusTag tone={issue.blocking ? "danger" : "warning"}>{issue.blocking ? "阻断" : "提示"}</StatusTag>
+            <div className="score-quality-issue" title={issue.message}>
+              <StatusTag tone={issue.blocking ? "danger" : "warning"}>{issue.blocking ? "须处理后才能发布" : "提醒"}</StatusTag>
               <strong>{qualityLabels[issue.code] ?? issue.code}</strong>
               <span>{issue.count} 项</span>
-              <small>{issue.message}</small>
             </div>
           </List.Item>
         )}
@@ -503,10 +512,10 @@ export function ScoreManagementPage({
 
   const renderAudit = () => {
     if (!canReadAudit) {
-      return <EmptyState title="无审计读取权限" description="导出、确认和发布仍会写审计；当前用户不能读取审计日志。" />;
+      return <EmptyState title="无权查看操作记录" description="您的账号没有查看操作记录的权限。导出、确认、发布等操作仍会被系统记录。" />;
     }
     if (scoreAuditLogs.length === 0) {
-      return <EmptyState title="暂无审计记录" description="当前考试尚未返回匹配的 score 审计动作。" />;
+      return <EmptyState title="暂无操作记录" description="该考试还没有成绩相关的操作记录。" />;
     }
     return (
       <List
@@ -515,8 +524,8 @@ export function ScoreManagementPage({
         renderItem={(item) => (
           <List.Item>
             <div className="score-audit-row">
-              <strong>{auditActionLabels[item.action] ?? item.action}</strong>
-              <span>{item.reason || item.target_type}</span>
+              <strong title={item.action}>{auditActionLabels[item.action] ?? "成绩操作"}</strong>
+              <span>{item.reason || "未填写原因"}</span>
               <small>{formatTime(item.created_at)}</small>
             </div>
           </List.Item>
@@ -532,7 +541,7 @@ export function ScoreManagementPage({
           <Space>
             <h1>{mode === "teacher" ? "班级成绩" : "成绩发布"}</h1>
           </Space>
-          <p>{mode === "teacher" ? "查看当前授权考试的班级成绩与阅卷完成情况。" : "先处理阻断问题，检查无误后确认并发布成绩。"}</p>
+          <p>{mode === "teacher" ? "查看当前授权考试的班级成绩与阅卷完成情况。" : "先处理发布前检查发现的问题，检查无误后确认并发布成绩。"}</p>
         </div>
         <Space wrap>
           <Select
@@ -540,7 +549,7 @@ export function ScoreManagementPage({
             loading={loadingExams}
             value={selectedExamId || undefined}
             placeholder="选择考试"
-            options={exams.map((exam) => ({ label: `${exam.name} · ${exam.subject}`, value: exam.id }))}
+            options={exams.map((exam) => ({ label: `${exam.name} · ${examSubjectLabel(exam.subject)}`, value: exam.id }))}
             onChange={setSelectedExamId}
           />
           <Button icon={<RefreshCw size={16} />} onClick={() => void refresh()} loading={loadingExams || loadingScores}>
@@ -548,15 +557,6 @@ export function ScoreManagementPage({
           </Button>
         </Space>
       </section>
-
-      {!hasSession ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="未检测到真实后端访问令牌"
-            description="完成成绩汇总、质量检查、确认、发布和留痕导出。"
-        />
-      ) : null}
 
       {identities.error ? <Alert type="warning" showIcon message="学生身份信息读取不完整" description={identities.error} /> : null}
 
@@ -568,7 +568,7 @@ export function ScoreManagementPage({
           <strong>{summary.totalSubmissions}</strong>
         </div>
         <div>
-          <span>已完成阅卷</span>
+          <span>已生成成绩</span>
           <strong>{summary.completedGrades}</strong>
         </div>
         <div>
@@ -585,7 +585,7 @@ export function ScoreManagementPage({
         </div>
         <div>
           <span>{mode === "teacher" ? "当前状态" : publishedOrLocked ? "发布状态" : "是否可发布"}</span>
-          <StatusTag tone={mode === "teacher" ? "neutral" : publishedOrLocked || summary.canPublish ? "success" : "danger"}>{mode === "teacher" ? (selectedExam ? statusLabels[selectedExam.status] ?? selectedExam.status : "未选择") : publishedOrLocked ? "已发布" : summary.canPublish ? "可发布" : "不可发布"}</StatusTag>
+          <StatusTag tone={mode === "teacher" ? "neutral" : publishedOrLocked || summary.canPublish ? "success" : "danger"}>{mode === "teacher" ? (selectedExam ? examStatusLabels[selectedExam.status] ?? "未知状态" : "未选择") : publishedOrLocked ? "已发布" : summary.canPublish ? "可发布" : "不可发布"}</StatusTag>
         </div>
       </section>
 
@@ -597,7 +597,13 @@ export function ScoreManagementPage({
                 <h2>发布前质量检查</h2>
                 <p>{selectedExam ? selectedExam.name : "未选择考试"}</p>
               </div>
-              <Progress type="circle" size={58} percent={quality ? (quality.quality.passed ? 100 : Math.max(0, Math.round((1 - quality.quality.issues.length / 6) * 100))) : 0} status={quality?.quality.passed ? "success" : "exception"} format={(percent) => `${percent ?? 0}%`} />
+              {quality ? (
+                quality.quality.passed ? (
+                  <StatusTag tone="success">检查通过</StatusTag>
+                ) : (
+                  <StatusTag tone="danger">{`${quality.quality.issues.filter((issue) => issue.blocking).length} 项须处理`}</StatusTag>
+                )
+              ) : null}
             </div>
             {loadingScores ? <LoadingState label="正在读取质量检查" /> : renderQuality()}
           </section>
@@ -622,7 +628,7 @@ export function ScoreManagementPage({
                 columns={columns}
                 dataSource={filteredGrades}
                 pagination={{ pageSize: 8, showSizeChanger: false }}
-                locale={{ emptyText: <Empty description="当前考试没有后端返回的成绩" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+                locale={{ emptyText: <Empty description={mode === "teacher" ? "该考试暂无成绩，请等待阅卷完成。" : "该考试暂无成绩。请先完成阅卷，再点击『汇总最终成绩』生成成绩。"} image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
               />
             )}
           </section>
@@ -638,53 +644,54 @@ export function ScoreManagementPage({
           </div>
 
           {publishedOrLocked ? (
-            <Alert type="success" showIcon message="成绩已发布并锁定" description="发布后核心分数不可直接修改，后续调整必须通过申诉或改分留痕流程。" />
+            <Alert type="success" showIcon message="成绩已发布并锁定" description="成绩已发布并锁定，不能直接修改。如需调整，请通过成绩申诉流程处理。" />
           ) : null}
 
-          <Button block icon={<Calculator size={16} />} disabled={!canWrite || !selectedExamId || publishedOrLocked} loading={actioning === "finalize"} onClick={() => void finalize()}>
-            汇总最终成绩
-          </Button>
+          <div className="score-step-group">
+            <span className="score-step-title">第 1 步 · 汇总最终成绩</span>
+            <Button block icon={<Calculator size={16} />} disabled={!canWrite || !selectedExamId || publishedOrLocked} loading={actioning === "finalize"} onClick={() => void finalize()}>
+              汇总最终成绩
+            </Button>
+          </div>
 
-          <Input.TextArea rows={3} value={confirmReason} placeholder="确认原因" onChange={(event) => setConfirmReason(event.target.value)} />
-          <Button block icon={<CheckCircle2 size={16} />} disabled={!canWrite || grades.length === 0 || publishedOrLocked} loading={actioning === "confirm"} onClick={() => void confirmGrades()}>
-            确认成绩
-          </Button>
+          <div className="score-step-group">
+            <span className="score-step-title">第 2 步 · 确认成绩</span>
+            <label className="score-step-label" htmlFor="score-confirm-reason">确认原因（必填）</label>
+            <Input.TextArea id="score-confirm-reason" rows={3} value={confirmReason} placeholder="例如：已由学科组长复核，成绩无误" onChange={(event) => setConfirmReason(event.target.value)} />
+            <Button block icon={<CheckCircle2 size={16} />} disabled={!canWrite || grades.length === 0 || publishedOrLocked} loading={actioning === "confirm"} onClick={() => void confirmGrades()}>
+              确认成绩
+            </Button>
+          </div>
 
-          <Input.TextArea rows={3} value={publishReason} placeholder="发布原因" onChange={(event) => setPublishReason(event.target.value)} />
-          <Button block type="primary" icon={<Send size={16} />} disabled={!canWrite || !quality?.can_publish || publishedOrLocked} loading={actioning === "publish"} onClick={publish}>
-            发布成绩
-          </Button>
+          <div className="score-step-group">
+            <span className="score-step-title">第 3 步 · 发布成绩</span>
+            <label className="score-step-label" htmlFor="score-publish-reason">发布原因（必填）</label>
+            <Input.TextArea id="score-publish-reason" rows={3} value={publishReason} placeholder="例如：经教务处审批，同意发布" onChange={(event) => setPublishReason(event.target.value)} />
+            <Button block type="primary" icon={<Send size={16} />} disabled={!canWrite || !quality?.can_publish || publishedOrLocked} loading={actioning === "publish"} onClick={publish}>
+              发布成绩
+            </Button>
+          </div>
 
-          <Button block icon={<Download size={16} />} disabled={!canWrite || grades.length === 0} loading={actioning === "export"} onClick={exportGrades}>
-            导出 CSV
-          </Button>
+          <Divider className="score-step-divider" />
+
+          <div className="score-step-group">
+            <span className="score-step-title">导出</span>
+            <Button block icon={<Download size={16} />} disabled={!canWrite || grades.length === 0} loading={actioning === "export"} onClick={exportGrades}>
+              导出成绩
+            </Button>
+          </div>
 
           <details className="score-advanced-details">
-            <summary>更多与审计</summary>
+            <summary>操作记录与导出水印</summary>
           <Alert
             type="info"
             showIcon
             icon={<FileWarning size={18} />}
-            message="导出审计与水印"
-            description={lastWatermark ? `最近导出水印：${lastWatermark}` : "导出成绩会写 score.exported 审计，并在响应头返回 X-EduGrade-Watermark。"}
+            message="导出记录与水印"
+            description={lastWatermark ? `最近一次导出的水印编号：${lastWatermark}` : "每次导出都会记录操作人和时间，导出文件自带可追溯水印。"}
           />
 
-          <Tabs
-            size="small"
-            items={[
-              { key: "audit", label: "审计", children: renderAudit() },
-              {
-                key: "items",
-                label: "字段",
-                children: (
-                  <div className="score-field-note">
-                    <span>学生姓名和班级只在具备 `org:manage` 权限时读取。</span>
-                    <span>CSV 当前为后端真实导出能力，未伪装 Excel。</span>
-                  </div>
-                )
-              }
-            ]}
-          />
+          {renderAudit()}
           </details>
         </aside> : null}
       </section>

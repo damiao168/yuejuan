@@ -20,6 +20,8 @@ const examWorkspace = read("src/pages/ExamWorkspacePage.tsx");
 const examManagement = read("src/pages/ExamManagementPage.tsx");
 const appealCenter = read("src/pages/AppealCenterPage.tsx");
 const appealApi = read("src/api/appeals.ts");
+const apiClient = read("src/api/client.ts");
+const viteConfig = read("vite.config.ts");
 const styles = read("src/styles.css");
 
 function sourceFiles(directory) {
@@ -204,6 +206,18 @@ assert(
 assert(
   !/Demo 教育集团|平台租户/.test(login) && /name="tenant_code"/.test(login),
   "Login must accept real tenant codes instead of a fixed demo tenant list."
+);
+
+assert(
+  /function normalizeBaseUrl[\s\S]*?return trimmed;/.test(apiClient)
+    && !/return trimmed \|\| ["']http:\/\/127\.0\.0\.1:8080/.test(apiClient),
+  "Web API calls must default to the same origin so the deployment proxy handles authentication."
+);
+
+assert(
+  /server:\s*\{[\s\S]*?proxy:\s*backendProxy/.test(viteConfig)
+    && /preview:\s*\{[\s\S]*?proxy:\s*backendProxy/.test(viteConfig),
+  "Vite development and preview servers must both proxy same-origin API requests."
 );
 
 assert(

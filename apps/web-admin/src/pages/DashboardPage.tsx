@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Progress, Space } from "antd";
 import { motion } from "framer-motion";
-import { ArrowRight, ClipboardCheck, FileUp, RefreshCw, ScanLine, ShieldAlert } from "lucide-react";
+import { ArrowRight, ClipboardCheck, FileUp, RefreshCw, ScanLine } from "lucide-react";
 import { listArbitrationTasks, listReviewTasks, type ReviewTask } from "../api/review";
 import { listExams, type Exam } from "../api/exams";
 import { listSubmissions, type Submission } from "../api/submissions";
@@ -9,6 +9,7 @@ import { getSystemStatus, type SystemStatus } from "../api/system";
 import { hasAnyPermission, hasEveryPermission, type SessionUser } from "../auth/session";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
+import { examStatusLabels, examSubjectLabel } from "../constants/examStatus";
 import type { StatusTone } from "../types";
 
 interface HomeData {
@@ -20,28 +21,25 @@ interface HomeData {
   warnings: string[];
 }
 
-const statusLabels: Record<string, string> = {
-  draft: "草稿",
-  configured: "配置中",
-  ready: "准备完成",
-  collecting: "采集中",
-  grading: "阅卷中",
-  reviewing: "质量检查",
-  finalized: "待发布",
-  published: "已发布",
-  archived: "已归档",
-  pending: "等待处理",
-  assigned: "待阅卷",
-  in_progress: "处理中",
-  failed: "处理失败"
+const dependencyNames: Record<string, string> = {
+  postgres: "数据库",
+  redis: "缓存队列",
+  minio: "文件存储",
+  qdrant: "检索服务",
+  ai_service: "智能评分服务",
+  ocr_worker: "文字识别服务"
 };
 
-function tone(status: string): StatusTone {
-  if (["published", "completed", "ok"].includes(status)) return "success";
-  if (status.includes("failed") || status.includes("error")) return "danger";
-  if (["finalized", "reviewing", "pending"].includes(status)) return "warning";
-  if (["collecting", "grading", "assigned", "in_progress"].includes(status)) return "processing";
-  return "neutral";
+function dependencyTone(status: string): StatusTone {
+  if (status === "ok") return "success";
+  if (status === "not_configured") return "warning";
+  return "danger";
+}
+
+function dependencyText(status: string) {
+  if (status === "ok") return "正常";
+  if (status === "not_configured") return "待接入";
+  return "异常";
 }
 
 function progressFor(status: string) {
@@ -49,7 +47,7 @@ function progressFor(status: string) {
 }
 
 function roleLabel(user: SessionUser) {
-  if (user.roles.includes("platform_admin")) return "系统运维工作台";
+  if (user.roles.includes("platform_admin")) return "系统运维";
   return "管理端";
 }
 
@@ -132,7 +130,7 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
     ...(hasEveryPermission(user, ["exam:manage"]) ? [{ label: "创建考试", path: "/exams", icon: <ClipboardCheck size={17} /> }] : []),
     ...(hasEveryPermission(user, ["submission:manage"]) ? [{ label: "导入答卷", path: "/capture", icon: <FileUp size={17} /> }] : []),
     ...(hasAnyPermission(user, ["review:manage", "review:work"]) ? [{ label: "阅卷运营", path: "/grading", icon: <ScanLine size={17} /> }] : []),
-    ...(hasEveryPermission(user, ["org:manage"]) ? [{ label: "组织启用", path: "/organization/setup", icon: <ArrowRight size={17} /> }] : [])
+    ...(hasEveryPermission(user, ["org:manage"]) ? [{ label: "机构启用", path: "/organization/setup", icon: <ArrowRight size={17} /> }] : [])
   ].slice(0, 6);
 
   if (!data && loading) return <LoadingState label="正在加载工作台" />;
@@ -165,7 +163,7 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
         <section className="dashboard-pane todo-pane">
           <div className="section-head"><div><h2>我的待办</h2><p>按对考试流程的影响排序</p></div><strong>{todo.reduce((sum, item) => sum + item.value, 0)}</strong></div>
           {todo.length ? <div className="todo-list">{todo.map((item) => (
-            <button key={item.label} className="todo-row" onClick={() => onNavigate(item.path)}>
+            <button type="button" key={item.label} className="todo-row" onClick={() => onNavigate(item.path)}>
               <span><StatusTag tone={item.tone}>{item.label}</StatusTag></span><strong>{item.value}</strong><ArrowRight size={16} />
             </button>
           ))}</div> : <EmptyState title="当前没有待办" description="新的采集、阅卷或发布事项出现后会显示在这里。" />}
@@ -174,8 +172,8 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
         <section className="dashboard-pane exam-pane">
           <div className="section-head"><div><h2>正在进行的考试</h2><p>{activeExams.length} 场需要关注</p></div></div>
           {activeExams.length ? <div className="active-exam-list">{activeExams.map((exam) => (
-            <button key={exam.id} className="active-exam-row exam-task-row" onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/overview`)}>
-              <div><strong>{exam.name}</strong><span>{exam.subject} · 当前阶段：{statusLabels[exam.status] ?? exam.status}</span></div>
+      <button type="button" key={exam.id} className="active-exam-row exam-task-row" onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/overview`)}>
+              <div><strong>{exam.name}</strong><span title={exam.status}>{examSubjectLabel(exam.subject)} · 当前阶段：{examStatusLabels[exam.status] ?? "进行中"}</span></div>
               <div className="exam-progress"><Progress percent={progressFor(exam.status)} size="small" showInfo={false} /><span>{progressFor(exam.status)}%</span></div>
               <span className="exam-next-action">进入考试 <ArrowRight size={15} /></span>
             </button>
@@ -185,11 +183,7 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
 
       {quickActions.length ? <section className="quick-actions"><div className="section-head"><div><h2>常用操作</h2></div></div><Space wrap>{quickActions.map((action) => <Button key={action.label} icon={action.icon} onClick={() => onNavigate(action.path)}>{action.label}</Button>)}</Space></section> : null}
 
-      <section className="attention-band attention-list">
-        <div><ShieldAlert size={19} /><span><strong>问题清单</strong> 点击上方待处理事项可直接进入对应处理页面。</span></div><span>{failedSubmissions.length + unmatchedSubmissions.length} 项</span>
-      </section>
-
-      {data?.systemStatus && user.roles.includes("platform_admin") ? <section className="operations-strip"><strong>系统运维</strong>{data.systemStatus.dependencies.map((dependency) => <span key={dependency.name}>{dependency.name}<StatusTag tone={tone(dependency.status)}>{dependency.status === "ok" ? "正常" : "异常"}</StatusTag></span>)}</section> : null}
+      {data?.systemStatus && user.roles.includes("platform_admin") ? <section className="operations-strip"><strong>系统运维</strong>{data.systemStatus.dependencies.map((dependency) => <span key={dependency.name} title={dependency.name}>{dependencyNames[dependency.name] ?? dependency.name}<StatusTag tone={dependencyTone(dependency.status)}>{dependencyText(dependency.status)}</StatusTag></span>)}</section> : null}
     </div>
   );
 }

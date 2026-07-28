@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
-import { Alert, Button, Empty, Form, Input, InputNumber, List, Progress, Space, Table, Tag, Tooltip, type TableColumnsType } from "antd";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Button, Empty, Form, Input, InputNumber, List, Space, Table, Tag, type TableColumnsType } from "antd";
 import { BookOpenCheck, Download, KeyRound, RefreshCw, Save, Send, Trash2 } from "lucide-react";
 import { downloadFileBlob } from "../api/files";
 import { listQuestions } from "../api/papers";
@@ -23,8 +23,7 @@ import type {
   OfflineTaskPackage,
   Question,
   ReviewTask,
-  RubricSelection,
-  SubmissionPage
+  RubricSelection
 } from "../types";
 
 interface OfflineWorkbenchProps {
@@ -50,14 +49,22 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
   const [syncStatus, setSyncStatus] = useState<OfflineDraftEnvelope["syncStatus"]>("draft");
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const packageRequestRef = useRef(0);
 
-  const selectedTask = useMemo(() => tasks.find((task) => task.id === selectedTaskId), [selectedTaskId, tasks]);
   const latestAiGrade = useMemo(() => latestGrade(pkg?.aiGrades ?? []), [pkg?.aiGrades]);
   const maxScore = pkg?.question?.rubric?.max_score ?? pkg?.question?.score ?? latestAiGrade?.max_score ?? 0;
   const hasKey = offlineKey.trim().length >= 8;
   const currentEnvelope = envelopes.find((item) => item.taskId === (pkg?.task.id ?? selectedTaskId));
 
   const refreshEnvelopes = () => setEnvelopes(readOfflineDraftEnvelopes());
+
+  useEffect(() => () => {
+    if (imagePreview?.url) URL.revokeObjectURL(imagePreview.url);
+  }, [imagePreview?.url]);
+
+  useEffect(() => () => {
+    packageRequestRef.current += 1;
+  }, []);
 
   const loadMyTasks = async () => {
     setTaskError(null);
@@ -84,6 +91,7 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
   };
 
   const downloadPackage = async (taskId = selectedTaskId) => {
+    const requestId = ++packageRequestRef.current;
     if (!taskId || !token) {
       setPackageError("请先登录并选择真实 review_task。");
       return;
@@ -98,7 +106,9 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
     });
     try {
       const detail = await getReviewTask(client, taskId);
+      if (requestId !== packageRequestRef.current) return;
       const nextPackage = await buildTaskPackage(client, detail.task);
+      if (requestId !== packageRequestRef.current) return;
       setPkg(nextPackage);
       setDraft(createInitialDraft(nextPackage));
       setSyncStatus("draft");
@@ -106,18 +116,21 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
       if (nextPackage.page?.file_asset_id) {
         try {
           const blob = await downloadFileBlob(client, nextPackage.page.file_asset_id);
+          if (requestId !== packageRequestRef.current) return;
           setImagePreview({ url: URL.createObjectURL(blob.blob), contentType: blob.contentType, filename: blob.filename });
         } catch (error) {
+          if (requestId !== packageRequestRef.current) return;
           nextPackage.warnings.push(`答案图片下载失败：${formatError(error)}`);
         }
       }
       await onLog("info", "offline task package downloaded", taskId);
     } catch (error) {
+      if (requestId !== packageRequestRef.current) return;
       const message = formatError(error);
       setPackageError(message);
       await onLog("error", "offline task package download failed", message);
     } finally {
-      setPackageLoading(false);
+      if (requestId === packageRequestRef.current) setPackageLoading(false);
     }
   };
 
@@ -161,6 +174,10 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
       setPkg(record.packageSnapshot);
       setDraft(record.draft);
       setSelectedTaskId(taskId);
+      setImagePreview((current) => {
+        if (current?.url) URL.revokeObjectURL(current.url);
+        return null;
+      });
       setSyncStatus(record.syncStatus);
       setSyncMessage(record.syncMessage ?? "本地加密草稿已加载。");
       await onLog("info", "offline draft decrypted and loaded", taskId);

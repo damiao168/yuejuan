@@ -57,7 +57,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         <Result
           status="error"
           title="页面出现异常"
-          subTitle="页面渲染时发生错误，可能由脚本异常或版本更新导致，请重新加载后再试。"
+          subTitle="页面出现了意外错误，可能是网络不稳定或系统刚完成更新。请重新加载；若多次出现，请联系管理员。"
           extra={[
             <Button key="reload" type="primary" icon={<RefreshCw size={16} />} onClick={this.reload}>
               重新加载
