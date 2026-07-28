@@ -35,7 +35,7 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 
 | 范围 | 状态 | 已有证据 | 未完成事实 |
 | --- | --- | --- | --- |
-| 1. 条码承载学生身份 | 身份台账与生命周期完成，完整打印闭环未完成 | migration 000054/000055 持久化 print batch/sheet/page 和替代链；签发限制 active exam roster 并支持幂等重放；未签发/已作废 serial 不受信任；capture page 保存类型化 student/template/serial；跨文件重复页双方进入冲突；删除/恢复重复页会重算冲突；作废与幂等重印保存操作者、原因和新旧 serial 关系；旧 v1 保持验证 | 尚无打印包 UI/可下载文件、插页后续页完整 E2E 和 30 份实体回扫报告 |
+| 1. 条码承载学生身份 | 软件闭环完成，物理闭环未完成 | migration 000054/000055 持久化 print batch/sheet/page 和替代链；签发限制 active exam roster 并支持幂等重放；未签发/已作废 serial 不受信任；capture page 保存类型化 student/template/serial；跨文件重复页双方进入冲突；删除/恢复重复页会重算冲突；作废与幂等重印保存操作者、原因和新旧 serial 关系；下载 API 从不可变台账生成确定性 A4 PDF，内含高纠错二维码和四角定位块；三页插页/缺页联合 E2E 通过；旧 v1 保持验证 | 尚无 Web 下载入口和 30 份实体回扫报告 |
 | 2. 花名册对账与缺考 | 软件范围完成 | migration 000052/000053；管理员 roster API/UI；缺考原因和审计；缺考后不再触发 missing submission；未识别、缺页、重复答卷和缺少答卷进入发布门禁；500 人 PostgreSQL E2E | 历史已发布考试不会被追溯重开；这属于迁移/运营边界，不阻断本项 |
 | 3. OMR 校准范式修正 | 未完成 | 原有题目级校准、人工标注、双人审批/撤销和前端标注抽屉仍可用 | `CreateOMRCalibrationInput` 仍要求 `question_id`；session、scope、批准查询仍绑定 question；样本 SQL 仍要求 `decision='selected' AND confidence >= minimum`，排除了 ambiguous/blank/低置信样本；没有模板级校准场次和克隆语义 |
 | 4. 采集链路自救 | 未完成 | 页面配准任务已有 retry；Worker Runtime 有通用重试/重排 | `QueueBatch` 只查询 `status='uploaded'`；失败 capture file 不能通过批次重新排队；同 batch 同 sha256 无条件标 duplicate；没有修改 `submission_page.quality_override` 的业务 API/UI，现有字段仍只是空对象/读取能力；旧 submission 直传管线仍存在 |
@@ -46,8 +46,8 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 | 验收项 | 状态 | 结论 |
 | --- | --- | --- |
 | 1. 500 人 roster、抽走 3 份、缺考后发布 | 通过 | `TestStory060FiveHundredStudentRosterScaleE2EWithPostgresTestDatabase` 覆盖 497 份答卷、3 人缺考和发布门禁；HTTP 对账已在本地真实 PostgreSQL 执行 |
-| 2. 扫描仪卡纸/中间多一页且后续不串位 | 部分通过 | `TestStory060StudentSheetIdentityE2EWithPostgresTestDatabase` 已证明同一 sheet serial/page 跨两个 capture file 和两个 submission 时双方进入冲突且不静默覆盖；尚未完成“中间插页后继续扫描”的多页联合 E2E |
-| 3. 30 份试印回扫及旧条码兼容 | 部分通过 | 旧 v1 与新 v2 的软件兼容单测通过；没有打印包和实体扫描报告，因此不能批准物理链路 |
+| 2. 扫描仪卡纸/中间多一页且后续不串位 | 软件通过 | `TestStory060MultiPageInsertionMissingPageAndPrintPackageE2EWithPostgresTestDatabase` 覆盖三页模板中间插入无条码页和缺第 2 页：受控语义页码不随物理顺序漂移，插入页隔离到人工队列，缺页计数为 expected=3/actual=2；重复学生答卷不会触发数据库唯一键 500，新答卷进入冲突且不覆盖原匹配 |
+| 3. 30 份试印回扫及旧条码兼容 | 部分通过 | 旧 v1 与新 v2 的软件兼容单测通过；A4 PDF 已实际经 Poppler 渲染并由生产同源 ZXing 成功解码，但仍没有 30 份真实打印机/扫描仪报告，因此不能批准物理链路 |
 | 4. 20 题模板 ≤200 次标注完成全模板校准 | 未通过 | 当前仍是每题独立校准，且存在高置信 selected 样本偏置 |
 | 5. 失败文件重跑、同文件重传、质量 override | 未通过 | 三条产品路径均未落地；页面配准 retry 不能替代 capture file 重跑和质量放行 |
 | 6. 无假门禁、AI 建议正确关联 | 通过 | 假门禁已移除；`human_grade.ai_grade_id` 迁移、memory/PostgreSQL 和测试均存在 |
@@ -68,14 +68,14 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 
 ### 条码不是打印能力
 
-返回字符串数组不等于“可打印答题卡”。打印包必须锁定：
+软件打印包现已由不可变台账生成并锁定：
 
 - 模板 content hash、学生、sheet serial、页码和 key id。
 - 条码尺寸、纠错级别、静区、位置和打印缩放。
 - 打印批次、作废/重印原因和审计。
-- 真实打印机与扫描仪回扫的解码率和配准偏差。
+- 真实打印机与扫描仪回扫的解码率和配准偏差仍需外部验收。
 
-在实体报告通过前，产品可以称为“学生答题卡身份台账与重复页检测”，不能称为“学生答题卡打印闭环”。
+当前下载 API 生成 A4 PDF，二维码使用高纠错级别、固定静区和位置，四角带定位块；PDF 字节对同一台账确定性一致，已完成 Poppler 渲染和 ZXing 软件解码。实体报告通过前，仍不能称为“学生答题卡物理打印闭环”。
 
 ### OMR 评测存在选择偏置
 
@@ -102,8 +102,9 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 - [x] capture page 绑定 serial 并检测跨文件/跨 submission 重复页冲突。
 - [x] 删除/恢复重复页后的 serial、页面和 submission 冲突状态重算。
 - [x] 作废/重印原因、操作者、替代链和审计入口。
-- [ ] 插页/缺页/重复页的多页联合 E2E。
-- [ ] 打印包 UI 与可下载文件。
+- [x] 插页/缺页/重复学生的多页联合 E2E。
+- [x] 由不可变台账生成的确定性 A4 PDF 下载 API。
+- [ ] Web 打印包下载入口。
 - [ ] 30 份实体回扫作为外部验收证据。
 
 ### STORY-060B：模板级 OMR 校准
@@ -136,7 +137,7 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 1. 060A 的 roster 限制、serial 持久化和冲突检测。
 2. 060B 的 OMR 无偏模板级校准。
 3. 060C 的采集自救。
-4. 060A 打印包与 060D 实体回扫/联合验收。
+4. 060A Web 下载入口与 060D 实体回扫/联合验收。
 5. STORY-060 批准后，才开始 STORY-061A 实现。
 
 实体打印机/扫描仪不影响软件切片继续开发，但会阻止 STORY-060 最终批准。

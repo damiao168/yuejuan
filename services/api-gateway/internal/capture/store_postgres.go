@@ -263,6 +263,12 @@ VALUES ($1,$2::uuid,$3,'pages_uploaded',$4,$4,'unchecked','[]',$5::uuid) RETURNI
 		return File{}, err
 	}
 	conflictBatchIDs := map[string]bool{}
+	verifiedPageNumbers := map[int]bool{}
+	identifiedStudentID := ""
+	identifiedTemplateID := ""
+	identifiedSheetSerial := ""
+	identityConflict := false
+	unverifiedCapturePageIDs := []string{}
 	for i, p := range pages {
 		barcode := s.evaluateBarcodesTx(ctx, tx, tenantID, examID, p.Barcodes)
 		assignedPageNo := p.SourceIndex
@@ -282,7 +288,17 @@ VALUES ($1,$2::uuid,$3,'pages_uploaded',$4,$4,'unchecked','[]',$5::uuid) RETURNI
 			}
 		}
 		submissionPageNo := assignedPageNo
-		if duplicate.SubmissionID == submissionID {
+		var pageNumberExists bool
+		if err = tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM submission_page
+  WHERE tenant_id=$1 AND submission_id=$2::uuid AND page_no=$3 AND deleted_at IS NULL
+)
+`, tenantID, submissionID, submissionPageNo).Scan(&pageNumberExists); err != nil {
+			return File{}, err
+		}
+		if pageNumberExists {
 			if err = tx.QueryRowContext(ctx, `
 SELECT COALESCE(max(page_no),0)+1
 FROM submission_page
@@ -301,6 +317,19 @@ VALUES ($1,$2::uuid,$3::uuid,$4,'uploaded','unchecked','{}','[]') RETURNING id::
 			barcodeStatus = "verified"
 		} else if barcode.NeedsReview {
 			barcodeStatus = "needs_review"
+		}
+		if barcodeStatus == "verified" && barcode.AssignedStudentID != "" &&
+			barcode.AssignedTemplateID != "" && barcode.AssignedSheetSerial != "" {
+			if identifiedSheetSerial == "" {
+				identifiedStudentID = barcode.AssignedStudentID
+				identifiedTemplateID = barcode.AssignedTemplateID
+				identifiedSheetSerial = barcode.AssignedSheetSerial
+			} else if identifiedStudentID != barcode.AssignedStudentID ||
+				identifiedTemplateID != barcode.AssignedTemplateID ||
+				identifiedSheetSerial != barcode.AssignedSheetSerial {
+				identityConflict = true
+			}
+			verifiedPageNumbers[assignedPageNo] = true
 		}
 		identityFields := map[string]any{
 			"decoder": "page-processing", "width": p.Width, "height": p.Height,
@@ -334,6 +363,9 @@ RETURNING id::text`, tenantID, item.CaptureBatchID, item.ID, p.SourceIndex, subm
 		if err != nil {
 			return File{}, err
 		}
+		if barcodeStatus != "verified" {
+			unverifiedCapturePageIDs = append(unverifiedCapturePageIDs, capturePageID)
+		}
 		if barcode.AssignedSheetSerial != "" {
 			if err = markSheetPageObservedTx(
 				ctx, tx, tenantID, barcode.AssignedSheetSerial, capturePageID, submissionID, duplicate,
@@ -363,6 +395,117 @@ VALUES ($1,$2::uuid,$3::uuid,$4::uuid,$5,'pending','opencv-default','v1','sha256
 		_, err = tx.ExecContext(ctx, `INSERT INTO agent_worker_task (tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)
 VALUES ($1,'image_quality','image-quality','image_quality_run',$2::uuid,70,$3,'image-quality.v1',$4,$4,3,30,$5::uuid)`, tenantID, qualityRunID, payload, key, item.UploadedBy)
 		if err != nil {
+			return File{}, err
+		}
+	}
+	if identifiedSheetSerial != "" && !identityConflict {
+		var expectedPageCount int
+		if err = tx.QueryRowContext(ctx, `
+SELECT page_count
+FROM answer_sheet_template
+WHERE tenant_id=$1 AND id=$2::uuid AND status='locked' AND deleted_at IS NULL
+`, tenantID, identifiedTemplateID).Scan(&expectedPageCount); err != nil {
+			return File{}, mapNotFound(err)
+		}
+		evidence, _ := json.Marshal(map[string]any{
+			"method":       "controlled_barcode",
+			"confidence":   1.0,
+			"sheet_serial": identifiedSheetSerial,
+			"template_id":  identifiedTemplateID,
+		})
+		var existingSubmissionID string
+		existingErr := tx.QueryRowContext(ctx, `
+SELECT id::text
+FROM submission
+WHERE tenant_id=$1 AND exam_id=$2::uuid AND student_id=$3::uuid
+  AND id<>$4::uuid AND deleted_at IS NULL
+FOR UPDATE
+`, tenantID, examID, identifiedStudentID, submissionID).Scan(&existingSubmissionID)
+		if existingErr != nil && existingErr != sql.ErrNoRows {
+			return File{}, existingErr
+		}
+		if existingSubmissionID != "" {
+			if _, err = tx.ExecContext(ctx, `
+UPDATE submission
+SET identity_status='conflict',
+    identity_revision=identity_revision+1,
+    identity_evidence=$3::jsonb || jsonb_build_object(
+      'conflict_code','student_already_has_submission',
+      'conflict_submission_id',$4::text
+    ),
+    expected_page_count=$5,
+    actual_page_count=$6,
+    updated_at=now()
+WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL
+`, tenantID, submissionID, string(evidence), existingSubmissionID, expectedPageCount, len(verifiedPageNumbers)); err != nil {
+				return File{}, err
+			}
+			if _, err = tx.ExecContext(ctx, `
+UPDATE capture_page
+SET status='needs_review',
+    page_identity=page_identity || jsonb_build_object(
+      'barcode_status','needs_review',
+      'barcode_conflict_code','student_already_has_submission',
+      'barcode_conflict_page_id',''
+    ),
+    revision=revision+1,
+    updated_at=now()
+WHERE tenant_id=$1
+  AND submission_id=$2::uuid
+  AND deleted_at IS NULL
+`, tenantID, submissionID); err != nil {
+				return File{}, err
+			}
+			if _, err = tx.ExecContext(ctx, `
+UPDATE answer_sheet_print_sheet
+SET status='conflict',updated_at=now()
+WHERE tenant_id=$1 AND id=$2::uuid
+`, tenantID, identifiedSheetSerial); err != nil {
+				return File{}, err
+			}
+		} else if _, err = tx.ExecContext(ctx, `
+UPDATE submission
+SET student_id=$3::uuid,
+    identity_status='matched',
+    identity_revision=identity_revision+1,
+    identity_evidence=$4,
+    expected_page_count=$5,
+    actual_page_count=$6,
+    updated_at=now()
+WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL
+`, tenantID, submissionID, identifiedStudentID, evidence, expectedPageCount, len(verifiedPageNumbers)); err != nil {
+			return File{}, err
+		}
+		for _, capturePageID := range unverifiedCapturePageIDs {
+			if existingSubmissionID != "" {
+				break
+			}
+			if _, err = tx.ExecContext(ctx, `
+UPDATE capture_page
+SET status='needs_review',
+    page_identity=page_identity || jsonb_build_object(
+      'barcode_status','needs_review',
+      'barcode_conflict_code','unbound_page_in_controlled_sheet'
+    ),
+    revision=revision+1,
+    updated_at=now()
+WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL
+`, tenantID, capturePageID); err != nil {
+				return File{}, err
+			}
+		}
+	} else if identityConflict {
+		if _, err = tx.ExecContext(ctx, `
+UPDATE submission
+SET identity_status='conflict',
+    identity_revision=identity_revision+1,
+    identity_evidence=identity_evidence || jsonb_build_object(
+      'method','controlled_barcode',
+      'conflict_code','multiple_sheet_identities'
+    ),
+    updated_at=now()
+WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL
+`, tenantID, submissionID); err != nil {
 			return File{}, err
 		}
 	}

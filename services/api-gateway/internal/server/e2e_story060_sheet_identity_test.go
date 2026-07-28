@@ -1,15 +1,300 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/capture"
 )
+
+func TestStory060MultiPageInsertionMissingPageAndPrintPackageE2EWithPostgresTestDatabase(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("EDUGRADE_E2E_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("EDUGRADE_E2E_DATABASE_URL is not set; skipping STORY-060 multi-page PostgreSQL acceptance workflow")
+	}
+	db := e2eOpenPostgresTestDB(t, dsn)
+	e2eApplyPostgresMigrations(t, db)
+	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin"})
+	router := e2ePostgresRouter(db)
+	adminToken := e2eLoginWithTenant(t, router, "demo", "tenant_admin", "ChangeMe123!")
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "")
+	fixture := e2eCreateStory056AcceptanceFixture(t, db, router, adminToken, suffix)
+
+	layout := story056JSON(t, map[string]any{"pages": []any{
+		map[string]any{
+			"page_no": 1, "width": 1000, "height": 1400,
+			"registration_marks": []any{}, "identity_regions": []any{},
+			"question_regions": []any{map[string]any{"label": "Q1", "x": 0.08, "y": 0.12, "width": 0.84, "height": 0.22}},
+		},
+		map[string]any{
+			"page_no": 2, "width": 1000, "height": 1400,
+			"registration_marks": []any{}, "identity_regions": []any{},
+			"question_regions": []any{map[string]any{"label": "Q2", "x": 0.08, "y": 0.12, "width": 0.84, "height": 0.32}},
+		},
+		map[string]any{
+			"page_no": 3, "width": 1000, "height": 1400,
+			"registration_marks": []any{}, "identity_regions": []any{},
+			"question_regions": []any{map[string]any{"label": "Q3", "x": 0.08, "y": 0.12, "width": 0.84, "height": 0.42}},
+		},
+	}})
+	if _, err := db.Exec(`
+UPDATE answer_sheet_template
+SET page_count=3,layout=$3::jsonb,content_hash=$4,updated_at=now()
+WHERE tenant_id=$1::uuid AND id=$2::uuid
+`, fixture.TenantID, fixture.TemplateID, layout, "sha256:story060-three-page-"+suffix); err != nil {
+		t.Fatalf("prepare three-page locked template: %v", err)
+	}
+
+	var studentID, classID string
+	if err := db.QueryRow(`
+SELECT st.id::text,st.class_id::text
+FROM exam_class ec
+JOIN student st
+  ON st.tenant_id=ec.tenant_id AND st.class_id=ec.class_id
+WHERE ec.tenant_id=$1::uuid AND ec.exam_id=$2::uuid
+  AND ec.deleted_at IS NULL AND st.status='active' AND st.deleted_at IS NULL
+ORDER BY st.created_at
+LIMIT 1
+`, fixture.TenantID, fixture.ExamID).Scan(&studentID, &classID); err != nil {
+		t.Fatalf("lookup roster student: %v", err)
+	}
+	missingStudent := e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, story056JSON(t, map[string]any{
+		"school_id":  fixture.SchoolID,
+		"class_id":   classID,
+		"student_no": "S060-MISSING-" + suffix,
+		"name":       "STORY-060 Missing Page Student",
+	}), http.StatusCreated)["student"].(map[string]any)
+	missingStudentID := e2eString(t, missingStudent, "id")
+
+	issue := func(label, targetStudentID string) (string, string, map[int]string) {
+		t.Helper()
+		issued := e2ePostJSON(
+			t, router, http.MethodPost,
+			"/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/student-barcodes",
+			adminToken,
+			story056JSON(t, map[string]any{
+				"student_ids":     []string{targetStudentID},
+				"idempotency_key": "story060-" + label + "-" + suffix,
+			}),
+			http.StatusOK,
+		)["barcodes"].(map[string]any)
+		student := issued["students"].([]any)[0].(map[string]any)
+		pageValues := map[int]string{}
+		for _, raw := range student["pages"].([]any) {
+			page := raw.(map[string]any)
+			pageValues[int(e2eFloat(t, page, "page_no"))] = e2eString(t, page, "value")
+		}
+		if len(pageValues) != 3 {
+			t.Fatalf("expected three immutable print pages: %#v", issued)
+		}
+		return e2eString(t, issued, "print_batch_id"), e2eString(t, student, "sheet_serial"), pageValues
+	}
+
+	printBatchID, insertedSheetSerial, insertedBarcodes := issue("inserted", studentID)
+	download := func() *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/answer-sheet-print-batches/"+printBatchID+"/package.pdf", nil)
+		request.Header.Set("Authorization", "Bearer "+adminToken)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("download print package expected 200, got %d: %s", response.Code, response.Body.String())
+		}
+		return response
+	}
+	firstPackage := download()
+	secondPackage := download()
+	if firstPackage.Header().Get("Content-Type") != "application/pdf" ||
+		firstPackage.Header().Get("X-EduGrade-SHA256") == "" ||
+		!bytes.HasPrefix(firstPackage.Body.Bytes(), []byte("%PDF-")) ||
+		!bytes.Equal(firstPackage.Body.Bytes(), secondPackage.Body.Bytes()) {
+		t.Fatalf("print package must be a deterministic auditable PDF: headers=%v", firstPackage.Header())
+	}
+
+	store := capture.NewPostgresStoreWithBarcodeKeyring(db, e2eBarcodeKeyring())
+	createCapture := func(label string, barcodes []string) string {
+		t.Helper()
+		assetID := e2eUploadSyntheticPDF(
+			t, router, adminToken, "story060-"+label+"-"+suffix+".pdf",
+			"%PDF-1.4\n% STORY-060 "+label+" "+suffix+"\n",
+		)
+		batch := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+fixture.ExamID+"/capture-batches", adminToken, story056JSON(t, map[string]any{
+			"name":            "STORY-060 " + label,
+			"source_type":     "web_upload",
+			"idempotency_key": "story060-capture-" + label + "-" + suffix,
+		}), http.StatusCreated)["batch"].(map[string]any)
+		file := e2ePostJSON(t, router, http.MethodPost, "/api/v1/capture-batches/"+e2eString(t, batch, "id")+"/files", adminToken, story056JSON(t, map[string]any{
+			"file_asset_id":   assetID,
+			"idempotency_key": "story060-file-" + label + "-" + suffix,
+		}), http.StatusCreated)["file"].(map[string]any)
+		e2ePostJSON(t, router, http.MethodPost, "/api/v1/capture-batches/"+e2eString(t, batch, "id")+"/process", adminToken, `{}`, http.StatusOK)
+		var hash string
+		if err := db.QueryRow(`
+SELECT hash_sha256 FROM file_asset
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL
+`, fixture.TenantID, assetID).Scan(&hash); err != nil {
+			t.Fatalf("lookup synthetic page hash: %v", err)
+		}
+		decoded := make([]capture.DecodedPageInput, 0, len(barcodes))
+		for index, value := range barcodes {
+			page := capture.DecodedPageInput{
+				SourceIndex: index + 1, FileAssetID: assetID, SHA256: hash, Width: 1000, Height: 1400,
+			}
+			if value != "" {
+				page.Barcodes = []capture.BarcodeObservation{{
+					Format: "QR_CODE", Text: value,
+					Polygon: []map[string]int{
+						{"x": 10, "y": 10}, {"x": 110, "y": 10},
+						{"x": 110, "y": 110}, {"x": 10, "y": 110},
+					},
+				}}
+			}
+			decoded = append(decoded, page)
+		}
+		if _, err := store.ApplyFileResult(context.Background(), fixture.TenantID, e2eString(t, file, "id"), decoded); err != nil {
+			t.Fatalf("apply %s multi-page result: %v", label, err)
+		}
+		return e2eString(t, file, "id")
+	}
+
+	insertedFileID := createCapture("inserted-page", []string{
+		insertedBarcodes[1], "", insertedBarcodes[2], insertedBarcodes[3],
+	})
+	var insertedStudentID, insertedIdentityStatus string
+	var insertedExpected, insertedActual int
+	if err := db.QueryRow(`
+SELECT s.student_id::text,s.identity_status,s.expected_page_count,s.actual_page_count
+FROM submission s
+JOIN capture_page cp ON cp.tenant_id=s.tenant_id AND cp.submission_id=s.id
+WHERE cp.tenant_id=$1::uuid AND cp.capture_file_id=$2::uuid
+LIMIT 1
+`, fixture.TenantID, insertedFileID).Scan(
+		&insertedStudentID, &insertedIdentityStatus, &insertedExpected, &insertedActual,
+	); err != nil {
+		t.Fatalf("query inserted-page submission: %v", err)
+	}
+	if insertedStudentID != studentID || insertedIdentityStatus != "matched" ||
+		insertedExpected != 3 || insertedActual != 3 {
+		t.Fatalf("controlled pages must match the student without counting the insertion: student=%s status=%s expected=%d actual=%d",
+			insertedStudentID, insertedIdentityStatus, insertedExpected, insertedActual)
+	}
+	rows, err := db.Query(`
+SELECT cp.source_index,cp.assigned_page_no,sp.page_no,cp.status,
+       COALESCE(cp.page_identity->>'barcode_conflict_code','')
+FROM capture_page cp
+JOIN submission_page sp
+  ON sp.tenant_id=cp.tenant_id AND sp.id=cp.submission_page_id
+WHERE cp.tenant_id=$1::uuid AND cp.capture_file_id=$2::uuid
+ORDER BY cp.source_index
+`, fixture.TenantID, insertedFileID)
+	if err != nil {
+		t.Fatalf("query inserted-page ordering: %v", err)
+	}
+	defer rows.Close()
+	semanticPages := []int{}
+	physicalPages := []int{}
+	for rows.Next() {
+		var sourceIndex, semanticPage, physicalPage int
+		var status, code string
+		if err = rows.Scan(&sourceIndex, &semanticPage, &physicalPage, &status, &code); err != nil {
+			t.Fatalf("scan inserted-page ordering: %v", err)
+		}
+		semanticPages = append(semanticPages, semanticPage)
+		physicalPages = append(physicalPages, physicalPage)
+		if sourceIndex == 2 && (status != "needs_review" || code != "unbound_page_in_controlled_sheet") {
+			t.Fatalf("inserted uncontrolled page must be isolated for review: status=%s code=%s", status, code)
+		}
+	}
+	if !slices.Equal(semanticPages, []int{1, 2, 2, 3}) ||
+		!slices.Equal(physicalPages, []int{1, 2, 3, 4}) {
+		t.Fatalf("inserted page shifted controlled semantics: semantic=%v physical=%v", semanticPages, physicalPages)
+	}
+	e2eExpectStatus(
+		t, router, http.MethodGet,
+		"/api/v1/answer-sheet-print-batches/"+printBatchID+"/package.pdf",
+		adminToken, "", http.StatusConflict,
+	)
+
+	_, missingSheetSerial, missingBarcodes := issue("missing", missingStudentID)
+	missingFileID := createCapture("missing-page", []string{missingBarcodes[1], missingBarcodes[3]})
+	var missingExpected, missingActual int
+	var assignedPages []int
+	if err := db.QueryRow(`
+SELECT s.expected_page_count,s.actual_page_count
+FROM submission s
+JOIN capture_page cp ON cp.tenant_id=s.tenant_id AND cp.submission_id=s.id
+WHERE cp.tenant_id=$1::uuid AND cp.capture_file_id=$2::uuid
+LIMIT 1
+`, fixture.TenantID, missingFileID).Scan(&missingExpected, &missingActual); err != nil {
+		t.Fatalf("query missing-page counts: %v", err)
+	}
+	missingRows, err := db.Query(`
+SELECT assigned_page_no
+FROM capture_page
+WHERE tenant_id=$1::uuid AND capture_file_id=$2::uuid
+ORDER BY source_index
+`, fixture.TenantID, missingFileID)
+	if err != nil {
+		t.Fatalf("query missing-page assignments: %v", err)
+	}
+	defer missingRows.Close()
+	for missingRows.Next() {
+		var pageNo int
+		if err = missingRows.Scan(&pageNo); err != nil {
+			t.Fatalf("scan missing-page assignment: %v", err)
+		}
+		assignedPages = append(assignedPages, pageNo)
+	}
+	if missingExpected != 3 || missingActual != 2 || !slices.Equal(assignedPages, []int{1, 3}) {
+		t.Fatalf("missing page must remain explicit without shifting page 3: expected=%d actual=%d pages=%v",
+			missingExpected, missingActual, assignedPages)
+	}
+
+	_, repeatedSheetSerial, repeatedBarcodes := issue("repeated-student", studentID)
+	repeatedFileID := createCapture("repeated-student", []string{repeatedBarcodes[1]})
+	var repeatedConflicts int
+	if err := db.QueryRow(`
+SELECT count(DISTINCT s.id)
+FROM submission s
+WHERE s.tenant_id=$1::uuid
+  AND s.identity_status='conflict'
+  AND (
+    s.student_id=$2::uuid
+    OR s.id IN (
+      SELECT cp.submission_id
+      FROM capture_page cp
+      WHERE cp.tenant_id=$1::uuid AND cp.capture_file_id=$3::uuid
+    )
+  )
+`, fixture.TenantID, studentID, repeatedFileID).Scan(&repeatedConflicts); err != nil {
+		t.Fatalf("query repeated-student conflicts: %v", err)
+	}
+	if repeatedConflicts != 1 {
+		t.Fatalf("a second active submission for one student must become a review conflict without replacing the original, got %d", repeatedConflicts)
+	}
+
+	var insertedSheetCount, missingSheetCount, repeatedSheetCount int
+	if err := db.QueryRow(`
+SELECT
+  (SELECT count(*) FROM answer_sheet_print_sheet WHERE tenant_id=$1::uuid AND id=$2::uuid),
+  (SELECT count(*) FROM answer_sheet_print_sheet WHERE tenant_id=$1::uuid AND id=$3::uuid),
+  (SELECT count(*) FROM answer_sheet_print_sheet WHERE tenant_id=$1::uuid AND id=$4::uuid)
+`, fixture.TenantID, insertedSheetSerial, missingSheetSerial, repeatedSheetSerial).Scan(
+		&insertedSheetCount, &missingSheetCount, &repeatedSheetCount,
+	); err != nil {
+		t.Fatalf("query multi-page sheet ledgers: %v", err)
+	}
+	if insertedSheetCount != 1 || missingSheetCount != 1 || repeatedSheetCount != 1 {
+		t.Fatal("multi-page captures lost their immutable sheet ledgers")
+	}
+}
 
 func TestStory060StudentSheetIdentityE2EWithPostgresTestDatabase(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("EDUGRADE_E2E_DATABASE_URL"))

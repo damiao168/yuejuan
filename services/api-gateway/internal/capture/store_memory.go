@@ -32,6 +32,10 @@ func (s *MemoryStore) IssueStudentBarcodes(context.Context, string, string, stri
 	return IssuedStudentBarcodes{}, ErrInvalidTransition
 }
 
+func (s *MemoryStore) GetStudentPrintPackage(context.Context, string, string) (StudentPrintPackage, error) {
+	return StudentPrintPackage{}, ErrNotFound
+}
+
 func (s *MemoryStore) RevokeStudentSheet(context.Context, string, string, string, StudentSheetLifecycleInput) (StudentSheet, error) {
 	return StudentSheet{}, ErrInvalidTransition
 }

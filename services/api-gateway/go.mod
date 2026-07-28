@@ -8,7 +8,9 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/minio/minio-go/v7 v7.0.95
+	github.com/phpdave11/gofpdf v1.4.3
 	github.com/redis/go-redis/v9 v9.7.3
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.39.0
 	golang.org/x/text v0.39.0
 )
