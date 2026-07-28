@@ -166,9 +166,6 @@ func TestWorkerRuntimeReliabilityWithPostgresTestDatabase(t *testing.T) {
 			t.Fatalf("replacement claim: %v", err)
 		}
 		reclaimed := <-claimResult
-		if len(reclaimed) != 1 || reclaimed[0].ID != created.ID || reclaimed[0].LeaseToken == claimed[0].LeaseToken {
-			t.Fatalf("unexpected replacement claim: %#v", reclaimed)
-		}
 		for operation, operationErr := range map[string]error{
 			"complete":  <-completeErr,
 			"heartbeat": <-heartbeatErr,
@@ -176,6 +173,18 @@ func TestWorkerRuntimeReliabilityWithPostgresTestDatabase(t *testing.T) {
 			if operationErr == nil || (!errors.Is(operationErr, workerruntime.ErrLeaseExpired) && !errors.Is(operationErr, workerruntime.ErrLeaseMismatch)) {
 				t.Fatalf("stale %s should fail by lease, got %v", operation, operationErr)
 			}
+		}
+		// Claim uses FOR UPDATE SKIP LOCKED. If a stale operation briefly owns
+		// the row lock, an empty first poll is expected; once both stale
+		// operations return (and roll back), the next poll must reclaim it.
+		if len(reclaimed) == 0 {
+			reclaimed, err = runtimeStore.Claim(ctx, tenantID, postgresClaimInput("worker-new"))
+			if err != nil {
+				t.Fatalf("replacement claim after stale operations: %v", err)
+			}
+		}
+		if len(reclaimed) != 1 || reclaimed[0].ID != created.ID || reclaimed[0].LeaseToken == claimed[0].LeaseToken {
+			t.Fatalf("unexpected replacement claim: %#v", reclaimed)
 		}
 
 		stored, err := runtimeStore.Get(ctx, tenantID, created.ID)

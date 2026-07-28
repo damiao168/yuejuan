@@ -124,7 +124,14 @@ jobs:
           -e services/image-quality-worker
           -e services/page-processing-worker
       - run: python -m pip check
-      - run: python -m pip_audit --strict
+      - name: Audit installed third-party Python packages
+        run: |
+          python -m pip freeze --exclude-editable > "${RUNNER_TEMP}/audit-requirements.txt"
+          if grep -qi '^edugrade-' "${RUNNER_TEMP}/audit-requirements.txt"; then
+            echo "Editable EduGrade packages leaked into the audit input."
+            exit 1
+          fi
+          python -m pip_audit --strict -r "${RUNNER_TEMP}/audit-requirements.txt"
       - run: ruff check ai-services services/image-quality-worker services/ocr-worker services/page-processing-worker
       - name: OCR worker tests
         run: python -m pytest -q services/ocr-worker/tests

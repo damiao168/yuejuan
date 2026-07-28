@@ -11,7 +11,12 @@ const checks = [
   {
     name: "tenant user administration",
     file: "services/api-gateway/internal/auth/user_admin.go",
-    includes: ["DisallowUnknownFields", "strongBootstrapPassword", "auth.user_created", "role is not assignable"]
+    includes: ["decodeAuthJSON(w, r, &input, true)", "strongBootstrapPassword", "auth.user_created", "role is not assignable"]
+  },
+  {
+    name: "strict authentication JSON decoding",
+    file: "services/api-gateway/internal/auth/validation.go",
+    includes: ["decoder.DisallowUnknownFields()", "http.MaxBytesReader", "request body must contain exactly one JSON value"]
   },
   {
     name: "tenant-safe user store",
