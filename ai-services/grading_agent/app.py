@@ -9,16 +9,16 @@ from .capabilities import CapabilityMatrix
 from .contract import normalize_model_output, validate_request
 from .errors import AgentError
 from .guardrails import detect_prompt_injection
-from .model import LocalLlamaCppAdapter
+from .provider_adapter import build_provider_adapter
 
 
 class GradingAgentApplication:
-    def __init__(self, settings, matrix=None, model=None, clock=None, logger=None):
+    def __init__(self, settings, matrix=None, model=None, clock=None, logger=None, adapter_registry=None):
         self.settings = settings
         self.matrix = matrix or CapabilityMatrix.load(settings.contract_root)
         if self.matrix.profile_id != settings.capability_profile:
             raise ValueError("configured capability profile does not match the governed capability matrix")
-        self.model = model or LocalLlamaCppAdapter(settings)
+        self.model = model or build_provider_adapter(settings, adapter_registry)
         self.clock = clock or time.time
         self.logger = logger or self._default_logger
         self._cache = OrderedDict()

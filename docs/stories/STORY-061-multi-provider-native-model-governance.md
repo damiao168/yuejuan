@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress（2026-07-29：STORY-061A 三个切片已完成实现复审；治理地基、管理 API、权限审计、Secret 边界、最小管理界面和生产配置拒绝门禁已落地。仍未接入任何外部厂商，061B 尚未获批）
+In Progress（2026-07-29：STORY-061A 三个切片已完成实现复审；061B 独立计划评审只批准不联网的 061B0 Provider Adapter 接缝，现已实现并复审。仍未接入任何外部厂商，061B1 真实厂商联调尚未获批）
 
 ## First-principles decision
 
@@ -242,9 +242,11 @@ In Progress（2026-07-29：STORY-061A 三个切片已完成实现复审；治理
 
 ### STORY-061B：首批原生厂商影子接入
 
-- 两个文本厂商和一个多模态厂商的原生 Adapter。
-- 仅 `shadow_compare`，不改变教师成绩。
-- 授权测试账号、合成数据和脱敏冻结集真实联调。
+- **061B0（已完成）**：抽出供应商无关的 `ProviderAdapter` 协议和显式注册表；默认构建仍只注册 `local_llama_cpp`，未知类型 fail closed，不读取外部 Secret、不产生外部请求。
+- **061B1（待批准）**：候选为阿里云 DashScope 原生文本/多模态协议；只有完成沙箱账号、区域、留存、合同和合成 fixture 审查后，才允许实现影子 Adapter。
+- **061B2（待选型）**：选择第二个持续维护的厂商原生协议；OpenAI-compatible 接口和处于迁移/停止演进状态的旧接口不作为补位方案。
+- 完成合规前置后，首批目标仍为两个文本厂商和一个多模态厂商的原生 Adapter。
+- 真实联调仅允许 `shadow_compare`，不改变教师成绩；先使用授权测试账号和合成数据，脱敏冻结集须另行批准。
 
 ### STORY-061C：评测与批准
 
@@ -363,4 +365,6 @@ In Progress（2026-07-29：STORY-061A 三个切片已完成实现复审；治理
 
 ## Decision
 
-计划评审通过，STORY-061 进入 In Progress，但首轮只批准实施 STORY-061A。061A1、061A2 与 061A3 已于 2026-07-29 完成实现复审，证据见 [`STORY-061A1 实现复审`](../reviews/STORY-061A1-implementation-review-2026-07-29.md)、[`STORY-061A2 实现复审`](../reviews/STORY-061A2-implementation-review-2026-07-29.md) 和 [`STORY-061A3 实现复审`](../reviews/STORY-061A3-implementation-review-2026-07-29.md)。STORY-061A 至此完成；任何真实厂商 API、影子流量或学生数据外发均继续禁止，必须先对 061B 单独完成厂商选型、授权、数据边界和实施计划评审。
+计划评审通过，STORY-061 进入 In Progress。061A1、061A2 与 061A3 已于 2026-07-29 完成实现复审，证据见 [`STORY-061A1 实现复审`](../reviews/STORY-061A1-implementation-review-2026-07-29.md)、[`STORY-061A2 实现复审`](../reviews/STORY-061A2-implementation-review-2026-07-29.md) 和 [`STORY-061A3 实现复审`](../reviews/STORY-061A3-implementation-review-2026-07-29.md)。STORY-061A 至此完成。
+
+061B 独立计划评审只批准不联网的 061B0，证据见 [`STORY-061B 独立计划评审`](../reviews/STORY-061B-plan-review-2026-07-29.md)；061B0 已完成实现复审，证据见 [`STORY-061B0 实现复审`](../reviews/STORY-061B0-implementation-review-2026-07-29.md)。任何真实厂商 API、影子流量或学生数据外发均继续禁止；061B1 必须先补齐厂商沙箱、合同/留存结论、区域、Secret 和合成协议 fixture，再独立批准。
