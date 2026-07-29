@@ -4,6 +4,7 @@ import "context"
 
 type Store interface {
 	EnsureLocalBaseline(ctx context.Context, tenantID string, baseline LocalBaseline) error
+	ValidateProductionReadiness(ctx context.Context, secrets SecretReferenceResolver) error
 	ListProviders(ctx context.Context, tenantID string) ([]Provider, error)
 	CreateProvider(ctx context.Context, tenantID string, actorID string, input ProviderInput) (Provider, error)
 	UpdateProviderStatus(ctx context.Context, tenantID string, id string, input ProviderStatusInput) (Provider, error)

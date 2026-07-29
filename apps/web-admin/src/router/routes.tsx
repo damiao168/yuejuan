@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import {
   Activity,
   BarChart3,
+  BrainCircuit,
   BookOpenCheck,
   ClipboardCheck,
   FileText,
@@ -125,6 +126,10 @@ export const routes: AppRoute[] = [
   {
     key: "settings", path: "/settings", title: "系统设置", group: "系统管理", icon: <Settings size={18} />, permissions: ["system:manage"], mock: true, productionReady: false,
     experiences: { admin: { title: "系统设置", group: "系统管理" } }
+  },
+  {
+    key: "modelGovernance", path: "/system/models", title: "模型治理", group: "系统管理", icon: <BrainCircuit size={18} />, permissions: ["model:read"], mock: false, productionReady: true,
+    experiences: { admin: { title: "模型治理", group: "系统管理" } }
   },
   {
     key: "systemStatus", path: "/system/status", title: "系统运维", group: "系统管理", icon: <ServerCog size={18} />, permissions: ["system:read"], allowedRoles: ["platform_admin"], mock: false, productionReady: true,

@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress（2026-07-29：计划评审通过，仅启动 061A；061A1 治理地基与 061A2 管理 API、权限审计、Secret 解析边界和本地基线注册已完成，未接入任何外部厂商）
+In Progress（2026-07-29：STORY-061A 三个切片已完成实现复审；治理地基、管理 API、权限审计、Secret 边界、最小管理界面和生产配置拒绝门禁已落地。仍未接入任何外部厂商，061B 尚未获批）
 
 ## First-principles decision
 
@@ -238,7 +238,7 @@ In Progress（2026-07-29：计划评审通过，仅启动 061A；061A1 治理地
 
 - **061A1（已完成）**：供应商中立身份/遥测、治理数据库模型、Secret 引用约束、默认关闭策略、调用事实和 fail-closed 路由规则。
 - **061A2（已完成）**：Provider/Deployment/Policy 管理 API、权限与审计、本地基线注册和 Secret 引用解析边界。
-- **061A3（下一步）**：供应商与部署、模型策略中心的最小管理界面，以及生产配置拒绝门禁。
+- **061A3（已完成）**：供应商与部署、模型策略中心的最小管理界面，以及生产配置拒绝门禁。
 
 ### STORY-061B：首批原生厂商影子接入
 
@@ -363,4 +363,4 @@ In Progress（2026-07-29：计划评审通过，仅启动 061A；061A1 治理地
 
 ## Decision
 
-计划评审通过，STORY-061 进入 In Progress，但只批准实施 STORY-061A。061A1 与 061A2 已于 2026-07-29 完成实现复审，证据见 [`STORY-061A1 实现复审`](../reviews/STORY-061A1-implementation-review-2026-07-29.md) 和 [`STORY-061A2 实现复审`](../reviews/STORY-061A2-implementation-review-2026-07-29.md)。下一步实施 061A3；在 061A 全部完成并独立批准前，不开始任何厂商真实 API 接入。
+计划评审通过，STORY-061 进入 In Progress，但首轮只批准实施 STORY-061A。061A1、061A2 与 061A3 已于 2026-07-29 完成实现复审，证据见 [`STORY-061A1 实现复审`](../reviews/STORY-061A1-implementation-review-2026-07-29.md)、[`STORY-061A2 实现复审`](../reviews/STORY-061A2-implementation-review-2026-07-29.md) 和 [`STORY-061A3 实现复审`](../reviews/STORY-061A3-implementation-review-2026-07-29.md)。STORY-061A 至此完成；任何真实厂商 API、影子流量或学生数据外发均继续禁止，必须先对 061B 单独完成厂商选型、授权、数据边界和实施计划评审。

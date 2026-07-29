@@ -13,6 +13,7 @@ export type ViewKey =
   | "desktop"
   | "system"
   | "systemStatus"
+  | "modelGovernance"
   | "audit"
   | "organization"
   | "examWorkspace";

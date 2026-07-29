@@ -11,9 +11,10 @@ import (
 var ErrInvalidSecretReference = errors.New("invalid secret reference")
 
 type SecretProbe struct {
-	Scheme            string `json:"scheme"`
-	ResolverSupported bool   `json:"resolver_supported"`
-	Configured        bool   `json:"configured"`
+	Scheme               string `json:"scheme"`
+	ResolverSupported    bool   `json:"resolver_supported"`
+	Configured           bool   `json:"configured"`
+	MeetsMinimumStrength bool   `json:"meets_minimum_strength"`
 }
 
 type SecretReferenceResolver interface {
@@ -46,19 +47,26 @@ func (r *EnvironmentSecretResolver) Probe(reference string) (SecretProbe, error)
 			return SecretProbe{}, ErrInvalidSecretReference
 		}
 		value, exists := os.LookupEnv(name)
-		return SecretProbe{Scheme: parsed.Scheme, ResolverSupported: true, Configured: exists && value != ""}, nil
+		configured := exists && value != ""
+		return SecretProbe{
+			Scheme:               parsed.Scheme,
+			ResolverSupported:    true,
+			Configured:           configured,
+			MeetsMinimumStrength: configured && len(value) >= 24,
+		}, nil
 	case "docker_secret":
 		if strings.ContainsAny(name, `/\`) {
 			return SecretProbe{}, ErrInvalidSecretReference
 		}
 		info, statErr := os.Stat(filepath.Join(r.dockerSecretDir, name))
 		return SecretProbe{
-			Scheme:            parsed.Scheme,
-			ResolverSupported: true,
-			Configured:        statErr == nil && !info.IsDir() && info.Size() > 0,
+			Scheme:               parsed.Scheme,
+			ResolverSupported:    true,
+			Configured:           statErr == nil && !info.IsDir() && info.Size() > 0,
+			MeetsMinimumStrength: statErr == nil && !info.IsDir() && info.Size() >= 24,
 		}, nil
 	case "vault", "aws_secrets_manager", "azure_key_vault", "gcp_secret_manager":
-		return SecretProbe{Scheme: parsed.Scheme, ResolverSupported: false, Configured: false}, nil
+		return SecretProbe{Scheme: parsed.Scheme, ResolverSupported: false, Configured: false, MeetsMinimumStrength: false}, nil
 	default:
 		return SecretProbe{}, ErrInvalidSecretReference
 	}

@@ -45,6 +45,7 @@ flowchart LR
 
 - Go API Gateway：认证、租户隔离、RBAC、考试/试卷/答卷、OCR 任务、切题、评分、复核、仲裁、成绩和报表 API。
 - Web Admin：React 19、TypeScript、Vite、Ant Design，包含考试工作区、试卷与 Rubric、答卷采集、阅卷工作台、仲裁、成绩、申诉、审计和阅卷运营页面。
+- 模型治理：已完成本地/外部 Provider、Deployment、Secret 引用状态和租户策略的治理界面与生产配置拒绝门禁；外部调用默认关闭，尚未接入真实外部厂商。
 - Desktop Client：Tauri 2 + React + TypeScript，提供扫描工作站、离线阅卷基础能力、同步队列和本地诊断入口。
 - AI 服务：`ai-services/grading_agent` 提供内部认证、幂等、模型就绪检查、输出校验、证据校验和隐私安全遥测。
 - Lab：本地模型适配器、能力矩阵、提示词注册、合成评测、对抗样本、校准/公平性检查和发布门禁。
@@ -220,6 +221,7 @@ go test ./internal/subjective -run TestHTTPAdapterRealLocalAgent -count=1 -v
 - AI 阅卷仍是影子建议，不具备自动发布最终成绩的权限。
 - `confidence=0` 是有意的治理信号，生产 Pilot 前还需要真实受治理数据、教师一致性、校准、公平性和模型选择证据。
 - 作文和论述题当前只允许 `shadow_only`。
+- STORY-061A 治理地基已经完成；任何真实厂商 API 或影子流量仍需对 STORY-061B 单独计划评审，不能因治理页面可用而视为模型效果已验证。
 - Docker 容器级验收依赖本机 Docker Desktop 守护进程；没有可用 Docker 时，只能完成服务级和本地模型验证。
 - GGUF 模型、llama.cpp 二进制、运行时 API key、数据库密码和 `.env` 永远不应提交到 Git。
 

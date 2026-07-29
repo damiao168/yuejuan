@@ -6,13 +6,13 @@ import (
 )
 
 func TestEnvironmentSecretResolverProbesWithoutReturningSecret(t *testing.T) {
-	t.Setenv("STORY061_VENDOR_KEY", "super-secret-value")
+	t.Setenv("STORY061_VENDOR_KEY", "super-secret-value-at-least-24-bytes")
 	resolver := NewEnvironmentSecretResolver(t.TempDir())
 	probe, err := resolver.Probe("env://STORY061_VENDOR_KEY")
 	if err != nil {
 		t.Fatalf("probe configured environment reference: %v", err)
 	}
-	if probe.Scheme != "env" || !probe.ResolverSupported || !probe.Configured {
+	if probe.Scheme != "env" || !probe.ResolverSupported || !probe.Configured || !probe.MeetsMinimumStrength {
 		t.Fatalf("unexpected probe: %#v", probe)
 	}
 }

@@ -26,6 +26,20 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
+func (s *MemoryStore) ValidateProductionReadiness(_ context.Context, secrets SecretReferenceResolver) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	providers := make([]Provider, 0, len(s.providers))
+	for _, item := range s.providers {
+		providers = append(providers, item)
+	}
+	deployments := make([]Deployment, 0, len(s.deployments))
+	for _, item := range s.deployments {
+		deployments = append(deployments, item)
+	}
+	return ValidateProductionInventory(providers, deployments, secrets)
+}
+
 func (s *MemoryStore) EnsureLocalBaseline(_ context.Context, tenantID string, baseline LocalBaseline) error {
 	if strings.TrimSpace(tenantID) == "" {
 		return nil

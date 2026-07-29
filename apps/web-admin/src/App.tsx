@@ -32,6 +32,7 @@ const ExamManagementPage = lazy(() => import("./pages/ExamManagementPage").then(
 const GradingWorkbenchPage = lazy(() => import("./pages/GradingWorkbenchPage").then((module) => ({ default: module.GradingWorkbenchPage })));
 const AdminGradingOperationsPage = lazy(() => import("./pages/AdminGradingOperationsPage").then((module) => ({ default: module.AdminGradingOperationsPage })));
 const LearningReportsPage = lazy(() => import("./pages/LearningReportsPage").then((module) => ({ default: module.LearningReportsPage })));
+const ModelGovernancePage = lazy(() => import("./pages/ModelGovernancePage").then((module) => ({ default: module.ModelGovernancePage })));
 const OrganizationSetupPage = lazy(() => import("./pages/OrganizationSetupPage").then((module) => ({ default: module.OrganizationSetupPage })));
 const ExamWorkspacePage = lazy(() => import("./pages/ExamWorkspacePage").then((module) => ({ default: module.ExamWorkspacePage })));
 const AnswerSheetTemplatePage = lazy(() => import("./pages/AnswerSheetTemplatePage").then((module) => ({ default: module.AnswerSheetTemplatePage })));
@@ -331,6 +332,11 @@ function App() {
       <AuditLogPage canRead={hasEveryPermission(user, ["audit:read"])} canExport={hasEveryPermission(user, ["audit:export"])} tenantName={user.tenant} />
     ) : route.path === "/system/status" ? (
       <SystemStatusPage />
+    ) : route.path === "/system/models" ? (
+      <ModelGovernancePage
+        canManageProviders={hasEveryPermission(user, ["model:provider:manage"])}
+        canManagePolicy={hasEveryPermission(user, ["model:policy:manage"])}
+      />
     ) : (
       <ModulePage route={route} experience={navigationExperience} onNavigate={navigate} />
     );

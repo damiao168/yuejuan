@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"edugrade-enterprise/services/api-gateway/internal/appeal"
 	"edugrade-enterprise/services/api-gateway/internal/auth"
@@ -68,6 +69,15 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 	if err := modelGovernanceStore.EnsureLocalBaseline(context.Background(), "", localModelBaseline(cfg)); err != nil {
 		_ = closePostgres()
 		return nil, nil, err
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Service.Environment), "production") {
+		if err := modelGovernanceStore.ValidateProductionReadiness(
+			context.Background(),
+			modelgovernance.NewEnvironmentSecretResolver(""),
+		); err != nil {
+			_ = closePostgres()
+			return nil, nil, err
+		}
 	}
 	postgresChecker := deps.NewPostgresChecker(postgresDB)
 	checkers = append(checkers, postgresChecker)
