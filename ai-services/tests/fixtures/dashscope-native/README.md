@@ -7,6 +7,7 @@ The request shape and native text-generation path are based on:
 - <https://help.aliyun.com/zh/model-studio/text-generation>
 - <https://help.aliyun.com/zh/model-studio/qwen-api-via-dashscope>
 - <https://help.aliyun.com/zh/model-studio/qwen-structured-output>
+- <https://help.aliyun.com/en/model-studio/vision>
 
 The error specimens use the status/code semantics documented at:
 
@@ -14,4 +15,11 @@ The error specimens use the status/code semantics documented at:
 
 `error-*.json` wraps the native response body with `http_status` as local fixture metadata. This wrapper is not sent to or returned by DashScope.
 
-The model name is a dated protocol specimen, not an approved production deployment. Model selection, account authorization, endpoint region, pricing and retention approval remain deferred to STORY-061B1.
+The text model uses a dated protocol specimen and the image fixture uses a
+stable model alias. Neither is an approved production deployment. Final model
+selection and version pinning, account authorization, endpoint region, pricing
+and retention approval remain deferred to STORY-061B1.
+
+`request-image.json` contains a tiny synthetic PNG as an inline Data URL. The
+multimodal contract intentionally refuses public URLs, local paths and OSS URLs,
+and accepts exactly one server-attested `answer_segment_crop`.
