@@ -324,12 +324,6 @@ func e2eSeedStory056AcceptanceAnswersCount(t *testing.T, db *sql.DB, fixture sto
 	e2eSeedStory056AcceptanceAnswersWithQuestionTypes(t, db, fixture, suffix, count, []string{"single_choice", "true_false", "multiple_choice"})
 }
 
-// e2eSeedStory056AcceptanceAnswersForQuestion makes a statistically useful
-// cohort for one objective question without creating unrelated worker work.
-func e2eSeedStory056AcceptanceAnswersForQuestion(t *testing.T, db *sql.DB, fixture story056AcceptanceFixture, suffix, questionType string, count int) {
-	e2eSeedStory056AcceptanceAnswersWithQuestionTypes(t, db, fixture, suffix, count, []string{questionType})
-}
-
 func e2eSeedStory056AcceptanceAnswersWithQuestionTypes(t *testing.T, db *sql.DB, fixture story056AcceptanceFixture, suffix string, count int, questionTypes []string) {
 	t.Helper()
 	if count < 1 || len(questionTypes) == 0 {
