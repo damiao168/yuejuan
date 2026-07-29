@@ -517,23 +517,41 @@ WITH latest_by_segment AS (
       WHEN decision='selected' AND jsonb_array_length(selected_options)=1 THEN 'selected_low'
       WHEN decision='blank' THEN 'blank'
       ELSE 'ambiguous'
-    END AS sample_stratum
+    END AS sample_stratum,
+    CASE
+      WHEN decision='selected' AND jsonb_array_length(selected_options)=1 THEN selected_options->>0
+      WHEN decision='ambiguous' THEN COALESCE(measurements->0->>'option','')
+      ELSE ''
+    END AS sample_option
   FROM latest_by_segment
 ), ranked AS (
   SELECT *,row_number() OVER (
-    PARTITION BY question_id,sample_stratum,
-      CASE WHEN sample_stratum IN ('selected_high','selected_low') THEN selected_options->>0 ELSE '' END
+    PARTITION BY question_id,sample_stratum,sample_option
     ORDER BY md5(id || $10)
-  ) AS bucket_rank
+  ) AS bucket_rank,
+  row_number() OVER (
+    PARTITION BY sample_option
+    ORDER BY md5(id || $10)
+  ) AS option_rank,
+  row_number() OVER (
+    PARTITION BY sample_stratum
+    ORDER BY md5(id || $10)
+  ) AS stratum_rank
   FROM classified
 )
 SELECT id,answer_segment_id,question_id,question_no,crop_sha256,decision,
   selected_options,confidence,measurements,sample_stratum
 FROM ranked
-ORDER BY bucket_rank,md5(id || $10)
-LIMIT $11`, tenantID, session.TemplateID, session.TemplateContentHash, questionIDsRaw,
+ORDER BY
+  CASE
+    WHEN (sample_option <> '' AND option_rank <= $11) OR stratum_rank <= $12 THEN 0
+    ELSE 1
+  END,
+  bucket_rank,md5(id || $10)
+LIMIT $13`, tenantID, session.TemplateID, session.TemplateContentHash, questionIDsRaw,
 		session.ProfileVersion, session.ProfileHash, session.ReferenceFileAssetID, session.ReferenceSHA256,
-		session.MinimumConfidence, session.SampleSeed, session.MinimumSamples)
+		session.MinimumConfidence, session.SampleSeed, session.MinimumSamplesPerOption,
+		session.MinimumSamplesPerStratum, session.MinimumSamples)
 	if err != nil {
 		return err
 	}
