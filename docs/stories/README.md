@@ -95,7 +95,7 @@
 | STORY-058 | Grading Agent 服务实现（lab 智能体接入线） | Approved |
 | STORY-059 | 平台接入与评分结果落库（lab 智能体接入线） | Approved |
 | STORY-060 | 客观题自动化产能兑现与答卷完整性保障 | Software Accepted / Physical Validation Pending |
-| STORY-061 | 多厂商原生模型治理、影子评测与策略中心 | In Progress（061A1 完成） |
+| STORY-061 | 多厂商原生模型治理、影子评测与策略中心 | In Progress（061A1、061A2 完成） |
 
 ## 编号语义说明（2026-07-26）
 

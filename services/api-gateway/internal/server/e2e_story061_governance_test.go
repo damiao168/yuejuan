@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
+
+	"edugrade-enterprise/services/api-gateway/internal/modelgovernance"
 
 	"github.com/google/uuid"
 )
@@ -144,8 +147,131 @@ VALUES (
   'vendor-a-model-v1', 'prompt-v1', 'rubric-v1', 'subjective-shadow-v1',
   'cn-east', 'shadow_compare', 'replayed'
 )
-`, tenantID, requestID); err == nil {
+	`, tenantID, requestID); err == nil {
 		t.Fatal("idempotent replay created a duplicate billable call fact")
+	}
+
+	var platformProviderManage, demoPolicyManage bool
+	if err := db.QueryRowContext(ctx, `
+SELECT
+  EXISTS (
+    SELECT 1
+    FROM role
+    JOIN role_permission ON role_permission.tenant_id = role.tenant_id AND role_permission.role_id = role.id
+    JOIN permission ON permission.tenant_id = role_permission.tenant_id AND permission.id = role_permission.permission_id
+    JOIN tenant ON tenant.id = role.tenant_id
+    WHERE tenant.code = 'platform' AND role.code = 'platform_admin'
+      AND permission.code = 'model:provider:manage'
+      AND role.deleted_at IS NULL AND role_permission.deleted_at IS NULL AND permission.deleted_at IS NULL
+  ),
+  EXISTS (
+    SELECT 1
+    FROM role
+    JOIN role_permission ON role_permission.tenant_id = role.tenant_id AND role_permission.role_id = role.id
+    JOIN permission ON permission.tenant_id = role_permission.tenant_id AND permission.id = role_permission.permission_id
+    JOIN tenant ON tenant.id = role.tenant_id
+    WHERE tenant.code = 'demo' AND role.code = 'tenant_admin'
+      AND permission.code = 'model:policy:manage'
+      AND role.deleted_at IS NULL AND role_permission.deleted_at IS NULL AND permission.deleted_at IS NULL
+  )
+`).Scan(&platformProviderManage, &demoPolicyManage); err != nil {
+		t.Fatalf("read STORY-061 governance RBAC: %v", err)
+	}
+	if !platformProviderManage || !demoPolicyManage {
+		t.Fatalf("governance RBAC was not assigned: platform_provider=%v demo_policy=%v", platformProviderManage, demoPolicyManage)
+	}
+
+	governanceStore := modelgovernance.NewPostgresStore(db)
+	baseline := modelgovernance.LocalBaseline{
+		ProviderKey:       "local",
+		ProviderName:      "Local grading runtime",
+		DeploymentKey:     "local-qwen3-4b-q4-k-m",
+		ModelName:         "Qwen/Qwen3-4B-GGUF",
+		ModelVersion:      "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+		AdapterType:       "local_llama_cpp",
+		Region:            "on_premise",
+		CapabilityProfile: "local-pilot-v1",
+	}
+	if err := governanceStore.EnsureLocalBaseline(ctx, tenantID, baseline); err != nil {
+		t.Fatalf("register local baseline: %v", err)
+	}
+	providers, err := governanceStore.ListProviders(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("list governed providers: %v", err)
+	}
+	var localRegistered bool
+	for _, provider := range providers {
+		if provider.Key == baseline.ProviderKey {
+			localRegistered = true
+		}
+		if provider.CredentialRef != "" {
+			t.Fatalf("provider read model exposed credential_ref: %#v", provider)
+		}
+	}
+	if !localRegistered {
+		t.Fatal("local baseline provider was not registered")
+	}
+	createdProvider, err := governanceStore.CreateProvider(ctx, tenantID, "", modelgovernance.ProviderInput{
+		Key:           "vendor-b",
+		DisplayName:   "Vendor B",
+		Kind:          modelgovernance.ProviderExternal,
+		AdapterType:   "vendor_b_native",
+		CredentialRef: "vault://edugrade/vendor-b",
+		Region:        "cn-east",
+		DataPolicy:    modelgovernance.DataPolicy{RetentionMode: "no_store"},
+		Status:        "unverified",
+	})
+	if err != nil {
+		t.Fatalf("create provider through governance store: %v", err)
+	}
+	if createdProvider.CredentialRef != "" || !createdProvider.CredentialConfigured || createdProvider.CredentialScheme != "vault" {
+		t.Fatalf("provider store did not redact credential reference: %#v", createdProvider)
+	}
+	createdDeployment, err := governanceStore.CreateDeployment(ctx, tenantID, "", modelgovernance.DeploymentInput{
+		ProviderID:        createdProvider.ID,
+		Key:               "vendor-b-text-v1",
+		ModelName:         "Vendor B Text",
+		ModelVersion:      "vendor-b-model-v1",
+		Region:            "cn-east",
+		CapabilityProfile: "subjective-shadow-v1",
+		Modalities:        []string{"text"},
+		CapabilityPolicy:  map[string]any{"question_types": []string{"short_answer"}},
+		PricingPolicy:     map[string]any{"meter": "token", "input_micros": 1, "output_micros": 2},
+		Status:            "unverified",
+		HealthState:       "unverified",
+	})
+	if err != nil {
+		t.Fatalf("create deployment through governance store: %v", err)
+	}
+	if createdDeployment.ProviderKey != createdProvider.Key || createdDeployment.Key != "vendor-b-text-v1" {
+		t.Fatalf("unexpected governed deployment: %#v", createdDeployment)
+	}
+	policy, err := governanceStore.GetPolicy(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("get tenant model policy through store: %v", err)
+	}
+	updatedPolicy, err := governanceStore.UpdatePolicy(ctx, tenantID, "", modelgovernance.PolicyUpdateInput{
+		DisplayName:        policy.DisplayName,
+		Mode:               modelgovernance.ModeLocalOnly,
+		AllowedDeployments: []string{},
+		FallbackMode:       "manual_only",
+		ExpectedVersion:    policy.Version,
+		Reason:             "close external route after governance E2E",
+	})
+	if err != nil {
+		t.Fatalf("update tenant model policy through store: %v", err)
+	}
+	if updatedPolicy.ExternalEnabled || updatedPolicy.Mode != modelgovernance.ModeLocalOnly {
+		t.Fatalf("store policy update did not close external routing: %#v", updatedPolicy)
+	}
+	if _, err := governanceStore.UpdatePolicy(ctx, tenantID, "", modelgovernance.PolicyUpdateInput{
+		Mode:               modelgovernance.ModeLocalOnly,
+		AllowedDeployments: []string{},
+		FallbackMode:       "manual_only",
+		ExpectedVersion:    policy.Version,
+		Reason:             "stale update must fail",
+	}); !errors.Is(err, modelgovernance.ErrConflict) {
+		t.Fatalf("stale policy version was not rejected: %v", err)
 	}
 
 	newTenantID := uuid.NewString()

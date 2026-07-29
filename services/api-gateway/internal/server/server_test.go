@@ -42,6 +42,14 @@ func testConfig() config.Config {
 		Observability: config.ObservabilityConfig{
 			SlowRequestThreshold: time.Second,
 		},
+		AIService: config.AIServiceConfig{
+			ModelVersion:      "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+			ProviderKey:       "local",
+			DeploymentKey:     "local-qwen3-4b-q4-k-m",
+			AdapterType:       "local_llama_cpp",
+			DeploymentRegion:  "on_premise",
+			CapabilityProfile: "local-pilot-v1",
+		},
 	}
 }
 
@@ -98,6 +106,60 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+func TestModelGovernanceRoutesEnforceSeparateReadAndManagePermissions(t *testing.T) {
+	authStore := testAuthStoreWithPermissions(t, []string{"model:read", "model:policy:manage"})
+	router := NewRouter(
+		testConfig(),
+		logger.New(io.Discard, "error"),
+		nil,
+		authStore,
+		org.NewMemoryStore(),
+		exam.NewMemoryStore(),
+		paper.NewMemoryStore(),
+	)
+	token := serverLogin(t, router)
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/model-providers", nil)
+	listRequest.Header.Set("Authorization", "Bearer "+token)
+	listResponse := httptest.NewRecorder()
+	router.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK ||
+		!strings.Contains(listResponse.Body.String(), `"provider_key":"local"`) ||
+		strings.Contains(listResponse.Body.String(), `"credential_ref":`) {
+		t.Fatalf("governed provider read returned %d: %s", listResponse.Code, listResponse.Body.String())
+	}
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/model-providers", strings.NewReader(`{}`))
+	createRequest.Header.Set("Authorization", "Bearer "+token)
+	createRequest.Header.Set("Content-Type", "application/json")
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	if createResponse.Code != http.StatusForbidden {
+		t.Fatalf("model read permission unexpectedly allowed provider management: %d %s", createResponse.Code, createResponse.Body.String())
+	}
+
+	policyRequest := httptest.NewRequest(http.MethodPut, "/api/v1/model-policy", strings.NewReader(`{
+	  "display_name":"Default local-only policy",
+	  "mode":"local_only",
+	  "external_enabled":false,
+	  "text_export_enabled":false,
+	  "image_export_enabled":false,
+	  "allowed_deployments":[],
+	  "max_cost_micros_per_question":0,
+	  "max_cost_micros_per_exam":0,
+	  "fallback_mode":"manual_only",
+	  "expected_version":1,
+	  "reason":"confirm tenant local-only policy"
+	}`))
+	policyRequest.Header.Set("Authorization", "Bearer "+token)
+	policyRequest.Header.Set("Content-Type", "application/json")
+	policyResponse := httptest.NewRecorder()
+	router.ServeHTTP(policyResponse, policyRequest)
+	if policyResponse.Code != http.StatusOK || !strings.Contains(policyResponse.Body.String(), `"version":2`) {
+		t.Fatalf("model policy permission returned %d: %s", policyResponse.Code, policyResponse.Body.String())
+	}
+}
+
 func TestRequestTraceHeadersAndAccessLog(t *testing.T) {
 	var logs bytes.Buffer
 	router := NewRouter(testConfig(), logger.New(&logs, "info"), nil, testAuthStore(t), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
@@ -138,7 +200,7 @@ func TestSystemInfo(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, capability := range []string{"exam_management", "paper_metadata", "question_config", "rubric_versioning", "paper_config_validation", "file_upload", "object_storage", "private_file_download", "submission_collection", "submission_pages", "submission_quality_gate", "ocr_task_management", "ocr_result_ingestion", "answer_segmentation_metadata", "answer_segment_manual_review", "agent_orchestration_control_plane", "agent_task_management", "agent_task_retry", "agent_human_review_trigger", "answer_segment_answer_capture", "rule_based_objective_grading", "ai_grade_recording", "grading_low_confidence_review_trigger", "subjective_ai_grading_interface", "mock_llm_grading_adapter", "subjective_ai_grade_failure_recording", "rule_based_evidence_verification", "evidence_agent_job_recording", "evidence_failure_review_trigger", "human_review_task_management", "human_grade_recording", "review_assignment_workflow", "double_mark_policy_config", "double_mark_review_sessions", "arbitration_task_management", "final_grade_recording", "submission_grade_aggregation", "grade_confirmation_workflow", "grade_publish_quality_gate", "published_student_grade_lookup", "grade_csv_export_with_watermark", "student_appeal_submission", "appeal_review_workflow", "score_adjustment_audit_trail", "appeal_statistics", "student_learning_report", "exam_report_overview", "class_learning_report", "question_item_analysis", "grading_quality_report", "report_csv_export"} {
+	for _, capability := range []string{"exam_management", "paper_metadata", "question_config", "rubric_versioning", "paper_config_validation", "file_upload", "object_storage", "private_file_download", "submission_collection", "submission_pages", "submission_quality_gate", "ocr_task_management", "ocr_result_ingestion", "answer_segmentation_metadata", "answer_segment_manual_review", "agent_orchestration_control_plane", "agent_task_management", "agent_task_retry", "agent_human_review_trigger", "answer_segment_answer_capture", "rule_based_objective_grading", "ai_grade_recording", "grading_low_confidence_review_trigger", "subjective_ai_grading_interface", "mock_llm_grading_adapter", "subjective_ai_grade_failure_recording", "model_governance_api", "model_secret_reference_probe", "local_model_baseline_registry", "rule_based_evidence_verification", "evidence_agent_job_recording", "evidence_failure_review_trigger", "human_review_task_management", "human_grade_recording", "review_assignment_workflow", "double_mark_policy_config", "double_mark_review_sessions", "arbitration_task_management", "final_grade_recording", "submission_grade_aggregation", "grade_confirmation_workflow", "grade_publish_quality_gate", "published_student_grade_lookup", "grade_csv_export_with_watermark", "student_appeal_submission", "appeal_review_workflow", "score_adjustment_audit_trail", "appeal_statistics", "student_learning_report", "exam_report_overview", "class_learning_report", "question_item_analysis", "grading_quality_report", "report_csv_export"} {
 		if !strings.Contains(body, `"`+capability+`"`) {
 			t.Fatalf("system info must disclose %s capability: %s", capability, body)
 		}

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -24,6 +25,8 @@ var (
 	ErrInvalidDeployment = errors.New("invalid model deployment")
 	ErrInvalidPolicy     = errors.New("invalid tenant model policy")
 	ErrNoDeployment      = errors.New("no governed model deployment is eligible")
+	ErrNotFound          = errors.New("model governance resource not found")
+	ErrConflict          = errors.New("model governance resource conflict")
 
 	governanceKey = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 )
@@ -34,27 +37,110 @@ type DataPolicy struct {
 }
 
 type Provider struct {
+	ID                   string     `json:"id,omitempty"`
+	TenantID             string     `json:"tenant_id,omitempty"`
+	Key                  string     `json:"provider_key"`
+	DisplayName          string     `json:"display_name,omitempty"`
+	Kind                 string     `json:"provider_kind"`
+	AdapterType          string     `json:"adapter_type"`
+	CredentialRef        string     `json:"-"`
+	CredentialConfigured bool       `json:"credential_reference_set"`
+	CredentialScheme     string     `json:"credential_scheme,omitempty"`
+	Region               string     `json:"region"`
+	DataPolicy           DataPolicy `json:"data_policy"`
+	Status               string     `json:"status"`
+	CreatedAt            time.Time  `json:"created_at,omitempty"`
+	UpdatedAt            time.Time  `json:"updated_at,omitempty"`
+}
+
+type Deployment struct {
+	ID                string         `json:"id,omitempty"`
+	TenantID          string         `json:"tenant_id,omitempty"`
+	ProviderID        string         `json:"provider_id,omitempty"`
+	Key               string         `json:"deployment_key"`
+	ProviderKey       string         `json:"provider_key"`
+	ModelName         string         `json:"model_name,omitempty"`
+	ModelVersion      string         `json:"model_version"`
+	Region            string         `json:"region"`
+	CapabilityProfile string         `json:"capability_profile"`
+	Modalities        []string       `json:"modalities"`
+	CapabilityPolicy  map[string]any `json:"capability_policy,omitempty"`
+	PricingPolicy     map[string]any `json:"pricing_policy,omitempty"`
+	Status            string         `json:"status"`
+	HealthState       string         `json:"health_state"`
+	CreatedAt         time.Time      `json:"created_at,omitempty"`
+	UpdatedAt         time.Time      `json:"updated_at,omitempty"`
+}
+
+type TenantPolicy struct {
+	ID                       string    `json:"id,omitempty"`
+	TenantID                 string    `json:"tenant_id,omitempty"`
+	PolicyKey                string    `json:"policy_key,omitempty"`
+	DisplayName              string    `json:"display_name,omitempty"`
+	Mode                     string    `json:"mode"`
+	ExternalEnabled          bool      `json:"external_enabled"`
+	TextExportEnabled        bool      `json:"text_export_enabled"`
+	ImageExportEnabled       bool      `json:"image_export_enabled"`
+	AllowedDeployments       []string  `json:"allowed_deployments"`
+	MaxCostMicrosPerQuestion int64     `json:"max_cost_micros_per_question"`
+	MaxCostMicrosPerExam     int64     `json:"max_cost_micros_per_exam"`
+	FallbackMode             string    `json:"fallback_mode"`
+	Status                   string    `json:"status,omitempty"`
+	Version                  int64     `json:"version,omitempty"`
+	UpdatedAt                time.Time `json:"updated_at,omitempty"`
+}
+
+type LocalBaseline struct {
+	ProviderKey       string
+	ProviderName      string
+	DeploymentKey     string
+	ModelName         string
+	ModelVersion      string
+	AdapterType       string
+	Region            string
+	CapabilityProfile string
+}
+
+type ProviderInput struct {
+	TenantID      string     `json:"tenant_id,omitempty"`
 	Key           string     `json:"provider_key"`
+	DisplayName   string     `json:"display_name"`
 	Kind          string     `json:"provider_kind"`
 	AdapterType   string     `json:"adapter_type"`
 	CredentialRef string     `json:"credential_ref,omitempty"`
 	Region        string     `json:"region"`
 	DataPolicy    DataPolicy `json:"data_policy"`
-	Status        string     `json:"status"`
+	Status        string     `json:"status,omitempty"`
 }
 
-type Deployment struct {
-	Key               string   `json:"deployment_key"`
-	ProviderKey       string   `json:"provider_key"`
-	ModelVersion      string   `json:"model_version"`
-	Region            string   `json:"region"`
-	CapabilityProfile string   `json:"capability_profile"`
-	Modalities        []string `json:"modalities"`
-	Status            string   `json:"status"`
-	HealthState       string   `json:"health_state"`
+type ProviderStatusInput struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
 }
 
-type TenantPolicy struct {
+type DeploymentInput struct {
+	TenantID          string         `json:"tenant_id,omitempty"`
+	ProviderID        string         `json:"provider_id"`
+	Key               string         `json:"deployment_key"`
+	ModelName         string         `json:"model_name"`
+	ModelVersion      string         `json:"model_version"`
+	Region            string         `json:"region"`
+	CapabilityProfile string         `json:"capability_profile"`
+	Modalities        []string       `json:"modalities"`
+	CapabilityPolicy  map[string]any `json:"capability_policy"`
+	PricingPolicy     map[string]any `json:"pricing_policy"`
+	Status            string         `json:"status,omitempty"`
+	HealthState       string         `json:"health_state,omitempty"`
+}
+
+type DeploymentStateInput struct {
+	Status      string `json:"status"`
+	HealthState string `json:"health_state"`
+	Reason      string `json:"reason"`
+}
+
+type PolicyUpdateInput struct {
+	DisplayName              string   `json:"display_name"`
 	Mode                     string   `json:"mode"`
 	ExternalEnabled          bool     `json:"external_enabled"`
 	TextExportEnabled        bool     `json:"text_export_enabled"`
@@ -63,6 +149,8 @@ type TenantPolicy struct {
 	MaxCostMicrosPerQuestion int64    `json:"max_cost_micros_per_question"`
 	MaxCostMicrosPerExam     int64    `json:"max_cost_micros_per_exam"`
 	FallbackMode             string   `json:"fallback_mode"`
+	ExpectedVersion          int64    `json:"expected_version"`
+	Reason                   string   `json:"reason"`
 }
 
 type RouteRequest struct {
@@ -90,6 +178,11 @@ func ValidateProvider(provider Provider) error {
 		(provider.Kind != ProviderLocal && provider.Kind != ProviderExternal) ||
 		strings.TrimSpace(provider.Region) == "" ||
 		provider.DataPolicy.TrainingAllowed ||
+		(provider.Status != "unverified" &&
+			provider.Status != "active" &&
+			provider.Status != "degraded" &&
+			provider.Status != "rate_limited" &&
+			provider.Status != "disabled") ||
 		(provider.DataPolicy.RetentionMode != "no_store" && provider.DataPolicy.RetentionMode != "contractual") {
 		return ErrInvalidProvider
 	}

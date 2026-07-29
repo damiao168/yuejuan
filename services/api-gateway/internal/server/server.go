@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 
 	"edugrade-enterprise/services/api-gateway/internal/appeal"
@@ -17,6 +18,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/imagequality"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
 	"edugrade-enterprise/services/api-gateway/internal/middleware"
+	"edugrade-enterprise/services/api-gateway/internal/modelgovernance"
 	ocrpkg "edugrade-enterprise/services/api-gateway/internal/ocr"
 	"edugrade-enterprise/services/api-gateway/internal/orchestrator"
 	"edugrade-enterprise/services/api-gateway/internal/org"
@@ -62,6 +64,11 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 	appealStore := appeal.NewPostgresStore(postgresDB)
 	reportStore := report.NewPostgresStore(postgresDB)
 	captureStore := capture.NewPostgresStoreWithBarcodeKeyring(postgresDB, capture.BarcodeKeyring{ActiveKeyID: cfg.Barcode.ActiveKeyID, Keys: cfg.Barcode.HMACKeys})
+	modelGovernanceStore := modelgovernance.NewPostgresStore(postgresDB)
+	if err := modelGovernanceStore.EnsureLocalBaseline(context.Background(), "", localModelBaseline(cfg)); err != nil {
+		_ = closePostgres()
+		return nil, nil, err
+	}
 	postgresChecker := deps.NewPostgresChecker(postgresDB)
 	checkers = append(checkers, postgresChecker)
 	cleanups = append(cleanups, closePostgres)
@@ -82,7 +89,7 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 		return nil, nil, err
 	}
 
-	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, scoreStore, appealStore, reportStore, captureStore)
+	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, scoreStore, appealStore, reportStore, captureStore, modelGovernanceStore)
 	cleanup := func() {
 		for _, closeFn := range cleanups {
 			_ = closeFn()
@@ -129,6 +136,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	var appealStore appeal.Store = appeal.NewMemoryStore()
 	var reportStore report.Store = report.NewMemoryStore()
 	var captureStore capture.Store = capture.NewMemoryStore()
+	var modelGovernanceStore modelgovernance.Store = modelgovernance.NewMemoryStore()
 	for _, optionalStore := range optionalStores {
 		switch store := optionalStore.(type) {
 		case imagequality.Store:
@@ -175,6 +183,10 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 			if store != nil {
 				captureStore = store
 			}
+		case modelgovernance.Store:
+			if store != nil {
+				modelGovernanceStore = store
+			}
 		}
 	}
 	h.WithWorkerRuntimeStore(workerRuntimeStore)
@@ -208,6 +220,12 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	scoreHandler := score.NewHandler(scoreStore, authStore)
 	appealHandler := appeal.NewHandler(appealStore, authStore)
 	reportHandler := report.NewHandler(reportStore, authStore)
+	modelGovernanceHandler := modelgovernance.NewHandler(
+		modelGovernanceStore,
+		authStore,
+		modelgovernance.NewEnvironmentSecretResolver(""),
+		localModelBaseline(cfg),
+	)
 	requireAuth := auth.AuthMiddleware(authStore, auth.HandlerOptions{CookieName: cfg.Auth.SessionCookieName})
 	requireOrgManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("org:manage")(handler))
@@ -305,6 +323,15 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	requireSystemRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("system:read")(handler))
 	}
+	requireModelRead := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequirePermission("model:read")(handler))
+	}
+	requireModelProviderManage := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequirePermission("model:provider:manage")(handler))
+	}
+	requireModelPolicyManage := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequirePermission("model:policy:manage")(handler))
+	}
 	requireOCRAvailabilityRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequireAnyPermission(
 			"review:work",
@@ -336,6 +363,15 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/roles", requireOrgManage(authHandler.ListAssignableRoles))
 	mux.Handle("GET /api/v1/audit-logs", requireAuditRead(authHandler.ListAudits))
 	mux.Handle("POST /api/v1/audit-logs/export", requireAuditExport(authHandler.ExportAudits))
+	mux.Handle("GET /api/v1/model-providers", requireModelRead(modelGovernanceHandler.ListProviders))
+	mux.Handle("POST /api/v1/model-providers", requireModelProviderManage(modelGovernanceHandler.CreateProvider))
+	mux.Handle("PATCH /api/v1/model-providers/{id}/status", requireModelProviderManage(modelGovernanceHandler.UpdateProviderStatus))
+	mux.Handle("GET /api/v1/model-deployments", requireModelRead(modelGovernanceHandler.ListDeployments))
+	mux.Handle("POST /api/v1/model-deployments", requireModelProviderManage(modelGovernanceHandler.CreateDeployment))
+	mux.Handle("PATCH /api/v1/model-deployments/{id}/state", requireModelProviderManage(modelGovernanceHandler.UpdateDeploymentState))
+	mux.Handle("GET /api/v1/model-policy", requireModelRead(modelGovernanceHandler.GetPolicy))
+	mux.Handle("PUT /api/v1/model-policy", requireModelPolicyManage(modelGovernanceHandler.UpdatePolicy))
+	mux.Handle("POST /api/v1/model-secrets/probe", requireModelProviderManage(modelGovernanceHandler.ProbeSecret))
 
 	mux.Handle("POST /api/v1/tenants", requireTenantManage(orgHandler.CreateTenant))
 	mux.Handle("GET /api/v1/tenants", requireAuth(http.HandlerFunc(orgHandler.ListTenants)))
@@ -561,6 +597,19 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 
 func (s *Server) Handler() http.Handler {
 	return s.handler
+}
+
+func localModelBaseline(cfg config.Config) modelgovernance.LocalBaseline {
+	return modelgovernance.LocalBaseline{
+		ProviderKey:       cfg.AIService.ProviderKey,
+		ProviderName:      "Local grading runtime",
+		DeploymentKey:     cfg.AIService.DeploymentKey,
+		ModelName:         cfg.AIService.ModelVersion,
+		ModelVersion:      cfg.AIService.ModelVersion,
+		AdapterType:       cfg.AIService.AdapterType,
+		Region:            cfg.AIService.DeploymentRegion,
+		CapabilityProfile: cfg.AIService.CapabilityProfile,
+	}
 }
 
 func skipGlobalBodyLimit(r *http.Request) bool {
