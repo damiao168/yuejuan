@@ -503,6 +503,7 @@ type Store interface {
 	GetFile(ctx context.Context, tenantID, fileID string) (File, error)
 	ListFiles(ctx context.Context, tenantID, batchID string) ([]File, error)
 	ListPages(ctx context.Context, tenantID, batchID string) ([]Page, error)
+	GetPageBySubmissionPageID(ctx context.Context, tenantID, submissionPageID string) (Page, error)
 	GetMatchingQueue(ctx context.Context, tenantID, batchID string) (MatchingQueue, error)
 	ConfirmStudentMatch(ctx context.Context, tenantID, submissionID, actorID string, input ConfirmStudentMatchInput) (MatchingSubmission, error)
 	MarkStudentUnknown(ctx context.Context, tenantID, submissionID, actorID string, input MarkStudentUnknownInput) (MatchingSubmission, error)

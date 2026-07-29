@@ -353,7 +353,8 @@ func (s *MemoryStore) RegisterFile(_ context.Context, tenantID, batchID, actorID
 	}
 	status := "uploaded"
 	for _, x := range s.files {
-		if x.TenantID == tenantID && x.CaptureBatchID == batchID && x.SHA256 == asset.SHA256 {
+		if x.TenantID == tenantID && x.CaptureBatchID == batchID && x.SHA256 == asset.SHA256 &&
+			(x.Status == "uploaded" || x.Status == "queued" || x.Status == "processing" || x.Status == "completed") {
 			status = "duplicate"
 		}
 	}
@@ -400,6 +401,20 @@ func (s *MemoryStore) ListPages(_ context.Context, tenantID, batchID string) ([]
 	return out, nil
 }
 
+func (s *MemoryStore) GetPageBySubmissionPageID(_ context.Context, tenantID, submissionPageID string) (Page, error) {
+	if submissionPageID == "" {
+		return Page{}, ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, page := range s.pages {
+		if page.TenantID == tenantID && page.SubmissionPageID == submissionPageID {
+			return page, nil
+		}
+	}
+	return Page{}, ErrNotFound
+}
+
 func (s *MemoryStore) QueueBatch(_ context.Context, tenantID, batchID, actorID string) (Batch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -412,8 +427,9 @@ func (s *MemoryStore) QueueBatch(_ context.Context, tenantID, batchID, actorID s
 	}
 	count := 0
 	for id, x := range s.files {
-		if x.TenantID == tenantID && x.CaptureBatchID == batchID && x.Status == "uploaded" {
+		if x.TenantID == tenantID && x.CaptureBatchID == batchID && (x.Status == "uploaded" || x.Status == "failed") {
 			x.Status = "queued"
+			x.ErrorCode = ""
 			s.files[id] = x
 			count++
 		}
@@ -517,6 +533,10 @@ func (s *MemoryStore) ApplyQualityOutcome(_ context.Context, tenantID, submissio
 	for id, page := range s.pages {
 		if page.TenantID == tenantID && page.SubmissionPageID == submissionPageID {
 			page.Status = status
+			if page.PageIdentity == nil {
+				page.PageIdentity = map[string]any{}
+			}
+			page.PageIdentity["quality_status"] = qualityStatus
 			page.Revision++
 			s.pages[id] = page
 			return nil

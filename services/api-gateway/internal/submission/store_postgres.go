@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
+	"time"
 )
 
 type PostgresStore struct {
@@ -241,6 +243,90 @@ RETURNING id::text, tenant_id::text, submission_id::text, file_asset_id::text, p
 		return SubmissionPage{}, err
 	}
 	if err := tx.Commit(); err != nil {
+		return SubmissionPage{}, err
+	}
+	return page, nil
+}
+
+func (s *PostgresStore) OverridePageQuality(ctx context.Context, tenantID string, pageID string, actorID string, input OverridePageQualityInput) (SubmissionPage, error) {
+	reason := strings.TrimSpace(input.Reason)
+	if pageID == "" || actorID == "" || len([]rune(reason)) < 5 || len([]rune(reason)) > 500 {
+		return SubmissionPage{}, ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SubmissionPage{}, err
+	}
+	defer tx.Rollback()
+	var submissionID, currentStatus, normalizedAssetID, submissionStatus string
+	var currentIssues, currentOverride []byte
+	err = tx.QueryRowContext(ctx, `
+SELECT sp.submission_id::text,sp.quality_status,COALESCE(sp.normalized_file_asset_id::text,''),
+       sp.quality_issues,sp.quality_override,s.status
+FROM submission_page sp
+JOIN submission s ON s.tenant_id=sp.tenant_id AND s.id=sp.submission_id
+WHERE sp.tenant_id=$1 AND sp.id=$2::uuid AND sp.deleted_at IS NULL AND s.deleted_at IS NULL
+FOR UPDATE OF sp,s
+`, tenantID, pageID).Scan(&submissionID, &currentStatus, &normalizedAssetID, &currentIssues, &currentOverride, &submissionStatus)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SubmissionPage{}, ErrNotFound
+		}
+		return SubmissionPage{}, err
+	}
+	if submissionStatus == "ready_for_ocr" || submissionStatus == "rejected" {
+		return SubmissionPage{}, ErrSubmissionLocked
+	}
+	if currentStatus == "passed" {
+		var existingOverride map[string]any
+		if json.Unmarshal(currentOverride, &existingOverride) == nil && existingOverride["decision"] == "accepted" {
+			var page SubmissionPage
+			err = scanPage(tx.QueryRowContext(ctx, `
+SELECT id::text, tenant_id::text, submission_id::text, file_asset_id::text, page_no, status,
+  COALESCE(latest_quality_run_id::text, ''), COALESCE(normalized_file_asset_id::text, ''),
+  quality_status, quality_override, quality_issues, created_at
+FROM submission_page
+WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL
+`, tenantID, pageID), &page)
+			if err != nil {
+				return SubmissionPage{}, err
+			}
+			return page, tx.Commit()
+		}
+	}
+	if currentStatus != "review" && currentStatus != "failed" {
+		return SubmissionPage{}, ErrInvalidTransition
+	}
+	if normalizedAssetID == "" {
+		return SubmissionPage{}, ErrInvalidTransition
+	}
+	overrideJSON, err := json.Marshal(map[string]any{
+		"decision":                "accepted",
+		"reason":                  reason,
+		"actor_id":                actorID,
+		"overridden_at":           time.Now().UTC(),
+		"original_quality_status": currentStatus,
+		"original_quality_issues": json.RawMessage(currentIssues),
+	})
+	if err != nil {
+		return SubmissionPage{}, err
+	}
+	row := tx.QueryRowContext(ctx, `
+UPDATE submission_page
+SET quality_status='passed',quality_override=$3,updated_at=now()
+WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL
+RETURNING id::text, tenant_id::text, submission_id::text, file_asset_id::text, page_no, status,
+  COALESCE(latest_quality_run_id::text, ''), COALESCE(normalized_file_asset_id::text, ''),
+  quality_status, quality_override, quality_issues, created_at
+`, tenantID, pageID, overrideJSON)
+	var page SubmissionPage
+	if err = scanPage(row, &page); err != nil {
+		return SubmissionPage{}, err
+	}
+	if err = s.aggregateQualityTx(ctx, tx, tenantID, submissionID); err != nil {
+		return SubmissionPage{}, err
+	}
+	if err = tx.Commit(); err != nil {
 		return SubmissionPage{}, err
 	}
 	return page, nil

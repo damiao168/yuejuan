@@ -56,3 +56,47 @@ func TestReplacePageInvalidatesImageQualityPointers(t *testing.T) {
 		t.Fatalf("replace should clear quality override: %#v", replaced.QualityOverride)
 	}
 }
+
+func TestOverridePageQualityPreservesMachineEvidenceAndPassesAggregate(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	item, err := store.Create(ctx, "tenant-1", "exam-1", "actor-1", CreateSubmissionInput{SourceType: "scanner_upload", ExpectedPageCount: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.AddPage(ctx, "tenant-1", item.ID, "actor-1", AddPageInput{FileAssetID: "source-1", PageNo: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err = store.ApplyPageQualityResult(ctx, "tenant-1", ApplyPageQualityInput{
+		SubmissionID:          item.ID,
+		PageID:                page.ID,
+		LatestQualityRunID:    "quality-run-1",
+		NormalizedFileAssetID: "normalized-1",
+		QualityStatus:         "failed",
+		QualityIssues:         []QualityIssue{{Code: "blur", Message: "machine threshold exceeded"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overridden, err := store.OverridePageQuality(ctx, "tenant-1", page.ID, "reviewer-1", OverridePageQualityInput{Reason: "人工核对页面清晰可阅卷"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overridden.QualityStatus != "passed" || overridden.QualityOverride["decision"] != "accepted" ||
+		overridden.QualityOverride["original_quality_status"] != "failed" ||
+		overridden.QualityOverride["actor_id"] != "reviewer-1" {
+		t.Fatalf("override evidence is incomplete: %#v", overridden)
+	}
+	if len(overridden.QualityIssues) != 1 || overridden.QualityIssues[0].Code != "blur" {
+		t.Fatalf("machine issues must remain queryable: %#v", overridden.QualityIssues)
+	}
+	aggregate, err := store.Get(ctx, "tenant-1", item.ID)
+	if err != nil || aggregate.QualityStatus != "passed" || aggregate.Status != "quality_checked" {
+		t.Fatalf("override should update aggregate: %#v %v", aggregate, err)
+	}
+	replayed, err := store.OverridePageQuality(ctx, "tenant-1", page.ID, "reviewer-1", OverridePageQualityInput{Reason: "重复请求应恢复原决定"})
+	if err != nil || replayed.QualityOverride["reason"] != "人工核对页面清晰可阅卷" {
+		t.Fatalf("idempotent override replay must preserve the original decision: %#v %v", replayed, err)
+	}
+}

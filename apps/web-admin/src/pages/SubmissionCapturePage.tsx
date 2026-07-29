@@ -782,6 +782,13 @@ export function SubmissionCapturePage({
 
       <OcrWorkerAlert enabled={canManage} />
 
+      <Alert
+        type="warning"
+        showIcon
+        message="当前页面是兼容模式"
+        description="旧版答卷直传与直接切题流程已废弃，不再作为生产采集入口。新考试请从考试工作区进入「答卷采集批次」，以保留拆页、质量检查、版面对齐和题目裁剪证据。"
+      />
+
       {studentLookupError ? (
         <Alert type="info" showIcon message="学生姓名未完全加载" description="部分学生姓名暂时无法加载，不影响答卷采集，稍后刷新重试即可。" />
       ) : null}

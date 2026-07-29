@@ -95,7 +95,11 @@ func (s *PostgresStore) RegisterFile(ctx context.Context, tenantID, batchID, act
 	}
 	duplicateStatus := "uploaded"
 	var duplicateID string
-	err = tx.QueryRowContext(ctx, `SELECT id::text FROM capture_file WHERE tenant_id=$1 AND capture_batch_id=$2::uuid AND sha256=$3 AND deleted_at IS NULL LIMIT 1`, tenantID, batchID, asset.SHA256).Scan(&duplicateID)
+	err = tx.QueryRowContext(ctx, `SELECT id::text FROM capture_file
+WHERE tenant_id=$1 AND capture_batch_id=$2::uuid AND sha256=$3
+  AND status IN ('uploaded','queued','processing','completed')
+  AND deleted_at IS NULL
+LIMIT 1`, tenantID, batchID, asset.SHA256).Scan(&duplicateID)
 	if err == nil {
 		duplicateStatus = "duplicate"
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -158,6 +162,14 @@ func (s *PostgresStore) ListPages(ctx context.Context, tenantID, batchID string)
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) GetPageBySubmissionPageID(ctx context.Context, tenantID, submissionPageID string) (Page, error) {
+	if submissionPageID == "" {
+		return Page{}, ErrInvalidInput
+	}
+	return scanPage(s.db.QueryRowContext(ctx, `SELECT `+pageColumns+` FROM capture_page
+WHERE tenant_id=$1 AND submission_page_id=$2::uuid AND deleted_at IS NULL`, tenantID, submissionPageID))
+}
+
 func (s *PostgresStore) QueueBatch(ctx context.Context, tenantID, batchID, actorID string) (Batch, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -174,7 +186,11 @@ func (s *PostgresStore) QueueBatch(ctx context.Context, tenantID, batchID, actor
 	if current == "completed" || current == "cancelled" {
 		return Batch{}, ErrInvalidTransition
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT `+fileColumns+` FROM capture_file WHERE tenant_id=$1 AND capture_batch_id=$2::uuid AND status='uploaded' AND deleted_at IS NULL FOR UPDATE`, tenantID, batchID)
+	rows, err := tx.QueryContext(ctx, `SELECT `+fileColumns+` FROM capture_file
+WHERE tenant_id=$1 AND capture_batch_id=$2::uuid AND status IN ('uploaded','failed')
+  AND deleted_at IS NULL
+ORDER BY created_at
+FOR UPDATE`, tenantID, batchID)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -200,13 +216,39 @@ func (s *PostgresStore) QueueBatch(ctx context.Context, tenantID, batchID, actor
 	for _, item := range files {
 		payload, _ := json.Marshal(map[string]any{"capture_file_id": item.ID, "file_asset_id": item.FileAssetID, "exam_id": examID, "download_url": "/api/v1/files/" + item.FileAssetID + "/download", "content_type": item.ContentType, "sha256": item.SHA256, "max_pages": 500, "render_dpi": 300})
 		key := "capture-decode:" + item.ID + ":v1"
-		_, err = tx.ExecContext(ctx, `INSERT INTO agent_worker_task (tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)
+		if item.Status == "failed" {
+			result, retryErr := tx.ExecContext(ctx, `UPDATE agent_worker_task
+SET status='queued',
+    not_before=NULL,
+    lease_token=NULL,
+    lease_expires_at=NULL,
+    leased_by=NULL,
+    completed_at=NULL,
+    max_attempts=GREATEST(max_attempts,attempt_count+1),
+    updated_at=now()
+WHERE tenant_id=$1
+  AND source_type='capture_file'
+  AND source_id=$2::uuid
+  AND status IN ('failed','dead_letter')`, tenantID, item.ID)
+			if retryErr != nil {
+				return Batch{}, retryErr
+			}
+			affected, retryErr := result.RowsAffected()
+			if retryErr != nil {
+				return Batch{}, retryErr
+			}
+			if affected != 1 {
+				return Batch{}, ErrConflict
+			}
+		} else {
+			_, err = tx.ExecContext(ctx, `INSERT INTO agent_worker_task (tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)
 VALUES ($1,'capture_file_decode','page-processing','capture_file',$2::uuid,50,$3,'capture-file-decode-v1',$4,$4,5,5,NULLIF($5,'')::uuid)
 ON CONFLICT (tenant_id,task_type,idempotency_key) DO NOTHING`, tenantID, item.ID, payload, key, actorID)
-		if err != nil {
-			return Batch{}, err
+			if err != nil {
+				return Batch{}, err
+			}
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE capture_file SET status='queued',updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, item.ID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE capture_file SET status='queued',error_code=NULL,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, item.ID); err != nil {
 			return Batch{}, err
 		}
 	}
@@ -648,8 +690,12 @@ func (s *PostgresStore) ApplyQualityOutcome(ctx context.Context, tenantID, submi
 	}
 	defer tx.Rollback()
 	var batchID string
-	err = tx.QueryRowContext(ctx, `UPDATE capture_page SET status=CASE WHEN $3='normalized' AND page_identity->>'barcode_status'='needs_review' THEN 'needs_review' ELSE $3 END,revision=revision+1,updated_at=now()
-WHERE tenant_id=$1 AND submission_page_id=$2::uuid AND deleted_at IS NULL RETURNING capture_batch_id::text`, tenantID, submissionPageID, pageStatus).Scan(&batchID)
+	err = tx.QueryRowContext(ctx, `UPDATE capture_page
+SET status=CASE WHEN $3='normalized' AND page_identity->>'barcode_status'='needs_review' THEN 'needs_review' ELSE $3 END,
+    page_identity=page_identity || jsonb_build_object('quality_status',$4::text),
+    revision=revision+1,
+    updated_at=now()
+WHERE tenant_id=$1 AND submission_page_id=$2::uuid AND deleted_at IS NULL RETURNING capture_batch_id::text`, tenantID, submissionPageID, pageStatus, qualityStatus).Scan(&batchID)
 	if err != nil {
 		return mapNotFound(err)
 	}

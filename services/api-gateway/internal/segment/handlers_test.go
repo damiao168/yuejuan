@@ -84,6 +84,28 @@ func TestGenerateSegmentsReportsMissingPageAndAnswerArea(t *testing.T) {
 	}
 }
 
+func TestLegacySegmentGenerationIsExplicitlyDeprecated(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"segment:manage"})
+	submissionStore := submission.NewMemoryStore()
+	item := readySubmission(t, submissionStore)
+	paperStore := paper.NewMemoryStore()
+	createQuestion(t, paperStore, item.ExamID, "Q1", 1, map[string]any{"page": 1.0, "x": 10.0, "y": 20.0, "w": 100.0, "h": 40.0})
+	router := testRouter(authStore, paperStore, submissionStore, segment.NewMemoryStore())
+	token := login(t, router)
+
+	req := authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/segment-answers", nil, token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("legacy compatibility route expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Deprecation") != "true" || rec.Header().Get("Sunset") == "" ||
+		!strings.Contains(rec.Header().Get("Warning"), "deprecated") ||
+		!strings.Contains(rec.Header().Get("Link"), "successor-version") {
+		t.Fatalf("legacy route must advertise its replacement and sunset: %#v", rec.Header())
+	}
+}
+
 func TestSegmentationRequiresReadySubmission(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"segment:manage"})
 	submissionStore := submission.NewMemoryStore()

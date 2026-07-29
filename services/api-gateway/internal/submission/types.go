@@ -82,6 +82,10 @@ type ApplyPageQualityInput struct {
 	QualityIssues         []QualityIssue
 }
 
+type OverridePageQualityInput struct {
+	Reason string `json:"reason"`
+}
+
 type Store interface {
 	Create(ctx context.Context, tenantID string, examID string, actorID string, input CreateSubmissionInput) (Submission, error)
 	ListByExam(ctx context.Context, tenantID string, examID string) ([]Submission, error)
@@ -90,6 +94,7 @@ type Store interface {
 	ReplacePage(ctx context.Context, tenantID string, submissionID string, actorID string, pageNo int, input AddPageInput) (SubmissionPage, error)
 	ListPages(ctx context.Context, tenantID string, submissionID string) ([]SubmissionPage, error)
 	ApplyPageQualityResult(ctx context.Context, tenantID string, input ApplyPageQualityInput) (SubmissionPage, error)
+	OverridePageQuality(ctx context.Context, tenantID string, pageID string, actorID string, input OverridePageQualityInput) (SubmissionPage, error)
 	RunQualityCheck(ctx context.Context, tenantID string, submissionID string, actorID string) (QualityResult, error)
 	UpdateStatus(ctx context.Context, tenantID string, submissionID string, actorID string, status string) (Submission, error)
 }

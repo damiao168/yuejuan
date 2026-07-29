@@ -109,6 +109,13 @@ export async function processCaptureBatch(batchId: string) {
   return apiClient.request<{ batch: CaptureBatch }>(`/api/v1/capture-batches/${encodeURIComponent(batchId)}/process`, { method: "POST" });
 }
 
+export async function overrideCapturePageQuality(submissionPageId: string, reason: string) {
+  return apiClient.request<{ page: { id: string; submission_id: string; quality_status: string }; registration_runs: RegistrationRun[] }>(
+    `/api/v1/submission-pages/${encodeURIComponent(submissionPageId)}/quality-override`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+}
+
 export async function completeCaptureBatch(batchId: string, reason: string) {
   return apiClient.request<{ batch: CaptureBatch }>(`/api/v1/capture-batches/${encodeURIComponent(batchId)}/complete`, { method: "POST", body: JSON.stringify({ reason }) });
 }

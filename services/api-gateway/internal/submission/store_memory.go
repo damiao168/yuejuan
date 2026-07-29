@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -182,6 +183,47 @@ func (s *MemoryStore) ApplyPageQualityResult(_ context.Context, tenantID string,
 	page.QualityIssues = append([]QualityIssue{}, input.QualityIssues...)
 	s.pages[input.PageID] = page
 	s.aggregateQualityLocked(tenantID, input.SubmissionID)
+	return page, nil
+}
+
+func (s *MemoryStore) OverridePageQuality(_ context.Context, tenantID string, pageID string, actorID string, input OverridePageQualityInput) (SubmissionPage, error) {
+	reason := strings.TrimSpace(input.Reason)
+	if pageID == "" || actorID == "" || len([]rune(reason)) < 5 || len([]rune(reason)) > 500 {
+		return SubmissionPage{}, ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	page, ok := s.pages[pageID]
+	if !ok || page.TenantID != tenantID {
+		return SubmissionPage{}, ErrNotFound
+	}
+	item, ok := s.submissions[page.SubmissionID]
+	if !ok || item.TenantID != tenantID {
+		return SubmissionPage{}, ErrNotFound
+	}
+	if item.Status == "ready_for_ocr" || item.Status == "rejected" {
+		return SubmissionPage{}, ErrSubmissionLocked
+	}
+	if page.QualityStatus == "passed" && page.QualityOverride["decision"] == "accepted" {
+		return page, nil
+	}
+	if page.QualityStatus != "review" && page.QualityStatus != "failed" {
+		return SubmissionPage{}, ErrInvalidTransition
+	}
+	if page.NormalizedFileAssetID == "" {
+		return SubmissionPage{}, ErrInvalidTransition
+	}
+	page.QualityOverride = map[string]any{
+		"decision":                "accepted",
+		"reason":                  reason,
+		"actor_id":                actorID,
+		"overridden_at":           time.Now().UTC(),
+		"original_quality_status": page.QualityStatus,
+		"original_quality_issues": append([]QualityIssue{}, page.QualityIssues...),
+	}
+	page.QualityStatus = "passed"
+	s.pages[pageID] = page
+	s.aggregateQualityLocked(tenantID, page.SubmissionID)
 	return page, nil
 }
 

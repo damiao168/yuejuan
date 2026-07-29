@@ -92,3 +92,39 @@ func TestCompletedBatchRejectsFurtherWrites(t *testing.T) {
 		t.Fatalf("completed batch queue should be rejected, got %v", err)
 	}
 }
+
+func TestFailedCaptureFileCanRetryAndSameHashCanBeReuploaded(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	batch, err := store.CreateBatch(ctx, "tenant-1", "exam-1", "user-1", CreateBatchInput{Name: "recovery", SourceType: "web_upload"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.RegisterFile(ctx, "tenant-1", batch.ID, "user-1", RegisterFileInput{FileAssetID: "asset-1", IdempotencyKey: "file-1"}, FileAssetSnapshot{ID: "asset-1", SizeBytes: 10, SHA256: "sha256:same"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.QueueBatch(ctx, "tenant-1", batch.ID, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.ApplyFileFailure(ctx, "tenant-1", first.ID, "pdf_decode_failed", false)
+	if err != nil || failed.Status != "failed" {
+		t.Fatalf("fail source file: %#v %v", failed, err)
+	}
+	reuploaded, err := store.RegisterFile(ctx, "tenant-1", batch.ID, "user-1", RegisterFileInput{FileAssetID: "asset-2", IdempotencyKey: "file-2"}, FileAssetSnapshot{ID: "asset-2", SizeBytes: 10, SHA256: "sha256:same"})
+	if err != nil || reuploaded.Status != "uploaded" {
+		t.Fatalf("failed hash should be accepted again: %#v %v", reuploaded, err)
+	}
+	duplicate, err := store.RegisterFile(ctx, "tenant-1", batch.ID, "user-1", RegisterFileInput{FileAssetID: "asset-3", IdempotencyKey: "file-3"}, FileAssetSnapshot{ID: "asset-3", SizeBytes: 10, SHA256: "sha256:same"})
+	if err != nil || duplicate.Status != "duplicate" {
+		t.Fatalf("active hash should still be deduplicated: %#v %v", duplicate, err)
+	}
+	if _, err = store.QueueBatch(ctx, "tenant-1", batch.ID, "user-1"); err != nil {
+		t.Fatalf("retry failed file in batch: %v", err)
+	}
+	first, _ = store.GetFile(ctx, "tenant-1", first.ID)
+	reuploaded, _ = store.GetFile(ctx, "tenant-1", reuploaded.ID)
+	if first.Status != "queued" || first.ErrorCode != "" || reuploaded.Status != "queued" {
+		t.Fatalf("recovery queue did not reset eligible files: first=%#v reuploaded=%#v", first, reuploaded)
+	}
+}

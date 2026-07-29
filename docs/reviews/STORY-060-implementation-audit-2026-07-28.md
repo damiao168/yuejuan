@@ -1,6 +1,6 @@
 # STORY-060 实现事实审计（2026-07-28）
 
-> 2026-07-29 进展更新：本审计指出的 STORY-060B 缺口已收口。模板 profile 级校准、按题目与结果层的分层抽样、服务端盲标保护、双人审批/撤销、相同内容哈希模板的受控克隆继承，以及跨题自动确认 PostgreSQL E2E 已落地。下文保留 7 月 28 日审计原貌，作为变更前基线。
+> 2026-07-29 进展更新：本审计指出的 STORY-060B、060C 缺口已收口。模板 profile 级校准、无偏分层抽样和受控克隆继承已落地；失败采集文件批内重排、失败后同 hash 重传、质量人工放行及自动恢复配准任务也已通过 PostgreSQL E2E。旧 submission 直传/直接切题入口已明确标记废弃。下文保留 7 月 28 日审计原貌，作为变更前基线。
 
 ## 结论
 
@@ -121,11 +121,11 @@ STORY-060 当前应标记为 **In Progress**，不能批准完成，也不能把
 
 ### STORY-060C：采集自救
 
-- failed capture file 批内重排，创建或恢复真实 Worker task。
-- 失败/作废源文件允许同 hash 重传；正常完成文件仍防重复。
-- 质量人工放行 API、原因、操作者、时间、原问题和审计。
-- 放行后恢复配准链路，不能只改展示状态。
-- 关闭或明确废弃旧 submission 直传通道。
+- [x] failed capture file 批内重排，恢复原 Worker task 并保留历史 attempt。
+- [x] 失败源文件允许同 hash 重传；活跃或正常完成文件仍防重复。
+- [x] 质量人工放行 API/UI，保存原因、操作者、时间、原质量状态和原问题并写审计。
+- [x] 放行后把 capture page 恢复为 normalized 并立即创建真实 page registration task。
+- [x] 旧 submission 直传/直接切题通道通过兼容页警示及标准 HTTP deprecation/sunset/successor 元数据明确废弃。
 
 ### STORY-060D：最终回归与实体证据
 

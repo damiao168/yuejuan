@@ -3,6 +3,7 @@ package imagequality
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -93,6 +94,39 @@ func (h *Handler) RunQualityCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	h.auditAction(r, "image_quality.runs_created", "submission", submissionID, "create image quality runs")
 	httpx.JSON(w, http.StatusAccepted, map[string]any{"runs": runs})
+}
+
+func (h *Handler) OverridePageQuality(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	if h.captures == nil {
+		httpx.Error(w, r, http.StatusConflict, "capture_pipeline_unavailable", "capture pipeline is unavailable")
+		return
+	}
+	var input submission.OverridePageQualityInput
+	if !decodeStrictJSON(w, r, &input) {
+		return
+	}
+	input.Reason = strings.TrimSpace(input.Reason)
+	if _, err := h.captures.GetPageBySubmissionPageID(r.Context(), user.TenantID, r.PathValue("id")); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	page, err := h.submissions.OverridePageQuality(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	if err = h.captures.ApplyQualityOutcome(r.Context(), user.TenantID, page.ID, QualityPassed); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	runs, err := h.captures.QueueSubmissionPages(r.Context(), user.TenantID, page.SubmissionID, user.ID)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "image_quality.page_overridden", "submission_page", page.ID, input.Reason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"page": page, "registration_runs": runs})
 }
 
 func (h *Handler) ClaimJobs(w http.ResponseWriter, r *http.Request) {
@@ -307,6 +341,24 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
+func decodeStrictJSON(w http.ResponseWriter, r *http.Request, target any) bool {
+	if r.Body == nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "json body is required")
+		return false
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "invalid json body")
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "request body must contain one json object")
+		return false
+	}
+	return true
+}
+
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound), errors.Is(err, submission.ErrNotFound), errors.Is(err, files.ErrNotFound), errors.Is(err, capture.ErrNotFound):
@@ -319,7 +371,7 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, "image_quality_lease_mismatch", "image quality lease mismatch")
 	case errors.Is(err, ErrConflict):
 		httpx.Error(w, r, http.StatusConflict, "image_quality_result_conflict", "image quality result conflicts with existing result")
-	case errors.Is(err, ErrInvalidTransition):
+	case errors.Is(err, ErrInvalidTransition), errors.Is(err, submission.ErrInvalidTransition), errors.Is(err, submission.ErrSubmissionLocked), errors.Is(err, capture.ErrInvalidTransition):
 		httpx.Error(w, r, http.StatusConflict, "invalid_image_quality_transition", "image quality status transition is not allowed")
 	case errors.Is(err, workerruntime.ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, "worker_task_not_found", "worker task not found")

@@ -47,6 +47,7 @@ import {
   listCaptureBatches,
   markStudentUnknown,
   mergeCaptureSubmissions,
+  overrideCapturePageQuality,
   processCaptureBatch,
   processSubmissionPages,
   reopenCaptureBatch,
@@ -85,6 +86,7 @@ const statusLabels: Record<string, string> = {
   registration: "正在对齐版面",
   deleted: "已删除",
   quality_rejected: "质量不合格",
+  normalized: "质量已通过",
 };
 
 const errorLabels: Record<string, string> = {
@@ -371,6 +373,8 @@ export function CaptureBatchPage({
   const [activeTab, setActiveTab] = useState("files");
   const [reopenOpen, setReopenOpen] = useState(false);
   const [reopenReason, setReopenReason] = useState("");
+  const [qualityOverridePage, setQualityOverridePage] = useState<CapturePage>();
+  const [qualityOverrideReason, setQualityOverrideReason] = useState("");
   const batchesRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const matchingRequestRef = useRef(0);
@@ -524,7 +528,7 @@ export function CaptureBatchPage({
       await registerCaptureFile(
         detail.batch.id,
         uploaded.file.id,
-        `${file.name}:${uploaded.file.hash_sha256}`,
+        crypto.randomUUID(),
       );
       await loadDetail(detail.batch.id);
       message.success(`${file.name} 已加入批次`);
@@ -598,6 +602,25 @@ export function CaptureBatchPage({
       const result = await processSubmissionPages(submissionId);
       await loadDetail(detail!.batch.id);
       message.success(`已开始处理 ${result.runs.length} 页（版面对齐与题目切分）`);
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setActioning(false);
+    }
+  }
+
+  async function confirmQualityOverride() {
+    if (!detail || !qualityOverridePage?.submission_page_id || !qualityOverrideReason.trim()) return;
+    setActioning(true);
+    try {
+      const result = await overrideCapturePageQuality(
+        qualityOverridePage.submission_page_id,
+        qualityOverrideReason.trim(),
+      );
+      setQualityOverridePage(undefined);
+      setQualityOverrideReason("");
+      await loadDetail(detail.batch.id);
+      message.success(`质量误判已放行，并恢复 ${result.registration_runs.length} 个版面对齐任务`);
     } catch (currentError) {
       message.error(formatError(currentError));
     } finally {
@@ -806,7 +829,7 @@ export function CaptureBatchPage({
     },
     {
       title: "操作",
-      width: 190,
+      width: 280,
       render: (_, item) => (
         <Space>
           <Button
@@ -836,6 +859,20 @@ export function CaptureBatchPage({
             disabled={!batchCanManage}
             aria-label={item.status === "deleted" ? "恢复页面" : "删除页面"}
           />
+          {["review", "failed"].includes(String(item.page_identity.quality_status ?? "")) &&
+          item.status !== "deleted" ? (
+            <Button
+              size="small"
+              type="primary"
+              disabled={!batchCanManage || !item.submission_page_id}
+              onClick={() => {
+                setQualityOverrideReason("");
+                setQualityOverridePage(item);
+              }}
+            >
+              质量放行
+            </Button>
+          ) : null}
         </Space>
       ),
     },
@@ -1008,10 +1045,14 @@ export function CaptureBatchPage({
                       loading={actioning}
                       disabled={
                         !batchCanManage ||
-                        !detail.files.some((item) => item.status === "uploaded")
+                        !detail.files.some((item) =>
+                          ["uploaded", "failed"].includes(item.status),
+                        )
                       }
                     >
-                      开始处理
+                      {detail.files.some((item) => item.status === "failed")
+                        ? "处理待办文件"
+                        : "开始处理"}
                     </Button>
                     {detail.batch.status === "ready" && (
                       <Button
@@ -1165,7 +1206,10 @@ export function CaptureBatchPage({
                           {detail.files.filter((file) => file.status === "failed").map((file) => (
                             <div className="capture-file-issue" key={file.id}>
                               <div><strong>{file.original_name}</strong><span title={file.error_code || undefined}>文件处理失败：{(file.error_code && errorLabels[file.error_code]) || "请重新导入正确的文件"}</span></div>
-                              <Button icon={<FileUp size={15} />} disabled={!batchCanManage} onClick={() => { setActiveTab("files"); message.info("请点击右上角「导入文件」重新上传该文件"); }}>重新导入文件</Button>
+                              <Space>
+                                <Button icon={<RefreshCw size={15} />} loading={actioning} disabled={!batchCanManage} onClick={() => void startProcessing()}>重试原文件</Button>
+                                <Button icon={<FileUp size={15} />} disabled={!batchCanManage} onClick={() => { setActiveTab("files"); message.info("可重新导入修复后的同一文件，系统会保留原失败记录"); }}>上传修复文件</Button>
+                              </Space>
                             </div>
                           ))}
                           {issuePages.length > 0 && <ResponsiveTable
@@ -1190,6 +1234,28 @@ export function CaptureBatchPage({
           </main>
         </div>
       )}
+      <Modal
+        title="人工放行质量误判"
+        open={Boolean(qualityOverridePage)}
+        okText="确认放行并继续处理"
+        cancelText="取消"
+        confirmLoading={actioning}
+        okButtonProps={{ disabled: qualityOverrideReason.trim().length < 5 }}
+        onCancel={() => {
+          setQualityOverridePage(undefined);
+          setQualityOverrideReason("");
+        }}
+        onOk={() => void confirmQualityOverride()}
+      >
+        <p>仅当你已查看原图并确认页面可正常阅卷时使用。系统会保留原质量问题、操作者、原因和时间，并立即恢复版面对齐任务。</p>
+        <Input.TextArea
+          value={qualityOverrideReason}
+          rows={4}
+          maxLength={500}
+          placeholder="至少填写 5 个字，例如：人工核对字迹和答题区域清晰，倾斜不影响识别"
+          onChange={(event) => setQualityOverrideReason(event.target.value)}
+        />
+      </Modal>
       <Modal
         title="重开采集批次"
         open={reopenOpen}

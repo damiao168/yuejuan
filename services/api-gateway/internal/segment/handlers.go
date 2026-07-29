@@ -31,6 +31,9 @@ func NewHandler(store Store, papers paper.Store, submissions submissionpkg.Store
 }
 
 func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Sunset", "Thu, 01 Oct 2026 00:00:00 GMT")
+	w.Header().Set("Warning", `299 EduGrade "Legacy direct segmentation is deprecated; use the capture batch registration pipeline"`)
 	user := mustUser(r)
 	submissionID := r.PathValue("id")
 	sub, err := h.submissions.Get(r.Context(), user.TenantID, submissionID)
@@ -38,6 +41,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, ErrNotFound)
 		return
 	}
+	w.Header().Set("Link", fmt.Sprintf("</api/v1/exams/%s/capture-batches>; rel=\"successor-version\"", sub.ExamID))
 	if sub.Status != "ready_for_ocr" {
 		writeStoreError(w, r, ErrNotReady)
 		return
