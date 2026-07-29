@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress（2026-07-29 实现事实审计：花名册对账、条码软件闭环、模板级 OMR 校准和采集自救完成；尚待 060D 联合回归，实体回扫因当前无真实打印机/扫描仪保留为外部验收）
+Software Accepted / Physical Validation Pending（2026-07-29：060D PostgreSQL 联合回归、真实浏览器流程和全量工程门禁通过；因当前无真实打印机/扫描仪，30 份实体回扫保留为外部验收硬门禁）
 
 ## First-principles decision
 
@@ -132,7 +132,12 @@ In Progress（2026-07-29 实现事实审计：花名册对账、条码软件闭�
 
 - [`docs/reviews/STORY-060-implementation-audit-2026-07-28.md`](../reviews/STORY-060-implementation-audit-2026-07-28.md)
 
-在 060D 联合回归完成前，本 Story 保持 In Progress。当前无真实打印机/扫描仪，实体打印/扫描证据作为明确的外部验收债务保留，不以软件渲染和解码结果冒充。
+060D 软件联合回归已经完成，证据见：
+
+- [`docs/reviews/STORY-060-software-acceptance-2026-07-29.md`](../reviews/STORY-060-software-acceptance-2026-07-29.md)
+- [`docs/stories/STORY-060-approval.md`](STORY-060-approval.md)
+
+当前状态为 `Software Accepted / Physical Validation Pending`。实体打印/扫描证据作为明确的外部验收硬门禁保留，不以软件渲染和解码结果冒充；在物理报告批准前，不得宣称 STORY-060 全量完成或 Production Ready。
 
 ## Plan review
 
@@ -153,4 +158,4 @@ In Progress（2026-07-29 实现事实审计：花名册对账、条码软件闭�
 
 ## Decision
 
-In Progress，尚未批准。2026-07-28 审计后顺序调整为：060A 条码归属闭环 → 060B 模板级 OMR 校准 → 060C 采集自救 → 060D 联合回归与实体证据。STORY-061 只允许保持规划状态。
+Software Accepted / Physical Validation Pending。2026-07-29 已完成 060A 条码归属闭环、060B 模板级 OMR 校准、060C 采集自救和 060D 软件联合回归。STORY-061 可以开始实现，但 30 份真实打印回扫报告仍是试点、生产发布以及 STORY-060 最终 `Approved` 的硬前置。
