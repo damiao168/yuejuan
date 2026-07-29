@@ -945,7 +945,7 @@ body {
 .template-workbench {
   min-height: 680px;
   display: grid;
-  grid-template-columns: 210px minmax(520px, 1fr) 230px;
+  grid-template-columns: 210px minmax(520px, 1fr) 290px;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1329,6 +1329,103 @@ body {
 
 .template-summary strong {
   color: var(--text);
+}
+
+.print-package-panel {
+  gap: 12px;
+}
+
+.print-package-panel > p,
+.print-package-modal > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.print-package-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--border);
+}
+
+.print-package-metrics > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px;
+  background: var(--surface-muted);
+}
+
+.print-package-metrics span,
+.print-batch-history > span,
+.print-batch-row span,
+.print-class-list small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.print-package-metrics strong {
+  color: var(--text);
+  font-size: 17px;
+}
+
+.print-batch-history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.print-batch-history .ant-list-item {
+  padding: 8px 0;
+}
+
+.print-batch-row {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.print-package-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.print-class-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.print-class-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.print-class-list .ant-checkbox-wrapper {
+  min-width: 0;
+  align-items: flex-start;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.print-class-list .ant-checkbox-wrapper > span:last-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .class-scope-list {

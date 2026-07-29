@@ -98,6 +98,32 @@ LIMIT 1
 	}
 
 	printBatchID, insertedSheetSerial, insertedBarcodes := issue("inserted", studentID)
+	printContext := e2eGetJSON(
+		t, router,
+		"/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/print-context",
+		adminToken, http.StatusOK,
+	)["print_context"].(map[string]any)
+	if e2eString(t, printContext, "template_id") != fixture.TemplateID ||
+		e2eString(t, printContext, "exam_id") != fixture.ExamID {
+		t.Fatalf("print context must stay scoped to the locked template: %#v", printContext)
+	}
+	var activeCandidateFound bool
+	for _, raw := range printContext["candidates"].([]any) {
+		candidate := raw.(map[string]any)
+		if e2eString(t, candidate, "student_id") == studentID {
+			activeCandidateFound = candidate["has_active_sheet"] == true &&
+				e2eString(t, candidate, "active_print_batch_id") == printBatchID
+		}
+	}
+	if !activeCandidateFound {
+		t.Fatalf("issued student must be protected from accidental duplicate Web issuance: %#v", printContext["candidates"])
+	}
+	batches := printContext["batches"].([]any)
+	if len(batches) == 0 ||
+		e2eString(t, batches[0].(map[string]any), "print_batch_id") != printBatchID ||
+		batches[0].(map[string]any)["downloadable"] != true {
+		t.Fatalf("freshly issued print package must be recoverable after refresh: %#v", batches)
+	}
 	download := func() *httptest.ResponseRecorder {
 		t.Helper()
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/answer-sheet-print-batches/"+printBatchID+"/package.pdf", nil)
@@ -221,6 +247,23 @@ ORDER BY cp.source_index
 		"/api/v1/answer-sheet-print-batches/"+printBatchID+"/package.pdf",
 		adminToken, "", http.StatusConflict,
 	)
+	printContext = e2eGetJSON(
+		t, router,
+		"/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/print-context",
+		adminToken, http.StatusOK,
+	)["print_context"].(map[string]any)
+	batches = printContext["batches"].([]any)
+	var observedBatchFound bool
+	for _, raw := range batches {
+		batch := raw.(map[string]any)
+		if e2eString(t, batch, "print_batch_id") == printBatchID {
+			observedBatchFound = batch["downloadable"] == false &&
+				e2eFloat(t, batch, "observed_count") > 0
+		}
+	}
+	if !observedBatchFound {
+		t.Fatalf("observed package must become non-downloadable in the Web context: %#v", batches)
+	}
 
 	_, missingSheetSerial, missingBarcodes := issue("missing", missingStudentID)
 	missingFileID := createCapture("missing-page", []string{missingBarcodes[1], missingBarcodes[3]})

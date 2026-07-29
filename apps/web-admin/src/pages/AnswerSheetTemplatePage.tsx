@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Alert, App, Button, Collapse, Drawer, Input, InputNumber, List, Modal, Progress, Select, Space, Spin } from "antd";
-import { ChevronLeft, ChevronRight, Copy, LockKeyhole, MousePointer2, Plus, RefreshCw, Save, Trash2, ZoomIn, ZoomOut } from "lucide-react";
+import { Alert, App, Button, Checkbox, Collapse, Drawer, Input, InputNumber, List, Modal, Progress, Select, Space, Spin } from "antd";
+import { ChevronLeft, ChevronRight, Copy, Download, LockKeyhole, MousePointer2, Plus, Printer, RefreshCw, Save, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { ApiClientError } from "../api/client";
@@ -29,6 +29,12 @@ import {
 } from "../api/configuration";
 import { downloadFileBlob } from "../api/files";
 import { listPapers, listQuestions, type PaperVersion, type Question } from "../api/papers";
+import {
+	downloadStudentPrintPackage,
+	getStudentPrintContext,
+	issueStudentPrintBatch,
+	type StudentPrintContext
+} from "../api/printing";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
 
@@ -53,6 +59,27 @@ function formatError(error: unknown) {
     return error.message || "操作失败，请稍后重试";
   }
   return error instanceof Error && error.message ? error.message : "操作失败，请稍后重试";
+}
+
+function saveDownload(blob: Blob, filename: string) {
+	const url = URL.createObjectURL(blob);
+	const link = document.createElement("a");
+	link.href = url;
+	link.download = filename;
+	document.body.appendChild(link);
+	link.click();
+	link.remove();
+	window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function printBatchTime(value: string) {
+	return new Intl.DateTimeFormat("zh-CN", {
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		hour12: false
+	}).format(new Date(value));
 }
 
 function emptyLayout(pageCount: number, width: number, height: number): TemplateLayout {
@@ -111,6 +138,8 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 	const calibrationImageObjectUrlRef = useRef<string | undefined>(undefined);
   const dataRequestRef = useRef(0);
   const calibrationListRequestRef = useRef(0);
+  const printContextRequestRef = useRef(0);
+  const printIssueRequestRef = useRef<{ signature: string; key: string } | undefined>(undefined);
   const [papers, setPapers] = useState<PaperVersion[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [templates, setTemplates] = useState<AnswerSheetTemplate[]>([]);
@@ -141,6 +170,12 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 	const [calibrationBusy, setCalibrationBusy] = useState(false);
 	const [calibrationAction, setCalibrationAction] = useState<"approve" | "revoke" | "discard">();
 	const [calibrationActionReason, setCalibrationActionReason] = useState("");
+	const [printContext, setPrintContext] = useState<StudentPrintContext>();
+	const [printContextLoading, setPrintContextLoading] = useState(false);
+	const [printContextError, setPrintContextError] = useState<string>();
+	const [printModalOpen, setPrintModalOpen] = useState(false);
+	const [selectedPrintClassIds, setSelectedPrintClassIds] = useState<string[]>([]);
+	const [printBusy, setPrintBusy] = useState(false);
 
   const selectedPaper = useMemo(() => papers.find((item) => item.id === selectedPaperId), [papers, selectedPaperId]);
   const selectedTemplate = useMemo(() => templates.find((item) => item.id === selectedTemplateId), [templates, selectedTemplateId]);
@@ -152,6 +187,19 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 	const isTemplateDifference = selectedTemplate?.status === "locked" && selectedTemplate.layout.omr_profile?.mode === "template_difference";
 	const calibrationQuestions = useMemo(() => questions.filter((item) => item.question_type === "single_choice" || item.question_type === "true_false"), [questions]);
 	const selectedCalibrationCase = useMemo<OMRCalibrationCase | undefined>(() => calibrationDetail?.cases.find((item) => item.id === calibrationCaseId) ?? calibrationDetail?.cases[0], [calibrationCaseId, calibrationDetail]);
+	const printableCandidates = useMemo(
+		() => printContext?.candidates.filter((item) => item.attendance_status === "expected" && !item.has_active_sheet) ?? [],
+		[printContext]
+	);
+	const printClasses = useMemo(() => {
+		const grouped = new Map<string, { id: string; name: string; count: number }>();
+		for (const candidate of printableCandidates) {
+			const current = grouped.get(candidate.class_id);
+			if (current) current.count += 1;
+			else grouped.set(candidate.class_id, { id: candidate.class_id, name: candidate.class_name, count: 1 });
+		}
+		return Array.from(grouped.values());
+	}, [printableCandidates]);
 
 	const loadOMRCalibrationList = useCallback(async (templateId: string) => {
 		const requestId = ++calibrationListRequestRef.current;
@@ -167,6 +215,23 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 			setCalibrationError(formatError(loadError));
 		} finally {
 			if (requestId === calibrationListRequestRef.current) setCalibrationLoading(false);
+		}
+	}, []);
+
+	const loadPrintContext = useCallback(async (templateId: string) => {
+		const requestId = ++printContextRequestRef.current;
+		setPrintContextLoading(true);
+		setPrintContextError(undefined);
+		try {
+			const response = await getStudentPrintContext(templateId);
+			if (requestId !== printContextRequestRef.current) return;
+			setPrintContext(response.print_context);
+		} catch (loadError) {
+			if (requestId !== printContextRequestRef.current) return;
+			setPrintContext(undefined);
+			setPrintContextError(formatError(loadError));
+		} finally {
+			if (requestId === printContextRequestRef.current) setPrintContextLoading(false);
 		}
 	}, []);
 
@@ -224,6 +289,17 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
     setPageNo(1);
     setSelectedRegionId("");
   }, [selectedTemplate]);
+
+	useEffect(() => {
+		printContextRequestRef.current += 1;
+		setPrintContext(undefined);
+		setPrintContextError(undefined);
+		setPrintModalOpen(false);
+		setSelectedPrintClassIds([]);
+		if (selectedTemplate?.status === "locked" && canManage) {
+			void loadPrintContext(selectedTemplate.id);
+		}
+	}, [canManage, loadPrintContext, selectedTemplate?.id, selectedTemplate?.status]);
 
 	useEffect(() => {
 		if (calibrationQuestions.some((item) => item.id === calibrationQuestionId)) return;
@@ -589,6 +665,64 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
     } catch (cloneError) { message.error(formatError(cloneError)); } finally { setSaving(false); }
   }
 
+	function openPrintModal() {
+		setSelectedPrintClassIds(printClasses.map((item) => item.id));
+		setPrintModalOpen(true);
+	}
+
+	async function downloadPrintBatch(printBatchId: string) {
+		setPrintBusy(true);
+		try {
+			const download = await downloadStudentPrintPackage(printBatchId);
+			saveDownload(download.blob, download.filename ?? `edugrade-answer-sheets-${printBatchId}.pdf`);
+			message.success("打印包已下载，请按原始尺寸打印并保持页面顺序");
+		} catch (downloadError) {
+			if (downloadError instanceof ApiClientError && downloadError.status === 409) {
+				message.error("该批次已有答卷被扫描或已作废，不能再次下载；补打请走作废与重印流程");
+				await loadPrintContext(selectedTemplateId);
+			} else {
+				message.error(formatError(downloadError));
+			}
+		} finally {
+			setPrintBusy(false);
+		}
+	}
+
+	async function issuePrintPackage() {
+		if (!selectedTemplate || !selectedPrintClassIds.length) return;
+		const selectedClasses = new Set(selectedPrintClassIds);
+		const studentIds = printableCandidates
+			.filter((item) => selectedClasses.has(item.class_id))
+			.map((item) => item.student_id);
+		if (!studentIds.length) {
+			message.error("所选班级没有可签发的应考学生");
+			return;
+		}
+		const signature = [...studentIds].sort().join(",");
+		if (printIssueRequestRef.current?.signature !== signature) {
+			printIssueRequestRef.current = { signature, key: `web-print-${crypto.randomUUID()}` };
+		}
+		setPrintBusy(true);
+		try {
+			const response = await issueStudentPrintBatch(
+				selectedTemplate.id,
+				studentIds,
+				printIssueRequestRef.current.key
+			);
+			printIssueRequestRef.current = undefined;
+			setPrintModalOpen(false);
+			await loadPrintContext(selectedTemplate.id);
+			const download = await downloadStudentPrintPackage(response.barcodes.print_batch_id);
+			saveDownload(download.blob, download.filename ?? `edugrade-answer-sheets-${response.barcodes.print_batch_id}.pdf`);
+			message.success(`已签发 ${response.barcodes.students.length} 份答题卡并下载打印包`);
+		} catch (issueError) {
+			message.error(formatError(issueError));
+			await loadPrintContext(selectedTemplate.id);
+		} finally {
+			setPrintBusy(false);
+		}
+	}
+
   if (loading) return <LoadingState label="正在加载答题卡模板" />;
   if (error) return <ErrorState message={error} onRetry={() => void loadData()} />;
   if (!papers.length) return <EmptyState title="尚未上传试卷" description="先在“试卷”步骤上传 PDF 或图片，再建立答题卡模板。" />;
@@ -675,6 +809,34 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 					</List.Item>} /> : <Alert type="info" showIcon message="尚无校准记录" description="本题累计 100 份以上识别结果后，才能开始人工校准。" />}
 				</>}
 			</section> : null}
+			{selectedTemplate.status === "locked" && canManage ? <section className="template-option-editor print-package-panel">
+				<div className="template-pane-head">
+					<strong>答题卡打印包</strong>
+					{printContext ? <StatusTag tone={printableCandidates.length ? "processing" : "success"}>{printableCandidates.length ? `${printableCandidates.length} 人待签发` : "签发完成"}</StatusTag> : null}
+				</div>
+				<p>按班级生成带学生身份条码的受控 PDF。系统不会把姓名或学号印在答题卡上。</p>
+				{printContextLoading ? <Spin size="small" /> : null}
+				{printContextError ? <Alert type="warning" showIcon message="打印状态暂不可读取" description={printContextError} action={<Button size="small" onClick={() => void loadPrintContext(selectedTemplate.id)}>重试</Button>} /> : null}
+				{printContext ? <>
+					<div className="print-package-metrics">
+						<div><span>应考</span><strong>{printContext.candidates.filter((item) => item.attendance_status === "expected").length}</strong></div>
+						<div><span>已有有效答题卡</span><strong>{printContext.candidates.filter((item) => item.has_active_sheet).length}</strong></div>
+						<div><span>缺考</span><strong>{printContext.candidates.filter((item) => item.attendance_status === "absent").length}</strong></div>
+					</div>
+					<Button block type="primary" icon={<Printer size={16} />} disabled={!printableCandidates.length} onClick={openPrintModal}>生成打印包</Button>
+					{printContext.batches.length ? <div className="print-batch-history">
+						<span>最近签发</span>
+						<List size="small" dataSource={printContext.batches.slice(0, 4)} renderItem={(batch) => <List.Item actions={batch.downloadable ? [
+							<Button key="download" type="link" size="small" icon={<Download size={14} />} loading={printBusy} onClick={() => void downloadPrintBatch(batch.print_batch_id)}>下载</Button>
+						] : []}>
+							<div className="print-batch-row">
+								<strong>{batch.sheet_count} 份 · {batch.sheet_count * batch.page_count} 页</strong>
+								<span>{printBatchTime(batch.issued_at)} · {batch.downloadable ? "可下载" : batch.conflict_count ? "存在冲突" : batch.revoked_count ? "已作废" : "已开始扫描"}</span>
+							</div>
+						</List.Item>} />
+					</div> : <Alert type="info" showIcon message="尚未签发打印包" />}
+				</> : null}
+			</section> : null}
             <div className="template-summary"><span>页面</span><strong>{layout.pages.length}</strong><span>题目区域</span><strong>{coveredQuestions.size}</strong><span>未配置</span><strong>{Math.max(questions.length - coveredQuestions.size, 0)}</strong></div>
           </aside>
         </section>
@@ -717,6 +879,30 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 				/>
 			</div> : <Spin />}
 		</Drawer>
+		<Modal
+			open={printModalOpen}
+			title="生成受控答题卡打印包"
+			okText={`签发并下载${selectedPrintClassIds.length ? `（${printableCandidates.filter((item) => selectedPrintClassIds.includes(item.class_id)).length} 人）` : ""}`}
+			cancelText="取消"
+			confirmLoading={printBusy}
+			okButtonProps={{ disabled: !selectedPrintClassIds.length }}
+			onOk={() => void issuePrintPackage()}
+			onCancel={() => !printBusy && setPrintModalOpen(false)}
+		>
+			<div className="print-package-modal">
+				<Alert type="warning" showIcon message="签发后请只打印所下载的这一份文件" description="每名学生、每一页都有唯一条码。重复复印或打乱页面会进入人工核验；补打必须使用作废与重印流程。" />
+				<div className="print-class-heading">
+					<strong>选择班级</strong>
+					<Button type="link" size="small" onClick={() => setSelectedPrintClassIds(selectedPrintClassIds.length === printClasses.length ? [] : printClasses.map((item) => item.id))}>{selectedPrintClassIds.length === printClasses.length ? "取消全选" : "全选"}</Button>
+				</div>
+				<div className="print-class-list">
+					{printClasses.map((item) => <Checkbox key={item.id} checked={selectedPrintClassIds.includes(item.id)} onChange={(event) => setSelectedPrintClassIds((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))}>
+						<span>{item.name}</span><small>{item.count} 名待签发</small>
+					</Checkbox>)}
+				</div>
+				<p className="muted">已排除缺考学生和已有有效答题卡的学生，避免重复签发。</p>
+			</div>
+		</Modal>
 		<Modal open={Boolean(calibrationAction)} title={calibrationAction === "approve" ? "批准自动确认校准" : calibrationAction === "revoke" ? "撤销自动确认校准" : "弃用校准草稿"} okText={calibrationAction === "approve" ? "确认批准" : calibrationAction === "revoke" ? "立即撤销" : "弃用草稿"} okButtonProps={{ danger: calibrationAction !== "approve" }} confirmLoading={calibrationBusy} onOk={() => void submitCalibrationAction()} onCancel={() => !calibrationBusy && setCalibrationAction(undefined)}>
 			<Alert type={calibrationAction === "approve" ? "warning" : "info"} showIcon message={calibrationAction === "approve" ? "审批人不能是参与标注的人，系统会自动核验。" : calibrationAction === "revoke" ? "撤销后，识别结果不再自动写入成绩，未完成的任务将转入人工复核。" : "弃用不会删除已写入的标注记录，只会终止这份草稿。"} />
 			<Input.TextArea autoFocus rows={4} value={calibrationActionReason} onChange={(event) => setCalibrationActionReason(event.target.value)} placeholder="请填写操作原因（至少 10 个字），将记入操作记录" />

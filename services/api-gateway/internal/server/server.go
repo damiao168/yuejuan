@@ -360,6 +360,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/answer-sheet-templates/{id}/clone", requireExamManage(paperHandler.CloneTemplate))
 	mux.Handle("POST /api/v1/answer-sheet-templates/{id}/page-barcodes", requireExamManage(captureHandler.IssueTemplateBarcodes))
 	mux.Handle("POST /api/v1/answer-sheet-templates/{id}/student-barcodes", requireExamManage(captureHandler.IssueStudentBarcodes))
+	mux.Handle("GET /api/v1/answer-sheet-templates/{id}/print-context", requireExamManage(captureHandler.GetStudentPrintContext))
 	mux.Handle("GET /api/v1/answer-sheet-print-batches/{id}/package.pdf", requireExamManage(captureHandler.DownloadStudentPrintPackage))
 	mux.Handle("POST /api/v1/answer-sheet-print-sheets/{id}/revoke", requireExamManage(captureHandler.RevokeStudentSheet))
 	mux.Handle("POST /api/v1/answer-sheet-print-sheets/{id}/reprint", requireExamManage(captureHandler.ReprintStudentSheet))

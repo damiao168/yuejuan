@@ -79,6 +79,16 @@ func (h *Handler) IssueStudentBarcodes(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"barcodes": out})
 }
 
+func (h *Handler) GetStudentPrintContext(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.GetStudentPrintContext(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"print_context": out})
+}
+
 func (h *Handler) DownloadStudentPrintPackage(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	out, err := h.store.GetStudentPrintPackage(r.Context(), user.TenantID, r.PathValue("id"))

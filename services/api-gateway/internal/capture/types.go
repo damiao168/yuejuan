@@ -234,6 +234,41 @@ type StudentPrintPackage struct {
 	Sheets              []PrintPackageSheet `json:"sheets"`
 }
 
+type StudentPrintCandidate struct {
+	StudentID          string `json:"student_id"`
+	StudentNo          string `json:"student_no"`
+	StudentName        string `json:"student_name"`
+	ClassID            string `json:"class_id"`
+	ClassName          string `json:"class_name"`
+	AttendanceStatus   string `json:"attendance_status"`
+	HasActiveSheet     bool   `json:"has_active_sheet"`
+	ActiveSheetSerial  string `json:"active_sheet_serial,omitempty"`
+	ActiveSheetStatus  string `json:"active_sheet_status,omitempty"`
+	ActivePrintBatchID string `json:"active_print_batch_id,omitempty"`
+}
+
+type StudentPrintBatchSummary struct {
+	PrintBatchID  string    `json:"print_batch_id"`
+	Operation     string    `json:"operation"`
+	Reason        string    `json:"reason,omitempty"`
+	SheetCount    int       `json:"sheet_count"`
+	PageCount     int       `json:"page_count"`
+	IssuedCount   int       `json:"issued_count"`
+	ObservedCount int       `json:"observed_count"`
+	ConflictCount int       `json:"conflict_count"`
+	RevokedCount  int       `json:"revoked_count"`
+	Downloadable  bool      `json:"downloadable"`
+	IssuedAt      time.Time `json:"issued_at"`
+}
+
+type StudentPrintContext struct {
+	ExamID              string                     `json:"exam_id"`
+	TemplateID          string                     `json:"template_id"`
+	TemplateContentHash string                     `json:"template_content_hash"`
+	Candidates          []StudentPrintCandidate    `json:"candidates"`
+	Batches             []StudentPrintBatchSummary `json:"batches"`
+}
+
 type StudentSheetLifecycleInput struct {
 	Reason string `json:"reason"`
 }
@@ -457,6 +492,7 @@ type BatchDetail struct {
 type Store interface {
 	IssueTemplateBarcodes(ctx context.Context, tenantID, templateID string) (IssuedTemplateBarcodes, error)
 	IssueStudentBarcodes(ctx context.Context, tenantID, templateID, actorID string, input IssueStudentBarcodesInput) (IssuedStudentBarcodes, error)
+	GetStudentPrintContext(ctx context.Context, tenantID, templateID string) (StudentPrintContext, error)
 	GetStudentPrintPackage(ctx context.Context, tenantID, printBatchID string) (StudentPrintPackage, error)
 	RevokeStudentSheet(ctx context.Context, tenantID, sheetSerial, actorID string, input StudentSheetLifecycleInput) (StudentSheet, error)
 	ReprintStudentSheet(ctx context.Context, tenantID, sheetSerial, actorID string, input ReprintStudentSheetInput) (IssuedStudentBarcodes, error)

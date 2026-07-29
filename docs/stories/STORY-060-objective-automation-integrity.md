@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress（2026-07-28 实现事实审计：花名册对账完成；条码、OMR 校准和采集自救尚未收口）
+In Progress（2026-07-29 实现事实审计：花名册对账和条码软件闭环完成；OMR 校准、采集自救及实体回扫尚未收口）
 
 ## First-principles decision
 
@@ -122,7 +122,7 @@ In Progress（2026-07-28 实现事实审计：花名册对账完成；条码、O
 当前实现不能按本 Story 全量批准：
 
 - 花名册对账、显式缺考和发布门禁已完成真实 PostgreSQL E2E。
-- 学生条码 v2 已完成考试 roster 约束、不可变 print batch/sheet/page 台账、签发幂等、未签发/已作废 serial 拒绝、跨文件重复页冲突与解除重算、带原因和替代链的作废/重印 API，以及由不可变台账生成的确定性 A4 PDF 下载 API。三页插页/缺页/重复学生联合 PostgreSQL E2E 已通过：插入页不会挤乱受控页码，缺第 2 页时第 3 页仍保持第 3 页；尚缺 Web 下载入口和 30 份实体回扫报告。
+- 学生条码 v2 已完成考试 roster 约束、不可变 print batch/sheet/page 台账、签发幂等、未签发/已作废 serial 拒绝、跨文件重复页冲突与解除重算、带原因和替代链的作废/重印 API，以及由不可变台账生成的确定性 A4 PDF。Web 已支持按班级签发并下载、刷新恢复历史批次、排除缺考和已有有效答题卡学生，并在批次开始扫描后禁止重复下载。三页插页/缺页/重复学生联合 PostgreSQL E2E 已通过：插入页不会挤乱受控页码，缺第 2 页时第 3 页仍保持第 3 页；尚缺 30 份实体回扫报告。
 - OMR 校准仍按 question 作用域，样本仍预筛高置信 `selected`，未完成计划中的 profile 级无偏校准。
 - capture file 失败重跑、失败后同 hash 重传和质量 override 业务入口均未完成。
 - `human_grade.ai_grade_id` 和假门禁删除已完成。
