@@ -1,0 +1,8 @@
+{
+  "http_status": 401,
+  "body": {
+    "code": "InvalidApiKey",
+    "message": "synthetic authentication fixture",
+    "request_id": "fixture-dashscope-request-0003"
+  }
+}

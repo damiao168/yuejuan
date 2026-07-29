@@ -1,0 +1,8 @@
+{
+  "http_status": 429,
+  "body": {
+    "code": "Throttling.RateQuota",
+    "message": "synthetic rate limit fixture",
+    "request_id": "fixture-dashscope-request-0002"
+  }
+}
