@@ -227,7 +227,11 @@ func writeAgentSuccess(t *testing.T, w http.ResponseWriter, requestID string) {
 		"rubric_version":     "rubric-v3",
 		"capability_profile": "local-pilot-v1",
 		"mock":               false,
-		"telemetry":          map[string]any{"adapter": "local_llama_cpp", "attempts": 1, "repair_attempted": false, "prior_error_codes": []string{}, "elapsed_ms": 100},
+		"telemetry": map[string]any{
+			"adapter": "local_llama_cpp", "provider": "local",
+			"deployment": "local-qwen3-4b-q4-k-m", "region": "on_premise",
+			"attempts": 1, "repair_attempted": false, "prior_error_codes": []string{}, "elapsed_ms": 100,
+		},
 	}
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		t.Fatal(err)

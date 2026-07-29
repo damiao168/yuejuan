@@ -188,13 +188,18 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	var subjectiveAdapter subjective.LLMGradingAdapter = subjective.NewMockLLMAdapter()
 	if cfg.AIService.URL != "" {
 		subjectiveAdapter = subjective.NewHTTPAdapter(subjective.HTTPAdapterConfig{
-			BaseURL:       cfg.AIService.URL,
-			Token:         cfg.AIService.Token,
-			Timeout:       cfg.AIService.Timeout,
-			MaxRetries:    cfg.AIService.MaxRetries,
-			ModelVersion:  cfg.AIService.ModelVersion,
-			PromptVersion: cfg.AIService.PromptVersion,
-			MinConfidence: cfg.AIService.MinConfidence,
+			BaseURL:           cfg.AIService.URL,
+			Token:             cfg.AIService.Token,
+			Timeout:           cfg.AIService.Timeout,
+			MaxRetries:        cfg.AIService.MaxRetries,
+			ModelVersion:      cfg.AIService.ModelVersion,
+			PromptVersion:     cfg.AIService.PromptVersion,
+			MinConfidence:     cfg.AIService.MinConfidence,
+			ProviderKey:       cfg.AIService.ProviderKey,
+			DeploymentKey:     cfg.AIService.DeploymentKey,
+			AdapterType:       cfg.AIService.AdapterType,
+			DeploymentRegion:  cfg.AIService.DeploymentRegion,
+			CapabilityProfile: cfg.AIService.CapabilityProfile,
 		})
 	}
 	subjectiveHandler := subjective.NewHandler(subjectiveStore, subjectiveAdapter, authStore)

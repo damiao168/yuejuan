@@ -16,6 +16,8 @@ class GradingAgentApplication:
     def __init__(self, settings, matrix=None, model=None, clock=None, logger=None):
         self.settings = settings
         self.matrix = matrix or CapabilityMatrix.load(settings.contract_root)
+        if self.matrix.profile_id != settings.capability_profile:
+            raise ValueError("configured capability profile does not match the governed capability matrix")
         self.model = model or LocalLlamaCppAdapter(settings)
         self.clock = clock or time.time
         self.logger = logger or self._default_logger
@@ -164,7 +166,10 @@ class GradingAgentApplication:
                         repair_reason=prior_error_codes[-1] if prior_error_codes else None,
                     )
                     telemetry = {
-                        "adapter": "local_llama_cpp",
+                        "adapter": self.settings.adapter_type,
+                        "provider": self.settings.provider_key,
+                        "deployment": self.settings.deployment_key,
+                        "region": self.settings.deployment_region,
                         "attempts": attempt + 1,
                         "repair_attempted": attempt > 0,
                         "prior_error_codes": list(prior_error_codes),

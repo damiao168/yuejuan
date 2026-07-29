@@ -35,6 +35,11 @@ class Settings:
     model_api_key: str = ""
     model_name: str = "qwen3-4b-q4-k-m"
     model_version: str = "Qwen/Qwen3-4B-GGUF:Q4_K_M"
+    provider_key: str = "local"
+    deployment_key: str = "local-qwen3-4b-q4-k-m"
+    adapter_type: str = "local_llama_cpp"
+    deployment_region: str = "on_premise"
+    capability_profile: str = "local-pilot-v1"
     prompt_version: str = "subjective-local-structured-v2"
     model_timeout_seconds: int = 230
     model_ready_timeout_seconds: int = 3
@@ -60,6 +65,15 @@ class Settings:
             model_api_key=os.getenv("EDUGRADE_GRADING_MODEL_API_KEY", ""),
             model_name=os.getenv("EDUGRADE_GRADING_MODEL_NAME", "qwen3-4b-q4-k-m").strip(),
             model_version=os.getenv("EDUGRADE_GRADING_MODEL_VERSION", "Qwen/Qwen3-4B-GGUF:Q4_K_M").strip(),
+            provider_key=os.getenv("EDUGRADE_GRADING_PROVIDER_KEY", "local").strip(),
+            deployment_key=os.getenv(
+                "EDUGRADE_GRADING_DEPLOYMENT_KEY", "local-qwen3-4b-q4-k-m"
+            ).strip(),
+            adapter_type=os.getenv("EDUGRADE_GRADING_ADAPTER_TYPE", "local_llama_cpp").strip(),
+            deployment_region=os.getenv("EDUGRADE_GRADING_DEPLOYMENT_REGION", "on_premise").strip(),
+            capability_profile=os.getenv(
+                "EDUGRADE_GRADING_CAPABILITY_PROFILE", "local-pilot-v1"
+            ).strip(),
             prompt_version=os.getenv("EDUGRADE_GRADING_PROMPT_VERSION", "subjective-local-structured-v2").strip(),
             model_timeout_seconds=_integer("EDUGRADE_GRADING_MODEL_TIMEOUT_SECONDS", 230, 1, 600),
             model_ready_timeout_seconds=_integer("EDUGRADE_GRADING_MODEL_READY_TIMEOUT_SECONDS", 3, 1, 30),
@@ -97,6 +111,22 @@ class Settings:
             or model_url.fragment
         ):
             raise ValueError("EDUGRADE_GRADING_MODEL_BASE_URL must be a valid HTTP(S) URL")
+        identity = {
+            "EDUGRADE_GRADING_PROVIDER_KEY": settings.provider_key,
+            "EDUGRADE_GRADING_DEPLOYMENT_KEY": settings.deployment_key,
+            "EDUGRADE_GRADING_ADAPTER_TYPE": settings.adapter_type,
+            "EDUGRADE_GRADING_DEPLOYMENT_REGION": settings.deployment_region,
+            "EDUGRADE_GRADING_CAPABILITY_PROFILE": settings.capability_profile,
+        }
+        if any(
+            not value
+            or len(value) > 128
+            or any(character.isspace() for character in value)
+            for value in identity.values()
+        ):
+            raise ValueError("provider and deployment identity fields must be non-empty bounded identifiers")
+        if settings.adapter_type != "local_llama_cpp":
+            raise ValueError("the current service build only enables the local_llama_cpp adapter")
         if not settings.model_name or not settings.model_version or not settings.prompt_version:
             raise ValueError("model and prompt versions must be configured")
         return settings

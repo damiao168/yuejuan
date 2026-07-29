@@ -56,10 +56,16 @@ func ValidateOutput(output AdapterOutput, ctx Context) error {
 	if output.DeliveryMode != "teacher_suggestion" && output.DeliveryMode != "shadow_only" {
 		return ErrInvalidModelOutput
 	}
-	if output.CapabilityProfile != "local-pilot-v1" || !output.NeedsHumanReview || strings.TrimSpace(output.StudentFeedback) == "" || strings.TrimSpace(output.TeacherNote) == "" {
+	if strings.TrimSpace(output.CapabilityProfile) == "" || !output.NeedsHumanReview || strings.TrimSpace(output.StudentFeedback) == "" || strings.TrimSpace(output.TeacherNote) == "" {
 		return ErrInvalidModelOutput
 	}
-	if output.Telemetry.Adapter == "" || output.Telemetry.Attempts < 1 || output.Telemetry.Attempts > 2 || output.Telemetry.ElapsedMS < 0 {
+	if strings.TrimSpace(output.Telemetry.Adapter) == "" ||
+		strings.TrimSpace(output.Telemetry.Provider) == "" ||
+		strings.TrimSpace(output.Telemetry.Deployment) == "" ||
+		strings.TrimSpace(output.Telemetry.Region) == "" ||
+		output.Telemetry.Attempts < 1 ||
+		output.Telemetry.Attempts > 2 ||
+		output.Telemetry.ElapsedMS < 0 {
 		return ErrInvalidModelOutput
 	}
 	rubricPoints := make(map[string]float64, len(ctx.Rubric.Points))

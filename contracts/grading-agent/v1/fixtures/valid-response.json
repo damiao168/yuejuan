@@ -27,6 +27,9 @@
   "mock": false,
   "telemetry": {
     "adapter": "local_llama_cpp",
+    "provider": "local",
+    "deployment": "local-qwen3-4b-q4-k-m",
+    "region": "on_premise",
     "attempts": 1,
     "repair_attempted": false,
     "prior_error_codes": [],

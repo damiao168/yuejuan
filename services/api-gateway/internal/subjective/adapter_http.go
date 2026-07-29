@@ -21,22 +21,32 @@ const gradingAgentSchemaVersion = "grading-agent-v1"
 const maxGradingAgentResponseBytes int64 = 1 << 20
 
 type HTTPAdapterConfig struct {
-	BaseURL       string
-	Token         string
-	Timeout       time.Duration
-	MaxRetries    int
-	ModelVersion  string
-	PromptVersion string
-	MinConfidence float64
-	Client        *http.Client
+	BaseURL           string
+	Token             string
+	Timeout           time.Duration
+	MaxRetries        int
+	ModelVersion      string
+	PromptVersion     string
+	MinConfidence     float64
+	ProviderKey       string
+	DeploymentKey     string
+	AdapterType       string
+	DeploymentRegion  string
+	CapabilityProfile string
+	Client            *http.Client
 }
 
 type HTTPAdapter struct {
-	baseURL    string
-	token      string
-	maxRetries int
-	policy     ModelPolicy
-	client     *http.Client
+	baseURL           string
+	token             string
+	maxRetries        int
+	policy            ModelPolicy
+	providerKey       string
+	deploymentKey     string
+	adapterType       string
+	deploymentRegion  string
+	capabilityProfile string
+	client            *http.Client
 }
 
 type GradingAgentError struct {
@@ -72,9 +82,14 @@ func NewHTTPAdapter(cfg HTTPAdapterConfig) *HTTPAdapter {
 		minConfidence = 0.8
 	}
 	return &HTTPAdapter{
-		baseURL:    strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/"),
-		token:      cfg.Token,
-		maxRetries: maxRetries,
+		baseURL:           strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/"),
+		token:             cfg.Token,
+		maxRetries:        maxRetries,
+		providerKey:       firstConfigured(cfg.ProviderKey, "local"),
+		deploymentKey:     firstConfigured(cfg.DeploymentKey, "local-qwen3-4b-q4-k-m"),
+		adapterType:       firstConfigured(cfg.AdapterType, "local_llama_cpp"),
+		deploymentRegion:  firstConfigured(cfg.DeploymentRegion, "on_premise"),
+		capabilityProfile: firstConfigured(cfg.CapabilityProfile, "local-pilot-v1"),
 		policy: ModelPolicy{
 			ModelVersion:  strings.TrimSpace(cfg.ModelVersion),
 			PromptVersion: strings.TrimSpace(cfg.PromptVersion),
@@ -100,12 +115,12 @@ func (a *HTTPAdapter) Grade(ctx context.Context, input AdapterInput) (AdapterOut
 	input.RequestID = requestID
 	request, err := a.buildRequest(requestID, input)
 	if err != nil {
-		return adapterFailureOutput(a.Name(), requestID, err), err
+		return a.failureOutput(requestID, err), err
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
 		wrapped := &GradingAgentError{Code: "request_encoding_failed", cause: err}
-		return adapterFailureOutput(a.Name(), requestID, wrapped), wrapped
+		return a.failureOutput(requestID, wrapped), wrapped
 	}
 
 	var lastErr error
@@ -114,7 +129,7 @@ func (a *HTTPAdapter) Grade(ctx context.Context, input AdapterInput) (AdapterOut
 		if requestErr == nil {
 			output, mapErr := a.mapResponse(input, response)
 			if mapErr != nil {
-				return adapterFailureOutput(a.Name(), requestID, mapErr), mapErr
+				return a.failureOutput(requestID, mapErr), mapErr
 			}
 			return output, nil
 		}
@@ -131,7 +146,7 @@ func (a *HTTPAdapter) Grade(ctx context.Context, input AdapterInput) (AdapterOut
 		case <-timer.C:
 		}
 	}
-	return adapterFailureOutput(a.Name(), requestID, lastErr), lastErr
+	return a.failureOutput(requestID, lastErr), lastErr
 }
 
 func (a *HTTPAdapter) buildRequest(requestID string, input AdapterInput) (gradingAgentRequest, error) {
@@ -245,7 +260,15 @@ func (a *HTTPAdapter) request(ctx context.Context, requestID string, body []byte
 }
 
 func (a *HTTPAdapter) mapResponse(input AdapterInput, response gradingAgentResponse) (AdapterOutput, error) {
-	if response.SchemaVersion != gradingAgentSchemaVersion || response.RequestID != input.RequestID || response.Status != "suggestion" || !response.NeedsHumanReview || response.Mock || response.ModelVersion != a.policy.ModelVersion || response.PromptVersion != a.policy.PromptVersion || response.RubricVersion != input.Rubric.Version || response.CapabilityProfile != "local-pilot-v1" {
+	if response.SchemaVersion != gradingAgentSchemaVersion ||
+		response.RequestID != input.RequestID ||
+		response.Status != "suggestion" ||
+		!response.NeedsHumanReview ||
+		response.Mock ||
+		response.ModelVersion != a.policy.ModelVersion ||
+		response.PromptVersion != a.policy.PromptVersion ||
+		response.RubricVersion != input.Rubric.Version ||
+		response.CapabilityProfile != a.capabilityProfile {
 		return AdapterOutput{}, &GradingAgentError{Code: "agent_response_contract_mismatch"}
 	}
 	if response.Delivery != "teacher_suggestion" && response.Delivery != "shadow_only" {
@@ -260,7 +283,13 @@ func (a *HTTPAdapter) mapResponse(input AdapterInput, response gradingAgentRespo
 	if response.SuggestedScore < 0 || response.SuggestedScore > input.Question.Score || !almostEqual(response.MaxScore, input.Question.Score) || response.Confidence != 0 {
 		return AdapterOutput{}, &GradingAgentError{Code: "agent_score_invalid"}
 	}
-	if response.Telemetry.Adapter != "local_llama_cpp" || response.Telemetry.Attempts < 1 || response.Telemetry.Attempts > 2 || response.Telemetry.ElapsedMS < 0 {
+	if response.Telemetry.Adapter != a.adapterType ||
+		response.Telemetry.Provider != a.providerKey ||
+		response.Telemetry.Deployment != a.deploymentKey ||
+		response.Telemetry.Region != a.deploymentRegion ||
+		response.Telemetry.Attempts < 1 ||
+		response.Telemetry.Attempts > 2 ||
+		response.Telemetry.ElapsedMS < 0 {
 		return AdapterOutput{}, &GradingAgentError{Code: "agent_telemetry_invalid"}
 	}
 	allowedRisks := map[string]bool{
@@ -295,6 +324,9 @@ func (a *HTTPAdapter) mapResponse(input AdapterInput, response gradingAgentRespo
 	}
 	telemetry := AdapterTelemetry{
 		Adapter:         response.Telemetry.Adapter,
+		Provider:        response.Telemetry.Provider,
+		Deployment:      response.Telemetry.Deployment,
+		Region:          response.Telemetry.Region,
 		Attempts:        response.Telemetry.Attempts,
 		RepairAttempted: response.Telemetry.RepairAttempted,
 		PriorErrorCodes: nonNilStrings(response.Telemetry.PriorErrorCodes),
@@ -323,6 +355,9 @@ func (a *HTTPAdapter) mapResponse(input AdapterInput, response gradingAgentRespo
 			"request_id":         response.RequestID,
 			"delivery":           response.Delivery,
 			"capability_profile": response.CapabilityProfile,
+			"provider":           response.Telemetry.Provider,
+			"deployment":         response.Telemetry.Deployment,
+			"region":             response.Telemetry.Region,
 			"telemetry":          telemetry,
 		},
 		Mock: false,
@@ -337,7 +372,7 @@ func newAdapterRequestID() string {
 	return "sg-" + hex.EncodeToString(raw)
 }
 
-func adapterFailureOutput(adapter, requestID string, err error) AdapterOutput {
+func (a *HTTPAdapter) failureOutput(requestID string, err error) AdapterOutput {
 	code := "adapter_error"
 	var agentErr *GradingAgentError
 	if errors.As(err, &agentErr) && strings.TrimSpace(agentErr.Code) != "" {
@@ -347,11 +382,17 @@ func adapterFailureOutput(adapter, requestID string, err error) AdapterOutput {
 		RequestID:        requestID,
 		NeedsHumanReview: true,
 		Telemetry: AdapterTelemetry{
-			Adapter:         adapter,
+			Adapter:         a.adapterType,
+			Provider:        a.providerKey,
+			Deployment:      a.deploymentKey,
+			Region:          a.deploymentRegion,
 			PriorErrorCodes: []string{},
 		},
 		RawOutput: map[string]any{
-			"adapter":    adapter,
+			"adapter":    a.adapterType,
+			"provider":   a.providerKey,
+			"deployment": a.deploymentKey,
+			"region":     a.deploymentRegion,
 			"request_id": requestID,
 			"error_code": code,
 		},
@@ -493,10 +534,21 @@ type gradingAgentEvidence struct {
 
 type gradingAgentTelemetry struct {
 	Adapter         string   `json:"adapter"`
+	Provider        string   `json:"provider"`
+	Deployment      string   `json:"deployment"`
+	Region          string   `json:"region"`
 	Attempts        int      `json:"attempts"`
 	RepairAttempted bool     `json:"repair_attempted"`
 	PriorErrorCodes []string `json:"prior_error_codes"`
 	ElapsedMS       int64    `json:"elapsed_ms"`
+}
+
+func firstConfigured(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 type gradingAgentErrorResponse struct {

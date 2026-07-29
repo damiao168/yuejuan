@@ -51,13 +51,37 @@ func TestLoadReadsGovernedAIServiceConfiguration(t *testing.T) {
 	t.Setenv("EDUGRADE_AI_MODEL_VERSION", "model-v1")
 	t.Setenv("EDUGRADE_AI_PROMPT_VERSION", "prompt-v2")
 	t.Setenv("EDUGRADE_AI_MIN_CONFIDENCE", "0.75")
+	t.Setenv("EDUGRADE_AI_PROVIDER_KEY", "local")
+	t.Setenv("EDUGRADE_AI_DEPLOYMENT_KEY", "local-test-v1")
+	t.Setenv("EDUGRADE_AI_ADAPTER_TYPE", "local_llama_cpp")
+	t.Setenv("EDUGRADE_AI_DEPLOYMENT_REGION", "on_premise")
+	t.Setenv("EDUGRADE_AI_CAPABILITY_PROFILE", "local-pilot-v1")
 
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AIService.URL != "http://grading-agent:8100" || cfg.AIService.Timeout != 240*time.Second || cfg.AIService.MaxRetries != 0 || cfg.AIService.ModelVersion != "model-v1" || cfg.AIService.PromptVersion != "prompt-v2" || cfg.AIService.MinConfidence != 0.75 {
+	if cfg.AIService.URL != "http://grading-agent:8100" ||
+		cfg.AIService.Timeout != 240*time.Second ||
+		cfg.AIService.MaxRetries != 0 ||
+		cfg.AIService.ModelVersion != "model-v1" ||
+		cfg.AIService.PromptVersion != "prompt-v2" ||
+		cfg.AIService.MinConfidence != 0.75 ||
+		cfg.AIService.ProviderKey != "local" ||
+		cfg.AIService.DeploymentKey != "local-test-v1" ||
+		cfg.AIService.AdapterType != "local_llama_cpp" ||
+		cfg.AIService.DeploymentRegion != "on_premise" ||
+		cfg.AIService.CapabilityProfile != "local-pilot-v1" {
 		t.Fatalf("unexpected AI service configuration: %#v", cfg.AIService)
+	}
+}
+
+func TestLoadRejectsIncompleteAIServiceIdentity(t *testing.T) {
+	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
+	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "test-service-token-with-at-least-32-characters")
+	t.Setenv("EDUGRADE_AI_PROVIDER_KEY", "contains whitespace")
+	if _, err := Load(""); err == nil {
+		t.Fatal("configured AI service must use bounded provider identity values")
 	}
 }
 

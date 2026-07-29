@@ -21,7 +21,16 @@ class ContractTests(unittest.TestCase):
             self.settings.model_version,
             self.settings.prompt_version,
             self.matrix.profile_id,
-            {"adapter": "local_llama_cpp", "attempts": 1, "repair_attempted": False, "prior_error_codes": [], "elapsed_ms": 1},
+            {
+                "adapter": "local_llama_cpp",
+                "provider": "local",
+                "deployment": "local-qwen3-4b-q4-k-m",
+                "region": "on_premise",
+                "attempts": 1,
+                "repair_attempted": False,
+                "prior_error_codes": [],
+                "elapsed_ms": 1,
+            },
         )
 
     def test_valid_request_and_output_are_promoted_without_identity(self):

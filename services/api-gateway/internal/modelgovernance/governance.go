@@ -1,0 +1,245 @@
+package modelgovernance
+
+import (
+	"errors"
+	"net/url"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+const (
+	ProviderLocal    = "local"
+	ProviderExternal = "external"
+
+	ModeLocalOnly          = "local_only"
+	ModeShadowCompare      = "shadow_compare"
+	ModeCloudSuggestion    = "cloud_suggestion"
+	ModeHybridEscalation   = "hybrid_escalation"
+	ModeDualProviderReview = "dual_provider_review"
+)
+
+var (
+	ErrInvalidProvider   = errors.New("invalid model provider")
+	ErrInvalidDeployment = errors.New("invalid model deployment")
+	ErrInvalidPolicy     = errors.New("invalid tenant model policy")
+	ErrNoDeployment      = errors.New("no governed model deployment is eligible")
+
+	governanceKey = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+)
+
+type DataPolicy struct {
+	TrainingAllowed bool   `json:"training_allowed"`
+	RetentionMode   string `json:"retention_mode"`
+}
+
+type Provider struct {
+	Key           string     `json:"provider_key"`
+	Kind          string     `json:"provider_kind"`
+	AdapterType   string     `json:"adapter_type"`
+	CredentialRef string     `json:"credential_ref,omitempty"`
+	Region        string     `json:"region"`
+	DataPolicy    DataPolicy `json:"data_policy"`
+	Status        string     `json:"status"`
+}
+
+type Deployment struct {
+	Key               string   `json:"deployment_key"`
+	ProviderKey       string   `json:"provider_key"`
+	ModelVersion      string   `json:"model_version"`
+	Region            string   `json:"region"`
+	CapabilityProfile string   `json:"capability_profile"`
+	Modalities        []string `json:"modalities"`
+	Status            string   `json:"status"`
+	HealthState       string   `json:"health_state"`
+}
+
+type TenantPolicy struct {
+	Mode                     string   `json:"mode"`
+	ExternalEnabled          bool     `json:"external_enabled"`
+	TextExportEnabled        bool     `json:"text_export_enabled"`
+	ImageExportEnabled       bool     `json:"image_export_enabled"`
+	AllowedDeployments       []string `json:"allowed_deployments"`
+	MaxCostMicrosPerQuestion int64    `json:"max_cost_micros_per_question"`
+	MaxCostMicrosPerExam     int64    `json:"max_cost_micros_per_exam"`
+	FallbackMode             string   `json:"fallback_mode"`
+}
+
+type RouteRequest struct {
+	Modality string
+}
+
+type RouteDecision struct {
+	ProviderKey   string `json:"provider_key"`
+	DeploymentKey string `json:"deployment_key"`
+	Reason        string `json:"reason"`
+}
+
+func DefaultTenantPolicy() TenantPolicy {
+	return TenantPolicy{
+		Mode:               ModeLocalOnly,
+		AllowedDeployments: []string{},
+		FallbackMode:       "manual_only",
+	}
+}
+
+func ValidateProvider(provider Provider) error {
+	if !governanceKey.MatchString(provider.Key) ||
+		!governanceKey.MatchString(provider.AdapterType) ||
+		strings.Contains(strings.ToLower(strings.ReplaceAll(provider.AdapterType, "-", "_")), "openai_compatible") ||
+		(provider.Kind != ProviderLocal && provider.Kind != ProviderExternal) ||
+		strings.TrimSpace(provider.Region) == "" ||
+		provider.DataPolicy.TrainingAllowed ||
+		(provider.DataPolicy.RetentionMode != "no_store" && provider.DataPolicy.RetentionMode != "contractual") {
+		return ErrInvalidProvider
+	}
+	if provider.Kind == ProviderLocal {
+		if provider.CredentialRef != "" {
+			return ErrInvalidProvider
+		}
+		return nil
+	}
+	if !validCredentialReference(provider.CredentialRef) {
+		return ErrInvalidProvider
+	}
+	return nil
+}
+
+func ValidateDeployment(deployment Deployment, provider Provider) error {
+	if !governanceKey.MatchString(deployment.Key) ||
+		deployment.ProviderKey != provider.Key ||
+		strings.TrimSpace(deployment.ModelVersion) == "" ||
+		strings.TrimSpace(deployment.Region) == "" ||
+		strings.TrimSpace(deployment.CapabilityProfile) == "" ||
+		(deployment.Status != "shadow_only" && deployment.Status != "unverified" && deployment.Status != "disabled") ||
+		(deployment.HealthState != "available" &&
+			deployment.HealthState != "unverified" &&
+			deployment.HealthState != "degraded" &&
+			deployment.HealthState != "rate_limited" &&
+			deployment.HealthState != "unavailable" &&
+			deployment.HealthState != "disabled") ||
+		len(deployment.Modalities) == 0 {
+		return ErrInvalidDeployment
+	}
+	seen := map[string]bool{}
+	for _, modality := range deployment.Modalities {
+		if (modality != "text" && modality != "image") || seen[modality] {
+			return ErrInvalidDeployment
+		}
+		seen[modality] = true
+	}
+	return nil
+}
+
+func ValidateTenantPolicy(policy TenantPolicy) error {
+	switch policy.Mode {
+	case ModeLocalOnly, ModeShadowCompare, ModeCloudSuggestion, ModeHybridEscalation, ModeDualProviderReview:
+	default:
+		return ErrInvalidPolicy
+	}
+	if policy.FallbackMode != "manual_only" && policy.FallbackMode != "approved_deployment_only" {
+		return ErrInvalidPolicy
+	}
+	if policy.MaxCostMicrosPerQuestion < 0 || policy.MaxCostMicrosPerExam < 0 {
+		return ErrInvalidPolicy
+	}
+	if !policy.ExternalEnabled &&
+		(policy.Mode != ModeLocalOnly ||
+			policy.TextExportEnabled ||
+			policy.ImageExportEnabled ||
+			len(policy.AllowedDeployments) != 0) {
+		return ErrInvalidPolicy
+	}
+	for _, deployment := range policy.AllowedDeployments {
+		if !governanceKey.MatchString(deployment) {
+			return ErrInvalidPolicy
+		}
+	}
+	return nil
+}
+
+func SelectDeployment(
+	policy TenantPolicy,
+	request RouteRequest,
+	providers []Provider,
+	deployments []Deployment,
+) (RouteDecision, error) {
+	if err := ValidateTenantPolicy(policy); err != nil {
+		return RouteDecision{}, err
+	}
+	if request.Modality != "text" && request.Modality != "image" {
+		return RouteDecision{}, ErrInvalidPolicy
+	}
+	providerByKey := make(map[string]Provider, len(providers))
+	for _, provider := range providers {
+		if err := ValidateProvider(provider); err != nil {
+			return RouteDecision{}, err
+		}
+		providerByKey[provider.Key] = provider
+	}
+	allowed := make(map[string]bool, len(policy.AllowedDeployments))
+	for _, deployment := range policy.AllowedDeployments {
+		allowed[deployment] = true
+	}
+	candidates := append([]Deployment(nil), deployments...)
+	sort.Slice(candidates, func(left, right int) bool {
+		if candidates[left].ProviderKey == candidates[right].ProviderKey {
+			return candidates[left].Key < candidates[right].Key
+		}
+		return candidates[left].ProviderKey < candidates[right].ProviderKey
+	})
+	for _, deployment := range candidates {
+		provider, exists := providerByKey[deployment.ProviderKey]
+		if !exists || ValidateDeployment(deployment, provider) != nil {
+			continue
+		}
+		if provider.Status != "active" ||
+			deployment.Status != "shadow_only" ||
+			deployment.HealthState != "available" ||
+			!contains(deployment.Modalities, request.Modality) {
+			continue
+		}
+		if provider.Kind == ProviderExternal {
+			if !policy.ExternalEnabled ||
+				!allowed[deployment.Key] ||
+				(request.Modality == "text" && !policy.TextExportEnabled) ||
+				(request.Modality == "image" && !policy.ImageExportEnabled) ||
+				policy.Mode == ModeLocalOnly {
+				continue
+			}
+			return RouteDecision{
+				ProviderKey:   provider.Key,
+				DeploymentKey: deployment.Key,
+				Reason:        "explicit tenant external authorization and deployment allowlist",
+			}, nil
+		}
+		return RouteDecision{
+			ProviderKey:   provider.Key,
+			DeploymentKey: deployment.Key,
+			Reason:        "local governed deployment selected without external data transfer",
+		}, nil
+	}
+	return RouteDecision{}, ErrNoDeployment
+}
+
+func validCredentialReference(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	switch parsed.Scheme {
+	case "env", "docker_secret", "vault", "aws_secrets_manager", "azure_key_vault", "gcp_secret_manager":
+		return true
+	default:
+		return false
+	}
+}
+
+func contains(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}

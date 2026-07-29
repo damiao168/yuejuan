@@ -90,6 +90,9 @@ type AdapterOutput struct {
 
 type AdapterTelemetry struct {
 	Adapter         string   `json:"adapter"`
+	Provider        string   `json:"provider"`
+	Deployment      string   `json:"deployment"`
+	Region          string   `json:"region"`
 	Attempts        int      `json:"attempts"`
 	RepairAttempted bool     `json:"repair_attempted"`
 	PriorErrorCodes []string `json:"prior_error_codes"`
@@ -112,6 +115,9 @@ type Grade struct {
 	CapabilityProfile      string                `json:"capability_profile"`
 	AdapterRequestID       string                `json:"adapter_request_id"`
 	AdapterName            string                `json:"adapter_name"`
+	ProviderKey            string                `json:"provider_key"`
+	DeploymentKey          string                `json:"deployment_key"`
+	DeploymentRegion       string                `json:"deployment_region"`
 	AdapterAttempts        int                   `json:"adapter_attempts"`
 	AdapterLatencyMS       int64                 `json:"adapter_latency_ms"`
 	AdapterRepairAttempted bool                  `json:"adapter_repair_attempted"`

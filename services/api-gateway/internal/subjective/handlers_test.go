@@ -74,7 +74,11 @@ func TestConfiguredRouterUsesGovernedGradingAgentAndOverridesCallerPolicy(t *tes
 			"student_feedback": "teacher review required", "teacher_note": "shadow suggestion",
 			"model_version": "governed-model-v1", "prompt_version": "governed-prompt-v2", "rubric_version": "v1",
 			"capability_profile": "local-pilot-v1", "mock": false,
-			"telemetry": map[string]any{"adapter": "local_llama_cpp", "attempts": 1, "repair_attempted": false, "prior_error_codes": []string{}, "elapsed_ms": 25},
+			"telemetry": map[string]any{
+				"adapter": "local_llama_cpp", "provider": "local",
+				"deployment": "local-qwen3-4b-q4-k-m", "region": "on_premise",
+				"attempts": 1, "repair_attempted": false, "prior_error_codes": []string{}, "elapsed_ms": 25,
+			},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(response)
@@ -189,9 +193,13 @@ func (fixedAdapter) Grade(_ context.Context, input subjective.AdapterInput) (sub
 		RubricVersion:     input.Rubric.Version,
 		DeliveryMode:      "teacher_suggestion",
 		CapabilityProfile: "local-pilot-v1",
-		Telemetry:         subjective.AdapterTelemetry{Adapter: "fixed-test-adapter", Attempts: 1, PriorErrorCodes: []string{}},
-		RawOutput:         map[string]any{"adapter": "fixed-test-adapter"},
-		Mock:              false,
+		Telemetry: subjective.AdapterTelemetry{
+			Adapter: "fixed-test-adapter", Provider: "local",
+			Deployment: "fixed-test-deployment", Region: "on_premise",
+			Attempts: 1, PriorErrorCodes: []string{},
+		},
+		RawOutput: map[string]any{"adapter": "fixed-test-adapter"},
+		Mock:      false,
 	}, nil
 }
 

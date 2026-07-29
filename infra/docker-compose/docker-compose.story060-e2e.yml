@@ -128,6 +128,11 @@ services:
       EDUGRADE_GRADING_MODEL_API_KEY: ${EDUGRADE_E2E_MODEL_API_KEY:?set by the STORY-060 runner}
       EDUGRADE_GRADING_MODEL_NAME: qwen3-4b-q4-k-m
       EDUGRADE_GRADING_MODEL_VERSION: Qwen/Qwen3-4B-GGUF:Q4_K_M
+      EDUGRADE_GRADING_PROVIDER_KEY: local
+      EDUGRADE_GRADING_DEPLOYMENT_KEY: local-qwen3-4b-q4-k-m
+      EDUGRADE_GRADING_ADAPTER_TYPE: local_llama_cpp
+      EDUGRADE_GRADING_DEPLOYMENT_REGION: on_premise
+      EDUGRADE_GRADING_CAPABILITY_PROFILE: local-pilot-v1
       EDUGRADE_GRADING_PROMPT_VERSION: subjective-local-structured-v2
       EDUGRADE_GRADING_MODEL_TIMEOUT_SECONDS: "230"
       EDUGRADE_GRADING_MODEL_MAX_OUTPUT_TOKENS: "384"
@@ -180,6 +185,11 @@ services:
       EDUGRADE_AI_MODEL_VERSION: Qwen/Qwen3-4B-GGUF:Q4_K_M
       EDUGRADE_AI_PROMPT_VERSION: subjective-local-structured-v2
       EDUGRADE_AI_MIN_CONFIDENCE: "0.8"
+      EDUGRADE_AI_PROVIDER_KEY: local
+      EDUGRADE_AI_DEPLOYMENT_KEY: local-qwen3-4b-q4-k-m
+      EDUGRADE_AI_ADAPTER_TYPE: local_llama_cpp
+      EDUGRADE_AI_DEPLOYMENT_REGION: on_premise
+      EDUGRADE_AI_CAPABILITY_PROFILE: local-pilot-v1
     depends_on:
       redis:
         condition: service_healthy

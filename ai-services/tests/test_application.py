@@ -20,6 +20,16 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len([call for call in model.calls if call[0] == "request"]), 1)
         self.assertNotIn("answer_text", str(events))
+        self.assertEqual(first["telemetry"]["provider"], "local")
+        self.assertEqual(first["telemetry"]["deployment"], "local-qwen3-4b-q4-k-m")
+        self.assertEqual(first["telemetry"]["region"], "on_premise")
+
+    def test_capability_profile_identity_must_match_the_governed_matrix(self):
+        with self.assertRaisesRegex(ValueError, "capability profile"):
+            GradingAgentApplication(
+                settings(capability_profile="unapproved-profile"),
+                model=FakeModel(),
+            )
 
     def test_idempotency_key_reuse_with_different_request_is_rejected(self):
         app = GradingAgentApplication(settings(), model=FakeModel())

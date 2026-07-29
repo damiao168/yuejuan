@@ -143,7 +143,12 @@ func (s *PostgresStore) CreateGrade(ctx context.Context, tenantID string, actorI
 	evidence, _ := json.Marshal(grade.Evidence)
 	risks, _ := json.Marshal(grade.RiskFlags)
 	raw, _ := json.Marshal(cloneMap(grade.RawOutput))
-	row := s.db.QueryRowContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Grade{}, err
+	}
+	defer tx.Rollback()
+	row := tx.QueryRowContext(ctx, `
 INSERT INTO ai_grade (
   tenant_id, answer_segment_id, question_id, question_no, question_type, answer_version,
   grader_type, rule_version, suggested_score, max_score, confidence,
@@ -151,14 +156,16 @@ INSERT INTO ai_grade (
   auto_pass, mock, raw_output, created_by, status, failure_reason,
   model_version, prompt_version, student_feedback, teacher_note,
   rubric_version, delivery_mode, capability_profile, adapter_request_id,
-  adapter_name, adapter_attempts, adapter_latency_ms, adapter_repair_attempted
+  adapter_name, provider_key, deployment_key, deployment_region,
+  adapter_attempts, adapter_latency_ms, adapter_repair_attempted
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, 'llm-adapter', $8, $9, $10,
   $11, $12, $13, $14, $15, false, $16, $17, $18, $19, NULLIF($20, ''),
-  $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
+  $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
 RETURNING id::text, tenant_id::text, answer_segment_id::text, question_id::text, question_no, question_type,
   answer_version, grader_type, model_version, prompt_version, rubric_version, delivery_mode, capability_profile,
-  adapter_request_id, adapter_name, adapter_attempts, adapter_latency_ms, adapter_repair_attempted,
+  adapter_request_id, adapter_name, provider_key, deployment_key, deployment_region,
+  adapter_attempts, adapter_latency_ms, adapter_repair_attempted,
   suggested_score::float8, max_score::float8, confidence::float8,
   matched_points, missing_points, evidence, risk_flags, needs_human_review, student_feedback, teacher_note,
   mock, status, COALESCE(failure_reason, ''), raw_output, created_by::text, created_at
@@ -167,9 +174,39 @@ RETURNING id::text, tenant_id::text, answer_segment_id::text, question_id::text,
 		matched, missing, evidence, risks, grade.NeedsHumanReview, grade.Mock, raw, actorID,
 		grade.Status, grade.FailureReason, grade.ModelVersion, grade.PromptVersion, grade.StudentFeedback, grade.TeacherNote,
 		grade.RubricVersion, grade.DeliveryMode, grade.CapabilityProfile, grade.AdapterRequestID,
-		grade.AdapterName, grade.AdapterAttempts, grade.AdapterLatencyMS, grade.AdapterRepairAttempted)
+		grade.AdapterName, grade.ProviderKey, grade.DeploymentKey, grade.DeploymentRegion,
+		grade.AdapterAttempts, grade.AdapterLatencyMS, grade.AdapterRepairAttempted)
 	var out Grade
 	if err := scanGrade(row, &out); err != nil {
+		return Grade{}, err
+	}
+	if !out.Mock &&
+		out.AdapterRequestID != "" &&
+		out.AdapterName != "" &&
+		out.ProviderKey != "" &&
+		out.DeploymentKey != "" &&
+		out.DeploymentRegion != "" {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO model_call_fact (
+  tenant_id, request_id, answer_segment_id, question_id,
+  provider_key, deployment_key, adapter_type, model_version,
+  prompt_version, rubric_version, capability_profile, deployment_region,
+  route_mode, route_reason, status, attempts, latency_ms, error_code
+)
+VALUES (
+  $1, $2, $3, $4,
+  $5, $6, $7, $8,
+  $9, $10, $11, $12,
+  'local_only', 'configured governed grading-agent deployment', $13, $14, $15, $16
+)
+`, tenantID, out.AdapterRequestID, out.AnswerSegmentID, out.QuestionID,
+			out.ProviderKey, out.DeploymentKey, out.AdapterName, out.ModelVersion,
+			out.PromptVersion, out.RubricVersion, out.CapabilityProfile, out.DeploymentRegion,
+			out.Status, out.AdapterAttempts, out.AdapterLatencyMS, out.FailureReason); err != nil {
+			return Grade{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return Grade{}, err
 	}
 	return out, nil
@@ -197,6 +234,9 @@ func scanGrade(row gradeScanner, out *Grade) error {
 		&out.CapabilityProfile,
 		&out.AdapterRequestID,
 		&out.AdapterName,
+		&out.ProviderKey,
+		&out.DeploymentKey,
+		&out.DeploymentRegion,
 		&out.AdapterAttempts,
 		&out.AdapterLatencyMS,
 		&out.AdapterRepairAttempted,

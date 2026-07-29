@@ -80,13 +80,18 @@ type QdrantConfig struct {
 }
 
 type AIServiceConfig struct {
-	URL           string
-	Token         string
-	Timeout       time.Duration
-	MaxRetries    int
-	ModelVersion  string
-	PromptVersion string
-	MinConfidence float64
+	URL               string
+	Token             string
+	Timeout           time.Duration
+	MaxRetries        int
+	ModelVersion      string
+	PromptVersion     string
+	MinConfidence     float64
+	ProviderKey       string
+	DeploymentKey     string
+	AdapterType       string
+	DeploymentRegion  string
+	CapabilityProfile string
 }
 
 type FileConfig struct {
@@ -167,13 +172,18 @@ func Load(envFile string) (Config, error) {
 			APIKey: getEnv("EDUGRADE_QDRANT_API_KEY", ""),
 		},
 		AIService: AIServiceConfig{
-			URL:           getEnv("EDUGRADE_AI_SERVICE_URL", ""),
-			Token:         getEnv("EDUGRADE_AI_SERVICE_TOKEN", ""),
-			Timeout:       getEnvDuration("EDUGRADE_AI_SERVICE_TIMEOUT", 750*time.Second),
-			MaxRetries:    getEnvInt("EDUGRADE_AI_SERVICE_MAX_RETRIES", 0),
-			ModelVersion:  getEnv("EDUGRADE_AI_MODEL_VERSION", "Qwen/Qwen3-4B-GGUF:Q4_K_M"),
-			PromptVersion: getEnv("EDUGRADE_AI_PROMPT_VERSION", "subjective-local-structured-v2"),
-			MinConfidence: getEnvFloat("EDUGRADE_AI_MIN_CONFIDENCE", 0.8),
+			URL:               getEnv("EDUGRADE_AI_SERVICE_URL", ""),
+			Token:             getEnv("EDUGRADE_AI_SERVICE_TOKEN", ""),
+			Timeout:           getEnvDuration("EDUGRADE_AI_SERVICE_TIMEOUT", 750*time.Second),
+			MaxRetries:        getEnvInt("EDUGRADE_AI_SERVICE_MAX_RETRIES", 0),
+			ModelVersion:      getEnv("EDUGRADE_AI_MODEL_VERSION", "Qwen/Qwen3-4B-GGUF:Q4_K_M"),
+			PromptVersion:     getEnv("EDUGRADE_AI_PROMPT_VERSION", "subjective-local-structured-v2"),
+			MinConfidence:     getEnvFloat("EDUGRADE_AI_MIN_CONFIDENCE", 0.8),
+			ProviderKey:       getEnv("EDUGRADE_AI_PROVIDER_KEY", "local"),
+			DeploymentKey:     getEnv("EDUGRADE_AI_DEPLOYMENT_KEY", "local-qwen3-4b-q4-k-m"),
+			AdapterType:       getEnv("EDUGRADE_AI_ADAPTER_TYPE", "local_llama_cpp"),
+			DeploymentRegion:  getEnv("EDUGRADE_AI_DEPLOYMENT_REGION", "on_premise"),
+			CapabilityProfile: getEnv("EDUGRADE_AI_CAPABILITY_PROFILE", "local-pilot-v1"),
 		},
 		Files: FileConfig{
 			Bucket:            getEnv("EDUGRADE_FILE_BUCKET", "edugrade-files"),
@@ -216,6 +226,18 @@ func validateProductionConfig(cfg Config) error {
 		}
 		if cfg.Service.WriteTimeout <= cfg.AIService.Timeout {
 			return fmt.Errorf("EDUGRADE_HTTP_WRITE_TIMEOUT must exceed EDUGRADE_AI_SERVICE_TIMEOUT")
+		}
+		identity := map[string]string{
+			"EDUGRADE_AI_PROVIDER_KEY":       cfg.AIService.ProviderKey,
+			"EDUGRADE_AI_DEPLOYMENT_KEY":     cfg.AIService.DeploymentKey,
+			"EDUGRADE_AI_ADAPTER_TYPE":       cfg.AIService.AdapterType,
+			"EDUGRADE_AI_DEPLOYMENT_REGION":  cfg.AIService.DeploymentRegion,
+			"EDUGRADE_AI_CAPABILITY_PROFILE": cfg.AIService.CapabilityProfile,
+		}
+		for name, value := range identity {
+			if strings.TrimSpace(value) == "" || len(value) > 128 || strings.ContainsAny(value, " \t\r\n") {
+				return fmt.Errorf("invalid AI service identity: %s must be a non-empty bounded identifier", name)
+			}
 		}
 	}
 	if !isProductionLike(cfg.Service.Environment) {
