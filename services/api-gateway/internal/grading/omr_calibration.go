@@ -15,40 +15,46 @@ import (
 )
 
 // OMRCalibrationSession freezes the exact template, reference asset, worker
-// profile, question, and deterministic sample population used to justify an
-// automatic-confirmation permission.
+// profile, and deterministic sample population used to justify an
+// automatic-confirmation permission. New sessions cover every OMR question in
+// one immutable template; ScopeType keeps legacy question-scoped evidence
+// readable without silently widening it.
 type OMRCalibrationSession struct {
-	ID                      string                `json:"id"`
-	TenantID                string                `json:"tenant_id"`
-	TemplateID              string                `json:"template_id"`
-	TemplateContentHash     string                `json:"template_content_hash"`
-	QuestionID              string                `json:"question_id"`
-	QuestionType            string                `json:"question_type"`
-	ProfileVersion          string                `json:"profile_version"`
-	ProfileHash             string                `json:"profile_hash"`
-	ReferenceFileAssetID    string                `json:"reference_file_asset_id"`
-	ReferenceSHA256         string                `json:"reference_sha256"`
-	OptionLabels            []string              `json:"option_labels"`
-	SampleSeed              string                `json:"sample_seed"`
-	SampleCount             int                   `json:"sample_count"`
-	MinimumSamples          int                   `json:"minimum_samples"`
-	MinimumSamplesPerOption int                   `json:"minimum_samples_per_option"`
-	MinimumConfidence       float64               `json:"minimum_confidence"`
-	Status                  string                `json:"status"`
-	CreatedBy               string                `json:"created_by"`
-	CreatedAt               time.Time             `json:"created_at"`
-	ApprovedBy              string                `json:"approved_by,omitempty"`
-	ApprovedAt              *time.Time            `json:"approved_at,omitempty"`
-	ApprovalNote            string                `json:"approval_note,omitempty"`
-	EvidenceHash            string                `json:"evidence_hash,omitempty"`
-	RevokedBy               string                `json:"revoked_by,omitempty"`
-	RevokedAt               *time.Time            `json:"revoked_at,omitempty"`
-	RevokeReason            string                `json:"revoke_reason,omitempty"`
-	DiscardedBy             string                `json:"discarded_by,omitempty"`
-	DiscardedAt             *time.Time            `json:"discarded_at,omitempty"`
-	DiscardReason           string                `json:"discard_reason,omitempty"`
-	UpdatedAt               time.Time             `json:"updated_at"`
-	Summary                 OMRCalibrationSummary `json:"summary"`
+	ID                       string                `json:"id"`
+	TenantID                 string                `json:"tenant_id"`
+	TemplateID               string                `json:"template_id"`
+	TemplateContentHash      string                `json:"template_content_hash"`
+	ScopeType                string                `json:"scope_type"`
+	QuestionID               string                `json:"question_id,omitempty"`
+	QuestionIDs              []string              `json:"question_ids"`
+	QuestionType             string                `json:"question_type"`
+	ProfileVersion           string                `json:"profile_version"`
+	ProfileHash              string                `json:"profile_hash"`
+	ReferenceFileAssetID     string                `json:"reference_file_asset_id"`
+	ReferenceSHA256          string                `json:"reference_sha256"`
+	OptionLabels             []string              `json:"option_labels"`
+	SampleSeed               string                `json:"sample_seed"`
+	SampleCount              int                   `json:"sample_count"`
+	MinimumSamples           int                   `json:"minimum_samples"`
+	MinimumSamplesPerOption  int                   `json:"minimum_samples_per_option"`
+	MinimumSamplesPerStratum int                   `json:"minimum_samples_per_stratum"`
+	MinimumConfidence        float64               `json:"minimum_confidence"`
+	InheritedFromSessionID   string                `json:"inherited_from_session_id,omitempty"`
+	Status                   string                `json:"status"`
+	CreatedBy                string                `json:"created_by"`
+	CreatedAt                time.Time             `json:"created_at"`
+	ApprovedBy               string                `json:"approved_by,omitempty"`
+	ApprovedAt               *time.Time            `json:"approved_at,omitempty"`
+	ApprovalNote             string                `json:"approval_note,omitempty"`
+	EvidenceHash             string                `json:"evidence_hash,omitempty"`
+	RevokedBy                string                `json:"revoked_by,omitempty"`
+	RevokedAt                *time.Time            `json:"revoked_at,omitempty"`
+	RevokeReason             string                `json:"revoke_reason,omitempty"`
+	DiscardedBy              string                `json:"discarded_by,omitempty"`
+	DiscardedAt              *time.Time            `json:"discarded_at,omitempty"`
+	DiscardReason            string                `json:"discard_reason,omitempty"`
+	UpdatedAt                time.Time             `json:"updated_at"`
+	Summary                  OMRCalibrationSummary `json:"summary"`
 }
 
 // OMRCalibrationCase is an immutable OMR output snapshot that an operator
@@ -59,6 +65,11 @@ type OMRCalibrationCase struct {
 	CalibrationID      string           `json:"calibration_id"`
 	OMRRunID           string           `json:"omr_run_id"`
 	AnswerSegmentID    string           `json:"answer_segment_id"`
+	QuestionID         string           `json:"question_id"`
+	QuestionNo         string           `json:"question_no"`
+	QuestionType       string           `json:"question_type"`
+	OptionLabels       []string         `json:"option_labels"`
+	SampleStratum      string           `json:"sample_stratum"`
 	CropSHA256         string           `json:"crop_sha256"`
 	ObservedDecision   string           `json:"observed_decision"`
 	ObservedOptions    []string         `json:"observed_options"`
@@ -74,14 +85,19 @@ type OMRCalibrationCase struct {
 }
 
 type OMRCalibrationSummary struct {
-	TotalCount     int            `json:"total_count"`
-	LabeledCount   int            `json:"labeled_count"`
-	PendingCount   int            `json:"pending_count"`
-	MatchCount     int            `json:"match_count"`
-	MismatchCount  int            `json:"mismatch_count"`
-	OptionCoverage map[string]int `json:"option_coverage"`
-	ReadyToApprove bool           `json:"ready_to_approve"`
-	Blockers       []string       `json:"blockers"`
+	TotalCount            int            `json:"total_count"`
+	LabeledCount          int            `json:"labeled_count"`
+	PendingCount          int            `json:"pending_count"`
+	MatchCount            int            `json:"match_count"`
+	MismatchCount         int            `json:"mismatch_count"`
+	EligibleCount         int            `json:"eligible_count"`
+	EligibleMatchCount    int            `json:"eligible_match_count"`
+	EligibleMismatchCount int            `json:"eligible_mismatch_count"`
+	OptionCoverage        map[string]int `json:"option_coverage"`
+	QuestionCoverage      map[string]int `json:"question_coverage"`
+	StratumCoverage       map[string]int `json:"stratum_coverage"`
+	ReadyToApprove        bool           `json:"ready_to_approve"`
+	Blockers              []string       `json:"blockers"`
 }
 
 type OMRCalibrationDetail struct {
@@ -90,11 +106,15 @@ type OMRCalibrationDetail struct {
 }
 
 type CreateOMRCalibrationInput struct {
-	QuestionID string `json:"question_id"`
+	// QuestionID is retained only so older clients receive a harmless,
+	// backwards-compatible request shape. New sessions always cover the
+	// complete immutable template.
+	QuestionID string `json:"question_id,omitempty"`
 }
 
 type LabelOMRCalibrationCaseInput struct {
-	ExpectedOption string `json:"expected_option"`
+	ExpectedOption  string   `json:"expected_option,omitempty"`
+	ExpectedOptions []string `json:"expected_options"`
 }
 
 type ApproveOMRCalibrationInput struct {
@@ -128,16 +148,16 @@ type calibrationQueryer interface {
 }
 
 const omrCalibrationSessionColumns = `
-id::text,tenant_id::text,template_id::text,template_content_hash,question_id::text,question_type,
+id::text,tenant_id::text,template_id::text,template_content_hash,scope_type,COALESCE(question_id::text,''),question_ids,question_type,
 profile_version,profile_hash,reference_file_asset_id::text,reference_sha256,option_labels,sample_seed::text,
-sample_count,minimum_samples,minimum_samples_per_option,minimum_confidence,status,created_by::text,created_at,
+sample_count,minimum_samples,minimum_samples_per_option,minimum_samples_per_stratum,minimum_confidence,status,created_by::text,created_at,
+COALESCE(inherited_from_session_id::text,''),
 COALESCE(approved_by::text,''),approved_at,approval_note,COALESCE(evidence_hash,''),COALESCE(revoked_by::text,''),
 revoked_at,revoke_reason,COALESCE(discarded_by::text,''),discarded_at,discard_reason,updated_at`
 
 func (s *PostgresStore) CreateOMRCalibration(ctx context.Context, tenantID, templateID, actorID string, input CreateOMRCalibrationInput) (OMRCalibrationDetail, error) {
 	templateID = strings.TrimSpace(templateID)
-	input.QuestionID = strings.TrimSpace(input.QuestionID)
-	if templateID == "" || input.QuestionID == "" || strings.TrimSpace(actorID) == "" {
+	if templateID == "" || strings.TrimSpace(actorID) == "" {
 		return OMRCalibrationDetail{}, ErrInvalidInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -146,44 +166,55 @@ func (s *PostgresStore) CreateOMRCalibration(ctx context.Context, tenantID, temp
 	}
 	defer tx.Rollback()
 
-	var contentHash, templateStatus, questionType, referenceAssetID, referenceSHA256, referenceContentType string
+	var examID, contentHash, templateStatus, referenceAssetID, referenceSHA256, referenceContentType string
 	var layoutRaw []byte
 	err = tx.QueryRowContext(ctx, `
-SELECT t.content_hash,t.status,t.layout,q.question_type,fa.id::text,fa.hash_sha256,fa.content_type
+SELECT t.exam_id::text,t.content_hash,t.status,t.layout,fa.id::text,fa.hash_sha256,fa.content_type
 FROM answer_sheet_template t
-JOIN question q ON q.tenant_id=t.tenant_id AND q.exam_id=t.exam_id AND q.id=$3::uuid AND q.deleted_at IS NULL
 JOIN exam_paper ep ON ep.tenant_id=t.tenant_id AND ep.id=t.exam_paper_id AND ep.deleted_at IS NULL
 JOIN file_asset fa ON fa.tenant_id=ep.tenant_id AND fa.id=ep.file_asset_id AND fa.deleted_at IS NULL
 WHERE t.tenant_id=$1::uuid AND t.id=$2::uuid AND t.deleted_at IS NULL
 FOR UPDATE OF t
-`, tenantID, templateID, input.QuestionID).Scan(&contentHash, &templateStatus, &layoutRaw, &questionType, &referenceAssetID, &referenceSHA256, &referenceContentType)
+`, tenantID, templateID).Scan(&examID, &contentHash, &templateStatus, &layoutRaw, &referenceAssetID, &referenceSHA256, &referenceContentType)
 	if errors.Is(err, sql.ErrNoRows) {
 		return OMRCalibrationDetail{}, ErrNotFound
 	}
 	if err != nil {
 		return OMRCalibrationDetail{}, err
 	}
-	if questionType != "single_choice" && questionType != "true_false" {
-		return OMRCalibrationDetail{}, ErrInvalidInput
-	}
 	var layout paper.TemplateLayout
 	if err := json.Unmarshal(layoutRaw, &layout); err != nil {
 		return OMRCalibrationDetail{}, ErrInvalidInput
 	}
+	questions, err := calibrationQuestionsForTemplateTx(ctx, tx, tenantID, examID, layout)
+	if err != nil {
+		return OMRCalibrationDetail{}, err
+	}
+	if len(questions) == 0 {
+		return OMRCalibrationDetail{}, ErrInvalidInput
+	}
 	reference := paper.TemplateOMRReference{Source: paper.OMRReferenceSourceExamPaper, FileAssetID: referenceAssetID, HashSHA256: referenceSHA256, ContentType: referenceContentType}
-	policy := paper.OMRAutoConfirmPolicyForTemplateReference(layout, templateStatus, contentHash, contentHash, reference, input.QuestionID)
+	policy := paper.OMRAutoConfirmPolicyForTemplateReference(layout, templateStatus, contentHash, contentHash, reference, questions[0].ID)
 	if policy.RuntimeProfile.Mode != paper.OMRProfileModeTemplateDifference || policy.Reference == nil || policy.ProfileHash == "" {
 		return OMRCalibrationDetail{}, ErrInvalidInput
 	}
-	optionLabels, ok := calibrationOptionLabels(layout, input.QuestionID)
-	if !ok {
-		return OMRCalibrationDetail{}, ErrInvalidInput
+	questionIDs := make([]string, 0, len(questions))
+	optionLabels := []string{}
+	seenLabels := map[string]bool{}
+	for _, question := range questions {
+		questionIDs = append(questionIDs, question.ID)
+		for _, label := range question.OptionLabels {
+			if !seenLabels[label] {
+				seenLabels[label] = true
+				optionLabels = append(optionLabels, label)
+			}
+		}
 	}
-	scopeKey := strings.Join([]string{tenantID, templateID, contentHash, input.QuestionID, policy.ProfileHash, policy.Reference.HashSHA256}, "|")
+	scopeKey := strings.Join([]string{tenantID, templateID, contentHash, "template", policy.ProfileHash, policy.Reference.HashSHA256}, "|")
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, scopeKey); err != nil {
 		return OMRCalibrationDetail{}, err
 	}
-	if existing, existingErr := getActiveOMRCalibrationSessionTx(ctx, tx, tenantID, templateID, contentHash, input.QuestionID, policy.RuntimeProfile.Version, policy.ProfileHash, policy.Reference.FileAssetID, policy.Reference.HashSHA256); existingErr == nil {
+	if existing, existingErr := getActiveOMRCalibrationSessionTx(ctx, tx, tenantID, templateID, contentHash, policy.RuntimeProfile.Version, policy.ProfileHash, policy.Reference.FileAssetID, policy.Reference.HashSHA256); existingErr == nil {
 		if err = tx.Commit(); err != nil {
 			return OMRCalibrationDetail{}, err
 		}
@@ -196,21 +227,26 @@ FOR UPDATE OF t
 	if err != nil {
 		return OMRCalibrationDetail{}, ErrInvalidInput
 	}
+	questionIDsRaw, err := json.Marshal(questionIDs)
+	if err != nil {
+		return OMRCalibrationDetail{}, ErrInvalidInput
+	}
 	var session OMRCalibrationSession
 	err = scanOMRCalibrationSession(tx.QueryRowContext(ctx, `
 INSERT INTO omr_calibration_session (
-  tenant_id,template_id,template_content_hash,question_id,question_type,profile_version,profile_hash,
-  reference_file_asset_id,reference_sha256,option_labels,minimum_samples,minimum_samples_per_option,
-  minimum_confidence,status,created_by
+  tenant_id,template_id,template_content_hash,scope_type,question_id,question_ids,question_type,
+  profile_version,profile_hash,reference_file_asset_id,reference_sha256,option_labels,
+  minimum_samples,minimum_samples_per_option,minimum_samples_per_stratum,minimum_confidence,status,created_by
 )
-VALUES ($1::uuid,$2::uuid,$3,$4::uuid,$5,$6,$7,$8::uuid,$9,$10::jsonb,$11,$12,$13,'draft',$14::uuid)
-RETURNING `+omrCalibrationSessionColumns, tenantID, templateID, contentHash, input.QuestionID, questionType,
+VALUES ($1::uuid,$2::uuid,$3,'template',NULL,$4::jsonb,'template',$5,$6,$7::uuid,$8,$9::jsonb,$10,$11,$12,$13,'draft',$14::uuid)
+RETURNING `+omrCalibrationSessionColumns, tenantID, templateID, contentHash, questionIDsRaw,
 		policy.RuntimeProfile.Version, policy.ProfileHash, policy.Reference.FileAssetID, policy.Reference.HashSHA256, labelsRaw,
-		paper.OMRCalibrationMinimumSampleCount, paper.OMRCalibrationMinimumSamplesPerOption, paper.OMRCalibrationMinimumConfidence, actorID), &session)
+		paper.OMRCalibrationMinimumSampleCount, paper.OMRCalibrationMinimumSamplesPerOption,
+		paper.OMRCalibrationMinimumSamplesPerStratum, paper.OMRCalibrationMinimumConfidence, actorID), &session)
 	if err != nil {
 		return OMRCalibrationDetail{}, err
 	}
-	if err = s.populateOMRCalibrationCasesTx(ctx, tx, tenantID, session); err != nil {
+	if err = s.populateOMRCalibrationCasesTx(ctx, tx, tenantID, session, questions); err != nil {
 		return OMRCalibrationDetail{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -276,7 +312,7 @@ func (s *PostgresStore) GetOMRCalibration(ctx context.Context, tenantID, id stri
 func (s *PostgresStore) LabelOMRCalibrationCase(ctx context.Context, tenantID, calibrationID, caseID, actorID string, input LabelOMRCalibrationCaseInput) (OMRCalibrationDetail, error) {
 	calibrationID, caseID, actorID = strings.TrimSpace(calibrationID), strings.TrimSpace(caseID), strings.TrimSpace(actorID)
 	input.ExpectedOption = strings.TrimSpace(input.ExpectedOption)
-	if calibrationID == "" || caseID == "" || actorID == "" || input.ExpectedOption == "" {
+	if calibrationID == "" || caseID == "" || actorID == "" {
 		return OMRCalibrationDetail{}, ErrInvalidInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -291,9 +327,6 @@ func (s *PostgresStore) LabelOMRCalibrationCase(ctx context.Context, tenantID, c
 	if session.Status != "draft" {
 		return OMRCalibrationDetail{}, ErrInvalidTransition
 	}
-	if !containsCalibrationOption(session.OptionLabels, input.ExpectedOption) {
-		return OMRCalibrationDetail{}, ErrInvalidInput
-	}
 	item, err := getOMRCalibrationCaseTx(ctx, tx, tenantID, calibrationID, caseID)
 	if err != nil {
 		return OMRCalibrationDetail{}, err
@@ -301,11 +334,29 @@ func (s *PostgresStore) LabelOMRCalibrationCase(ctx context.Context, tenantID, c
 	if item.ExpectedOptions != nil || item.Matches != nil {
 		return OMRCalibrationDetail{}, ErrInvalidTransition
 	}
-	matches := len(item.ObservedOptions) == 1 && item.ObservedOptions[0] == input.ExpectedOption
+	expected := input.ExpectedOptions
+	if input.ExpectedOption != "" {
+		if expected != nil {
+			return OMRCalibrationDetail{}, ErrInvalidInput
+		}
+		expected = []string{input.ExpectedOption}
+	}
+	if expected == nil {
+		return OMRCalibrationDetail{}, ErrInvalidInput
+	}
+	expected, ok := normalizeCalibrationOptions(item.OptionLabels, expected)
+	if !ok || (item.QuestionType != "multiple_choice" && len(expected) > 1) {
+		return OMRCalibrationDetail{}, ErrInvalidInput
+	}
+	expectedRaw, err := json.Marshal(expected)
+	if err != nil {
+		return OMRCalibrationDetail{}, ErrInvalidInput
+	}
+	matches := calibrationOptionsMatch(item.ObservedDecision, item.ObservedOptions, expected)
 	result, err := tx.ExecContext(ctx, `
 UPDATE omr_calibration_case
-SET expected_options=jsonb_build_array($4::text),matches=$5,labeled_by=$6::uuid,labeled_at=now()
-WHERE tenant_id=$1::uuid AND calibration_session_id=$2::uuid AND id=$3::uuid AND expected_options IS NULL`, tenantID, calibrationID, caseID, input.ExpectedOption, matches, actorID)
+SET expected_options=$4::jsonb,matches=$5,labeled_by=$6::uuid,labeled_at=now()
+WHERE tenant_id=$1::uuid AND calibration_session_id=$2::uuid AND id=$3::uuid AND expected_options IS NULL`, tenantID, calibrationID, caseID, expectedRaw, matches, actorID)
 	if err != nil {
 		return OMRCalibrationDetail{}, err
 	}
@@ -440,38 +491,67 @@ WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='draft' AND deleted_at IS NU
 	return s.GetOMRCalibration(ctx, tenantID, calibrationID)
 }
 
-func (s *PostgresStore) populateOMRCalibrationCasesTx(ctx context.Context, tx *sql.Tx, tenantID string, session OMRCalibrationSession) error {
+func (s *PostgresStore) populateOMRCalibrationCasesTx(ctx context.Context, tx *sql.Tx, tenantID string, session OMRCalibrationSession, questions []calibrationQuestion) error {
+	questionIDsRaw, err := json.Marshal(session.QuestionIDs)
+	if err != nil {
+		return ErrInvalidInput
+	}
 	rows, err := tx.QueryContext(ctx, `
 WITH latest_by_segment AS (
   SELECT DISTINCT ON (o.answer_segment_id)
-    o.id::text,o.answer_segment_id::text,o.crop_sha256,o.decision,o.selected_options,o.confidence,o.measurements
+    o.id::text,o.answer_segment_id::text,seg.question_id::text,seg.question_no,
+    o.crop_sha256,o.decision,o.selected_options,o.confidence,o.measurements
   FROM omr_run o
   JOIN answer_segment seg ON seg.tenant_id=o.tenant_id AND seg.id=o.answer_segment_id AND seg.deleted_at IS NULL
   WHERE o.tenant_id=$1::uuid AND o.template_id=$2::uuid AND o.template_content_hash=$3
-    AND seg.question_id=$4::uuid AND o.profile_version=$5 AND o.profile_hash=$6
+    AND seg.question_id::text IN (SELECT jsonb_array_elements_text($4::jsonb))
+    AND o.profile_version=$5 AND o.profile_hash=$6
     AND o.reference_file_asset_id=$7::uuid AND o.reference_sha256=$8
-    AND o.status='completed' AND o.deleted_at IS NULL
+    AND o.status='completed' AND o.decision IS NOT NULL AND o.confidence IS NOT NULL
+    AND o.deleted_at IS NULL
   ORDER BY o.answer_segment_id,o.completed_at DESC NULLS LAST,o.id DESC
+), classified AS (
+  SELECT *,
+    CASE
+      WHEN decision='selected' AND jsonb_array_length(selected_options)=1 AND confidence >= $9 THEN 'selected_high'
+      WHEN decision='selected' AND jsonb_array_length(selected_options)=1 THEN 'selected_low'
+      WHEN decision='blank' THEN 'blank'
+      ELSE 'ambiguous'
+    END AS sample_stratum
+  FROM latest_by_segment
+), ranked AS (
+  SELECT *,row_number() OVER (
+    PARTITION BY question_id,sample_stratum,
+      CASE WHEN sample_stratum IN ('selected_high','selected_low') THEN selected_options->>0 ELSE '' END
+    ORDER BY md5(id || $10)
+  ) AS bucket_rank
+  FROM classified
 )
-SELECT id,answer_segment_id,crop_sha256,decision,selected_options,confidence,measurements
-FROM latest_by_segment
-WHERE decision='selected' AND confidence >= $9 AND jsonb_array_length(selected_options)=1
-ORDER BY md5(id || $10)
-LIMIT $11`, tenantID, session.TemplateID, session.TemplateContentHash, session.QuestionID,
+SELECT id,answer_segment_id,question_id,question_no,crop_sha256,decision,
+  selected_options,confidence,measurements,sample_stratum
+FROM ranked
+ORDER BY bucket_rank,md5(id || $10)
+LIMIT $11`, tenantID, session.TemplateID, session.TemplateContentHash, questionIDsRaw,
 		session.ProfileVersion, session.ProfileHash, session.ReferenceFileAssetID, session.ReferenceSHA256,
 		session.MinimumConfidence, session.SampleSeed, session.MinimumSamples)
 	if err != nil {
 		return err
 	}
 	type candidate struct {
-		runID, segmentID, cropSHA256, decision string
-		selected, measurements                 []byte
-		confidence                             float64
+		runID, segmentID, questionID, questionNo string
+		cropSHA256, decision, sampleStratum      string
+		selected, measurements                   []byte
+		confidence                               float64
+	}
+	questionByID := make(map[string]calibrationQuestion, len(questions))
+	for _, question := range questions {
+		questionByID[question.ID] = question
 	}
 	candidates := []candidate{}
 	for rows.Next() {
 		var item candidate
-		if err := rows.Scan(&item.runID, &item.segmentID, &item.cropSHA256, &item.decision, &item.selected, &item.confidence, &item.measurements); err != nil {
+		if err := rows.Scan(&item.runID, &item.segmentID, &item.questionID, &item.questionNo, &item.cropSHA256,
+			&item.decision, &item.selected, &item.confidence, &item.measurements, &item.sampleStratum); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -485,12 +565,24 @@ LIMIT $11`, tenantID, session.TemplateID, session.TemplateContentHash, session.Q
 		return err
 	}
 	for _, item := range candidates {
+		question, ok := questionByID[item.questionID]
+		if !ok {
+			return ErrInvalidInput
+		}
+		optionLabelsRaw, marshalErr := json.Marshal(question.OptionLabels)
+		if marshalErr != nil {
+			return ErrInvalidInput
+		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO omr_calibration_case (
-  tenant_id,calibration_session_id,omr_run_id,answer_segment_id,crop_sha256,
-  observed_decision,observed_options,observed_confidence,measurements
+  tenant_id,calibration_session_id,omr_run_id,answer_segment_id,question_id,question_no,
+  question_type,option_labels,sample_stratum,crop_sha256,observed_decision,
+  observed_options,observed_confidence,measurements
 )
-VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7::jsonb,$8,$9::jsonb)`, tenantID, session.ID, item.runID, item.segmentID, item.cropSHA256, item.decision, item.selected, item.confidence, item.measurements); err != nil {
+VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,$7,$8::jsonb,$9,$10,$11,$12::jsonb,$13,$14::jsonb)`,
+			tenantID, session.ID, item.runID, item.segmentID, item.questionID, item.questionNo,
+			question.Type, optionLabelsRaw, item.sampleStratum, item.cropSHA256, item.decision,
+			item.selected, item.confidence, item.measurements); err != nil {
 			return err
 		}
 	}
@@ -498,15 +590,15 @@ VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7::jsonb,$8,$9::jsonb)`, tena
 	return err
 }
 
-func getActiveOMRCalibrationSessionTx(ctx context.Context, tx *sql.Tx, tenantID, templateID, templateHash, questionID, profileVersion, profileHash, referenceAssetID, referenceSHA256 string) (OMRCalibrationSession, error) {
+func getActiveOMRCalibrationSessionTx(ctx context.Context, tx *sql.Tx, tenantID, templateID, templateHash, profileVersion, profileHash, referenceAssetID, referenceSHA256 string) (OMRCalibrationSession, error) {
 	row := tx.QueryRowContext(ctx, `SELECT `+omrCalibrationSessionColumns+`
 FROM omr_calibration_session
-WHERE tenant_id=$1::uuid AND template_id=$2::uuid AND template_content_hash=$3 AND question_id=$4::uuid
-  AND profile_version=$5 AND profile_hash=$6 AND reference_file_asset_id=$7::uuid AND reference_sha256=$8
+WHERE tenant_id=$1::uuid AND template_id=$2::uuid AND template_content_hash=$3 AND scope_type='template'
+  AND profile_version=$4 AND profile_hash=$5 AND reference_file_asset_id=$6::uuid AND reference_sha256=$7
   AND status IN ('draft','approved') AND deleted_at IS NULL
 ORDER BY CASE status WHEN 'approved' THEN 0 ELSE 1 END,created_at DESC
 LIMIT 1
-FOR UPDATE`, tenantID, templateID, templateHash, questionID, profileVersion, profileHash, referenceAssetID, referenceSHA256)
+FOR UPDATE`, tenantID, templateID, templateHash, profileVersion, profileHash, referenceAssetID, referenceSHA256)
 	var out OMRCalibrationSession
 	return out, scanOMRCalibrationSession(row, &out)
 }
@@ -538,6 +630,7 @@ func getOMRCalibrationCaseTx(ctx context.Context, tx *sql.Tx, tenantID, calibrat
 func listOMRCalibrationCases(ctx context.Context, queryer calibrationQueryer, tenantID, calibrationID string) ([]OMRCalibrationCase, error) {
 	rows, err := queryer.QueryContext(ctx, `
 SELECT c.id::text,c.calibration_session_id::text,c.omr_run_id::text,c.answer_segment_id::text,c.crop_sha256,
+  c.question_id::text,c.question_no,c.question_type,c.option_labels,c.sample_stratum,
   c.observed_decision,c.observed_options,c.observed_confidence,c.measurements,
   COALESCE(c.expected_options,'null'::jsonb),c.matches,COALESCE(c.labeled_by::text,''),c.labeled_at,c.created_at,
   COALESCE(o.overlay_file_asset_id::text,'')
@@ -552,12 +645,16 @@ ORDER BY c.created_at,c.id`, tenantID, calibrationID)
 	out := []OMRCalibrationCase{}
 	for rows.Next() {
 		var item OMRCalibrationCase
-		var observedRaw, measurementsRaw, expectedRaw []byte
+		var optionLabelsRaw, observedRaw, measurementsRaw, expectedRaw []byte
 		var matches sql.NullBool
 		var labeledAt sql.NullTime
 		if err := rows.Scan(&item.ID, &item.CalibrationID, &item.OMRRunID, &item.AnswerSegmentID, &item.CropSHA256,
+			&item.QuestionID, &item.QuestionNo, &item.QuestionType, &optionLabelsRaw, &item.SampleStratum,
 			&item.ObservedDecision, &observedRaw, &item.ObservedConfidence, &measurementsRaw,
 			&expectedRaw, &matches, &item.LabeledBy, &labeledAt, &item.CreatedAt, &item.OverlayFileAssetID); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(optionLabelsRaw, &item.OptionLabels); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(observedRaw, &item.ObservedOptions); err != nil {
@@ -586,15 +683,19 @@ ORDER BY c.created_at,c.id`, tenantID, calibrationID)
 }
 
 func scanOMRCalibrationSession(row calibrationScanner, out *OMRCalibrationSession) error {
-	var optionLabelsRaw []byte
+	var questionIDsRaw, optionLabelsRaw []byte
 	var approvedAt, revokedAt, discardedAt sql.NullTime
-	if err := row.Scan(&out.ID, &out.TenantID, &out.TemplateID, &out.TemplateContentHash, &out.QuestionID, &out.QuestionType,
+	if err := row.Scan(&out.ID, &out.TenantID, &out.TemplateID, &out.TemplateContentHash, &out.ScopeType, &out.QuestionID, &questionIDsRaw, &out.QuestionType,
 		&out.ProfileVersion, &out.ProfileHash, &out.ReferenceFileAssetID, &out.ReferenceSHA256, &optionLabelsRaw, &out.SampleSeed,
-		&out.SampleCount, &out.MinimumSamples, &out.MinimumSamplesPerOption, &out.MinimumConfidence, &out.Status, &out.CreatedBy, &out.CreatedAt,
+		&out.SampleCount, &out.MinimumSamples, &out.MinimumSamplesPerOption, &out.MinimumSamplesPerStratum, &out.MinimumConfidence, &out.Status, &out.CreatedBy, &out.CreatedAt,
+		&out.InheritedFromSessionID,
 		&out.ApprovedBy, &approvedAt, &out.ApprovalNote, &out.EvidenceHash, &out.RevokedBy, &revokedAt, &out.RevokeReason, &out.DiscardedBy, &discardedAt, &out.DiscardReason, &out.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
+		return err
+	}
+	if err := json.Unmarshal(questionIDsRaw, &out.QuestionIDs); err != nil {
 		return err
 	}
 	if err := json.Unmarshal(optionLabelsRaw, &out.OptionLabels); err != nil {
@@ -620,24 +721,49 @@ func scanOMRCalibrationSession(row calibrationScanner, out *OMRCalibrationSessio
 type calibrationScanner interface{ Scan(...any) error }
 
 func summarizeOMRCalibration(session OMRCalibrationSession, cases []OMRCalibrationCase) OMRCalibrationSummary {
-	summary := OMRCalibrationSummary{OptionCoverage: map[string]int{}, Blockers: []string{}}
+	summary := OMRCalibrationSummary{
+		OptionCoverage:   map[string]int{},
+		QuestionCoverage: map[string]int{},
+		StratumCoverage: map[string]int{
+			"selected_high": 0,
+			"selected_low":  0,
+			"blank":         0,
+			"ambiguous":     0,
+		},
+		Blockers: []string{},
+	}
 	for _, label := range session.OptionLabels {
 		summary.OptionCoverage[label] = 0
 	}
+	for _, questionID := range session.QuestionIDs {
+		summary.QuestionCoverage[questionID] = 0
+	}
 	for _, item := range cases {
 		summary.TotalCount++
+		summary.QuestionCoverage[item.QuestionID]++
+		summary.StratumCoverage[item.SampleStratum]++
+		eligible := item.SampleStratum == "selected_high" || (session.ScopeType != "template" && item.SampleStratum == "")
+		if eligible {
+			summary.EligibleCount++
+		}
 		if item.ExpectedOptions == nil || item.Matches == nil {
 			summary.PendingCount++
 			continue
 		}
 		summary.LabeledCount++
-		if len(item.ExpectedOptions) == 1 {
-			summary.OptionCoverage[item.ExpectedOptions[0]]++
+		for _, option := range item.ExpectedOptions {
+			summary.OptionCoverage[option]++
 		}
 		if *item.Matches {
 			summary.MatchCount++
+			if eligible {
+				summary.EligibleMatchCount++
+			}
 		} else {
 			summary.MismatchCount++
+			if eligible {
+				summary.EligibleMismatchCount++
+			}
 		}
 	}
 	if summary.TotalCount < session.MinimumSamples {
@@ -646,13 +772,31 @@ func summarizeOMRCalibration(session OMRCalibrationSession, cases []OMRCalibrati
 	if summary.PendingCount > 0 {
 		summary.Blockers = append(summary.Blockers, "calibration_labels_pending")
 	}
-	if summary.MismatchCount > 0 {
-		summary.Blockers = append(summary.Blockers, "calibration_mismatch_detected")
+	if summary.EligibleMismatchCount > 0 {
+		blocker := "eligible_calibration_mismatch_detected"
+		if session.ScopeType != "template" {
+			blocker = "calibration_mismatch_detected"
+		}
+		summary.Blockers = append(summary.Blockers, blocker)
 	}
 	for _, label := range session.OptionLabels {
 		if summary.OptionCoverage[label] < session.MinimumSamplesPerOption {
 			summary.Blockers = append(summary.Blockers, "option_coverage_incomplete")
 			break
+		}
+	}
+	for _, questionID := range session.QuestionIDs {
+		if summary.QuestionCoverage[questionID] == 0 {
+			summary.Blockers = append(summary.Blockers, "question_coverage_incomplete")
+			break
+		}
+	}
+	if session.ScopeType == "template" {
+		for _, stratum := range []string{"selected_high", "selected_low", "blank", "ambiguous"} {
+			if summary.StratumCoverage[stratum] < session.MinimumSamplesPerStratum {
+				summary.Blockers = append(summary.Blockers, "stratum_coverage_incomplete")
+				break
+			}
 		}
 	}
 	if session.Status != "draft" {
@@ -662,25 +806,63 @@ func summarizeOMRCalibration(session OMRCalibrationSession, cases []OMRCalibrati
 	return summary
 }
 
-func calibrationOptionLabels(layout paper.TemplateLayout, questionID string) ([]string, bool) {
-	labels := []string{}
-	seen := map[string]bool{}
+type calibrationQuestion struct {
+	ID           string
+	No           string
+	Type         string
+	OptionLabels []string
+}
+
+func calibrationQuestionsForTemplateTx(ctx context.Context, tx *sql.Tx, tenantID, examID string, layout paper.TemplateLayout) ([]calibrationQuestion, error) {
+	rows, err := tx.QueryContext(ctx, `
+SELECT id::text,question_no,question_type
+FROM question
+WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND deleted_at IS NULL
+`, tenantID, examID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	metadata := map[string]calibrationQuestion{}
+	for rows.Next() {
+		var item calibrationQuestion
+		if err := rows.Scan(&item.ID, &item.No, &item.Type); err != nil {
+			return nil, err
+		}
+		metadata[item.ID] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := []calibrationQuestion{}
+	seenQuestions := map[string]bool{}
 	for _, page := range layout.Pages {
 		for _, region := range page.QuestionRegions {
-			if region.QuestionID != questionID {
+			item, ok := metadata[region.QuestionID]
+			if !ok || seenQuestions[item.ID] {
 				continue
 			}
+			if item.Type != "single_choice" && item.Type != "multiple_choice" && item.Type != "true_false" {
+				continue
+			}
+			seenLabels := map[string]bool{}
 			for _, option := range region.OptionRegions {
 				label := strings.TrimSpace(option.Label)
-				if label == "" || seen[label] {
-					return nil, false
+				if label == "" || seenLabels[label] {
+					return nil, ErrInvalidInput
 				}
-				seen[label] = true
-				labels = append(labels, label)
+				seenLabels[label] = true
+				item.OptionLabels = append(item.OptionLabels, label)
 			}
+			if len(item.OptionLabels) < 2 {
+				return nil, ErrInvalidInput
+			}
+			seenQuestions[item.ID] = true
+			out = append(out, item)
 		}
 	}
-	return labels, len(labels) >= 2
+	return out, nil
 }
 
 func containsCalibrationOption(options []string, expected string) bool {
@@ -692,30 +874,72 @@ func containsCalibrationOption(options []string, expected string) bool {
 	return false
 }
 
+func normalizeCalibrationOptions(allowed, expected []string) ([]string, bool) {
+	selected := map[string]bool{}
+	for _, value := range expected {
+		value = strings.TrimSpace(value)
+		if value == "" || selected[value] || !containsCalibrationOption(allowed, value) {
+			return nil, false
+		}
+		selected[value] = true
+	}
+	normalized := make([]string, 0, len(selected))
+	for _, option := range allowed {
+		if selected[option] {
+			normalized = append(normalized, option)
+		}
+	}
+	return normalized, true
+}
+
+func calibrationOptionsMatch(decision string, observed, expected []string) bool {
+	if len(expected) == 0 {
+		return decision == "blank" && len(observed) == 0
+	}
+	if len(observed) != len(expected) {
+		return false
+	}
+	expectedSet := make(map[string]bool, len(expected))
+	for _, option := range expected {
+		expectedSet[option] = true
+	}
+	for _, option := range observed {
+		if !expectedSet[option] {
+			return false
+		}
+	}
+	return decision == "selected" || decision == "multiple"
+}
+
 func omrCalibrationEvidenceHash(session OMRCalibrationSession, cases []OMRCalibrationCase) (string, error) {
 	sorted := append([]OMRCalibrationCase(nil), cases...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
 	payload := struct {
 		Session struct {
-			TemplateID              string   `json:"template_id"`
-			TemplateContentHash     string   `json:"template_content_hash"`
-			QuestionID              string   `json:"question_id"`
-			QuestionType            string   `json:"question_type"`
-			ProfileVersion          string   `json:"profile_version"`
-			ProfileHash             string   `json:"profile_hash"`
-			ReferenceFileAssetID    string   `json:"reference_file_asset_id"`
-			ReferenceSHA256         string   `json:"reference_sha256"`
-			OptionLabels            []string `json:"option_labels"`
-			SampleSeed              string   `json:"sample_seed"`
-			MinimumSamples          int      `json:"minimum_samples"`
-			MinimumSamplesPerOption int      `json:"minimum_samples_per_option"`
-			MinimumConfidence       float64  `json:"minimum_confidence"`
+			TemplateID               string   `json:"template_id"`
+			TemplateContentHash      string   `json:"template_content_hash"`
+			ScopeType                string   `json:"scope_type"`
+			QuestionID               string   `json:"question_id"`
+			QuestionIDs              []string `json:"question_ids"`
+			QuestionType             string   `json:"question_type"`
+			ProfileVersion           string   `json:"profile_version"`
+			ProfileHash              string   `json:"profile_hash"`
+			ReferenceFileAssetID     string   `json:"reference_file_asset_id"`
+			ReferenceSHA256          string   `json:"reference_sha256"`
+			OptionLabels             []string `json:"option_labels"`
+			SampleSeed               string   `json:"sample_seed"`
+			MinimumSamples           int      `json:"minimum_samples"`
+			MinimumSamplesPerOption  int      `json:"minimum_samples_per_option"`
+			MinimumSamplesPerStratum int      `json:"minimum_samples_per_stratum"`
+			MinimumConfidence        float64  `json:"minimum_confidence"`
 		} `json:"session"`
 		Cases []OMRCalibrationCase `json:"cases"`
 	}{}
 	payload.Session.TemplateID = session.TemplateID
 	payload.Session.TemplateContentHash = session.TemplateContentHash
+	payload.Session.ScopeType = session.ScopeType
 	payload.Session.QuestionID = session.QuestionID
+	payload.Session.QuestionIDs = session.QuestionIDs
 	payload.Session.QuestionType = session.QuestionType
 	payload.Session.ProfileVersion = session.ProfileVersion
 	payload.Session.ProfileHash = session.ProfileHash
@@ -725,6 +949,7 @@ func omrCalibrationEvidenceHash(session OMRCalibrationSession, cases []OMRCalibr
 	payload.Session.SampleSeed = session.SampleSeed
 	payload.Session.MinimumSamples = session.MinimumSamples
 	payload.Session.MinimumSamplesPerOption = session.MinimumSamplesPerOption
+	payload.Session.MinimumSamplesPerStratum = session.MinimumSamplesPerStratum
 	payload.Session.MinimumConfidence = session.MinimumConfidence
 	payload.Cases = sorted
 	raw, err := json.Marshal(payload)
@@ -741,15 +966,16 @@ func omrCalibrationEvidenceHash(session OMRCalibrationSession, cases []OMRCalibr
 func (s *PostgresStore) loadApprovedOMRCalibrationTx(ctx context.Context, tx *sql.Tx, tenantID, templateID, templateContentHash, questionID, profileVersion, profileHash, referenceFileAssetID, referenceSHA256 string) (*paper.OMRCalibrationApproval, error) {
 	var out paper.OMRCalibrationApproval
 	err := tx.QueryRowContext(ctx, `
-SELECT id::text,template_id::text,template_content_hash,question_id::text,profile_version,profile_hash,
+SELECT id::text,template_id::text,template_content_hash,scope_type,COALESCE(question_id::text,''),profile_version,profile_hash,
   reference_file_asset_id::text,reference_sha256,minimum_confidence,evidence_hash,status
 FROM omr_calibration_session
-WHERE tenant_id=$1::uuid AND template_id=$2::uuid AND template_content_hash=$3 AND question_id=$4::uuid
+WHERE tenant_id=$1::uuid AND template_id=$2::uuid AND template_content_hash=$3
+  AND (scope_type='template' OR (scope_type='question' AND question_id=$4::uuid))
   AND profile_version=$5 AND profile_hash=$6 AND reference_file_asset_id=$7::uuid AND reference_sha256=$8
   AND status='approved' AND deleted_at IS NULL
-ORDER BY approved_at DESC
+ORDER BY CASE scope_type WHEN 'template' THEN 0 ELSE 1 END,approved_at DESC
 LIMIT 1`, tenantID, templateID, templateContentHash, questionID, profileVersion, profileHash, referenceFileAssetID, referenceSHA256).Scan(
-		&out.ID, &out.TemplateID, &out.TemplateContentHash, &out.QuestionID, &out.ProfileVersion, &out.ProfileHash,
+		&out.ID, &out.TemplateID, &out.TemplateContentHash, &out.ScopeType, &out.QuestionID, &out.ProfileVersion, &out.ProfileHash,
 		&out.ReferenceFileAssetID, &out.ReferenceSHA256, &out.MinimumConfidence, &out.EvidenceHash, &out.Status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

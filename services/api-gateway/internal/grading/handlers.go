@@ -563,6 +563,16 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 func decorateOMRCalibrationDetail(detail OMRCalibrationDetail) OMRCalibrationDetail {
 	for index := range detail.Cases {
 		detail.Cases[index].SegmentImageURL = "/api/v1/answer-segments/" + detail.Cases[index].AnswerSegmentID + "/image"
+		if detail.Cases[index].Matches == nil {
+			// Blind labels must not be influenceable through browser devtools or
+			// a direct API call. Reveal the immutable worker snapshot only after
+			// this case has received its one-time human label.
+			detail.Cases[index].ObservedDecision = ""
+			detail.Cases[index].ObservedOptions = nil
+			detail.Cases[index].ObservedConfidence = 0
+			detail.Cases[index].Measurements = nil
+			detail.Cases[index].SampleStratum = ""
+		}
 	}
 	return detail
 }

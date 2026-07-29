@@ -51,6 +51,9 @@ const (
 	// OMRCalibrationMinimumSamplesPerOption prevents a skewed sample from
 	// approving a question whose other bubble regions were never examined.
 	OMRCalibrationMinimumSamplesPerOption = 10
+	// OMRCalibrationMinimumSamplesPerStratum forces evidence to cover the
+	// worker's high-confidence, low-confidence, blank, and ambiguous branches.
+	OMRCalibrationMinimumSamplesPerStratum = 10
 	// OMRCalibrationMinimumConfidence is stricter than the historical generic
 	// OMR threshold. A calibrated permission only covers this high-confidence
 	// branch; all other outcomes continue through human review.
@@ -98,7 +101,8 @@ type OMRCalibrationApproval struct {
 	ID                   string  `json:"id"`
 	TemplateID           string  `json:"template_id"`
 	TemplateContentHash  string  `json:"template_content_hash"`
-	QuestionID           string  `json:"question_id"`
+	ScopeType            string  `json:"scope_type"`
+	QuestionID           string  `json:"question_id,omitempty"`
 	ProfileVersion       string  `json:"profile_version"`
 	ProfileHash          string  `json:"profile_hash"`
 	ReferenceFileAssetID string  `json:"reference_file_asset_id"`
@@ -339,7 +343,7 @@ func calibrationMatchesTemplateDifference(calibration OMRCalibrationApproval, te
 		strings.TrimSpace(calibration.ID) != "" &&
 		strings.TrimSpace(templateID) != "" && calibration.TemplateID == templateID &&
 		strings.TrimSpace(calibration.TemplateContentHash) != "" && calibration.TemplateContentHash == templateContentHash &&
-		strings.TrimSpace(calibration.QuestionID) != "" && calibration.QuestionID == questionID &&
+		(calibration.ScopeType == "template" || ((calibration.ScopeType == "" || calibration.ScopeType == "question") && strings.TrimSpace(calibration.QuestionID) != "" && calibration.QuestionID == questionID)) &&
 		calibration.ProfileVersion == OMRProfileVersionTemplateDifferenceBubbleV1 &&
 		strings.TrimSpace(calibration.ProfileHash) != "" && calibration.ProfileHash == profileHash &&
 		strings.TrimSpace(calibration.ReferenceFileAssetID) != "" && calibration.ReferenceFileAssetID == reference.FileAssetID &&

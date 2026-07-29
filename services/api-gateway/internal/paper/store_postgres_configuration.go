@@ -224,7 +224,67 @@ WHERE tenant_id = $1::uuid AND id = $2::uuid AND deleted_at IS NULL
 		}
 		return AnswerSheetTemplate{}, err
 	}
-	return s.CreateTemplate(ctx, tenantID, source.ExamID, userID, CreateTemplateInput{ExamPaperID: source.ExamPaperID, Name: source.Name + " 副本", PageCount: source.PageCount, Layout: source.Layout})
+	cloned, err := s.CreateTemplate(ctx, tenantID, source.ExamID, userID, CreateTemplateInput{
+		ExamPaperID: source.ExamPaperID,
+		Name:        source.Name + " 副本",
+		PageCount:   source.PageCount,
+		Layout:      source.Layout,
+	})
+	if err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	if err := s.inheritApprovedOMRCalibrationForClone(ctx, tenantID, source.ID, cloned); err != nil {
+		return AnswerSheetTemplate{}, err
+	}
+	return cloned, nil
+}
+
+func (s *PostgresStore) inheritApprovedOMRCalibrationForClone(ctx context.Context, tenantID, sourceTemplateID string, cloned AnswerSheetTemplate) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// The inherited approval remains bound to the source evidence hash and
+	// records that provenance explicitly. Runtime lookup also requires the
+	// clone's content/profile/reference hashes to remain identical.
+	if _, err = tx.ExecContext(ctx, `
+WITH copied_session AS (
+  INSERT INTO omr_calibration_session (
+    tenant_id,template_id,template_content_hash,scope_type,question_id,question_ids,question_type,
+    profile_version,profile_hash,reference_file_asset_id,reference_sha256,option_labels,sample_seed,
+    sample_count,minimum_samples,minimum_samples_per_option,minimum_samples_per_stratum,
+    minimum_confidence,status,created_by,created_at,inherited_from_session_id,
+    approved_by,approved_at,approval_note,evidence_hash,updated_at
+  )
+  SELECT s.tenant_id,$3::uuid,s.template_content_hash,s.scope_type,s.question_id,s.question_ids,s.question_type,
+    s.profile_version,s.profile_hash,s.reference_file_asset_id,s.reference_sha256,s.option_labels,s.sample_seed,
+    s.sample_count,s.minimum_samples,s.minimum_samples_per_option,s.minimum_samples_per_stratum,
+    s.minimum_confidence,'approved',s.created_by,now(),s.id,
+    s.approved_by,s.approved_at,s.approval_note,s.evidence_hash,now()
+  FROM omr_calibration_session s
+  WHERE s.tenant_id=$1::uuid AND s.template_id=$2::uuid
+    AND s.template_content_hash=$4 AND s.scope_type='template'
+    AND s.status='approved' AND s.deleted_at IS NULL
+  ORDER BY s.approved_at DESC
+  LIMIT 1
+  RETURNING id,inherited_from_session_id
+)
+INSERT INTO omr_calibration_case (
+  tenant_id,calibration_session_id,omr_run_id,answer_segment_id,question_id,question_no,
+  question_type,option_labels,sample_stratum,crop_sha256,observed_decision,observed_options,
+  observed_confidence,measurements,expected_options,matches,labeled_by,labeled_at,created_at
+)
+SELECT c.tenant_id,copy.id,c.omr_run_id,c.answer_segment_id,c.question_id,c.question_no,
+  c.question_type,c.option_labels,c.sample_stratum,c.crop_sha256,c.observed_decision,c.observed_options,
+  c.observed_confidence,c.measurements,c.expected_options,c.matches,c.labeled_by,c.labeled_at,c.created_at
+FROM copied_session copy
+JOIN omr_calibration_case c
+  ON c.tenant_id=$1::uuid AND c.calibration_session_id=copy.inherited_from_session_id
+`, tenantID, sourceTemplateID, cloned.ID, cloned.ContentHash); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *PostgresStore) Readiness(ctx context.Context, tenantID string, examID string) (ReadinessResult, error) {

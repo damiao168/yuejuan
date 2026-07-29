@@ -114,9 +114,21 @@ function calibrationBlockerLabel(code: string) {
 		sample_count_below_minimum: "合格历史样本不足 100 份",
 		calibration_labels_pending: "仍有样本尚未人工标注",
 		calibration_mismatch_detected: "人工标注与识别结果出现不一致",
+		eligible_calibration_mismatch_detected: "高置信候选存在识别错误，不能开放自动确认",
 		option_coverage_incomplete: "各选项的人工样本覆盖不足 10 份",
+		question_coverage_incomplete: "模板内仍有选择题未被样本覆盖",
+		stratum_coverage_incomplete: "高置信、低置信、空白或模糊样本覆盖不足",
 		calibration_not_draft: "该校准已不处于可审批状态"
 	}[code] ?? "存在未满足的校准条件";
+}
+
+function calibrationStratumLabel(value: OMRCalibrationCase["sample_stratum"]) {
+	return {
+		selected_high: "高置信候选",
+		selected_low: "低置信候选",
+		blank: "机器判空白",
+		ambiguous: "模糊或多选"
+	}[value];
 }
 
 const coordLabels = { x: "左", y: "上", width: "宽", height: "高" } as const;
@@ -164,7 +176,7 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 	const [calibrationDetail, setCalibrationDetail] = useState<OMRCalibrationDetail>();
 	const [calibrationDrawerOpen, setCalibrationDrawerOpen] = useState(false);
 	const [calibrationCaseId, setCalibrationCaseId] = useState("");
-	const [calibrationQuestionId, setCalibrationQuestionId] = useState("");
+	const [calibrationExpectedOptions, setCalibrationExpectedOptions] = useState<string[]>([]);
 	const [calibrationImageUrl, setCalibrationImageUrl] = useState<string>();
 	const [calibrationImageLoading, setCalibrationImageLoading] = useState(false);
 	const [calibrationBusy, setCalibrationBusy] = useState(false);
@@ -185,7 +197,6 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
   const readonly = !canManage || selectedTemplate?.status === "locked";
   const coveredQuestions = useMemo(() => new Set(layout.pages.flatMap((page) => page.question_regions.map((region) => region.question_id))), [layout]);
 	const isTemplateDifference = selectedTemplate?.status === "locked" && selectedTemplate.layout.omr_profile?.mode === "template_difference";
-	const calibrationQuestions = useMemo(() => questions.filter((item) => item.question_type === "single_choice" || item.question_type === "true_false"), [questions]);
 	const selectedCalibrationCase = useMemo<OMRCalibrationCase | undefined>(() => calibrationDetail?.cases.find((item) => item.id === calibrationCaseId) ?? calibrationDetail?.cases[0], [calibrationCaseId, calibrationDetail]);
 	const printableCandidates = useMemo(
 		() => printContext?.candidates.filter((item) => item.attendance_status === "expected" && !item.has_active_sheet) ?? [],
@@ -237,10 +248,11 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 
 	function showCalibrationDetail(detail: OMRCalibrationDetail) {
 		setCalibrationDetail(detail);
+		setCalibrationExpectedOptions([]);
 		setCalibrationDrawerOpen(true);
 		setCalibrationCaseId((current) => {
 			if (detail.cases.some((item) => item.id === current)) return current;
-			return detail.cases.find((item) => !item.expected_options)?.id ?? detail.cases[0]?.id ?? "";
+			return detail.cases.find((item) => item.matches === undefined)?.id ?? detail.cases[0]?.id ?? "";
 		});
 	}
 
@@ -302,11 +314,6 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 	}, [canManage, loadPrintContext, selectedTemplate?.id, selectedTemplate?.status]);
 
 	useEffect(() => {
-		if (calibrationQuestions.some((item) => item.id === calibrationQuestionId)) return;
-		setCalibrationQuestionId(calibrationQuestions.find((item) => item.id === selectedQuestionId)?.id ?? calibrationQuestions[0]?.id ?? "");
-	}, [calibrationQuestionId, calibrationQuestions, selectedQuestionId]);
-
-	useEffect(() => {
 		calibrationListRequestRef.current += 1;
 		setCalibrationDetail(undefined);
 		setCalibrationDrawerOpen(false);
@@ -350,6 +357,10 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 			}
 		};
 	}, [message, selectedCalibrationCase?.answer_segment_id]);
+
+	useEffect(() => {
+		setCalibrationExpectedOptions([]);
+	}, [selectedCalibrationCase?.id]);
 
   useEffect(() => {
     let active = true;
@@ -548,16 +559,16 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 	}
 
 	async function startCalibration() {
-		if (!selectedTemplate || !calibrationQuestionId) {
-			message.error("请先选择一个单选题或判断题，再开始校准");
+		if (!selectedTemplate) {
+			message.error("请先选择已锁定的答题卡模板");
 			return;
 		}
 		setCalibrationBusy(true);
 		try {
-			const response = await createOMRCalibration(selectedTemplate.id, calibrationQuestionId);
+			const response = await createOMRCalibration(selectedTemplate.id);
 			showCalibrationDetail(response.calibration);
 			await loadOMRCalibrationList(selectedTemplate.id);
-			message.success("校准样本已生成，请逐份查看图片并标注实际填涂的选项");
+			message.success("整套模板的分层校准样本已生成，请逐份盲标实际填涂结果");
 		} catch (createError) {
 			message.error(formatError(createError));
 		} finally {
@@ -565,18 +576,18 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 		}
 	}
 
-	async function labelCalibrationCase(expectedOption: string) {
+	async function labelCalibrationCase(expectedOptions: string[]) {
 		if (!calibrationDetail || !selectedCalibrationCase || calibrationDetail.session.status !== "draft") return;
 		setCalibrationBusy(true);
 		try {
-			const response = await labelOMRCalibrationCase(calibrationDetail.session.id, selectedCalibrationCase.id, expectedOption);
+			const response = await labelOMRCalibrationCase(calibrationDetail.session.id, selectedCalibrationCase.id, expectedOptions);
 			showCalibrationDetail(response.calibration);
-			setCalibrationCaseId(response.calibration.cases.find((item) => !item.expected_options)?.id ?? selectedCalibrationCase.id);
+			setCalibrationCaseId(response.calibration.cases.find((item) => item.matches === undefined)?.id ?? selectedCalibrationCase.id);
 			await loadOMRCalibrationList(calibrationDetail.session.template_id);
-			if (response.calibration.session.summary.mismatch_count > 0) {
-				message.warning("此样本的人工标注与机器识别结果不一致，本次校准无法通过审批。可弃用本次草稿后重新开始");
+			if (response.calibration.session.summary.eligible_mismatch_count > 0) {
+				message.warning("高置信候选出现人工核对错误，本次校准不能批准自动确认");
 			} else {
-				message.success("已标注（标注后不可修改）");
+				message.success("已完成盲标（提交后不可修改）");
 			}
 		} catch (labelError) {
 			message.error(formatError(labelError));
@@ -605,7 +616,7 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 			showCalibrationDetail(response.calibration);
 			await loadOMRCalibrationList(calibrationDetail.session.template_id);
 			setCalibrationAction(undefined);
-			message.success(calibrationAction === "approve" ? "校准已批准，此后本题高把握的识别结果将自动确认" : calibrationAction === "revoke" ? "校准已撤销，未完成的识别任务将转入人工复核" : "草稿已弃用，标注记录会保留备查");
+			message.success(calibrationAction === "approve" ? "校准已批准，此后整套模板的高把握识别结果可自动确认" : calibrationAction === "revoke" ? "校准已撤销，未完成的识别任务将转入人工复核" : "草稿已弃用，标注记录会保留备查");
 		} catch (actionError) {
 			message.error(formatError(actionError));
 		} finally {
@@ -797,16 +808,13 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
 			</section> : null}
 			{isTemplateDifference ? <section className="template-option-editor calibration-panel">
 				<div className="template-pane-head"><strong>填涂识别校准</strong><StatusTag tone={calibrations.some((item) => item.status === "approved") ? "success" : "warning"}>{calibrations.some((item) => item.status === "approved") ? "校准已通过" : "未校准，全部人工复核"}</StatusTag></div>
-				<p>开启自动确认前，需先人工核对一批系统抽取的样本。标注时不显示机器识别结果，保证判断独立。</p>
+				<p>一次校准覆盖整套锁定模板。系统按题目以及高置信、低置信、空白、模糊四类结果均衡抽样；标注前隐藏机器结果。</p>
 				{!canCalibrate ? <Alert type="info" showIcon message="需要“评分管理”权限才能创建、标注或审批校准" /> : <>
-					<Space.Compact block>
-						<Select value={calibrationQuestionId || undefined} placeholder="选择单选题或判断题" options={calibrationQuestions.map((item) => ({ value: item.id, label: `${item.question_no} · ${item.question_type === "single_choice" ? "单选" : "判断"}` }))} onChange={setCalibrationQuestionId} />
-						<Button type="primary" loading={calibrationBusy} disabled={!calibrationQuestionId} onClick={() => void startCalibration()}>开始校准</Button>
-					</Space.Compact>
+					<Button block type="primary" loading={calibrationBusy} onClick={() => void startCalibration()}>开始整套模板校准</Button>
 					{calibrationError ? <Alert type="warning" showIcon message="校准状态暂不可读取" description={calibrationError} action={<Button size="small" onClick={() => selectedTemplate && void loadOMRCalibrationList(selectedTemplate.id)}>重试</Button>} /> : null}
 					{calibrationLoading ? <Spin size="small" /> : calibrations.length ? <List className="calibration-session-list" size="small" dataSource={calibrations.slice(0, 4)} renderItem={(item) => <List.Item actions={[<Button key="open" type="link" size="small" loading={calibrationBusy} onClick={() => void openCalibration(item.id)}>查看</Button>]}>
-						<div className="calibration-session-row"><div><strong>{questions.find((question) => question.id === item.question_id)?.question_no ?? "题目已删除"}</strong><span>{item.summary.labeled_count}/{item.summary.total_count} 已标注 · {item.summary.mismatch_count} 不一致</span></div><StatusTag tone={calibrationStatusTone(item.status)}>{calibrationStatusLabel(item.status)}</StatusTag></div>
-					</List.Item>} /> : <Alert type="info" showIcon message="尚无校准记录" description="本题累计 100 份以上识别结果后，才能开始人工校准。" />}
+						<div className="calibration-session-row"><div><strong>{item.scope_type === "template" ? `整套模板 · ${item.question_ids.length} 道题${item.inherited_from_session_id ? " · 继承校准" : ""}` : questions.find((question) => question.id === item.question_id)?.question_no ?? "历史题目级校准"}</strong><span>{item.summary.labeled_count}/{item.summary.total_count} 已标注 · 高置信错误 {item.summary.eligible_mismatch_count}</span></div><StatusTag tone={calibrationStatusTone(item.status)}>{calibrationStatusLabel(item.status)}</StatusTag></div>
+					</List.Item>} /> : <Alert type="info" showIcon message="尚无校准记录" description="整套模板累计足够的四类识别结果后，可开始人工校准。" />}
 				</>}
 			</section> : null}
 			{selectedTemplate.status === "locked" && canManage ? <section className="template-option-editor print-package-panel">
@@ -843,21 +851,23 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
       )}
 		<Drawer title="填涂识别校准记录" width={760} open={calibrationDrawerOpen} onClose={() => setCalibrationDrawerOpen(false)} destroyOnClose={false}>
 			{calibrationDetail ? <div className="calibration-drawer">
-				<Alert type={calibrationDetail.session.status === "approved" ? "success" : calibrationDetail.session.status === "revoked" ? "error" : "info"} showIcon message={`状态：${calibrationStatusLabel(calibrationDetail.session.status)}`} description={calibrationDetail.session.status === "approved" ? "校准已生效：此后该题识别把握不低于 98% 的答卷将自动确认，其余仍转人工复核。" : calibrationDetail.session.status === "revoked" ? "撤销已生效：尚未处理完的识别任务将全部转入人工复核。" : "人工标注写入后不可修改；如发现标注与识别结果不一致，请弃用本次草稿重新抽样。"} />
+				<Alert type={calibrationDetail.session.status === "approved" ? "success" : calibrationDetail.session.status === "revoked" ? "error" : "info"} showIcon message={`状态：${calibrationStatusLabel(calibrationDetail.session.status)}`} description={calibrationDetail.session.status === "approved" ? "校准已生效：整套模板中识别把握不低于 98% 且符合自动确认条件的结果可自动确认，其余仍转人工复核。" : calibrationDetail.session.status === "revoked" ? "撤销已生效：尚未处理完的识别任务将全部转入人工复核。" : "请只依据答题图片盲标；提交后才显示机器结果，且标注不可修改。"} />
 				<div className="calibration-metrics">
 					<div><span>已标注</span><strong>{calibrationDetail.session.summary.labeled_count}/{calibrationDetail.session.summary.total_count}</strong></div>
-					<div><span>一致</span><strong>{calibrationDetail.session.summary.match_count}</strong></div>
-					<div><span>不一致</span><strong>{calibrationDetail.session.summary.mismatch_count}</strong></div>
+					<div><span>高置信正确</span><strong>{calibrationDetail.session.summary.eligible_match_count}/{calibrationDetail.session.summary.eligible_count}</strong></div>
+					<div><span>高置信错误</span><strong>{calibrationDetail.session.summary.eligible_mismatch_count}</strong></div>
 					<div><span>识别把握下限</span><strong>{Math.round(calibrationDetail.session.minimum_confidence * 100)}%</strong></div>
 				</div>
-				<Progress percent={calibrationProgress} status={calibrationDetail.session.summary.mismatch_count > 0 ? "exception" : calibrationProgress === 100 ? "success" : "active"} />
+				<Progress percent={calibrationProgress} status={calibrationDetail.session.summary.eligible_mismatch_count > 0 ? "exception" : calibrationProgress === 100 ? "success" : "active"} />
 				{calibrationDetail.session.status === "draft" && calibrationDetail.session.summary.blockers.length ? <Alert type="warning" showIcon message="尚不能批准自动确认" description={<ul className="calibration-blockers">{calibrationDetail.session.summary.blockers.map((item) => <li key={item} title={item}>{calibrationBlockerLabel(item)}</li>)}</ul>} /> : null}
+				<p className="muted">分层样本覆盖（每类至少 {calibrationDetail.session.minimum_samples_per_stratum} 份）</p>
+				<div className="calibration-coverage">{Object.entries(calibrationDetail.session.summary.stratum_coverage).map(([stratum, count]) => <span key={stratum}>{calibrationStratumLabel(stratum as OMRCalibrationCase["sample_stratum"])}: {count}/{calibrationDetail.session.minimum_samples_per_stratum}</span>)}</div>
 				<p className="muted">各选项已标注样本数（每个选项至少需 {calibrationDetail.session.minimum_samples_per_option} 份）</p>
 				<div className="calibration-coverage">{Object.entries(calibrationDetail.session.summary.option_coverage).map(([option, count]) => <span key={option}>{option}: {count}/{calibrationDetail.session.minimum_samples_per_option}</span>)}</div>
 				{selectedCalibrationCase ? <section className="calibration-case">
-					<div className="template-pane-head"><strong>样本 {selectedCalibrationIndex + 1}/{calibrationDetail.cases.length}</strong><Space><Button size="small" disabled={selectedCalibrationIndex <= 0 || calibrationBusy} onClick={() => setCalibrationCaseId(calibrationDetail.cases[selectedCalibrationIndex - 1].id)}>上一份</Button><Button size="small" disabled={selectedCalibrationIndex < 0 || selectedCalibrationIndex >= calibrationDetail.cases.length - 1 || calibrationBusy} onClick={() => setCalibrationCaseId(calibrationDetail.cases[selectedCalibrationIndex + 1].id)}>下一份</Button></Space></div>
+					<div className="template-pane-head"><strong>{selectedCalibrationCase.question_no} · 样本 {selectedCalibrationIndex + 1}/{calibrationDetail.cases.length}</strong><Space><StatusTag tone="neutral">{selectedCalibrationCase.matches === undefined ? "盲标样本" : calibrationStratumLabel(selectedCalibrationCase.sample_stratum)}</StatusTag><Button size="small" disabled={selectedCalibrationIndex <= 0 || calibrationBusy} onClick={() => setCalibrationCaseId(calibrationDetail.cases[selectedCalibrationIndex - 1].id)}>上一份</Button><Button size="small" disabled={selectedCalibrationIndex < 0 || selectedCalibrationIndex >= calibrationDetail.cases.length - 1 || calibrationBusy} onClick={() => setCalibrationCaseId(calibrationDetail.cases[selectedCalibrationIndex + 1].id)}>下一份</Button></Space></div>
 					<div className="calibration-crop">{calibrationImageLoading ? <Spin tip="正在加载答题图片" /> : calibrationImageUrl ? <img src={calibrationImageUrl} alt={`校准样本 ${selectedCalibrationIndex + 1}`} /> : <Alert type="error" showIcon message="图片加载失败" />}</div>
-					{selectedCalibrationCase.expected_options?.length ? <Alert type={selectedCalibrationCase.matches ? "success" : "error"} showIcon message={`人工标注：${selectedCalibrationCase.expected_options.join(", ")}`} description={`机器识别：${selectedCalibrationCase.observed_options.join(", ")} · 识别把握 ${Math.round(selectedCalibrationCase.observed_confidence * 100)}%${selectedCalibrationCase.matches ? " · 一致" : " · 不一致，本次校准无法通过审批"}`} /> : <><Alert type="info" showIcon message="请先自行判断这份答卷填涂了哪个选项，再点击下方按钮标注" description="提交前不显示机器识别结果，以免影响你的判断。" /><Space wrap className="calibration-label-actions">{calibrationDetail.session.option_labels.map((option) => <Button key={option} type="primary" disabled={calibrationDetail.session.status !== "draft" || calibrationBusy} loading={calibrationBusy} onClick={() => void labelCalibrationCase(option)}>标注为 {option}</Button>)}</Space></>}
+					{selectedCalibrationCase.matches !== undefined ? <Alert type={selectedCalibrationCase.matches ? "success" : "warning"} showIcon message={`人工标注：${selectedCalibrationCase.expected_options?.length ? selectedCalibrationCase.expected_options.join(", ") : "空白"}`} description={`机器识别：${selectedCalibrationCase.observed_options.length ? selectedCalibrationCase.observed_options.join(", ") : selectedCalibrationCase.observed_decision} · 识别把握 ${Math.round(selectedCalibrationCase.observed_confidence * 100)}% · ${selectedCalibrationCase.matches ? "一致" : selectedCalibrationCase.sample_stratum === "selected_high" ? "高置信错误，阻断审批" : "不一致，但该分支仍保持人工复核"}`} /> : <><Alert type="info" showIcon message={selectedCalibrationCase.question_type === "multiple_choice" ? "请只根据图片选择所有实际填涂项" : "请只根据图片判断实际填涂项"} description="提交前不显示机器识别选项与置信度，避免影响人工判断。" />{selectedCalibrationCase.question_type === "multiple_choice" ? <><Checkbox.Group options={selectedCalibrationCase.option_labels} value={calibrationExpectedOptions} onChange={(values) => setCalibrationExpectedOptions(values as string[])} /><Space wrap className="calibration-label-actions"><Button type="primary" disabled={!calibrationExpectedOptions.length || calibrationBusy} loading={calibrationBusy} onClick={() => void labelCalibrationCase(calibrationExpectedOptions)}>提交所选项</Button><Button disabled={calibrationBusy} onClick={() => void labelCalibrationCase([])}>标注为空白</Button></Space></> : <Space wrap className="calibration-label-actions">{selectedCalibrationCase.option_labels.map((option) => <Button key={option} type="primary" disabled={calibrationDetail.session.status !== "draft" || calibrationBusy} loading={calibrationBusy} onClick={() => void labelCalibrationCase([option])}>标注为 {option}</Button>)}<Button disabled={calibrationDetail.session.status !== "draft" || calibrationBusy} onClick={() => void labelCalibrationCase([])}>标注为空白</Button></Space>}</>}
 				</section> : <EmptyState title="没有可用样本" description="校准样本尚未生成，请先开始校准。" />}
 				<div className="calibration-actions">
 					{calibrationDetail.session.status === "draft" ? <><Button type="primary" disabled={!calibrationDetail.session.summary.ready_to_approve || calibrationBusy} onClick={() => { setCalibrationActionReason(""); setCalibrationAction("approve"); }}>由独立审批人批准</Button><Button danger disabled={calibrationBusy} onClick={() => { setCalibrationActionReason(""); setCalibrationAction("discard"); }}>弃用草稿</Button></> : null}

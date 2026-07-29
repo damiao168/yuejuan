@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
@@ -35,15 +36,13 @@ func TestStory056TemplateDifferenceCalibrationApprovalAndRevocationE2E(t *testin
 	fixture := e2eCreateStory056AcceptanceFixtureWithOMRProfile(t, db, router, adminToken, suffix, map[string]any{
 		"mode": paper.OMRProfileModeTemplateDifference, "version": paper.OMRProfileVersionTemplateDifferenceBubbleV1,
 	})
-	e2eSeedStory056AcceptanceAnswersForQuestion(t, db, fixture, suffix+"-calibration", "single_choice", paper.OMRCalibrationMinimumSampleCount)
+	e2eSeedStory056AcceptanceAnswersWithQuestionTypes(t, db, fixture, suffix+"-calibration", 120, []string{"single_choice", "true_false", "multiple_choice"})
 
 	seedRun := e2eStartStory056Run(t, router, adminToken, fixture.ExamID, "story056-calibration-seed-"+suffix)
 	seedRunID := e2eString(t, seedRun, "id")
-	e2eSeedStory056CalibrationOMRFacts(t, db, fixture.TenantID, seedRunID, fixture.QuestionIDs["single_choice"])
+	e2eSeedStory056CalibrationOMRFacts(t, db, fixture.TenantID, seedRunID)
 
-	created := e2ePostJSON(t, router, http.MethodPost, "/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/omr-calibrations", adminToken, story056JSON(t, map[string]any{
-		"question_id": fixture.QuestionIDs["single_choice"],
-	}), http.StatusCreated)["calibration"].(map[string]any)
+	created := e2ePostJSON(t, router, http.MethodPost, "/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/omr-calibrations", adminToken, `{}`, http.StatusCreated)["calibration"].(map[string]any)
 	session := created["session"].(map[string]any)
 	calibrationID := e2eString(t, session, "id")
 	cases, ok := created["cases"].([]any)
@@ -53,19 +52,27 @@ func TestStory056TemplateDifferenceCalibrationApprovalAndRevocationE2E(t *testin
 	if e2eFloat(t, session, "minimum_confidence") != paper.OMRCalibrationMinimumConfidence || e2eString(t, session, "status") != "draft" {
 		t.Fatalf("calibration must freeze the minimum evidence threshold: %#v", session)
 	}
+	if e2eString(t, session, "scope_type") != "template" {
+		t.Fatalf("new calibration must cover the immutable template: %#v", session)
+	}
 
 	// The creator cannot self-approve, before or after doing the label work.
 	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/omr-calibrations/"+calibrationID+"/approve", adminToken, story056JSON(t, map[string]any{
 		"approval_note": "creator must not approve this calibration",
 	}), http.StatusForbidden)
+	var labeledCalibration map[string]any
 	for _, raw := range cases {
 		item, ok := raw.(map[string]any)
 		if !ok {
 			t.Fatalf("unexpected calibration case: %#v", raw)
 		}
-		e2ePostJSON(t, router, http.MethodPost, "/api/v1/omr-calibrations/"+calibrationID+"/cases/"+e2eString(t, item, "id")+"/label", adminToken, story056JSON(t, map[string]any{
-			"expected_option": e2eStory056CalibrationObservedOption(t, item),
-		}), http.StatusOK)
+		labeledCalibration = e2ePostJSON(t, router, http.MethodPost, "/api/v1/omr-calibrations/"+calibrationID+"/cases/"+e2eString(t, item, "id")+"/label", adminToken, story056JSON(t, map[string]any{
+			"expected_options": e2eStory056CalibrationExpectedOptions(t, db, fixture.TenantID, e2eString(t, item, "id")),
+		}), http.StatusOK)["calibration"].(map[string]any)
+	}
+	labeledSummary := labeledCalibration["session"].(map[string]any)["summary"].(map[string]any)
+	if ready, _ := labeledSummary["ready_to_approve"].(bool); !ready {
+		t.Fatalf("complete stratified blind labels must be approvable: %#v", labeledSummary)
 	}
 
 	approved := e2ePostJSON(t, router, http.MethodPost, "/api/v1/omr-calibrations/"+calibrationID+"/approve", approverToken, story056JSON(t, map[string]any{
@@ -75,8 +82,24 @@ func TestStory056TemplateDifferenceCalibrationApprovalAndRevocationE2E(t *testin
 	if e2eString(t, approvedSession, "status") != "approved" || e2eString(t, approvedSession, "approved_by") != approverID || !strings.HasPrefix(e2eString(t, approvedSession, "evidence_hash"), "sha256:") {
 		t.Fatalf("independent approval must freeze a durable evidence hash: %#v", approvedSession)
 	}
+	approvedCases := approved["cases"].([]any)
+	clonedTemplate := e2ePostJSON(t, router, http.MethodPost, "/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/clone", adminToken, `{}`, http.StatusCreated)["template"].(map[string]any)
+	clonedTemplateID := e2eString(t, clonedTemplate, "id")
+	var inheritedFrom, inheritedStatus, inheritedEvidence string
+	var inheritedCaseCount int
+	if err := db.QueryRow(`
+SELECT s.inherited_from_session_id::text,s.status,s.evidence_hash,
+  (SELECT count(*) FROM omr_calibration_case c WHERE c.tenant_id=s.tenant_id AND c.calibration_session_id=s.id)
+FROM omr_calibration_session s
+WHERE s.tenant_id=$1::uuid AND s.template_id=$2::uuid AND s.deleted_at IS NULL
+`, fixture.TenantID, clonedTemplateID).Scan(&inheritedFrom, &inheritedStatus, &inheritedEvidence, &inheritedCaseCount); err != nil {
+		t.Fatalf("load inherited clone calibration: %v", err)
+	}
+	if inheritedFrom != calibrationID || inheritedStatus != "approved" || inheritedEvidence != e2eString(t, approvedSession, "evidence_hash") || inheritedCaseCount != paper.OMRCalibrationMinimumSampleCount {
+		t.Fatalf("an unchanged template clone must inherit the exact approved evidence: source=%s status=%s evidence=%s cases=%d", inheritedFrom, inheritedStatus, inheritedEvidence, inheritedCaseCount)
+	}
 
-	firstCase := cases[0].(map[string]any)
+	firstCase := e2eStory056CalibrationCaseForQuestionAndStratum(t, approvedCases, fixture.QuestionIDs["single_choice"], "selected_high")
 	firstSegmentID := e2eString(t, firstCase, "answer_segment_id")
 	firstRunID, firstItem, firstLease := e2eStory056CalibrationReprocessAndClaim(t, router, adminToken, firstSegmentID, suffix+"-approved")
 	var profileVersion, profileHash, referenceSHA256, runCalibrationID, runEvidenceHash, autoReason string
@@ -101,7 +124,8 @@ WHERE tenant_id=$1::uuid AND scoring_run_id=$2::uuid AND deleted_at IS NULL`, fi
 		t.Fatalf("approved calibration must permit a high-confidence automatic grade: %#v", firstResult)
 	}
 
-	secondCase := cases[1].(map[string]any)
+	// A template approval must also authorize a different covered question.
+	secondCase := e2eStory056CalibrationCaseForQuestionAndStratum(t, approvedCases, fixture.QuestionIDs["true_false"], "selected_high")
 	secondSegmentID := e2eString(t, secondCase, "answer_segment_id")
 	secondRunID, secondItem, secondLease := e2eStory056CalibrationReprocessAndClaim(t, router, adminToken, secondSegmentID, suffix+"-revoke")
 	var queuedCalibrationID string
@@ -164,31 +188,40 @@ RETURNING user_id::text`, username, hash).Scan(&userID)
 	return userID, username
 }
 
-func e2eSeedStory056CalibrationOMRFacts(t *testing.T, db *sql.DB, tenantID, runID, questionID string) {
+func e2eSeedStory056CalibrationOMRFacts(t *testing.T, db *sql.DB, tenantID, runID string) {
 	t.Helper()
 	result, err := db.Exec(`
 WITH candidates AS (
-  SELECT o.id,
-    CASE ((row_number() OVER (ORDER BY o.id) - 1) % 4)
-      WHEN 0 THEN 'A' WHEN 1 THEN 'B' WHEN 2 THEN 'C' ELSE 'D'
-    END AS option_label
+  SELECT o.id,q.question_type,
+    (row_number() OVER (PARTITION BY seg.question_id ORDER BY o.id) - 1) AS question_rank
   FROM omr_run o
   JOIN answer_segment seg ON seg.tenant_id=o.tenant_id AND seg.id=o.answer_segment_id AND seg.deleted_at IS NULL
-  WHERE o.tenant_id=$1::uuid AND o.scoring_run_id=$2::uuid AND seg.question_id=$3::uuid AND o.deleted_at IS NULL
+  JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id AND q.deleted_at IS NULL
+  WHERE o.tenant_id=$1::uuid AND o.scoring_run_id=$2::uuid AND o.deleted_at IS NULL
   ORDER BY o.id
-  LIMIT 100
+), classified AS (
+  SELECT *,
+    CASE WHEN question_type='true_false'
+      THEN CASE ((question_rank / 4) % 2) WHEN 0 THEN 'true' ELSE 'false' END
+      ELSE CASE ((question_rank / 4) % 4) WHEN 0 THEN 'A' WHEN 1 THEN 'B' WHEN 2 THEN 'C' ELSE 'D' END
+    END AS option_label,
+    (question_rank % 4) AS stratum_index
+  FROM candidates
 )
 UPDATE omr_run o
-SET status='completed',decision='selected',selected_options=jsonb_build_array(c.option_label),confidence=0.99,
+SET status='completed',
+  decision=CASE c.stratum_index WHEN 2 THEN 'blank' WHEN 3 THEN 'ambiguous' ELSE 'selected' END,
+  selected_options=CASE WHEN c.stratum_index IN (0,1) THEN jsonb_build_array(c.option_label) ELSE '[]'::jsonb END,
+  confidence=CASE c.stratum_index WHEN 0 THEN 0.99 WHEN 1 THEN 0.80 WHEN 2 THEN 0.95 ELSE 0.50 END,
   measurements=jsonb_build_array(jsonb_build_object('option',c.option_label,'foreground_delta',0.9)),
   result_version='story056-calibration-seed-v1',duration_ms=1,completed_at=now(),updated_at=now()
-FROM candidates c
-WHERE o.id=c.id`, tenantID, runID, questionID)
+FROM classified c
+WHERE o.id=c.id`, tenantID, runID)
 	if err != nil {
 		t.Fatalf("seed completed OMR calibration evidence: %v", err)
 	}
-	if count, _ := result.RowsAffected(); count != paper.OMRCalibrationMinimumSampleCount {
-		t.Fatalf("expected %d calibration OMR facts, got %d", paper.OMRCalibrationMinimumSampleCount, count)
+	if count, _ := result.RowsAffected(); count != 120 {
+		t.Fatalf("expected 120 stratified calibration OMR facts, got %d", count)
 	}
 	result, err = db.Exec(`
 UPDATE agent_worker_task task
@@ -199,25 +232,58 @@ WHERE task.tenant_id=o.tenant_id AND task.id=o.runtime_task_id
 	if err != nil {
 		t.Fatalf("retire seeded calibration worker tasks: %v", err)
 	}
-	if count, _ := result.RowsAffected(); count != paper.OMRCalibrationMinimumSampleCount {
-		t.Fatalf("expected %d retired calibration worker tasks, got %d", paper.OMRCalibrationMinimumSampleCount, count)
+	if count, _ := result.RowsAffected(); count != 120 {
+		t.Fatalf("expected 120 retired calibration worker tasks, got %d", count)
 	}
 	if _, err = db.Exec(`UPDATE scoring_run SET status='completed',queued_count=0,review_count=0,failed_count=0,auto_confirmed_count=0,completed_at=now(),updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, runID); err != nil {
 		t.Fatalf("complete seeded calibration scoring run: %v", err)
 	}
 }
 
-func e2eStory056CalibrationObservedOption(t *testing.T, item map[string]any) string {
+func e2eStory056CalibrationExpectedOptions(t *testing.T, db *sql.DB, tenantID, caseID string) []string {
 	t.Helper()
-	options, ok := item["observed_options"].([]any)
-	if !ok || len(options) != 1 {
-		t.Fatalf("calibration case must expose exactly one observed option: %#v", item)
+	var decision string
+	var observedRaw, measurementsRaw []byte
+	if err := db.QueryRow(`
+SELECT observed_decision,observed_options,measurements
+FROM omr_calibration_case
+WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, caseID).Scan(&decision, &observedRaw, &measurementsRaw); err != nil {
+		t.Fatalf("load blind calibration ground truth fixture: %v", err)
 	}
-	option, ok := options[0].(string)
+	var options []string
+	if err := json.Unmarshal(observedRaw, &options); err != nil {
+		t.Fatalf("decode calibration observed options: %v", err)
+	}
+	if len(options) > 0 {
+		return options
+	}
+	if decision == "blank" {
+		return []string{}
+	}
+	var measurements []map[string]any
+	if err := json.Unmarshal(measurementsRaw, &measurements); err != nil {
+		t.Fatalf("decode calibration measurements: %v", err)
+	}
+	if len(measurements) == 0 {
+		t.Fatalf("ambiguous calibration case has no fixture ground truth: %s", caseID)
+	}
+	option, ok := measurements[0]["option"].(string)
 	if !ok || option == "" {
-		t.Fatalf("calibration observed option must be a non-empty string: %#v", item)
+		t.Fatalf("ambiguous calibration case has invalid fixture ground truth: %#v", measurements[0])
 	}
-	return option
+	return []string{option}
+}
+
+func e2eStory056CalibrationCaseForQuestionAndStratum(t *testing.T, cases []any, questionID, stratum string) map[string]any {
+	t.Helper()
+	for _, raw := range cases {
+		item, ok := raw.(map[string]any)
+		if ok && e2eString(t, item, "question_id") == questionID && e2eString(t, item, "sample_stratum") == stratum {
+			return item
+		}
+	}
+	t.Fatalf("missing calibration case for question %s in stratum %s", questionID, stratum)
+	return nil
 }
 
 func e2eStory056CalibrationReprocessAndClaim(t *testing.T, router http.Handler, adminToken, segmentID, suffix string) (string, map[string]any, story056WorkerLease) {
