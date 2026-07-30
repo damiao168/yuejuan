@@ -35,11 +35,13 @@ import {
   createModelProvider,
   getModelPolicy,
   listModelDeployments,
+  listModelEvaluationRuns,
   listModelProviders,
   probeModelSecret,
   updateModelPolicy,
   type CreateDeploymentInput,
   type CreateProviderInput,
+  type EvaluationRun,
   type ModelDeployment,
   type ModelProvider,
   type PolicyMode,
@@ -49,8 +51,9 @@ import {
 } from "../api/modelGovernance";
 import { ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
+import { ModelEvaluationWorkspace } from "../components/model-governance/ModelEvaluationWorkspace";
 
-type GovernanceView = "providers" | "deployments" | "policy";
+type GovernanceView = "providers" | "deployments" | "evaluations" | "policy";
 
 const policyModeLabels: Record<PolicyMode, string> = {
   local_only: "仅本地",
@@ -97,14 +100,17 @@ function microsToYuan(value: number) {
 
 export function ModelGovernancePage({
   canManageProviders,
-  canManagePolicy
+  canManagePolicy,
+  canManageEvaluations
 }: {
   canManageProviders: boolean;
   canManagePolicy: boolean;
+  canManageEvaluations: boolean;
 }) {
   const { message } = App.useApp();
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [deployments, setDeployments] = useState<ModelDeployment[]>([]);
+  const [evaluationRuns, setEvaluationRuns] = useState<EvaluationRun[]>([]);
   const [policy, setPolicy] = useState<TenantModelPolicy | null>(null);
   const [activeView, setActiveView] = useState<GovernanceView>("providers");
   const [loading, setLoading] = useState(true);
@@ -124,14 +130,16 @@ export function ModelGovernancePage({
     setLoading(true);
     setError(undefined);
     try {
-      const [providerResponse, deploymentResponse, policyResponse] = await Promise.all([
+      const [providerResponse, deploymentResponse, policyResponse, evaluationResponse] = await Promise.all([
         listModelProviders(),
         listModelDeployments(),
-        getModelPolicy()
+        getModelPolicy(),
+        listModelEvaluationRuns()
       ]);
       setProviders(providerResponse.providers);
       setDeployments(deploymentResponse.deployments);
       setPolicy(policyResponse.policy);
+      setEvaluationRuns(evaluationResponse.evaluation_runs);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -456,6 +464,7 @@ export function ModelGovernancePage({
                 options={[
                   { value: "providers", label: `供应商 ${providers.length}` },
                   { value: "deployments", label: `部署 ${deployments.length}` },
+                  { value: "evaluations", label: `评测 ${evaluationRuns.length}` },
                   { value: "policy", label: "租户策略" }
                 ]}
               />
@@ -487,6 +496,15 @@ export function ModelGovernancePage({
                   <div className="model-governance-table">
                     <ResponsiveTable rowKey="id" columns={deploymentColumns} dataSource={deployments} pagination={false} />
                   </div>
+                ) : null}
+                {activeView === "evaluations" ? (
+                  <ModelEvaluationWorkspace
+                    runs={evaluationRuns}
+                    deployments={deployments}
+                    loading={loading}
+                    canManage={canManageEvaluations}
+                    onRefresh={load}
+                  />
                 ) : null}
                 {activeView === "policy" ? (
                   <div className="model-policy-layout">

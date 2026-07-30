@@ -336,6 +336,7 @@ function App() {
       <ModelGovernancePage
         canManageProviders={hasEveryPermission(user, ["model:provider:manage"])}
         canManagePolicy={hasEveryPermission(user, ["model:policy:manage"])}
+        canManageEvaluations={hasEveryPermission(user, ["model:evaluation:manage"])}
       />
     ) : (
       <ModulePage route={route} experience={navigationExperience} onNavigate={navigate} />

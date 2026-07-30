@@ -110,6 +110,94 @@ export interface SecretProbe {
   meets_minimum_strength: boolean;
 }
 
+export type EvaluationEvidenceClass = "protocol_fixture" | "authorized_frozen_set";
+export type EvaluationRunStatus = "draft" | "completed" | "invalidated";
+
+export interface EvaluationMetrics {
+  teacher_acceptance_rate: number;
+  serious_error_rate: number;
+  evidence_validity_rate: number;
+  stability_rate: number;
+  average_cost_micros: number;
+}
+
+export interface EvaluationCandidate {
+  id: string;
+  tenant_id?: string;
+  run_id: string;
+  deployment_id: string;
+  provider_key: string;
+  deployment_key: string;
+  model_version: string;
+  prompt_version: string;
+  rubric_version: string;
+  evaluated_samples: number;
+  teacher_reviewed_samples: number;
+  teacher_accepted_samples: number;
+  serious_error_samples: number;
+  evidence_valid_samples: number;
+  repeat_comparisons: number;
+  stable_repeat_samples: number;
+  p95_latency_ms: number;
+  total_cost_micros: number;
+  metrics: EvaluationMetrics;
+  created_at: string;
+}
+
+export interface EvaluationRun {
+  id: string;
+  tenant_id?: string;
+  run_key: string;
+  display_name: string;
+  dataset_reference: string;
+  dataset_sha256: string;
+  authorization_reference?: string;
+  evidence_class: EvaluationEvidenceClass;
+  subject: string;
+  grade: string;
+  question_type: string;
+  modality: "text" | "image";
+  sample_count: number;
+  repeat_count: number;
+  status: EvaluationRunStatus;
+  candidates: EvaluationCandidate[];
+  completed_at?: string;
+  invalidated_at?: string;
+  created_at: string;
+}
+
+export interface CreateEvaluationRunInput {
+  run_key: string;
+  display_name: string;
+  dataset_reference: string;
+  dataset_sha256: string;
+  authorization_reference?: string;
+  evidence_class: EvaluationEvidenceClass;
+  subject: string;
+  grade: string;
+  question_type: string;
+  modality: "text" | "image";
+  sample_count: number;
+  repeat_count: number;
+  reason: string;
+}
+
+export interface AddEvaluationCandidateInput {
+  deployment_id: string;
+  prompt_version: string;
+  rubric_version: string;
+  evaluated_samples: number;
+  teacher_reviewed_samples: number;
+  teacher_accepted_samples: number;
+  serious_error_samples: number;
+  evidence_valid_samples: number;
+  repeat_comparisons: number;
+  stable_repeat_samples: number;
+  p95_latency_ms: number;
+  total_cost_micros: number;
+  reason: string;
+}
+
 export function listModelProviders() {
   return apiClient.request<{ providers: ModelProvider[] }>("/api/v1/model-providers");
 }
@@ -147,5 +235,37 @@ export function probeModelSecret(credentialRef: string) {
   return apiClient.request<{ probe: SecretProbe }>("/api/v1/model-secrets/probe", {
     method: "POST",
     body: JSON.stringify({ credential_ref: credentialRef })
+  });
+}
+
+export function listModelEvaluationRuns() {
+  return apiClient.request<{ evaluation_runs: EvaluationRun[] }>("/api/v1/model-evaluation-runs");
+}
+
+export function createModelEvaluationRun(input: CreateEvaluationRunInput) {
+  return apiClient.request<{ evaluation_run: EvaluationRun }>("/api/v1/model-evaluation-runs", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function addModelEvaluationCandidate(runID: string, input: AddEvaluationCandidateInput) {
+  return apiClient.request<{ candidate: EvaluationCandidate }>(`/api/v1/model-evaluation-runs/${runID}/candidates`, {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function completeModelEvaluationRun(runID: string, reason: string) {
+  return apiClient.request<{ evaluation_run: EvaluationRun }>(`/api/v1/model-evaluation-runs/${runID}/complete`, {
+    method: "POST",
+    body: JSON.stringify({ reason })
+  });
+}
+
+export function invalidateModelEvaluationRun(runID: string, reason: string) {
+  return apiClient.request<{ evaluation_run: EvaluationRun }>(`/api/v1/model-evaluation-runs/${runID}/invalidate`, {
+    method: "POST",
+    body: JSON.stringify({ reason })
   });
 }
