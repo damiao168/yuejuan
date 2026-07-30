@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress（2026-07-30：STORY-061A 三个切片、061B0～061B0.2 及 061B0.3A～061B0.3C 已完成实现复审；内部图片契约、服务器端题块解析器和不可达 v2 装配接缝已经闭环。仍未接入任何外部厂商，061B1 真实厂商联调尚未获批）
+In Progress（2026-07-30：STORY-061A、061B0～061B0.3C 及 061B1A 沙箱准入门禁已完成实现复审；下一步只允许实现无默认网络、未注册的 061B1B 原生传输接缝。仍未接入任何外部厂商，061B1C 真实沙箱联调尚未获批）
 
 ## First-principles decision
 
@@ -248,7 +248,9 @@ In Progress（2026-07-30：STORY-061A 三个切片、061B0～061B0.2 及 061B0.3
 - **061B0.3A（已完成）**：建立独立 `grading-agent-v2` Schema、合法/非法图片 fixture，以及 Go/Python 离线验证；v1 生产链路保持不变，v2 仍不可达。
 - **061B0.3B（已完成）**：建立服务器端 active crop resolver，以 tenant/segment/question 范围查询、active registration/correction owner、对象哈希/PNG/bbox 校验和读取后重新确认阻断跨范围与陈旧题块；resolver 尚无生产调用方。
 - **061B0.3C（已完成）**：建立不可达的 Go v2 请求构造器和 Python fixture-only application seam；首版使用内部请求内联的受限 Base64 PNG，实施独立 8 MiB 上限、图片内存清理、安全幂等摘要和单路推理并发，不建设反向取图令牌。
-- **061B1（待批准）**：候选为阿里云 DashScope 原生文本/多模态协议；只有完成沙箱账号、区域、留存、合同和合成 fixture 审查后，才允许实现影子 Adapter。
+- **061B1A（已完成）**：实现厂商沙箱准入门禁；只有原生协议、沙箱账号、合同/留存/区域/价格评审、强 Secret、预算、租户导出授权、合成数据限制和有界批准期全部成立时才允许继续。
+- **061B1B（待实施）**：建立无默认网络实现、未注册 Provider Adapter 的 DashScope 原生传输接缝，只使用注入式合成传输器验证请求/响应/错误边界。
+- **061B1C（待批准）**：候选为阿里云 DashScope 原生文本/多模态沙箱；只有取得真实沙箱账号及 061B1A 全部批准证据后，才允许注册影子 Adapter 并发送合成请求。
 - **061B2（待选型）**：选择第二个持续维护的厂商原生协议；OpenAI-compatible 接口和处于迁移/停止演进状态的旧接口不作为补位方案。
 - 完成合规前置后，首批目标仍为两个文本厂商和一个多模态厂商的原生 Adapter。
 - 真实联调仅允许 `shadow_compare`，不改变教师成绩；先使用授权测试账号和合成数据，脱敏冻结集须另行批准。
@@ -372,4 +374,4 @@ In Progress（2026-07-30：STORY-061A 三个切片、061B0～061B0.2 及 061B0.3
 
 计划评审通过，STORY-061 进入 In Progress。061A1、061A2 与 061A3 已于 2026-07-29 完成实现复审，证据见 [`STORY-061A1 实现复审`](../reviews/STORY-061A1-implementation-review-2026-07-29.md)、[`STORY-061A2 实现复审`](../reviews/STORY-061A2-implementation-review-2026-07-29.md) 和 [`STORY-061A3 实现复审`](../reviews/STORY-061A3-implementation-review-2026-07-29.md)。STORY-061A 至此完成。
 
-061B 独立计划评审只批准不联网的 061B0，证据见 [`STORY-061B 独立计划评审`](../reviews/STORY-061B-plan-review-2026-07-29.md)；061B0、061B0.1 与 061B0.2 已完成实现复审，证据见 [`STORY-061B0 实现复审`](../reviews/STORY-061B0-implementation-review-2026-07-29.md)、[`STORY-061B0.1 实现复审`](../reviews/STORY-061B0.1-implementation-review-2026-07-29.md) 和 [`STORY-061B0.2 实现复审`](../reviews/STORY-061B0.2-implementation-review-2026-07-29.md)。061B0.3 的独立计划评审见 [`STORY-061B0.3 内部图片契约计划评审`](../reviews/STORY-061B0.3-plan-review-2026-07-30.md)，061B0.3A 已完成实现复审，证据见 [`STORY-061B0.3A 实现复审`](../reviews/STORY-061B0.3A-implementation-review-2026-07-30.md)；061B0.3B 的计划与实现证据见 [`STORY-061B0.3B 计划评审`](../reviews/STORY-061B0.3B-plan-review-2026-07-30.md) 和 [`STORY-061B0.3B 实现复审`](../reviews/STORY-061B0.3B-implementation-review-2026-07-30.md)；061B0.3C 已完成实现复审，证据见 [`STORY-061B0.3C 实现复审`](../reviews/STORY-061B0.3C-implementation-review-2026-07-30.md)。061B0.3 至此完成。任何真实厂商 API、影子流量或学生数据外发均继续禁止；061B1 必须先完成厂商沙箱、合同/留存结论、区域、Secret、图片外发授权和合成协议 fixture 审查，再独立批准。
+061B 独立计划评审只批准不联网的 061B0，证据见 [`STORY-061B 独立计划评审`](../reviews/STORY-061B-plan-review-2026-07-29.md)；061B0、061B0.1 与 061B0.2 已完成实现复审，证据见 [`STORY-061B0 实现复审`](../reviews/STORY-061B0-implementation-review-2026-07-29.md)、[`STORY-061B0.1 实现复审`](../reviews/STORY-061B0.1-implementation-review-2026-07-29.md) 和 [`STORY-061B0.2 实现复审`](../reviews/STORY-061B0.2-implementation-review-2026-07-29.md)。061B0.3 的独立计划评审见 [`STORY-061B0.3 内部图片契约计划评审`](../reviews/STORY-061B0.3-plan-review-2026-07-30.md)，061B0.3A 已完成实现复审，证据见 [`STORY-061B0.3A 实现复审`](../reviews/STORY-061B0.3A-implementation-review-2026-07-30.md)；061B0.3B 的计划与实现证据见 [`STORY-061B0.3B 计划评审`](../reviews/STORY-061B0.3B-plan-review-2026-07-30.md) 和 [`STORY-061B0.3B 实现复审`](../reviews/STORY-061B0.3B-implementation-review-2026-07-30.md)；061B0.3C 已完成实现复审，证据见 [`STORY-061B0.3C 实现复审`](../reviews/STORY-061B0.3C-implementation-review-2026-07-30.md)。061B0.3 至此完成。061B1A 沙箱准入门禁已完成实现复审，证据见 [`STORY-061B1A 实现复审`](../reviews/STORY-061B1A-implementation-review-2026-07-30.md)。任何真实厂商 API、影子流量或学生数据外发均继续禁止；061B1B 只允许注入式合成传输，061B1C 必须取得真实沙箱和全部合规证据后再独立批准。
