@@ -1545,6 +1545,9 @@ body {
 
 .model-evaluation-detail > footer span { display: inline-flex; align-items: center; gap: 7px; }
 .model-evaluation-legend-best { width: 8px; height: 8px; border-radius: 50%; background: #176b43; }
+.model-evaluation-form { margin-top: 20px; }
+.model-evaluation-form .ant-input-number { width: 100%; }
+.model-evaluation-transition-form { margin-top: 18px; }
 
 .model-governance-identity {
   display: flex;

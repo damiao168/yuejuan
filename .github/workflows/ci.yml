@@ -39,6 +39,7 @@ jobs:
       - run: npm run check:story052
       - run: npm run check:story053
       - run: npm run check:story057
+      - run: npm run check:story061
       - run: npm --prefix lab test
       - run: npm --prefix lab run eval
       - run: npm --prefix lab run gate:dev

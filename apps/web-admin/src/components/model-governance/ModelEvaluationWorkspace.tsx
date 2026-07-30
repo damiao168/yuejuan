@@ -1,7 +1,39 @@
-import { Alert, Button, Empty, Input, Select, Space, Tag, type TableColumnsType } from "antd";
-import { BarChart3, Database, Eye, Search, ShieldCheck, TriangleAlert } from "lucide-react";
+import {
+  Alert,
+  App,
+  Button,
+  Drawer,
+  Empty,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Select,
+  Space,
+  Tag,
+  Tooltip,
+  type TableColumnsType
+} from "antd";
+import {
+  BarChart3,
+  Ban,
+  CheckCircle2,
+  Database,
+  Eye,
+  Plus,
+  Search,
+  ShieldCheck,
+  TriangleAlert
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type {
+import { ApiClientError } from "../../api/client";
+import {
+  addModelEvaluationCandidate,
+  completeModelEvaluationRun,
+  createModelEvaluationRun,
+  invalidateModelEvaluationRun,
+  type AddEvaluationCandidateInput,
+  type CreateEvaluationRunInput,
   EvaluationCandidate,
   EvaluationEvidenceClass,
   EvaluationRun,
@@ -41,12 +73,19 @@ function formatAverageCost(value: number) {
   return value === 0 ? "¥0" : `¥${(value / 1_000_000).toFixed(6)}`;
 }
 
+function errorMessage(error: unknown) {
+  if (error instanceof ApiClientError) return error.message || "评测操作失败，请检查输入后重试";
+  return error instanceof Error ? error.message : "评测操作失败，请检查输入后重试";
+}
+
+type TransitionKind = "complete" | "invalidate";
+
 export function ModelEvaluationWorkspace({
   runs,
-  deployments: _deployments,
+  deployments,
   loading,
-  canManage: _canManage,
-  onRefresh: _onRefresh
+  canManage,
+  onRefresh
 }: {
   runs: EvaluationRun[];
   deployments: ModelDeployment[];
@@ -54,10 +93,18 @@ export function ModelEvaluationWorkspace({
   canManage: boolean;
   onRefresh: () => Promise<void>;
 }) {
+  const { message } = App.useApp();
   const [keyword, setKeyword] = useState("");
   const [status, setStatus] = useState<EvaluationRunStatus | "all">("all");
   const [evidenceClass, setEvidenceClass] = useState<EvaluationEvidenceClass | "all">("all");
   const [selectedRunID, setSelectedRunID] = useState<string>();
+  const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
+  const [candidateDrawerOpen, setCandidateDrawerOpen] = useState(false);
+  const [transitionKind, setTransitionKind] = useState<TransitionKind>();
+  const [saving, setSaving] = useState(false);
+  const [createForm] = Form.useForm<CreateEvaluationRunInput>();
+  const [candidateForm] = Form.useForm<AddEvaluationCandidateInput>();
+  const [transitionForm] = Form.useForm<{ reason: string }>();
 
   const filteredRuns = useMemo(() => {
     const normalizedKeyword = keyword.trim().toLocaleLowerCase();
@@ -82,6 +129,14 @@ export function ModelEvaluationWorkspace({
   }, [runs, selectedRunID]);
 
   const selectedRun = runs.find((run) => run.id === selectedRunID);
+  const availableDeployments = selectedRun
+    ? deployments.filter((deployment) => !selectedRun.candidates.some((candidate) => candidate.deployment_id === deployment.id))
+    : [];
+  const canCompleteSelected = Boolean(
+    selectedRun
+    && selectedRun.candidates.length >= 2
+    && selectedRun.candidates.some((candidate) => candidate.provider_key === "local")
+  );
 
   const bestMetrics = useMemo(() => {
     if (!selectedRun?.candidates.length) return undefined;
@@ -241,6 +296,108 @@ export function ModelEvaluationWorkspace({
     }
   ];
 
+  const openCreateDrawer = () => {
+    createForm.resetFields();
+    createForm.setFieldsValue({
+      evidence_class: "protocol_fixture",
+      modality: "text",
+      sample_count: 10,
+      repeat_count: 2
+    } as Partial<CreateEvaluationRunInput>);
+    setCreateDrawerOpen(true);
+  };
+
+  const openCandidateDrawer = () => {
+    if (!selectedRun) return;
+    const repeatComparisons = selectedRun.sample_count * Math.max(0, selectedRun.repeat_count - 1);
+    candidateForm.resetFields();
+    candidateForm.setFieldsValue({
+      evaluated_samples: selectedRun.sample_count,
+      teacher_reviewed_samples: selectedRun.evidence_class === "authorized_frozen_set" ? selectedRun.sample_count : 0,
+      teacher_accepted_samples: 0,
+      serious_error_samples: 0,
+      evidence_valid_samples: selectedRun.sample_count,
+      repeat_comparisons: repeatComparisons,
+      stable_repeat_samples: repeatComparisons,
+      p95_latency_ms: 0,
+      total_cost_micros: 0
+    } as Partial<AddEvaluationCandidateInput>);
+    setCandidateDrawerOpen(true);
+  };
+
+  const submitCreate = async () => {
+    const values = await createForm.validateFields();
+    setSaving(true);
+    try {
+      const response = await createModelEvaluationRun({
+        ...values,
+        authorization_reference: values.evidence_class === "authorized_frozen_set"
+          ? values.authorization_reference
+          : undefined
+      });
+      setCreateDrawerOpen(false);
+      setSelectedRunID(response.evaluation_run.id);
+      message.success("评测批次已创建，可开始录入候选结果");
+      await onRefresh();
+    } catch (error) {
+      message.error(errorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submitCandidate = async () => {
+    if (!selectedRun) return;
+    const values = await candidateForm.validateFields();
+    setSaving(true);
+    try {
+      await addModelEvaluationCandidate(selectedRun.id, {
+        ...values,
+        evaluated_samples: selectedRun.sample_count,
+        teacher_reviewed_samples: selectedRun.evidence_class === "authorized_frozen_set"
+          ? selectedRun.sample_count
+          : 0,
+        teacher_accepted_samples: selectedRun.evidence_class === "protocol_fixture"
+          ? 0
+          : values.teacher_accepted_samples
+      });
+      setCandidateDrawerOpen(false);
+      message.success("候选评测证据已加入批次");
+      await onRefresh();
+    } catch (error) {
+      message.error(errorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submitTransition = async () => {
+    if (!selectedRun || !transitionKind) return;
+    const { reason } = await transitionForm.validateFields();
+    setSaving(true);
+    try {
+      if (transitionKind === "complete") {
+        await completeModelEvaluationRun(selectedRun.id, reason);
+        message.success("评测批次已冻结，候选证据不再接受修改");
+      } else {
+        await invalidateModelEvaluationRun(selectedRun.id, reason);
+        message.success("评测证据已标记为失效");
+      }
+      setTransitionKind(undefined);
+      transitionForm.resetFields();
+      await onRefresh();
+    } catch (error) {
+      message.error(errorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openTransition = (kind: TransitionKind) => {
+    transitionForm.resetFields();
+    setTransitionKind(kind);
+  };
+
   return (
     <div className="model-evaluation-workspace">
       <div className="model-evaluation-filterbar">
@@ -273,6 +430,11 @@ export function ModelEvaluationWorkspace({
               { value: "authorized_frozen_set", label: evidenceLabels.authorized_frozen_set }
             ]}
           />
+          {canManage ? (
+            <Button type="primary" icon={<Plus size={15} />} onClick={openCreateDrawer}>
+              新建评测
+            </Button>
+          ) : null}
         </Space>
       </div>
       <div className="model-evaluation-count">
@@ -302,7 +464,35 @@ export function ModelEvaluationWorkspace({
                 <span>数据集 {selectedRun.dataset_reference}</span>
               </p>
             </div>
-            <Tag color={statusColor(selectedRun.status)}>{statusLabels[selectedRun.status]}</Tag>
+            <Space wrap>
+              <Tag color={statusColor(selectedRun.status)}>{statusLabels[selectedRun.status]}</Tag>
+              {canManage && selectedRun.status === "draft" ? (
+                <Button icon={<Plus size={15} />} disabled={availableDeployments.length === 0} onClick={openCandidateDrawer}>
+                  添加候选
+                </Button>
+              ) : null}
+              {canManage && selectedRun.status === "draft" ? (
+                <Tooltip
+                  title={canCompleteSelected ? undefined : "至少需要两个候选，并且必须包含本地基线"}
+                >
+                  <span>
+                    <Button
+                      type="primary"
+                      icon={<CheckCircle2 size={15} />}
+                      disabled={!canCompleteSelected}
+                      onClick={() => openTransition("complete")}
+                    >
+                      冻结完成
+                    </Button>
+                  </span>
+                </Tooltip>
+              ) : null}
+              {canManage && selectedRun.status !== "invalidated" ? (
+                <Button danger icon={<Ban size={15} />} onClick={() => openTransition("invalidate")}>
+                  标记失效
+                </Button>
+              ) : null}
+            </Space>
           </header>
 
           <div className="model-evaluation-evidence">
@@ -350,6 +540,193 @@ export function ModelEvaluationWorkspace({
           </footer>
         </section>
       ) : null}
+
+      <Drawer
+        title="新建离线评测批次"
+        width={620}
+        open={createDrawerOpen}
+        onClose={() => setCreateDrawerOpen(false)}
+        extra={<Button type="primary" loading={saving} onClick={() => void submitCreate()}>创建批次</Button>}
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="评测记录不等于模型批准"
+          description="这里只登记离线运行证据；不会调用外部模型、启用部署或改变评分路由。"
+        />
+        <Form form={createForm} layout="vertical" className="model-evaluation-form">
+          <div className="model-governance-form-row two">
+            <Form.Item
+              name="run_key"
+              label="批次标识"
+              rules={[{ required: true }, { pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/, message: "仅支持小写字母、数字、点、下划线和连字符" }]}
+            >
+              <Input placeholder="math-grade9-fixture-v1" />
+            </Form.Item>
+            <Form.Item name="display_name" label="批次名称" rules={[{ required: true, max: 128 }]}>
+              <Input placeholder="九年级数学协议样例对比" />
+            </Form.Item>
+          </div>
+          <div className="model-governance-form-row two">
+            <Form.Item
+              name="dataset_reference"
+              label="数据集引用"
+              rules={[{ required: true }, { pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]}
+            >
+              <Input placeholder="math-grade9-fixture-v1" />
+            </Form.Item>
+            <Form.Item
+              name="dataset_sha256"
+              label="数据集 SHA-256"
+              rules={[{ required: true }, { pattern: /^[a-f0-9]{64}$/, message: "请输入 64 位小写 SHA-256" }]}
+            >
+              <Input placeholder="64 位小写哈希" />
+            </Form.Item>
+          </div>
+          <Form.Item name="evidence_class" label="证据类别" rules={[{ required: true }]}>
+            <Select
+              options={[
+                { value: "protocol_fixture", label: "协议样例（不代表模型效果）" },
+                { value: "authorized_frozen_set", label: "授权冻结集（含教师真值）" }
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(before, after) => before.evidence_class !== after.evidence_class}>
+            {({ getFieldValue }) => getFieldValue("evidence_class") === "authorized_frozen_set" ? (
+              <Form.Item
+                name="authorization_reference"
+                label="授权引用"
+                rules={[{ required: true }, { pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]}
+              >
+                <Input placeholder="frozen-set-approval-2026-01" />
+              </Form.Item>
+            ) : null}
+          </Form.Item>
+          <div className="model-governance-form-row">
+            <Form.Item name="subject" label="学科" rules={[{ required: true, max: 128 }]}><Input placeholder="数学" /></Form.Item>
+            <Form.Item name="grade" label="年级" rules={[{ required: true, max: 128 }]}><Input placeholder="九年级" /></Form.Item>
+            <Form.Item
+              name="question_type"
+              label="题型标识"
+              rules={[{ required: true }, { pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]}
+            >
+              <Input placeholder="short_answer" />
+            </Form.Item>
+          </div>
+          <div className="model-governance-form-row">
+            <Form.Item name="modality" label="输入模态" rules={[{ required: true }]}>
+              <Select options={[{ value: "text", label: "文本" }, { value: "image", label: "图片" }]} />
+            </Form.Item>
+            <Form.Item name="sample_count" label="样本数" rules={[{ required: true }]}>
+              <InputNumber min={1} max={100000} precision={0} />
+            </Form.Item>
+            <Form.Item name="repeat_count" label="重复评分次数" rules={[{ required: true }]}>
+              <InputNumber min={1} max={20} precision={0} />
+            </Form.Item>
+          </div>
+          <Form.Item name="reason" label="创建原因" rules={[{ required: true, min: 4, max: 256 }]}>
+            <Input.TextArea rows={3} placeholder="说明评测目的、证据来源和复核安排" />
+          </Form.Item>
+        </Form>
+      </Drawer>
+
+      <Drawer
+        title={`添加候选结果${selectedRun ? ` · ${selectedRun.display_name}` : ""}`}
+        width={620}
+        open={candidateDrawerOpen}
+        onClose={() => setCandidateDrawerOpen(false)}
+        extra={<Button type="primary" loading={saving} onClick={() => void submitCandidate()}>保存候选</Button>}
+      >
+        {selectedRun ? (
+          <>
+            <Alert
+              type={selectedRun.evidence_class === "protocol_fixture" ? "info" : "success"}
+              showIcon
+              message={selectedRun.evidence_class === "protocol_fixture" ? "协议样例不录入教师接受数据" : "教师复核数固定为全部样本"}
+              description={`批次固定 ${selectedRun.sample_count} 个样本、重复 ${selectedRun.repeat_count} 次；候选版本写入后不可修改。`}
+            />
+            <Form form={candidateForm} layout="vertical" className="model-evaluation-form">
+              <Form.Item name="deployment_id" label="候选部署" rules={[{ required: true }]}>
+                <Select
+                  options={availableDeployments.map((deployment) => ({
+                    value: deployment.id,
+                    label: `${deployment.model_name} · ${deployment.deployment_key}`
+                  }))}
+                />
+              </Form.Item>
+              <div className="model-governance-form-row two">
+                <Form.Item name="prompt_version" label="提示词版本" rules={[{ required: true, max: 128 }]}><Input placeholder="prompt-v1" /></Form.Item>
+                <Form.Item name="rubric_version" label="Rubric 版本" rules={[{ required: true, max: 128 }]}><Input placeholder="rubric-v1" /></Form.Item>
+              </div>
+              <div className="model-governance-form-row">
+                <Form.Item name="evaluated_samples" label="已评样本"><InputNumber disabled /></Form.Item>
+                <Form.Item name="teacher_reviewed_samples" label="教师复核数"><InputNumber disabled /></Form.Item>
+                <Form.Item
+                  name="teacher_accepted_samples"
+                  label="教师直接接受数"
+                  rules={[{ required: true }]}
+                >
+                  <InputNumber
+                    disabled={selectedRun.evidence_class === "protocol_fixture"}
+                    min={0}
+                    max={selectedRun.sample_count}
+                    precision={0}
+                  />
+                </Form.Item>
+              </div>
+              <div className="model-governance-form-row">
+                <Form.Item name="serious_error_samples" label="严重错误样本" rules={[{ required: true }]}>
+                  <InputNumber min={0} max={selectedRun.sample_count} precision={0} />
+                </Form.Item>
+                <Form.Item name="evidence_valid_samples" label="证据有效样本" rules={[{ required: true }]}>
+                  <InputNumber min={0} max={selectedRun.sample_count} precision={0} />
+                </Form.Item>
+                <Form.Item name="p95_latency_ms" label="P95 时延（ms）" rules={[{ required: true }]}>
+                  <InputNumber min={0} precision={0} />
+                </Form.Item>
+              </div>
+              <div className="model-governance-form-row">
+                <Form.Item name="repeat_comparisons" label="重复对比数" rules={[{ required: true }]}>
+                  <InputNumber min={0} max={selectedRun.sample_count * Math.max(0, selectedRun.repeat_count - 1)} precision={0} />
+                </Form.Item>
+                <Form.Item name="stable_repeat_samples" label="稳定重复数" rules={[{ required: true }]}>
+                  <InputNumber min={0} max={selectedRun.sample_count * Math.max(0, selectedRun.repeat_count - 1)} precision={0} />
+                </Form.Item>
+                <Form.Item name="total_cost_micros" label="总成本（微元）" rules={[{ required: true }]}>
+                  <InputNumber min={0} precision={0} />
+                </Form.Item>
+              </div>
+              <Form.Item name="reason" label="录入原因" rules={[{ required: true, min: 4, max: 256 }]}>
+                <Input.TextArea rows={3} placeholder="说明离线运行来源和数据核验情况" />
+              </Form.Item>
+            </Form>
+          </>
+        ) : null}
+      </Drawer>
+
+      <Modal
+        title={transitionKind === "complete" ? "冻结完成评测" : "标记评测证据失效"}
+        open={Boolean(transitionKind)}
+        okText={transitionKind === "complete" ? "确认冻结" : "确认失效"}
+        okButtonProps={{ danger: transitionKind === "invalidate" }}
+        confirmLoading={saving}
+        onOk={() => void submitTransition()}
+        onCancel={() => setTransitionKind(undefined)}
+      >
+        <Alert
+          type={transitionKind === "complete" ? "warning" : "error"}
+          showIcon
+          message={transitionKind === "complete" ? "冻结后不能再添加候选" : "失效后只能保留为历史审计证据"}
+          description={transitionKind === "complete"
+            ? "本操作仍不会批准模型或改变评分路由。"
+            : "若数据授权撤回、版本不一致或证据被替代，应立即标记失效。"}
+        />
+        <Form form={transitionForm} layout="vertical" className="model-evaluation-transition-form">
+          <Form.Item name="reason" label="操作原因" rules={[{ required: true, min: 4, max: 256 }]}>
+            <Input.TextArea rows={3} placeholder="填写可审计的操作原因" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }
