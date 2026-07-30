@@ -1,0 +1,73 @@
+{
+  "schema_version": "grading-agent-v2",
+  "request_id": "subjective-grade-image-0001",
+  "subject": "math",
+  "grade_level": "junior_middle",
+  "question_id": "question-001",
+  "answer_segment_id": "segment-001",
+  "question_type": "calculation",
+  "question_text": "Calculate 12 + 8 and show the result.",
+  "max_score": 4,
+  "answer_text": "12 + 8 = 20",
+  "ocr_confidence": 0.96,
+  "rubric_version": "rubric-v4",
+  "prompt_version": "subjective-image-contract-v2",
+  "rubric": {
+    "rubric_id": "rubric-001",
+    "rubric_version": "rubric-v4",
+    "question_type": "calculation",
+    "max_score": 4,
+    "allow_partial_total": false,
+    "points": [
+      {
+        "id": "p1",
+        "description": "Shows the addition expression",
+        "score": 2,
+        "required": true,
+        "aliases": ["12 + 8"],
+        "evidence_required": true,
+        "match_policy": "semantic"
+      },
+      {
+        "id": "p2",
+        "description": "Obtains the result 20",
+        "score": 2,
+        "required": true,
+        "aliases": ["20"],
+        "evidence_required": true,
+        "match_policy": "semantic"
+      }
+    ],
+    "deductions": [],
+    "equivalent_answers": [],
+    "examples": [],
+    "scoring_notes": []
+  },
+  "model_policy": {
+    "mode": "shadow",
+    "model_version": "fixture-multimodal-model-v1",
+    "min_confidence": 0.8
+  },
+  "prompt_guard": {
+    "student_answer_is_untrusted": true,
+    "suspected_injection": false,
+    "signals": []
+  },
+  "media_evidence": {
+    "kind": "answer_segment_crop",
+    "encoding": "base64",
+    "media_type": "image/png",
+    "sha256": "d126d616641d42ac8b0a07ec302c9fa1ec049f86200931a0a60c8f3080284b77",
+    "byte_size": 68,
+    "width_pixels": 1,
+    "height_pixels": 1,
+    "normalized_bbox": {
+      "x": 0,
+      "y": 0,
+      "width": 1,
+      "height": 1
+    },
+    "binding_hash": "00dec19e6cb2f4f6ae51300bf1c3c65def2b747bca52a48f27f619c95f9d8c9d",
+    "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII="
+  }
+}

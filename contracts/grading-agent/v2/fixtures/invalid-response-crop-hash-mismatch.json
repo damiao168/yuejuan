@@ -1,0 +1,66 @@
+{
+  "schema_version": "grading-agent-v2",
+  "request_id": "subjective-grade-image-0001",
+  "status": "suggestion",
+  "delivery": "shadow_only",
+  "suggested_score": 4,
+  "max_score": 4,
+  "confidence": 0,
+  "matched_points": [
+    {
+      "rubric_point_id": "p1",
+      "label": "Shows the addition expression",
+      "score": 2,
+      "evidence_ids": ["e-text-1"]
+    },
+    {
+      "rubric_point_id": "p2",
+      "label": "Obtains the result 20",
+      "score": 2,
+      "evidence_ids": ["e-crop-1"]
+    }
+  ],
+  "missing_points": [],
+  "deductions": [],
+  "evidence": [
+    {
+      "evidence_id": "e-text-1",
+      "rubric_point_id": "p1",
+      "text_excerpt": "12 + 8",
+      "location": "answer_text",
+      "confidence": 0.9
+    },
+    {
+      "evidence_id": "e-crop-1",
+      "rubric_point_id": "p2",
+      "location": "answer_crop",
+      "crop_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "normalized_bbox": {
+        "x": 0.1,
+        "y": 0.1,
+        "width": 0.8,
+        "height": 0.8
+      },
+      "confidence": 0.88
+    }
+  ],
+  "risk_flags": ["score_needs_review", "human_review_required"],
+  "needs_human_review": true,
+  "student_feedback": "The teacher makes the final decision.",
+  "teacher_note": "This fixture must fail evidence verification.",
+  "model_version": "fixture-multimodal-model-v1",
+  "prompt_version": "subjective-image-contract-v2",
+  "rubric_version": "rubric-v4",
+  "capability_profile": "internal-image-contract-v2",
+  "mock": false,
+  "telemetry": {
+    "adapter": "fixture_only",
+    "provider": "offline",
+    "deployment": "unreachable",
+    "region": "none",
+    "attempts": 1,
+    "repair_attempted": false,
+    "prior_error_codes": [],
+    "elapsed_ms": 1
+  }
+}

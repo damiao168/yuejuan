@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contractRoot = join(root, "contracts", "grading-agent", "v1");
 const load = (path) => JSON.parse(readFileSync(join(contractRoot, path), "utf8"));
+const contractV2Root = join(root, "contracts", "grading-agent", "v2");
+const loadV2 = (path) => JSON.parse(readFileSync(join(contractV2Root, path), "utf8"));
 
 const contract = load("contract.json");
 const matrix = load("capability-matrix.json");
@@ -48,5 +51,71 @@ for (const point of response.matched_points) {
   }
 }
 assert.ok(invalid.matched_points.some((point) => point.evidence_ids.some((id) => !invalid.evidence.some((item) => item.evidence_id === id))));
+
+const contractV2 = loadV2("contract.json");
+const requestSchemaV2 = loadV2("request.schema.json");
+const responseSchemaV2 = loadV2("response.schema.json");
+const errorSchemaV2 = loadV2("error.schema.json");
+const requestV2 = loadV2("fixtures/valid-request.json");
+const responseV2 = loadV2("fixtures/valid-response.json");
+const invalidURLV2 = loadV2("fixtures/invalid-request-remote-url.json");
+const invalidWholePageV2 = loadV2("fixtures/invalid-request-whole-page.json");
+const invalidResponseV2 = loadV2("fixtures/invalid-response-crop-hash-mismatch.json");
+const errorV2 = loadV2("fixtures/valid-error.json");
+
+assert.equal(contractV2.deployment_mode, "unreachable_fixture_only");
+assert.equal(contractV2.http_route_enabled, false);
+assert.equal(contractV2.external_provider_enabled, false);
+assert.equal(contractV2.final_grade_publication_allowed, false);
+assert.equal(contractV2.human_review_required, true);
+assert.equal(requestSchemaV2.properties.schema_version.const, "grading-agent-v2");
+assert.equal(responseSchemaV2.properties.schema_version.const, "grading-agent-v2");
+assert.equal(errorSchemaV2.properties.schema_version.const, "grading-agent-v2");
+assert.equal(request.schema_version, "grading-agent-v1", "v1 fixture must remain unchanged");
+
+for (const field of contractV2.forbidden_request_fields) {
+  assert.equal(Object.hasOwn(requestV2, field), false, `v2 request leaks forbidden field ${field}`);
+}
+assert.equal(requestV2.media_evidence.kind, "answer_segment_crop");
+assert.equal(requestV2.media_evidence.encoding, "base64");
+assert.equal(requestV2.media_evidence.media_type, "image/png");
+const decodedCrop = Buffer.from(requestV2.media_evidence.data_base64, "base64");
+assert.equal(decodedCrop.byteLength, requestV2.media_evidence.byte_size);
+assert.equal(decodedCrop.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+assert.equal(decodedCrop.readUInt32BE(16), requestV2.media_evidence.width_pixels);
+assert.equal(decodedCrop.readUInt32BE(20), requestV2.media_evidence.height_pixels);
+assert.equal(createHash("sha256").update(decodedCrop).digest("hex"), requestV2.media_evidence.sha256);
+
+const bbox = requestV2.media_evidence.normalized_bbox;
+const bindingParts = [
+  requestV2.schema_version,
+  requestV2.request_id,
+  requestV2.question_id,
+  requestV2.answer_segment_id,
+  requestV2.media_evidence.sha256,
+  ...[bbox.x, bbox.y, bbox.width, bbox.height].map((value) => String(Math.round(value * 1_000_000))),
+];
+const bindingMaterial = bindingParts.map((part) => `${Buffer.byteLength(part, "utf8")}:${part}`).join("");
+assert.equal(createHash("sha256").update(bindingMaterial).digest("hex"), requestV2.media_evidence.binding_hash);
+assert.ok(bbox.width * bbox.height < contractV2.maximum_source_bbox_area);
+assert.notEqual(invalidURLV2.media_evidence.encoding, "base64");
+assert.match(invalidURLV2.media_evidence.data_base64, /^https:/);
+assert.ok(
+  invalidWholePageV2.media_evidence.normalized_bbox.width *
+    invalidWholePageV2.media_evidence.normalized_bbox.height >=
+    contractV2.maximum_source_bbox_area,
+);
+
+assert.equal(responseV2.request_id, requestV2.request_id);
+assert.equal(responseV2.needs_human_review, true);
+assert.equal(responseV2.mock, false);
+const cropEvidence = responseV2.evidence.find((item) => item.location === "answer_crop");
+assert.equal(cropEvidence.crop_sha256, requestV2.media_evidence.sha256);
+assert.notEqual(
+  invalidResponseV2.evidence.find((item) => item.location === "answer_crop").crop_sha256,
+  requestV2.media_evidence.sha256,
+);
+assert.equal(errorV2.schema_version, "grading-agent-v2");
+assert.equal(errorV2.error.retryable, false);
 
 console.log("STORY-057 grading-agent contract invariants passed");

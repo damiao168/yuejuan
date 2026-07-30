@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edugrade.local/contracts/grading-agent/v2/request.schema.json",
+  "title": "Governed grading-agent image request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "subject",
+    "grade_level",
+    "question_id",
+    "answer_segment_id",
+    "question_type",
+    "question_text",
+    "max_score",
+    "answer_text",
+    "ocr_confidence",
+    "rubric_version",
+    "prompt_version",
+    "rubric",
+    "model_policy",
+    "prompt_guard",
+    "media_evidence"
+  ],
+  "properties": {
+    "schema_version": {"const": "grading-agent-v2"},
+    "request_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"},
+    "subject": {
+      "type": "string",
+      "enum": ["chinese", "math", "english", "physics", "chemistry", "biology", "history", "politics", "geography", "computer_science"]
+    },
+    "grade_level": {"const": "junior_middle"},
+    "question_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "answer_segment_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "question_type": {"type": "string", "enum": ["short_answer", "calculation", "essay", "discussion"]},
+    "question_text": {"type": "string", "minLength": 1, "maxLength": 12000},
+    "max_score": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+    "answer_text": {"type": "string", "minLength": 1, "maxLength": 20000},
+    "ocr_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "rubric_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "prompt_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "rubric": {"$ref": "../v1/request.schema.json#/$defs/rubric"},
+    "model_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "model_version", "min_confidence"],
+      "properties": {
+        "mode": {"const": "shadow"},
+        "model_version": {"type": "string", "minLength": 1, "maxLength": 256},
+        "min_confidence": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "prompt_guard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["student_answer_is_untrusted", "suspected_injection", "signals"],
+      "properties": {
+        "student_answer_is_untrusted": {"const": true},
+        "suspected_injection": {"type": "boolean"},
+        "signals": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 128}}
+      }
+    },
+    "media_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "encoding",
+        "media_type",
+        "sha256",
+        "byte_size",
+        "width_pixels",
+        "height_pixels",
+        "normalized_bbox",
+        "binding_hash",
+        "data_base64"
+      ],
+      "properties": {
+        "kind": {"const": "answer_segment_crop"},
+        "encoding": {"const": "base64"},
+        "media_type": {"const": "image/png"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "byte_size": {"type": "integer", "minimum": 1, "maximum": 5242880},
+        "width_pixels": {"type": "integer", "minimum": 1, "maximum": 12000000},
+        "height_pixels": {"type": "integer", "minimum": 1, "maximum": 12000000},
+        "normalized_bbox": {"$ref": "#/$defs/normalizedBbox"},
+        "binding_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "data_base64": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 6990508,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "normalizedBbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {"type": "number", "minimum": 0, "maximum": 1, "multipleOf": 0.000001},
+        "y": {"type": "number", "minimum": 0, "maximum": 1, "multipleOf": 0.000001},
+        "width": {"type": "number", "exclusiveMinimum": 0, "maximum": 1, "multipleOf": 0.000001},
+        "height": {"type": "number", "exclusiveMinimum": 0, "maximum": 1, "multipleOf": 0.000001}
+      }
+    }
+  }
+}
