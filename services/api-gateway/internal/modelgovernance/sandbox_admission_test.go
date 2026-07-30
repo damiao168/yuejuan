@@ -96,6 +96,39 @@ func TestAssessSandboxAdmissionBlockersAreStableAndContainNoSecretFacts(t *testi
 	}
 }
 
+func TestAssessStoredSandboxAdmissionRequiresActiveBoundApproval(t *testing.T) {
+	provider, deployment, policy, secret, evidence, now := validSandboxAdmission()
+	approval := SandboxApproval{
+		ID:                    "approval-id",
+		TenantID:              provider.TenantID,
+		ProviderID:            provider.ID,
+		DeploymentID:          deployment.ID,
+		ProviderKey:           provider.Key,
+		DeploymentKey:         deployment.Key,
+		Protocol:              evidence.Protocol,
+		ApprovalReference:     evidence.ApprovalReference,
+		ApprovedRegion:        evidence.ApprovedRegion,
+		SandboxAccount:        evidence.SandboxAccount,
+		ContractReviewed:      evidence.ContractReviewed,
+		RetentionReviewed:     evidence.RetentionReviewed,
+		DataResidencyReviewed: evidence.DataResidencyReviewed,
+		PricingReviewed:       evidence.PricingReviewed,
+		SyntheticDataOnly:     evidence.SyntheticDataOnly,
+		ExpiresAt:             evidence.ExpiresAt,
+	}
+	decision := AssessStoredSandboxAdmission(
+		provider, deployment, policy, secret, approval, "text", now,
+	)
+	if !decision.Allowed {
+		t.Fatalf("active bound approval was rejected: %+v", decision)
+	}
+	approval.DeploymentID = "different-deployment"
+	decision = AssessStoredSandboxAdmission(
+		provider, deployment, policy, secret, approval, "text", now,
+	)
+	assertSandboxBlocker(t, decision, "sandbox_approval_record_invalid")
+}
+
 func validSandboxAdmission() (
 	Provider,
 	Deployment,
@@ -106,6 +139,7 @@ func validSandboxAdmission() (
 ) {
 	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 	provider := Provider{
+		ID:            "provider-id",
 		TenantID:      "tenant-1",
 		Key:           "dashscope-sandbox",
 		Kind:          ProviderExternal,
@@ -119,6 +153,7 @@ func validSandboxAdmission() (
 		Status: "active",
 	}
 	deployment := Deployment{
+		ID:                "deployment-id",
 		TenantID:          "tenant-1",
 		Key:               "qwen-synthetic-shadow",
 		ProviderKey:       provider.Key,

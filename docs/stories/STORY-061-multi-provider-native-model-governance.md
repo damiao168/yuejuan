@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress（2026-07-30：STORY-061A、061B0～061B0.3C、061B1A 沙箱准入门禁及 061B1B 原生 fixture 传输接缝已完成实现复审。仍未接入任何外部厂商，下一步 061B1C 真实沙箱联调必须取得账号与全部合规批准后再独立评审）
+In Progress（2026-07-30：STORY-061A、061B0～061B0.3C、061B1A 沙箱准入门禁、061B1B 原生 fixture 传输接缝及 061B1C1 持久化审批治理已完成实现复审。仍未接入任何外部厂商，下一步 061B1C2 真实沙箱激活与联调必须取得账号、有效审批和全部合规材料后再独立评审）
 
 ## First-principles decision
 
@@ -250,7 +250,8 @@ In Progress（2026-07-30：STORY-061A、061B0～061B0.3C、061B1A 沙箱准入�
 - **061B0.3C（已完成）**：建立不可达的 Go v2 请求构造器和 Python fixture-only application seam；首版使用内部请求内联的受限 Base64 PNG，实施独立 8 MiB 上限、图片内存清理、安全幂等摘要和单路推理并发，不建设反向取图令牌。
 - **061B1A（已完成）**：实现厂商沙箱准入门禁；只有原生协议、沙箱账号、合同/留存/区域/价格评审、强 Secret、预算、租户导出授权、合成数据限制和有界批准期全部成立时才允许继续。
 - **061B1B（已完成）**：建立无默认网络实现、未注册 Provider Adapter 的 DashScope 原生传输接缝，只接受精确 fixture transport，并验证固定原生路径、严格 JSON、大小、超时、重试、错误映射、禁止字段和安全日志。
-- **061B1C（待批准）**：候选为阿里云 DashScope 原生文本/多模态沙箱；只有取得真实沙箱账号及 061B1A 全部批准证据后，才允许注册影子 Adapter 并发送合成请求。
+- **061B1C1（已完成）**：将临时准入证据升级为租户隔离、部署绑定、最长 90 天、不可变且显式可撤销的审批记录；提供严格管理 API、RBAC、审计和 PostgreSQL 约束，记录中不保存 Secret，并让最终准入门禁消费已验证审批记录。
+- **061B1C2（待批准）**：候选为阿里云 DashScope 原生文本/多模态沙箱；只有取得真实沙箱账号、有效 061B1C1 审批记录及 061B1A 全部运行时证据后，才允许注册影子 Adapter 并发送合成请求。
 - **061B2（待选型）**：选择第二个持续维护的厂商原生协议；OpenAI-compatible 接口和处于迁移/停止演进状态的旧接口不作为补位方案。
 - 完成合规前置后，首批目标仍为两个文本厂商和一个多模态厂商的原生 Adapter。
 - 真实联调仅允许 `shadow_compare`，不改变教师成绩；先使用授权测试账号和合成数据，脱敏冻结集须另行批准。
@@ -374,4 +375,4 @@ In Progress（2026-07-30：STORY-061A、061B0～061B0.3C、061B1A 沙箱准入�
 
 计划评审通过，STORY-061 进入 In Progress。061A1、061A2 与 061A3 已于 2026-07-29 完成实现复审，证据见 [`STORY-061A1 实现复审`](../reviews/STORY-061A1-implementation-review-2026-07-29.md)、[`STORY-061A2 实现复审`](../reviews/STORY-061A2-implementation-review-2026-07-29.md) 和 [`STORY-061A3 实现复审`](../reviews/STORY-061A3-implementation-review-2026-07-29.md)。STORY-061A 至此完成。
 
-061B 独立计划评审只批准不联网的 061B0，证据见 [`STORY-061B 独立计划评审`](../reviews/STORY-061B-plan-review-2026-07-29.md)；061B0、061B0.1 与 061B0.2 已完成实现复审，证据见 [`STORY-061B0 实现复审`](../reviews/STORY-061B0-implementation-review-2026-07-29.md)、[`STORY-061B0.1 实现复审`](../reviews/STORY-061B0.1-implementation-review-2026-07-29.md) 和 [`STORY-061B0.2 实现复审`](../reviews/STORY-061B0.2-implementation-review-2026-07-29.md)。061B0.3 的独立计划评审见 [`STORY-061B0.3 内部图片契约计划评审`](../reviews/STORY-061B0.3-plan-review-2026-07-30.md)，061B0.3A 已完成实现复审，证据见 [`STORY-061B0.3A 实现复审`](../reviews/STORY-061B0.3A-implementation-review-2026-07-30.md)；061B0.3B 的计划与实现证据见 [`STORY-061B0.3B 计划评审`](../reviews/STORY-061B0.3B-plan-review-2026-07-30.md) 和 [`STORY-061B0.3B 实现复审`](../reviews/STORY-061B0.3B-implementation-review-2026-07-30.md)；061B0.3C 已完成实现复审，证据见 [`STORY-061B0.3C 实现复审`](../reviews/STORY-061B0.3C-implementation-review-2026-07-30.md)。061B0.3 至此完成。061B1A 沙箱准入门禁与 061B1B fixture 传输接缝已完成实现复审，证据见 [`STORY-061B1A 实现复审`](../reviews/STORY-061B1A-implementation-review-2026-07-30.md) 和 [`STORY-061B1B 实现复审`](../reviews/STORY-061B1B-implementation-review-2026-07-30.md)。任何真实厂商 API、影子流量或学生数据外发均继续禁止；061B1C 必须取得真实沙箱和全部合规证据后再独立批准。
+061B 独立计划评审只批准不联网的 061B0，证据见 [`STORY-061B 独立计划评审`](../reviews/STORY-061B-plan-review-2026-07-29.md)；061B0、061B0.1 与 061B0.2 已完成实现复审，证据见 [`STORY-061B0 实现复审`](../reviews/STORY-061B0-implementation-review-2026-07-29.md)、[`STORY-061B0.1 实现复审`](../reviews/STORY-061B0.1-implementation-review-2026-07-29.md) 和 [`STORY-061B0.2 实现复审`](../reviews/STORY-061B0.2-implementation-review-2026-07-29.md)。061B0.3 的独立计划评审见 [`STORY-061B0.3 内部图片契约计划评审`](../reviews/STORY-061B0.3-plan-review-2026-07-30.md)，061B0.3A 已完成实现复审，证据见 [`STORY-061B0.3A 实现复审`](../reviews/STORY-061B0.3A-implementation-review-2026-07-30.md)；061B0.3B 的计划与实现证据见 [`STORY-061B0.3B 计划评审`](../reviews/STORY-061B0.3B-plan-review-2026-07-30.md) 和 [`STORY-061B0.3B 实现复审`](../reviews/STORY-061B0.3B-implementation-review-2026-07-30.md)；061B0.3C 已完成实现复审，证据见 [`STORY-061B0.3C 实现复审`](../reviews/STORY-061B0.3C-implementation-review-2026-07-30.md)。061B0.3 至此完成。061B1A 沙箱准入门禁、061B1B fixture 传输接缝与 061B1C1 持久化审批治理已完成实现复审，证据见 [`STORY-061B1A 实现复审`](../reviews/STORY-061B1A-implementation-review-2026-07-30.md)、[`STORY-061B1B 实现复审`](../reviews/STORY-061B1B-implementation-review-2026-07-30.md) 和 [`STORY-061B1C1 实现复审`](../reviews/STORY-061B1C1-implementation-review-2026-07-30.md)。任何真实厂商 API、影子流量或学生数据外发均继续禁止；061B1C2 必须取得真实沙箱、有效审批记录和全部运行时证据后再独立批准。

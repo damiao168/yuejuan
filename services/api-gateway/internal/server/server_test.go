@@ -129,6 +129,15 @@ func TestModelGovernanceRoutesEnforceSeparateReadAndManagePermissions(t *testing
 		t.Fatalf("governed provider read returned %d: %s", listResponse.Code, listResponse.Body.String())
 	}
 
+	approvalListRequest := httptest.NewRequest(http.MethodGet, "/api/v1/model-sandbox-approvals", nil)
+	approvalListRequest.Header.Set("Authorization", "Bearer "+token)
+	approvalListResponse := httptest.NewRecorder()
+	router.ServeHTTP(approvalListResponse, approvalListRequest)
+	if approvalListResponse.Code != http.StatusOK {
+		t.Fatalf("model read permission did not allow sandbox approval history: %d %s",
+			approvalListResponse.Code, approvalListResponse.Body.String())
+	}
+
 	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/model-providers", strings.NewReader(`{}`))
 	createRequest.Header.Set("Authorization", "Bearer "+token)
 	createRequest.Header.Set("Content-Type", "application/json")
@@ -136,6 +145,16 @@ func TestModelGovernanceRoutesEnforceSeparateReadAndManagePermissions(t *testing
 	router.ServeHTTP(createResponse, createRequest)
 	if createResponse.Code != http.StatusForbidden {
 		t.Fatalf("model read permission unexpectedly allowed provider management: %d %s", createResponse.Code, createResponse.Body.String())
+	}
+
+	approvalCreateRequest := httptest.NewRequest(http.MethodPost, "/api/v1/model-sandbox-approvals", strings.NewReader(`{}`))
+	approvalCreateRequest.Header.Set("Authorization", "Bearer "+token)
+	approvalCreateRequest.Header.Set("Content-Type", "application/json")
+	approvalCreateResponse := httptest.NewRecorder()
+	router.ServeHTTP(approvalCreateResponse, approvalCreateRequest)
+	if approvalCreateResponse.Code != http.StatusForbidden {
+		t.Fatalf("model read permission unexpectedly allowed sandbox approval management: %d %s",
+			approvalCreateResponse.Code, approvalCreateResponse.Body.String())
 	}
 
 	policyRequest := httptest.NewRequest(http.MethodPut, "/api/v1/model-policy", strings.NewReader(`{

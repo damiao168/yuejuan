@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/modelgovernance"
 
@@ -274,6 +275,105 @@ SELECT
 		t.Fatalf("stale policy version was not rejected: %v", err)
 	}
 
+	dashscopeProvider, err := governanceStore.CreateProvider(ctx, tenantID, "", modelgovernance.ProviderInput{
+		Key:           "dashscope-sandbox-" + uuid.NewString(),
+		DisplayName:   "DashScope synthetic sandbox",
+		Kind:          modelgovernance.ProviderExternal,
+		AdapterType:   modelgovernance.SandboxProtocolDashScopeNative,
+		CredentialRef: "vault://edugrade/dashscope-sandbox",
+		Region:        "cn-beijing",
+		DataPolicy:    modelgovernance.DataPolicy{RetentionMode: "no_store"},
+		Status:        "unverified",
+	})
+	if err != nil {
+		t.Fatalf("create DashScope sandbox provider: %v", err)
+	}
+	dashscopeDeployment, err := governanceStore.CreateDeployment(ctx, tenantID, "", modelgovernance.DeploymentInput{
+		ProviderID:        dashscopeProvider.ID,
+		Key:               "qwen-synthetic-" + uuid.NewString(),
+		ModelName:         "Qwen synthetic sandbox",
+		ModelVersion:      "pinned-synthetic-version",
+		Region:            dashscopeProvider.Region,
+		CapabilityProfile: "synthetic-text-v1",
+		Modalities:        []string{"text", "image"},
+		PricingPolicy:     map[string]any{"meter": "token"},
+		Status:            "unverified",
+		HealthState:       "unverified",
+	})
+	if err != nil {
+		t.Fatalf("create DashScope sandbox deployment: %v", err)
+	}
+	approvalNow := time.Now().UTC()
+	approvalInput := modelgovernance.SandboxApprovalInput{
+		ProviderID:            dashscopeProvider.ID,
+		DeploymentID:          dashscopeDeployment.ID,
+		Protocol:              modelgovernance.SandboxProtocolDashScopeNative,
+		ApprovalReference:     "approval-" + uuid.NewString(),
+		ApprovedRegion:        dashscopeProvider.Region,
+		SandboxAccount:        true,
+		ContractReviewed:      true,
+		RetentionReviewed:     true,
+		DataResidencyReviewed: true,
+		PricingReviewed:       true,
+		SyntheticDataOnly:     true,
+		ImageExportReviewed:   false,
+		ExpiresAt:             approvalNow.Add(30 * 24 * time.Hour),
+		Reason:                "approve bounded synthetic sandbox preparation",
+	}
+	approval, err := governanceStore.CreateSandboxApproval(ctx, tenantID, "", approvalInput)
+	if err != nil {
+		t.Fatalf("create persisted sandbox approval: %v", err)
+	}
+	if approval.ProviderKey != dashscopeProvider.Key ||
+		approval.DeploymentKey != dashscopeDeployment.Key ||
+		!approval.IsActive(approvalNow) {
+		t.Fatalf("sandbox approval was not bound to governed inventory: %#v", approval)
+	}
+	approvals, err := governanceStore.ListSandboxApprovals(ctx, tenantID)
+	if err != nil || len(approvals) != 1 || approvals[0].ID != approval.ID {
+		t.Fatalf("unexpected sandbox approval history: %#v %v", approvals, err)
+	}
+	if _, err := governanceStore.CreateSandboxApproval(ctx, tenantID, "", approvalInput); !errors.Is(err, modelgovernance.ErrConflict) {
+		t.Fatalf("duplicate active sandbox approval was not rejected: %v", err)
+	}
+	revokedApproval, err := governanceStore.RevokeSandboxApproval(
+		ctx, tenantID, "", approval.ID, "synthetic sandbox approval withdrawn",
+	)
+	if err != nil || revokedApproval.RevokedAt == nil {
+		t.Fatalf("revoke sandbox approval: %#v %v", revokedApproval, err)
+	}
+	if _, err := governanceStore.RevokeSandboxApproval(
+		ctx, tenantID, "", approval.ID, "duplicate revoke",
+	); !errors.Is(err, modelgovernance.ErrConflict) {
+		t.Fatalf("duplicate sandbox approval revocation was not rejected: %v", err)
+	}
+	approvalInput.ApprovalReference = "approval-" + uuid.NewString()
+	replacementApproval, err := governanceStore.CreateSandboxApproval(ctx, tenantID, "", approvalInput)
+	if err != nil {
+		t.Fatalf("replacement approval after explicit revocation failed: %v", err)
+	}
+	if _, err := governanceStore.RevokeSandboxApproval(
+		ctx, tenantID, "", replacementApproval.ID, "release deployment for constraint verification",
+	); err != nil {
+		t.Fatalf("revoke replacement sandbox approval: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO model_sandbox_approval (
+  tenant_id, provider_id, deployment_id, protocol,
+  approval_reference, approved_region, sandbox_account,
+  contract_reviewed, retention_reviewed, data_residency_reviewed,
+  pricing_reviewed, synthetic_data_only, expires_at
+)
+VALUES (
+  $1, $2, $3, 'dashscope_native',
+  $4, 'cn-beijing', TRUE,
+  FALSE, TRUE, TRUE,
+  TRUE, TRUE, now() + INTERVAL '1 day'
+)
+`, tenantID, dashscopeProvider.ID, dashscopeDeployment.ID, "invalid-"+uuid.NewString()); err == nil {
+		t.Fatal("database accepted incomplete sandbox approval facts")
+	}
+
 	newTenantID := uuid.NewString()
 	if _, err := db.ExecContext(ctx, `
 INSERT INTO tenant (id, tenant_id, name, code, status, settings)
@@ -292,6 +392,9 @@ WHERE tenant_id = $1 AND policy_key = 'default'
 	}
 	if triggeredMode != "local_only" || triggeredExternal {
 		t.Fatalf("new tenant did not fail closed: mode=%s external=%v", triggeredMode, triggeredExternal)
+	}
+	if _, err := governanceStore.CreateSandboxApproval(ctx, newTenantID, "", approvalInput); !errors.Is(err, modelgovernance.ErrNotFound) {
+		t.Fatalf("cross-tenant sandbox approval did not fail closed: %v", err)
 	}
 
 	var demoUserID string

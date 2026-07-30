@@ -16,6 +16,7 @@ type MemoryStore struct {
 	providers   map[string]Provider
 	deployments map[string]Deployment
 	policies    map[string]TenantPolicy
+	approvals   map[string]SandboxApproval
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -23,6 +24,7 @@ func NewMemoryStore() *MemoryStore {
 		providers:   map[string]Provider{},
 		deployments: map[string]Deployment{},
 		policies:    map[string]TenantPolicy{},
+		approvals:   map[string]SandboxApproval{},
 	}
 }
 
@@ -294,6 +296,105 @@ func (s *MemoryStore) UpdatePolicy(_ context.Context, tenantID string, _ string,
 	policy.UpdatedAt = time.Now().UTC()
 	s.policies[tenantID] = policy
 	return policy, nil
+}
+
+func (s *MemoryStore) ListSandboxApprovals(_ context.Context, tenantID string) ([]SandboxApproval, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []SandboxApproval{}
+	for _, item := range s.approvals {
+		if item.TenantID == tenantID {
+			out = append(out, item)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (s *MemoryStore) CreateSandboxApproval(
+	_ context.Context,
+	tenantID string,
+	_ string,
+	input SandboxApprovalInput,
+) (SandboxApproval, error) {
+	now := time.Now().UTC()
+	if ValidateSandboxApprovalInput(input, now) != nil {
+		return SandboxApproval{}, ErrInvalidApproval
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	provider, ok := s.providers[input.ProviderID]
+	if !ok || provider.TenantID != tenantID ||
+		provider.Kind != ProviderExternal ||
+		provider.AdapterType != SandboxProtocolDashScopeNative {
+		return SandboxApproval{}, ErrNotFound
+	}
+	deployment, ok := s.deployments[input.DeploymentID]
+	if !ok || deployment.TenantID != tenantID ||
+		deployment.ProviderID != provider.ID ||
+		deployment.Region != input.ApprovedRegion ||
+		provider.Region != input.ApprovedRegion {
+		return SandboxApproval{}, ErrNotFound
+	}
+	for _, item := range s.approvals {
+		if item.TenantID == tenantID &&
+			item.DeploymentID == deployment.ID &&
+			item.RevokedAt == nil {
+			return SandboxApproval{}, ErrConflict
+		}
+	}
+	item := SandboxApproval{
+		ID:                    uuid.NewString(),
+		TenantID:              tenantID,
+		ProviderID:            provider.ID,
+		DeploymentID:          deployment.ID,
+		ProviderKey:           provider.Key,
+		DeploymentKey:         deployment.Key,
+		Protocol:              input.Protocol,
+		ApprovalReference:     strings.TrimSpace(input.ApprovalReference),
+		ApprovedRegion:        strings.TrimSpace(input.ApprovedRegion),
+		SandboxAccount:        input.SandboxAccount,
+		ContractReviewed:      input.ContractReviewed,
+		RetentionReviewed:     input.RetentionReviewed,
+		DataResidencyReviewed: input.DataResidencyReviewed,
+		PricingReviewed:       input.PricingReviewed,
+		SyntheticDataOnly:     input.SyntheticDataOnly,
+		ImageExportReviewed:   input.ImageExportReviewed,
+		ExpiresAt:             input.ExpiresAt.UTC(),
+		CreatedAt:             now,
+	}
+	s.approvals[item.ID] = item
+	return item, nil
+}
+
+func (s *MemoryStore) RevokeSandboxApproval(
+	_ context.Context,
+	tenantID string,
+	_ string,
+	id string,
+	reason string,
+) (SandboxApproval, error) {
+	if strings.TrimSpace(reason) == "" {
+		return SandboxApproval{}, ErrInvalidApproval
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.approvals[id]
+	if !ok || item.TenantID != tenantID {
+		return SandboxApproval{}, ErrNotFound
+	}
+	if item.RevokedAt != nil {
+		return SandboxApproval{}, ErrConflict
+	}
+	now := time.Now().UTC()
+	item.RevokedAt = &now
+	s.approvals[id] = item
+	return item, nil
 }
 
 func sanitizeProvider(provider Provider) Provider {

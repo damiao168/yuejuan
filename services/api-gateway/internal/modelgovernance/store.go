@@ -13,6 +13,9 @@ type Store interface {
 	UpdateDeploymentState(ctx context.Context, tenantID string, id string, input DeploymentStateInput) (Deployment, error)
 	GetPolicy(ctx context.Context, tenantID string) (TenantPolicy, error)
 	UpdatePolicy(ctx context.Context, tenantID string, actorID string, input PolicyUpdateInput) (TenantPolicy, error)
+	ListSandboxApprovals(ctx context.Context, tenantID string) ([]SandboxApproval, error)
+	CreateSandboxApproval(ctx context.Context, tenantID string, actorID string, input SandboxApprovalInput) (SandboxApproval, error)
+	RevokeSandboxApproval(ctx context.Context, tenantID string, actorID string, id string, reason string) (SandboxApproval, error)
 }
 
 func ProviderFromInput(input ProviderInput) Provider {

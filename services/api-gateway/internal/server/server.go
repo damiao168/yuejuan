@@ -382,6 +382,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/model-policy", requireModelRead(modelGovernanceHandler.GetPolicy))
 	mux.Handle("PUT /api/v1/model-policy", requireModelPolicyManage(modelGovernanceHandler.UpdatePolicy))
 	mux.Handle("POST /api/v1/model-secrets/probe", requireModelProviderManage(modelGovernanceHandler.ProbeSecret))
+	mux.Handle("GET /api/v1/model-sandbox-approvals", requireModelRead(modelGovernanceHandler.ListSandboxApprovals))
+	mux.Handle("POST /api/v1/model-sandbox-approvals", requireModelProviderManage(modelGovernanceHandler.CreateSandboxApproval))
+	mux.Handle("POST /api/v1/model-sandbox-approvals/{id}/revoke", requireModelProviderManage(modelGovernanceHandler.RevokeSandboxApproval))
 
 	mux.Handle("POST /api/v1/tenants", requireTenantManage(orgHandler.CreateTenant))
 	mux.Handle("GET /api/v1/tenants", requireAuth(http.HandlerFunc(orgHandler.ListTenants)))

@@ -30,6 +30,37 @@ type SandboxAdmissionDecision struct {
 	Blockers []string `json:"blockers"`
 }
 
+func AssessStoredSandboxAdmission(
+	provider Provider,
+	deployment Deployment,
+	policy TenantPolicy,
+	secret SecretProbe,
+	approval SandboxApproval,
+	modality string,
+	now time.Time,
+) SandboxAdmissionDecision {
+	decision := AssessSandboxAdmission(
+		provider, deployment, policy, secret, approval.Evidence(), modality, now,
+	)
+	validBinding := approval.TenantID != "" &&
+		approval.TenantID == provider.TenantID &&
+		approval.TenantID == deployment.TenantID &&
+		approval.ProviderID == provider.ID &&
+		approval.DeploymentID == deployment.ID &&
+		approval.ProviderKey == provider.Key &&
+		approval.DeploymentKey == deployment.Key &&
+		approval.IsActive(now)
+	if validBinding {
+		return decision
+	}
+	if !contains(decision.Blockers, "sandbox_approval_record_invalid") {
+		decision.Blockers = append(decision.Blockers, "sandbox_approval_record_invalid")
+		sort.Strings(decision.Blockers)
+	}
+	decision.Allowed = false
+	return decision
+}
+
 // AssessSandboxAdmission is the final offline gate before a future native
 // provider sandbox invocation. It does not resolve credentials or perform I/O.
 func AssessSandboxAdmission(
