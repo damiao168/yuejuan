@@ -1,6 +1,5 @@
 import base64
 import binascii
-import copy
 import hashlib
 import math
 import re
@@ -213,8 +212,10 @@ def validate_request_v2(payload):
         if not isinstance(payload[field], str) or not _INTERNAL_ID.fullmatch(payload[field]):
             _fail(f"{field} must be a bounded internal identifier", request_id)
 
-    inherited = copy.deepcopy(payload)
-    inherited.pop("media_evidence")
+    # Reuse the already-parsed values without duplicating the bounded Base64
+    # string. The v1 validator is read-only, so a shallow inherited envelope is
+    # sufficient and keeps peak memory predictable for the future v2 seam.
+    inherited = {key: value for key, value in payload.items() if key != "media_evidence"}
     inherited["schema_version"] = "grading-agent-v1"
     validate_request(inherited)
     validate_media_evidence(payload["media_evidence"], payload)
