@@ -1493,6 +1493,59 @@ body {
 .model-evaluation-run strong { color: var(--text); }
 .model-evaluation-run small { margin-top: 2px; color: var(--text-muted); font-size: 12px; }
 
+.model-evaluation-selected-row > td { background: #f0f6ff !important; }
+.model-evaluation-selected-row:hover > td { background: #eaf3ff !important; }
+
+.model-evaluation-detail {
+  margin: 0 20px 20px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fbfcfe;
+}
+
+.model-evaluation-detail > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 24px 26px 18px;
+}
+
+.model-evaluation-detail > header h2 { margin: 5px 0 3px; color: var(--text); font-size: 21px; }
+.model-evaluation-detail > header p { margin: 0; color: var(--text-muted); }
+.model-evaluation-detail > header p span { margin-left: 12px; }
+
+.model-evaluation-detail-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #175bb8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.model-evaluation-evidence { padding: 0 26px 18px; }
+.model-evaluation-evidence .ant-alert-description { overflow-wrap: anywhere; }
+.model-evaluation-candidate-table { padding: 0 12px; }
+.model-evaluation-candidate-table .ant-table { background: transparent; }
+.model-evaluation-candidate-table .ant-table-thead > tr > th { color: var(--text-muted); background: #f4f6f8; font-size: 12px; }
+.model-evaluation-best { color: #176b43; font-weight: 700; }
+.model-evaluation-risk { color: #b42318; font-weight: 700; }
+
+.model-evaluation-detail > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 26px 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-evaluation-detail > footer span { display: inline-flex; align-items: center; gap: 7px; }
+.model-evaluation-legend-best { width: 8px; height: 8px; border-radius: 50%; background: #176b43; }
+
 .model-governance-identity {
   display: flex;
   min-width: 0;
@@ -1618,6 +1671,11 @@ body {
   .model-evaluation-filterbar .ant-space,
   .model-evaluation-filterbar .ant-select { width: 100%; }
   .model-evaluation-count { align-items: flex-start; flex-direction: column; padding-inline: 12px; }
+  .model-evaluation-detail { margin-inline: 12px; }
+  .model-evaluation-detail > header { padding: 20px 18px 14px; }
+  .model-evaluation-detail > header p span { display: block; margin: 3px 0 0; }
+  .model-evaluation-evidence { padding: 0 18px 14px; }
+  .model-evaluation-detail > footer { align-items: flex-start; flex-direction: column; padding-inline: 18px; }
   .model-policy-primary { padding: 28px 22px; }
   .model-policy-inspector { padding: 20px 22px; }
   .model-governance-form-row,
