@@ -96,6 +96,10 @@ func (s *MemoryStore) GetEvidence(context.Context, string, string) (SegmentEvide
 	return SegmentEvidence{}, ErrNotFound
 }
 
+func (s *MemoryStore) GetEvidenceForQuestion(context.Context, string, string, string) (SegmentEvidence, error) {
+	return SegmentEvidence{}, ErrNotFound
+}
+
 func (s *MemoryStore) findExistingLocked(tenantID string, submissionID string, questionID string) (Segment, bool) {
 	for _, item := range s.segments {
 		if item.TenantID == tenantID && item.SubmissionID == submissionID && item.QuestionID == questionID {
