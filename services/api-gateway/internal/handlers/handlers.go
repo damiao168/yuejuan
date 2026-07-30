@@ -268,6 +268,7 @@ func (h *Handlers) SystemInfo(w http.ResponseWriter, _ *http.Request) {
 			"model_governance_api",
 			"model_secret_reference_probe",
 			"local_model_baseline_registry",
+			"offline_model_evaluation",
 			"rule_based_evidence_verification",
 			"evidence_agent_job_recording",
 			"evidence_failure_review_trigger",

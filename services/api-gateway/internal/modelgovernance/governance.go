@@ -29,6 +29,7 @@ var (
 	ErrConflict          = errors.New("model governance resource conflict")
 	ErrProductionUnsafe  = errors.New("model governance production configuration is unsafe")
 	ErrInvalidApproval   = errors.New("invalid model sandbox approval")
+	ErrInvalidEvaluation = errors.New("invalid model evaluation")
 
 	governanceKey = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 )

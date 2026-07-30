@@ -16,6 +16,11 @@ type Store interface {
 	ListSandboxApprovals(ctx context.Context, tenantID string) ([]SandboxApproval, error)
 	CreateSandboxApproval(ctx context.Context, tenantID string, actorID string, input SandboxApprovalInput) (SandboxApproval, error)
 	RevokeSandboxApproval(ctx context.Context, tenantID string, actorID string, id string, reason string) (SandboxApproval, error)
+	ListEvaluationRuns(ctx context.Context, tenantID string) ([]EvaluationRun, error)
+	CreateEvaluationRun(ctx context.Context, tenantID string, actorID string, input EvaluationRunInput) (EvaluationRun, error)
+	AddEvaluationCandidate(ctx context.Context, tenantID string, actorID string, runID string, input EvaluationCandidateInput) (EvaluationCandidate, error)
+	CompleteEvaluationRun(ctx context.Context, tenantID string, actorID string, runID string, reason string) (EvaluationRun, error)
+	InvalidateEvaluationRun(ctx context.Context, tenantID string, actorID string, runID string, reason string) (EvaluationRun, error)
 }
 
 func ProviderFromInput(input ProviderInput) Provider {

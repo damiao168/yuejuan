@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress（2026-07-30：STORY-061A、061B0～061B0.3C、061B1A 沙箱准入门禁、061B1B 原生 fixture 传输接缝及 061B1C1 持久化审批治理已完成实现复审。仍未接入任何外部厂商，下一步 061B1C2 真实沙箱激活与联调必须取得账号、有效审批和全部合规材料后再独立评审）
+In Progress（2026-07-30：STORY-061A、061B0～061B0.3C、061B1A 沙箱准入门禁、061B1B 原生 fixture 传输接缝、061B1C1 持久化审批治理及 061C1 离线评测证据后台已完成实现复审。仍未接入任何外部厂商；下一步优先建设 061C2 可见评测中心，061B1C2 真实沙箱联调继续等待账号、有效审批和全部合规材料）
 
 ## First-principles decision
 
@@ -258,9 +258,10 @@ In Progress（2026-07-30：STORY-061A、061B0～061B0.3C、061B1A 沙箱准入�
 
 ### STORY-061C：评测与批准
 
-- 多模型并排评测、稳定性/严重错误/证据/公平性切片。
-- 题型级 promotion、revocation 和版本过期。
-- 教师反馈和模型建议可查询关联。
+- **061C1（已完成）**：建立租户隔离、不可变的离线评测批次与候选证据后台；区分协议 fixture 和授权冻结集，计算教师接受率、严重错误率、证据有效率、稳定性、P95 时延和平均成本。完成至少需要两个候选并包含本地基线；本切片不 promotion、不改变路由。
+- **061C2（下一步）**：建设可见评测中心表格与详情页，在同一冻结集上并排展示候选、证据类别、指标和失效状态；不提供 promotion 按钮。
+- **061C3（待独立评审）**：题型级 promotion、revocation 和版本过期；只有授权冻结集证据可以进入批准评审。
+- **061C4（待独立评审）**：教师反馈和模型建议可查询关联、公平性切片及教研仲裁。
 
 ### STORY-061D：策略、成本与可靠性
 
@@ -376,3 +377,5 @@ In Progress（2026-07-30：STORY-061A、061B0～061B0.3C、061B1A 沙箱准入�
 计划评审通过，STORY-061 进入 In Progress。061A1、061A2 与 061A3 已于 2026-07-29 完成实现复审，证据见 [`STORY-061A1 实现复审`](../reviews/STORY-061A1-implementation-review-2026-07-29.md)、[`STORY-061A2 实现复审`](../reviews/STORY-061A2-implementation-review-2026-07-29.md) 和 [`STORY-061A3 实现复审`](../reviews/STORY-061A3-implementation-review-2026-07-29.md)。STORY-061A 至此完成。
 
 061B 独立计划评审只批准不联网的 061B0，证据见 [`STORY-061B 独立计划评审`](../reviews/STORY-061B-plan-review-2026-07-29.md)；061B0、061B0.1 与 061B0.2 已完成实现复审，证据见 [`STORY-061B0 实现复审`](../reviews/STORY-061B0-implementation-review-2026-07-29.md)、[`STORY-061B0.1 实现复审`](../reviews/STORY-061B0.1-implementation-review-2026-07-29.md) 和 [`STORY-061B0.2 实现复审`](../reviews/STORY-061B0.2-implementation-review-2026-07-29.md)。061B0.3 的独立计划评审见 [`STORY-061B0.3 内部图片契约计划评审`](../reviews/STORY-061B0.3-plan-review-2026-07-30.md)，061B0.3A 已完成实现复审，证据见 [`STORY-061B0.3A 实现复审`](../reviews/STORY-061B0.3A-implementation-review-2026-07-30.md)；061B0.3B 的计划与实现证据见 [`STORY-061B0.3B 计划评审`](../reviews/STORY-061B0.3B-plan-review-2026-07-30.md) 和 [`STORY-061B0.3B 实现复审`](../reviews/STORY-061B0.3B-implementation-review-2026-07-30.md)；061B0.3C 已完成实现复审，证据见 [`STORY-061B0.3C 实现复审`](../reviews/STORY-061B0.3C-implementation-review-2026-07-30.md)。061B0.3 至此完成。061B1A 沙箱准入门禁、061B1B fixture 传输接缝与 061B1C1 持久化审批治理已完成实现复审，证据见 [`STORY-061B1A 实现复审`](../reviews/STORY-061B1A-implementation-review-2026-07-30.md)、[`STORY-061B1B 实现复审`](../reviews/STORY-061B1B-implementation-review-2026-07-30.md) 和 [`STORY-061B1C1 实现复审`](../reviews/STORY-061B1C1-implementation-review-2026-07-30.md)。任何真实厂商 API、影子流量或学生数据外发均继续禁止；061B1C2 必须取得真实沙箱、有效审批记录和全部运行时证据后再独立批准。
+
+061C1 已完成独立计划与实现复审，证据见 [`STORY-061C1 计划评审`](../reviews/STORY-061C1-plan-review-2026-07-30.md) 和 [`STORY-061C1 实现复审`](../reviews/STORY-061C1-implementation-review-2026-07-30.md)。该切片只建立离线评测证据后台；协议 fixture 不能冒充质量证据，评测完成不会改变部署、路由或成绩。下一步优先进入 061C2 可见评测中心，promotion 继续留待 061C3 独立评审。

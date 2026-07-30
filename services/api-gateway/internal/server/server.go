@@ -342,6 +342,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	requireModelPolicyManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("model:policy:manage")(handler))
 	}
+	requireModelEvaluationManage := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequirePermission("model:evaluation:manage")(handler))
+	}
 	requireOCRAvailabilityRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequireAnyPermission(
 			"review:work",
@@ -385,6 +388,11 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/model-sandbox-approvals", requireModelRead(modelGovernanceHandler.ListSandboxApprovals))
 	mux.Handle("POST /api/v1/model-sandbox-approvals", requireModelProviderManage(modelGovernanceHandler.CreateSandboxApproval))
 	mux.Handle("POST /api/v1/model-sandbox-approvals/{id}/revoke", requireModelProviderManage(modelGovernanceHandler.RevokeSandboxApproval))
+	mux.Handle("GET /api/v1/model-evaluation-runs", requireModelRead(modelGovernanceHandler.ListEvaluationRuns))
+	mux.Handle("POST /api/v1/model-evaluation-runs", requireModelEvaluationManage(modelGovernanceHandler.CreateEvaluationRun))
+	mux.Handle("POST /api/v1/model-evaluation-runs/{id}/candidates", requireModelEvaluationManage(modelGovernanceHandler.AddEvaluationCandidate))
+	mux.Handle("POST /api/v1/model-evaluation-runs/{id}/complete", requireModelEvaluationManage(modelGovernanceHandler.CompleteEvaluationRun))
+	mux.Handle("POST /api/v1/model-evaluation-runs/{id}/invalidate", requireModelEvaluationManage(modelGovernanceHandler.InvalidateEvaluationRun))
 
 	mux.Handle("POST /api/v1/tenants", requireTenantManage(orgHandler.CreateTenant))
 	mux.Handle("GET /api/v1/tenants", requireAuth(http.HandlerFunc(orgHandler.ListTenants)))

@@ -138,6 +138,15 @@ func TestModelGovernanceRoutesEnforceSeparateReadAndManagePermissions(t *testing
 			approvalListResponse.Code, approvalListResponse.Body.String())
 	}
 
+	evaluationListRequest := httptest.NewRequest(http.MethodGet, "/api/v1/model-evaluation-runs", nil)
+	evaluationListRequest.Header.Set("Authorization", "Bearer "+token)
+	evaluationListResponse := httptest.NewRecorder()
+	router.ServeHTTP(evaluationListResponse, evaluationListRequest)
+	if evaluationListResponse.Code != http.StatusOK {
+		t.Fatalf("model read permission did not allow evaluation history: %d %s",
+			evaluationListResponse.Code, evaluationListResponse.Body.String())
+	}
+
 	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/model-providers", strings.NewReader(`{}`))
 	createRequest.Header.Set("Authorization", "Bearer "+token)
 	createRequest.Header.Set("Content-Type", "application/json")
@@ -155,6 +164,16 @@ func TestModelGovernanceRoutesEnforceSeparateReadAndManagePermissions(t *testing
 	if approvalCreateResponse.Code != http.StatusForbidden {
 		t.Fatalf("model read permission unexpectedly allowed sandbox approval management: %d %s",
 			approvalCreateResponse.Code, approvalCreateResponse.Body.String())
+	}
+
+	evaluationCreateRequest := httptest.NewRequest(http.MethodPost, "/api/v1/model-evaluation-runs", strings.NewReader(`{}`))
+	evaluationCreateRequest.Header.Set("Authorization", "Bearer "+token)
+	evaluationCreateRequest.Header.Set("Content-Type", "application/json")
+	evaluationCreateResponse := httptest.NewRecorder()
+	router.ServeHTTP(evaluationCreateResponse, evaluationCreateRequest)
+	if evaluationCreateResponse.Code != http.StatusForbidden {
+		t.Fatalf("policy management permission unexpectedly allowed model evaluation management: %d %s",
+			evaluationCreateResponse.Code, evaluationCreateResponse.Body.String())
 	}
 
 	policyRequest := httptest.NewRequest(http.MethodPut, "/api/v1/model-policy", strings.NewReader(`{
@@ -176,6 +195,29 @@ func TestModelGovernanceRoutesEnforceSeparateReadAndManagePermissions(t *testing
 	router.ServeHTTP(policyResponse, policyRequest)
 	if policyResponse.Code != http.StatusOK || !strings.Contains(policyResponse.Body.String(), `"version":2`) {
 		t.Fatalf("model policy permission returned %d: %s", policyResponse.Code, policyResponse.Body.String())
+	}
+}
+
+func TestModelEvaluationManagePermissionAllowsMutationRoute(t *testing.T) {
+	authStore := testAuthStoreWithPermissions(t, []string{"model:evaluation:manage"})
+	router := NewRouter(
+		testConfig(),
+		logger.New(io.Discard, "error"),
+		nil,
+		authStore,
+		org.NewMemoryStore(),
+		exam.NewMemoryStore(),
+		paper.NewMemoryStore(),
+	)
+	token := serverLogin(t, router)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/model-evaluation-runs", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("evaluation management permission did not reach strict request validation: %d %s",
+			response.Code, response.Body.String())
 	}
 }
 
@@ -219,7 +261,7 @@ func TestSystemInfo(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, capability := range []string{"exam_management", "paper_metadata", "question_config", "rubric_versioning", "paper_config_validation", "file_upload", "object_storage", "private_file_download", "submission_collection", "submission_pages", "submission_quality_gate", "ocr_task_management", "ocr_result_ingestion", "answer_segmentation_metadata", "answer_segment_manual_review", "agent_orchestration_control_plane", "agent_task_management", "agent_task_retry", "agent_human_review_trigger", "answer_segment_answer_capture", "rule_based_objective_grading", "ai_grade_recording", "grading_low_confidence_review_trigger", "subjective_ai_grading_interface", "mock_llm_grading_adapter", "subjective_ai_grade_failure_recording", "model_governance_api", "model_secret_reference_probe", "local_model_baseline_registry", "rule_based_evidence_verification", "evidence_agent_job_recording", "evidence_failure_review_trigger", "human_review_task_management", "human_grade_recording", "review_assignment_workflow", "double_mark_policy_config", "double_mark_review_sessions", "arbitration_task_management", "final_grade_recording", "submission_grade_aggregation", "grade_confirmation_workflow", "grade_publish_quality_gate", "published_student_grade_lookup", "grade_csv_export_with_watermark", "student_appeal_submission", "appeal_review_workflow", "score_adjustment_audit_trail", "appeal_statistics", "student_learning_report", "exam_report_overview", "class_learning_report", "question_item_analysis", "grading_quality_report", "report_csv_export"} {
+	for _, capability := range []string{"exam_management", "paper_metadata", "question_config", "rubric_versioning", "paper_config_validation", "file_upload", "object_storage", "private_file_download", "submission_collection", "submission_pages", "submission_quality_gate", "ocr_task_management", "ocr_result_ingestion", "answer_segmentation_metadata", "answer_segment_manual_review", "agent_orchestration_control_plane", "agent_task_management", "agent_task_retry", "agent_human_review_trigger", "answer_segment_answer_capture", "rule_based_objective_grading", "ai_grade_recording", "grading_low_confidence_review_trigger", "subjective_ai_grading_interface", "mock_llm_grading_adapter", "subjective_ai_grade_failure_recording", "model_governance_api", "model_secret_reference_probe", "local_model_baseline_registry", "offline_model_evaluation", "rule_based_evidence_verification", "evidence_agent_job_recording", "evidence_failure_review_trigger", "human_review_task_management", "human_grade_recording", "review_assignment_workflow", "double_mark_policy_config", "double_mark_review_sessions", "arbitration_task_management", "final_grade_recording", "submission_grade_aggregation", "grade_confirmation_workflow", "grade_publish_quality_gate", "published_student_grade_lookup", "grade_csv_export_with_watermark", "student_appeal_submission", "appeal_review_workflow", "score_adjustment_audit_trail", "appeal_statistics", "student_learning_report", "exam_report_overview", "class_learning_report", "question_item_analysis", "grading_quality_report", "report_csv_export"} {
 		if !strings.Contains(body, `"`+capability+`"`) {
 			t.Fatalf("system info must disclose %s capability: %s", capability, body)
 		}

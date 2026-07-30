@@ -152,7 +152,7 @@ VALUES (
 		t.Fatal("idempotent replay created a duplicate billable call fact")
 	}
 
-	var platformProviderManage, demoPolicyManage bool
+	var platformProviderManage, demoPolicyManage, demoEvaluationManage bool
 	if err := db.QueryRowContext(ctx, `
 SELECT
   EXISTS (
@@ -174,12 +174,25 @@ SELECT
     WHERE tenant.code = 'demo' AND role.code = 'tenant_admin'
       AND permission.code = 'model:policy:manage'
       AND role.deleted_at IS NULL AND role_permission.deleted_at IS NULL AND permission.deleted_at IS NULL
+  ),
+  EXISTS (
+    SELECT 1
+    FROM role
+    JOIN role_permission ON role_permission.tenant_id = role.tenant_id AND role_permission.role_id = role.id
+    JOIN permission ON permission.tenant_id = role_permission.tenant_id AND permission.id = role_permission.permission_id
+    JOIN tenant ON tenant.id = role.tenant_id
+    WHERE tenant.code = 'demo' AND role.code = 'tenant_admin'
+      AND permission.code = 'model:evaluation:manage'
+      AND role.deleted_at IS NULL AND role_permission.deleted_at IS NULL AND permission.deleted_at IS NULL
   )
-`).Scan(&platformProviderManage, &demoPolicyManage); err != nil {
+`).Scan(&platformProviderManage, &demoPolicyManage, &demoEvaluationManage); err != nil {
 		t.Fatalf("read STORY-061 governance RBAC: %v", err)
 	}
-	if !platformProviderManage || !demoPolicyManage {
-		t.Fatalf("governance RBAC was not assigned: platform_provider=%v demo_policy=%v", platformProviderManage, demoPolicyManage)
+	if !platformProviderManage || !demoPolicyManage || !demoEvaluationManage {
+		t.Fatalf(
+			"governance RBAC was not assigned: platform_provider=%v demo_policy=%v demo_evaluation=%v",
+			platformProviderManage, demoPolicyManage, demoEvaluationManage,
+		)
 	}
 
 	governanceStore := modelgovernance.NewPostgresStore(db)
@@ -273,6 +286,131 @@ SELECT
 		Reason:             "stale update must fail",
 	}); !errors.Is(err, modelgovernance.ErrConflict) {
 		t.Fatalf("stale policy version was not rejected: %v", err)
+	}
+
+	deployments, err := governanceStore.ListDeployments(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("list deployments for offline evaluation: %v", err)
+	}
+	var localDeployment modelgovernance.Deployment
+	for _, deployment := range deployments {
+		if deployment.Key == baseline.DeploymentKey {
+			localDeployment = deployment
+			break
+		}
+	}
+	if localDeployment.ID == "" {
+		t.Fatal("local baseline deployment missing from evaluation inventory")
+	}
+	evaluationInput := modelgovernance.EvaluationRunInput{
+		Key:              "story061-fixture-" + uuid.NewString(),
+		DisplayName:      "STORY-061 offline protocol comparison",
+		DatasetReference: "fixture-" + uuid.NewString(),
+		DatasetSHA256:    strings.Repeat("a", 64),
+		EvidenceClass:    modelgovernance.EvaluationEvidenceProtocolFixture,
+		Subject:          "数学",
+		Grade:            "九年级",
+		QuestionType:     "short_answer",
+		Modality:         "text",
+		SampleCount:      10,
+		RepeatCount:      2,
+		Reason:           "create offline protocol comparison",
+	}
+	evaluation, err := governanceStore.CreateEvaluationRun(ctx, tenantID, "", evaluationInput)
+	if err != nil {
+		t.Fatalf("create offline evaluation run: %v", err)
+	}
+	candidateInput := func(deploymentID string) modelgovernance.EvaluationCandidateInput {
+		return modelgovernance.EvaluationCandidateInput{
+			DeploymentID:         deploymentID,
+			PromptVersion:        "prompt-v1",
+			RubricVersion:        "rubric-v1",
+			EvaluatedSamples:     evaluation.SampleCount,
+			SeriousErrorSamples:  1,
+			EvidenceValidSamples: evaluation.SampleCount - 1,
+			RepeatComparisons:    evaluation.SampleCount,
+			StableRepeatSamples:  evaluation.SampleCount - 2,
+			P95LatencyMS:         120,
+			TotalCostMicros:      1000,
+			Reason:               "record offline candidate measurement",
+		}
+	}
+	if _, err := governanceStore.AddEvaluationCandidate(
+		ctx, tenantID, "", evaluation.ID, candidateInput(localDeployment.ID),
+	); err != nil {
+		t.Fatalf("add local evaluation candidate: %v", err)
+	}
+	if _, err := governanceStore.AddEvaluationCandidate(
+		ctx, tenantID, "", evaluation.ID, candidateInput(createdDeployment.ID),
+	); err != nil {
+		t.Fatalf("add external fixture evaluation candidate: %v", err)
+	}
+	completedEvaluation, err := governanceStore.CompleteEvaluationRun(
+		ctx, tenantID, "", evaluation.ID, "freeze offline comparison evidence",
+	)
+	if err != nil {
+		t.Fatalf("complete offline evaluation: %v", err)
+	}
+	if completedEvaluation.Status != modelgovernance.EvaluationStatusCompleted ||
+		len(completedEvaluation.Candidates) != 2 {
+		t.Fatalf("unexpected completed evaluation: %#v", completedEvaluation)
+	}
+	if _, err := governanceStore.AddEvaluationCandidate(
+		ctx, tenantID, "", evaluation.ID, candidateInput(createdDeployment.ID),
+	); !errors.Is(err, modelgovernance.ErrConflict) {
+		t.Fatalf("completed evaluation accepted another candidate: %v", err)
+	}
+	if _, err := governanceStore.InvalidateEvaluationRun(
+		ctx, tenantID, "", evaluation.ID, "fixture evidence superseded",
+	); err != nil {
+		t.Fatalf("invalidate offline evaluation: %v", err)
+	}
+
+	guardInput := evaluationInput
+	guardInput.Key = "story061-guard-" + uuid.NewString()
+	guardInput.DatasetReference = "guard-" + uuid.NewString()
+	guardRun, err := governanceStore.CreateEvaluationRun(ctx, tenantID, "", guardInput)
+	if err != nil {
+		t.Fatalf("create trigger guard evaluation: %v", err)
+	}
+	guardCandidate, err := governanceStore.AddEvaluationCandidate(
+		ctx, tenantID, "", guardRun.ID, candidateInput(localDeployment.ID),
+	)
+	if err != nil {
+		t.Fatalf("add trigger guard local candidate: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+UPDATE model_evaluation_candidate
+SET serious_error_samples = 0
+WHERE tenant_id = $1 AND id = $2
+`, tenantID, guardCandidate.ID); err == nil {
+		t.Fatal("database mutated immutable evaluation measurements")
+	}
+	if _, err := db.ExecContext(ctx, `
+UPDATE model_evaluation_run
+SET status = 'completed', completed_at = now()
+WHERE tenant_id = $1 AND id = $2
+`, tenantID, guardRun.ID); err == nil {
+		t.Fatal("database completed an evaluation without two candidates")
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO model_evaluation_candidate (
+  tenant_id, run_id, deployment_id,
+  provider_key, deployment_key, model_version, prompt_version, rubric_version,
+  evaluated_samples, teacher_reviewed_samples, teacher_accepted_samples,
+  serious_error_samples, evidence_valid_samples,
+  repeat_comparisons, stable_repeat_samples, p95_latency_ms, total_cost_micros
+)
+VALUES (
+  $1, $2, $3,
+  $4, $5, $6, 'prompt-v1', 'rubric-v1',
+  9, 0, 0,
+  0, 9,
+  9, 8, 100, 0
+)
+`, tenantID, guardRun.ID, createdDeployment.ID,
+		createdDeployment.ProviderKey, createdDeployment.Key, createdDeployment.ModelVersion); err == nil {
+		t.Fatal("database accepted evaluation counts outside the frozen run scope")
 	}
 
 	dashscopeProvider, err := governanceStore.CreateProvider(ctx, tenantID, "", modelgovernance.ProviderInput{
@@ -395,6 +533,11 @@ WHERE tenant_id = $1 AND policy_key = 'default'
 	}
 	if _, err := governanceStore.CreateSandboxApproval(ctx, newTenantID, "", approvalInput); !errors.Is(err, modelgovernance.ErrNotFound) {
 		t.Fatalf("cross-tenant sandbox approval did not fail closed: %v", err)
+	}
+	if _, err := governanceStore.AddEvaluationCandidate(
+		ctx, newTenantID, "", guardRun.ID, candidateInput(createdDeployment.ID),
+	); !errors.Is(err, modelgovernance.ErrNotFound) {
+		t.Fatalf("cross-tenant model evaluation did not fail closed: %v", err)
 	}
 
 	var demoUserID string

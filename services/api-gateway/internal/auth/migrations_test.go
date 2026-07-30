@@ -192,6 +192,42 @@ func TestHumanGradeAILinkMigrationAddsNullableForeignKeyAndLookupIndex(t *testin
 	}
 }
 
+func TestStory061OfflineEvaluationMigrationEnforcesEvidenceAndCompletionBoundaries(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000061_story061_offline_model_evaluation.sql"))
+	if err != nil {
+		t.Fatalf("read STORY-061 offline evaluation migration: %v", err)
+	}
+	sqlText := compactMigrationSQL(string(raw))
+	for _, want := range []string{
+		"CREATE TABLE model_evaluation_run",
+		"CREATE TABLE model_evaluation_candidate",
+		"evidence_class = 'protocol_fixture' AND authorization_reference = ''",
+		"evidence_class = 'authorized_frozen_set'",
+		"FOREIGN KEY (tenant_id, run_id) REFERENCES model_evaluation_run(tenant_id, id)",
+		"FOREIGN KEY (tenant_id, deployment_id) REFERENCES model_deployment(tenant_id, id)",
+		"enforce_model_evaluation_candidate_scope",
+		"evaluation.status <> 'draft'",
+		"NEW.provider_key <> governed_provider_key",
+		"NEW.deployment_key <> governed_deployment_key",
+		"NEW.model_version <> governed_model_version",
+		"evaluation.evidence_class = 'authorized_frozen_set'",
+		"evaluation.evidence_class = 'protocol_fixture'",
+		"enforce_model_evaluation_completion",
+		"candidate_count < 2 OR local_candidate_count < 1",
+		"model evaluation evidence is immutable",
+		"invalid model evaluation status transition",
+		"completed model evaluation provenance is immutable",
+		"reject_model_evaluation_candidate_mutation",
+		"BEFORE UPDATE OR DELETE ON model_evaluation_candidate",
+		"'model:evaluation:manage'",
+		"role.code IN ('platform_admin', 'tenant_admin')",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("STORY-061 offline evaluation migration must contain %q", want)
+		}
+	}
+}
+
 func compactMigrationSQL(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }

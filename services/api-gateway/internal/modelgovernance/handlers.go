@@ -383,6 +383,149 @@ func (h *Handler) RevokeSandboxApproval(w http.ResponseWriter, r *http.Request) 
 	httpx.JSON(w, http.StatusOK, map[string]any{"approval": item})
 }
 
+func (h *Handler) ListEvaluationRuns(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := h.targetTenant(w, r, r.URL.Query().Get("tenant_id"))
+	if !ok {
+		return
+	}
+	items, err := h.store.ListEvaluationRuns(r.Context(), tenantID)
+	if err != nil {
+		httpx.Error(w, r, http.StatusInternalServerError, "model_evaluation_list_failed", "failed to list model evaluations")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"evaluation_runs": items})
+}
+
+func (h *Handler) CreateEvaluationRun(w http.ResponseWriter, r *http.Request) {
+	var input EvaluationRunInput
+	if !decodeStrictJSON(w, r, &input) {
+		return
+	}
+	tenantID, ok := h.targetTenant(w, r, input.TenantID)
+	if !ok {
+		return
+	}
+	if ValidateEvaluationRunInput(input) != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_model_evaluation", "invalid offline model evaluation")
+		return
+	}
+	user := mustUser(r)
+	actorID := user.ID
+	if tenantID != user.TenantID {
+		actorID = ""
+	}
+	item, err := h.store.CreateEvaluationRun(r.Context(), tenantID, actorID, input)
+	if err != nil {
+		writeStoreError(w, r, err, "model_evaluation_create_failed", "failed to create model evaluation")
+		return
+	}
+	h.auditAction(r, "model.evaluation_created", "model_evaluation_run", item.ID, input.Reason,
+		map[string]any{
+			"tenant_id": item.TenantID, "run_key": item.Key,
+			"dataset_reference": item.DatasetReference, "dataset_sha256": item.DatasetSHA256,
+			"authorization_reference": item.AuthorizationRef,
+			"evidence_class":          item.EvidenceClass, "subject": item.Subject,
+			"grade": item.Grade, "question_type": item.QuestionType,
+			"modality": item.Modality, "sample_count": item.SampleCount,
+			"repeat_count": item.RepeatCount,
+		})
+	httpx.JSON(w, http.StatusCreated, map[string]any{"evaluation_run": item})
+}
+
+func (h *Handler) AddEvaluationCandidate(w http.ResponseWriter, r *http.Request) {
+	var input EvaluationCandidateInput
+	if !decodeStrictJSON(w, r, &input) {
+		return
+	}
+	if strings.TrimSpace(input.Reason) == "" {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_model_evaluation_candidate", "candidate reason is required")
+		return
+	}
+	tenantID, ok := h.targetTenant(w, r, r.URL.Query().Get("tenant_id"))
+	if !ok {
+		return
+	}
+	user := mustUser(r)
+	actorID := user.ID
+	if tenantID != user.TenantID {
+		actorID = ""
+	}
+	item, err := h.store.AddEvaluationCandidate(
+		r.Context(), tenantID, actorID, r.PathValue("id"), input,
+	)
+	if err != nil {
+		writeStoreError(w, r, err, "model_evaluation_candidate_create_failed", "failed to add model evaluation candidate")
+		return
+	}
+	h.auditAction(r, "model.evaluation_candidate_added", "model_evaluation_candidate", item.ID, input.Reason,
+		map[string]any{
+			"tenant_id": item.TenantID, "run_id": item.RunID,
+			"provider_key": item.ProviderKey, "deployment_key": item.DeploymentKey,
+			"model_version": item.ModelVersion, "prompt_version": item.PromptVersion,
+			"rubric_version": item.RubricVersion, "evaluated_samples": item.EvaluatedSamples,
+		})
+	httpx.JSON(w, http.StatusCreated, map[string]any{"candidate": item})
+}
+
+func (h *Handler) CompleteEvaluationRun(w http.ResponseWriter, r *http.Request) {
+	h.transitionEvaluationRun(w, r, "complete")
+}
+
+func (h *Handler) InvalidateEvaluationRun(w http.ResponseWriter, r *http.Request) {
+	h.transitionEvaluationRun(w, r, "invalidate")
+}
+
+func (h *Handler) transitionEvaluationRun(w http.ResponseWriter, r *http.Request, transition string) {
+	var input EvaluationTransitionInput
+	if !decodeStrictJSON(w, r, &input) {
+		return
+	}
+	if strings.TrimSpace(input.Reason) == "" {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_model_evaluation_transition", "transition reason is required")
+		return
+	}
+	tenantID, ok := h.targetTenant(w, r, r.URL.Query().Get("tenant_id"))
+	if !ok {
+		return
+	}
+	user := mustUser(r)
+	actorID := user.ID
+	if tenantID != user.TenantID {
+		actorID = ""
+	}
+	var (
+		item EvaluationRun
+		err  error
+	)
+	switch transition {
+	case "complete":
+		item, err = h.store.CompleteEvaluationRun(
+			r.Context(), tenantID, actorID, r.PathValue("id"), input.Reason,
+		)
+	case "invalidate":
+		item, err = h.store.InvalidateEvaluationRun(
+			r.Context(), tenantID, actorID, r.PathValue("id"), input.Reason,
+		)
+	default:
+		err = ErrInvalidEvaluation
+	}
+	if err != nil {
+		writeStoreError(w, r, err, "model_evaluation_transition_failed", "failed to transition model evaluation")
+		return
+	}
+	action := "model.evaluation_completed"
+	if transition == "invalidate" {
+		action = "model.evaluation_invalidated"
+	}
+	h.auditAction(r, action, "model_evaluation_run", item.ID, input.Reason,
+		map[string]any{
+			"tenant_id": item.TenantID, "run_key": item.Key,
+			"evidence_class": item.EvidenceClass, "status": item.Status,
+			"candidate_count": len(item.Candidates),
+		})
+	httpx.JSON(w, http.StatusOK, map[string]any{"evaluation_run": item})
+}
+
 func (h *Handler) ensureBaseline(w http.ResponseWriter, r *http.Request, tenantID string) bool {
 	if err := h.store.EnsureLocalBaseline(r.Context(), tenantID, h.baseline); err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "local_model_registry_failed", "failed to register local model baseline")
@@ -397,7 +540,9 @@ func (h *Handler) targetTenant(w http.ResponseWriter, r *http.Request, requested
 	if requested == "" || requested == user.TenantID {
 		return user.TenantID, true
 	}
-	if user.TenantID == auth.PlatformTenantID && hasPermission(user, "model:provider:manage") {
+	if user.TenantID == auth.PlatformTenantID &&
+		(hasPermission(user, "model:provider:manage") ||
+			hasPermission(user, "model:evaluation:manage")) {
 		return requested, true
 	}
 	httpx.Error(w, r, http.StatusForbidden, "tenant_scope_forbidden", "target tenant is outside the caller scope")
@@ -437,7 +582,8 @@ func decodeStrictJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error, code string, message string) {
 	switch {
 	case errors.Is(err, ErrInvalidProvider), errors.Is(err, ErrInvalidDeployment),
-		errors.Is(err, ErrInvalidPolicy), errors.Is(err, ErrInvalidApproval):
+		errors.Is(err, ErrInvalidPolicy), errors.Is(err, ErrInvalidApproval),
+		errors.Is(err, ErrInvalidEvaluation):
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_model_governance_request", "invalid model governance request")
 	case errors.Is(err, ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, "model_governance_not_found", "model governance resource not found")
