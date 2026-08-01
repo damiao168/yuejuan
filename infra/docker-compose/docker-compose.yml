@@ -375,6 +375,32 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
+  subjective-grading-worker:
+    build:
+      context: ../..
+      dockerfile: services/subjective-grading-worker/Dockerfile
+      args:
+        SUBJECTIVE_PYTHON_IMAGE: ${EDUGRADE_SUBJECTIVE_PYTHON_IMAGE:-python:3.11.15-slim-trixie}
+    image: edugrade/subjective-grading-worker:${EDUGRADE_IMAGE_TAG:-local}
+    container_name: edugrade-subjective-grading-worker
+    profiles: ["subjective-grading"]
+    environment:
+      EDUGRADE_API_BASE_URL: http://api-gateway:8080
+      EDUGRADE_SUBJECTIVE_WORKER_TENANT_CODE: ${EDUGRADE_SUBJECTIVE_WORKER_TENANT_CODE}
+      EDUGRADE_SUBJECTIVE_WORKER_USERNAME: ${EDUGRADE_SUBJECTIVE_WORKER_USERNAME}
+      EDUGRADE_SUBJECTIVE_WORKER_PASSWORD: ${EDUGRADE_SUBJECTIVE_WORKER_PASSWORD}
+      EDUGRADE_SUBJECTIVE_WORKER_ID: ${EDUGRADE_SUBJECTIVE_WORKER_ID:-compose-subjective-1}
+      EDUGRADE_SUBJECTIVE_WORKER_POLL_INTERVAL: ${EDUGRADE_SUBJECTIVE_WORKER_POLL_INTERVAL:-5}
+      EDUGRADE_SUBJECTIVE_WORKER_LEASE_SECONDS: ${EDUGRADE_SUBJECTIVE_WORKER_LEASE_SECONDS:-300}
+      EDUGRADE_SUBJECTIVE_WORKER_HEARTBEAT_INTERVAL: ${EDUGRADE_SUBJECTIVE_WORKER_HEARTBEAT_INTERVAL:-10}
+      EDUGRADE_SUBJECTIVE_WORKER_HEARTBEAT_TIMEOUT: ${EDUGRADE_SUBJECTIVE_WORKER_HEARTBEAT_TIMEOUT:-3}
+    mem_limit: ${EDUGRADE_SUBJECTIVE_WORKER_MEM_LIMIT:-1g}
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    logging: *default-logging
+    restart: unless-stopped
+
   page-processing-worker:
     build:
       context: ../..

@@ -58,7 +58,19 @@ func TestStory056ObjectiveScoringRecoveryE2EWithPostgresTestDatabase(t *testing.
 	graderID := e2eLookupUserID(t, db, "demo", "grader")
 	graderToken := e2eLoginWithTenant(t, router, "demo", "grader", "ChangeMe123!")
 	fixture := e2eCreateStory056AcceptanceFixture(t, db, router, adminToken, suffix)
+
+	missingSegments := e2eStory062ScoringReadiness(t, router, adminToken, fixture.ExamID)
+	e2eAssertStory062ScoringReadiness(t, missingSegments, false, 3, 0, 0, 0)
+	e2eAssertStory062ReadinessCheck(t, missingSegments, "answer_segments_present", false, "blocker")
+	blockedStart := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+fixture.ExamID+"/scoring-runs", adminToken, story056JSON(t, map[string]any{
+		"idempotency_key": "story062-before-segments-" + suffix,
+	}), http.StatusConflict)
+	e2eAssertStory062ReadinessError(t, blockedStart, "answer_segments_present")
+
 	e2eSeedStory056AcceptanceAnswers(t, db, fixture, suffix)
+	ready := e2eStory062ScoringReadiness(t, router, adminToken, fixture.ExamID)
+	e2eAssertStory062ScoringReadiness(t, ready, true, 3, story056AcceptanceAnswerCount, story056AcceptanceAnswerCount, 0)
+	e2eAssertStory062ReadinessCheck(t, ready, "active_run_clear", true, "blocker")
 
 	cancelledRun := e2eStartStory056Run(t, router, adminToken, fixture.ExamID, "story056-cancel-"+suffix)
 	e2eAssertStory056Run(t, cancelledRun, "processing", story056AcceptanceAnswerCount, story056AcceptanceAnswerCount, 0, 0, 0, 0)
@@ -66,14 +78,20 @@ func TestStory056ObjectiveScoringRecoveryE2EWithPostgresTestDatabase(t *testing.
 	cancelResponse := e2ePostJSON(t, router, http.MethodPost, "/api/v1/scoring-runs/"+cancelledID+"/cancel", adminToken, `{}`, http.StatusOK)
 	e2eAssertStory056Run(t, cancelResponse["scoring_run"].(map[string]any), "cancelled", story056AcceptanceAnswerCount, 0, 0, 0, 0, 0)
 	e2eAssertStory056CancelledWork(t, db, fixture.TenantID, cancelledID, story056AcceptanceAnswerCount)
+	readyAfterCancellation := e2eStory062ScoringReadiness(t, router, adminToken, fixture.ExamID)
+	e2eAssertStory062ScoringReadiness(t, readyAfterCancellation, true, 3, story056AcceptanceAnswerCount, story056AcceptanceAnswerCount, 0)
 
 	run := e2eStartStory056Run(t, router, adminToken, fixture.ExamID, "story056-acceptance-"+suffix)
 	e2eAssertStory056Run(t, run, "processing", story056AcceptanceAnswerCount, story056AcceptanceAnswerCount, 0, 0, 0, 0)
 	runID := e2eString(t, run, "id")
 	e2eEnableStory056AutoConfirmation(t, db, fixture.TenantID, runID)
-	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/exams/"+fixture.ExamID+"/scoring-runs", adminToken, story056JSON(t, map[string]any{
+	activeRunReadiness := e2eStory062ScoringReadiness(t, router, adminToken, fixture.ExamID)
+	e2eAssertStory062ScoringReadiness(t, activeRunReadiness, false, 3, story056AcceptanceAnswerCount, story056AcceptanceAnswerCount, 0)
+	e2eAssertStory062ReadinessCheck(t, activeRunReadiness, "active_run_clear", false, "blocker")
+	overlappingStart := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+fixture.ExamID+"/scoring-runs", adminToken, story056JSON(t, map[string]any{
 		"idempotency_key": "story056-overlapping-run-" + suffix,
 	}), http.StatusConflict)
+	e2eAssertStory062ReadinessError(t, overlappingStart, "active_run_clear")
 
 	detail := e2eGetJSON(t, router, "/api/v1/scoring-runs/"+runID, adminToken, http.StatusOK)
 	items := e2eStory056RunItems(t, detail)
@@ -398,6 +416,77 @@ func e2eStartStory056Run(t *testing.T, router http.Handler, adminToken, examID, 
 	return e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/scoring-runs", adminToken, story056JSON(t, map[string]any{
 		"idempotency_key": idempotencyKey,
 	}), http.StatusCreated)["scoring_run"].(map[string]any)
+}
+
+func e2eStory062ScoringReadiness(t *testing.T, router http.Handler, adminToken, examID string) map[string]any {
+	t.Helper()
+	response := e2eGetJSON(t, router, "/api/v1/exams/"+examID+"/scoring-readiness", adminToken, http.StatusOK)
+	readiness, ok := response["scoring_readiness"].(map[string]any)
+	if !ok {
+		t.Fatalf("scoring readiness response has unexpected shape: %#v", response)
+	}
+	return readiness
+}
+
+func e2eAssertStory062ScoringReadiness(
+	t *testing.T,
+	readiness map[string]any,
+	wantReady bool,
+	wantQuestions, wantSegments, wantAutomatic, wantManual int,
+) {
+	t.Helper()
+	if got, ok := readiness["ready"].(bool); !ok || got != wantReady {
+		t.Fatalf("scoring readiness ready=%v, want %v: %#v", readiness["ready"], wantReady, readiness)
+	}
+	counts := map[string]int{
+		"total_questions":          wantQuestions,
+		"total_segments":           wantSegments,
+		"automatic_candidates":     wantAutomatic,
+		"manual_review_candidates": wantManual,
+	}
+	for field, want := range counts {
+		if got, ok := readiness[field].(float64); !ok || int(got) != want {
+			t.Fatalf("scoring readiness %s=%v, want %d: %#v", field, readiness[field], want, readiness)
+		}
+	}
+}
+
+func e2eAssertStory062ReadinessCheck(t *testing.T, readiness map[string]any, code string, wantPassed bool, wantSeverity string) {
+	t.Helper()
+	checks, ok := readiness["checks"].([]any)
+	if !ok {
+		t.Fatalf("scoring readiness checks have unexpected shape: %#v", readiness)
+	}
+	for _, raw := range checks {
+		check, ok := raw.(map[string]any)
+		if !ok || check["code"] != code {
+			continue
+		}
+		if got, ok := check["passed"].(bool); !ok || got != wantPassed {
+			t.Fatalf("scoring readiness check %s passed=%v, want %v: %#v", code, check["passed"], wantPassed, check)
+		}
+		if check["severity"] != wantSeverity {
+			t.Fatalf("scoring readiness check %s severity=%v, want %s: %#v", code, check["severity"], wantSeverity, check)
+		}
+		return
+	}
+	t.Fatalf("scoring readiness check %s is missing: %#v", code, readiness)
+}
+
+func e2eAssertStory062ReadinessError(t *testing.T, response map[string]any, blockerCode string) {
+	t.Helper()
+	apiError, ok := response["error"].(map[string]any)
+	if !ok || apiError["code"] != "scoring_not_ready" {
+		t.Fatalf("blocked scoring start must return scoring_not_ready: %#v", response)
+	}
+	readiness, ok := response["scoring_readiness"].(map[string]any)
+	if !ok {
+		t.Fatalf("blocked scoring start must include readiness details: %#v", response)
+	}
+	if ready, ok := readiness["ready"].(bool); !ok || ready {
+		t.Fatalf("blocked scoring start must report ready=false: %#v", response)
+	}
+	e2eAssertStory062ReadinessCheck(t, readiness, blockerCode, false, "blocker")
 }
 
 func e2eClaimStory056OMRTasks(t *testing.T, router http.Handler, adminToken string, limit int, service, instance string) map[string]story056WorkerLease {

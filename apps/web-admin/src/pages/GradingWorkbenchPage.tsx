@@ -50,6 +50,7 @@ import {
   getReviewDraft,
   downloadReviewWorkspaceImage,
   downloadScoringResultImage,
+  getScoringReadiness,
   getScoringSummary,
   listReviewTasks,
   returnReviewTask,
@@ -68,6 +69,7 @@ import {
   type RubricSelection,
   type ExamAutomationResults,
   type ScoringRunItem,
+  type ScoringReadiness,
   type ScoringSummary
 } from "../api/review";
 import { listManagedUsers, type ManagedUser } from "../api/users";
@@ -115,6 +117,11 @@ interface PreviewState {
 
 interface ScoringImagePreview extends PreviewState {
   title: string;
+}
+
+interface PrefetchedTaskBundle {
+  task: ReviewTask;
+  context: WorkbenchContext;
 }
 
 interface ScoreDraft {
@@ -395,6 +402,17 @@ async function loadTaskContext(task: ReviewTask, allowOriginalImage: boolean): P
   return { task: workspace.task, segment, question, pages: [], ocrTasks: [], ocrResults: [], aiGrades: suggestion.grade ? [suggestion.grade] : [], automationResult: workspace.context.automation_result, warnings: suggestion.warning ? [suggestion.warning] : [], ocrText: recognizedText, segmentImageUrl: workspace.segment_image_url, originalImageUrl: allowOriginalImage ? workspace.original_image_url : undefined };
 }
 
+async function fetchTaskBundle(taskId: string, currentUserId: string, initialExamId: string, allowOriginalImage: boolean): Promise<PrefetchedTaskBundle> {
+  const detail = await getReviewTask(taskId);
+  if (initialExamId && detail.task.exam_id !== initialExamId) {
+    throw new Error("该阅卷任务不属于当前考试，已停止加载。");
+  }
+  if (detail.task.assigned_to !== currentUserId) {
+    throw new Error("该阅卷任务已不再分配给当前用户。");
+  }
+  return { task: detail.task, context: await loadTaskContext(detail.task, allowOriginalImage) };
+}
+
 function createInitialDraft(ctx: WorkbenchContext | null): ScoreDraft {
   const ocrText = ctx?.ocrText || ctx?.ocrResults.map((item) => item.text).filter(Boolean).join("\n") || "";
   const selections: Record<string, number> = {};
@@ -487,6 +505,7 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [actioning, setActioning] = useState<string | null>(null);
   const [scoringSummary, setScoringSummary] = useState<ScoringSummary | null>(null);
+  const [scoringReadiness, setScoringReadiness] = useState<ScoringReadiness | null>(null);
   const [scoringLoading, setScoringLoading] = useState(false);
   const [scoringRunDetail, setScoringRunDetail] = useState<ExamAutomationResults | null>(null);
   const [scoringDetailOpen, setScoringDetailOpen] = useState(false);
@@ -503,6 +522,8 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
   const scoringSummaryRequestRef = useRef(0);
   const scoringImageRequestRef = useRef(0);
   const suppressAutoSelectRef = useRef(false);
+  const prefetchedTaskRef = useRef(new Map<string, Promise<PrefetchedTaskBundle>>());
+  const prefetchedPreviewRef = useRef(new Map<string, Promise<Awaited<ReturnType<typeof downloadReviewWorkspaceImage>> | null>>());
   const [draftRevision, setDraftRevision] = useState(0);
   const [draftSaveStatus, setDraftSaveStatus] = useState<DraftSaveStatus>("idle");
   const [draftHydrated, setDraftHydrated] = useState(false);
@@ -605,7 +626,22 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
   }, [assignableTasks]);
 
   const selectedIndex = useMemo(() => filteredTasks.findIndex((task) => task.id === selectedTaskId), [filteredTasks, selectedTaskId]);
+  const nextTask = useMemo(() => {
+    const actionable = (task: ReviewTask) => task.id !== selectedTaskId && !["submitted", "completed"].includes(task.status);
+    return filteredTasks.slice(selectedIndex + 1).find(actionable) ?? filteredTasks.find(actionable);
+  }, [filteredTasks, selectedIndex, selectedTaskId]);
   const selectedGrade = useMemo(() => latestGrade(ctx?.aiGrades ?? []), [ctx?.aiGrades]);
+  const scoringBlockingChecks = useMemo(
+    () => scoringReadiness?.checks.filter((check) => check.severity === "blocker" && !check.passed) ?? [],
+    [scoringReadiness]
+  );
+  const scoringWarningChecks = useMemo(
+    () => scoringReadiness?.checks.filter((check) => check.severity === "warning" && !check.passed) ?? [],
+    [scoringReadiness]
+  );
+  const hasUnresolvedScoringRun = Boolean(
+    scoringSummary?.run && ["queued", "processing", "needs_review", "failed", "cancelling"].includes(scoringSummary.run.status)
+  );
   const maxScore = ctx?.question?.score ?? selectedGrade?.max_score ?? 0;
   const rubricPoints = ctx?.question?.rubric?.points ?? [];
   const rubricTotal = useMemo(() => Object.values(draft.rubricSelections).reduce((sum, value) => sum + (Number(value) || 0), 0), [draft.rubricSelections]);
@@ -684,14 +720,19 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     const requestId = ++scoringSummaryRequestRef.current;
     if (!initialExamId || !canGrade) {
       setScoringSummary(null);
+      setScoringReadiness(null);
       setScoringLoading(false);
       return;
     }
     setScoringLoading(true);
     try {
-      const result = await getScoringSummary(initialExamId);
+      const [result, readinessResult] = await Promise.all([
+        getScoringSummary(initialExamId),
+        getScoringReadiness(initialExamId)
+      ]);
       if (requestId !== scoringSummaryRequestRef.current) return;
       setScoringSummary(result.scoring_summary);
+      setScoringReadiness(readinessResult.scoring_readiness);
     } catch (currentError) {
       if (requestId !== scoringSummaryRequestRef.current) return;
       message.error(formatError(currentError));
@@ -704,18 +745,29 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     if (!initialExamId || !canGrade) return;
     setActioning("start-scoring");
     try {
+      const readinessResult = await getScoringReadiness(initialExamId);
+      setScoringReadiness(readinessResult.scoring_readiness);
+      if (!readinessResult.scoring_readiness.ready) {
+        message.warning("评分准备检查未通过，请先处理阻塞项");
+        return;
+      }
       await startScoringRun(initialExamId, `web-${crypto.randomUUID()}`);
       message.success("评分任务已生成");
       setScoringDetailOpen(true);
-      const [summary, detail] = await Promise.all([
+      const [summary, detail, nextReadiness] = await Promise.all([
         getScoringSummary(initialExamId),
-        getExamAutomationResults(initialExamId)
+        getExamAutomationResults(initialExamId),
+        getScoringReadiness(initialExamId)
       ]);
       setScoringSummary(summary.scoring_summary);
       setScoringRunDetail(detail);
+      setScoringReadiness(nextReadiness.scoring_readiness);
       await loadTasks();
     } catch (currentError) {
       message.error(formatError(currentError));
+      void getScoringReadiness(initialExamId)
+        .then((result) => setScoringReadiness(result.scoring_readiness))
+        .catch(() => undefined);
     } finally {
       setActioning(null);
     }
@@ -746,11 +798,13 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     const refresh = () => {
       void Promise.all([
         getScoringSummary(initialExamId),
-        getExamAutomationResults(initialExamId)
-      ]).then(([summary, detail]) => {
+        getExamAutomationResults(initialExamId),
+        getScoringReadiness(initialExamId)
+      ]).then(([summary, detail, readiness]) => {
         if (disposed) return;
         setScoringSummary(summary.scoring_summary);
         setScoringRunDetail(detail);
+        setScoringReadiness(readiness.scoring_readiness);
       }).catch(() => undefined);
     };
     const timer = window.setInterval(refresh, 2500);
@@ -842,19 +896,32 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     setRotation(0);
     setOffset({ x: 0, y: 0 });
     try {
+      const prefetched = prefetchedTaskRef.current.get(taskId);
+      prefetchedTaskRef.current.delete(taskId);
       const detail = await getReviewTask(taskId);
-      if (requestId !== contextRequestRef.current) return;
       if (initialExamId && detail.task.exam_id !== initialExamId) {
         setSelectedTaskId("");
         setContextError("该阅卷任务不属于当前考试，已停止加载。");
         return;
       }
       const reviewerOwnsTask = detail.task.assigned_to === currentUserId;
-      const next = await loadTaskContext(detail.task, canViewOriginalImage);
+      const contextPromise = prefetched
+        ? prefetched.then((bundle) => {
+            const stillCurrent =
+              bundle.task.updated_at === detail.task.updated_at &&
+              bundle.task.status === detail.task.status &&
+              bundle.task.assigned_to === detail.task.assigned_to;
+            if (stillCurrent) return bundle.context;
+            prefetchedPreviewRef.current.delete(taskId);
+            return loadTaskContext(detail.task, canViewOriginalImage);
+          })
+        : loadTaskContext(detail.task, canViewOriginalImage);
+      const [next, draftResult] = await Promise.all([
+        contextPromise,
+        reviewerOwnsTask ? getReviewDraft(taskId) : Promise.resolve({ draft: null })
+      ]);
       if (requestId !== contextRequestRef.current) return;
       const initial = createInitialDraft(next);
-      const draftResult = reviewerOwnsTask ? await getReviewDraft(taskId) : { draft: null };
-      if (requestId !== contextRequestRef.current) return;
       let restored = initial;
       let revision = 0;
       let restoredViewer: DraftFallbackSnapshot["viewer"] = { mode: "segment", scale: 1, rotation: 0, offset: { x: 0, y: 0 }, fit: true };
@@ -961,6 +1028,8 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     previewRequestRef.current += 1;
     scoringSummaryRequestRef.current += 1;
     scoringImageRequestRef.current += 1;
+    prefetchedTaskRef.current.clear();
+    prefetchedPreviewRef.current.clear();
     setTasks([]);
     setSelectedTaskId("");
     setAssignmentTaskIds([]);
@@ -979,6 +1048,7 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     setDraftSaveStatus("idle");
     lastSavedDraft.current = "";
     setScoringSummary(null);
+    setScoringReadiness(null);
     setScoringLoading(false);
     setScoringRunDetail(null);
     setScoringDetailOpen(false);
@@ -1001,6 +1071,40 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
   useEffect(() => {
     void loadContext(selectedTaskId);
   }, [loadContext, selectedTaskId]);
+
+  useEffect(() => {
+    if (
+      !canWork ||
+      !nextTask ||
+      nextTask.assigned_to !== currentUserId ||
+      !["assigned", "in_progress", "returned"].includes(nextTask.status)
+    ) {
+      return;
+    }
+    for (const taskId of prefetchedTaskRef.current.keys()) {
+      if (taskId !== selectedTaskId && taskId !== nextTask.id) prefetchedTaskRef.current.delete(taskId);
+    }
+    for (const taskId of prefetchedPreviewRef.current.keys()) {
+      if (taskId !== selectedTaskId && taskId !== nextTask.id) prefetchedPreviewRef.current.delete(taskId);
+    }
+    if (prefetchedTaskRef.current.has(nextTask.id)) {
+      return;
+    }
+    const bundlePromise = fetchTaskBundle(nextTask.id, currentUserId, initialExamId, canViewOriginalImage);
+    prefetchedTaskRef.current.set(nextTask.id, bundlePromise);
+    prefetchedPreviewRef.current.set(
+      nextTask.id,
+      bundlePromise
+        .then((bundle) => bundle.context.segmentImageUrl
+          ? downloadReviewWorkspaceImage(bundle.context.segmentImageUrl)
+          : null)
+        .catch(() => null)
+    );
+    void bundlePromise.catch(() => {
+      prefetchedTaskRef.current.delete(nextTask.id);
+      prefetchedPreviewRef.current.delete(nextTask.id);
+    });
+  }, [canViewOriginalImage, canWork, currentUserId, initialExamId, nextTask, selectedTaskId]);
 
   useEffect(() => {
     if (
@@ -1080,7 +1184,10 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     setImageSize(null);
     setAutoFit(true);
     try {
-      const file = await downloadReviewWorkspaceImage(viewerMode === "segment" ? ctx.segmentImageUrl : ctx.originalImageUrl!);
+      const imagePath = viewerMode === "segment" ? ctx.segmentImageUrl : ctx.originalImageUrl!;
+      const cachedPreview = viewerMode === "segment" ? prefetchedPreviewRef.current.get(ctx.task.id) : undefined;
+      if (cachedPreview) prefetchedPreviewRef.current.delete(ctx.task.id);
+      const file = (cachedPreview ? await cachedPreview : null) ?? await downloadReviewWorkspaceImage(imagePath);
       if (requestId !== previewRequestRef.current) return;
       setPreview((current) => {
         if (current?.url) {
@@ -1147,14 +1254,8 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
   };
 
   const goNext = async () => {
-    const next = filteredTasks.slice(selectedIndex + 1).find((task) => task.status !== "submitted" && task.status !== "completed");
-    if (next) {
-      setSelectedTaskId(next.id);
-      return;
-    }
-    const fallback = filteredTasks.find((task) => task.status !== "submitted" && task.status !== "completed");
-    if (fallback) {
-      setSelectedTaskId(fallback.id);
+    if (nextTask) {
+      setSelectedTaskId(nextTask.id);
       return;
     }
     if (!canManageTasks) {
@@ -1190,10 +1291,12 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     await runAction(
       "submit",
       async () => {
+        const submittedTaskId = ctx.task.id;
+        const nextTaskId = nextTask?.id ?? "";
         const selections: RubricSelection[] = Object.entries(draft.rubricSelections)
           .filter(([, value]) => Number(value) > 0)
           .map(([point_id, value]) => ({ point_id, score: Number(value) }));
-        await submitHumanGrade(ctx.task.id, {
+        await submitHumanGrade(submittedTaskId, {
           score,
           rubric_selections: selections,
           comments: draft.comments,
@@ -1201,11 +1304,12 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
           student_feedback: draft.studentFeedback,
           reason: draft.reason || "教师复核完成"
         });
-        removeReviewDraftFallback(currentUserId, ctx.task.id);
+        removeReviewDraftFallback(currentUserId, submittedTaskId);
         contextRequestRef.current += 1;
         previewRequestRef.current += 1;
+        setTasks((current) => current.map((task) => task.id === submittedTaskId ? { ...task, status: "submitted" } : task));
         setCtx(null);
-        setSelectedTaskId("");
+        setSelectedTaskId(nextTaskId);
         setPreview(null);
         setImageSize(null);
         setDraft(createInitialDraft(null));
@@ -1213,6 +1317,9 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
         setDraftSaveStatus("idle");
         lastSavedDraft.current = "";
         await Promise.all([loadTasks(), loadScoringSummary()]);
+        if (!nextTaskId && !canManageTasks) {
+          message.info("当前没有更多已分配给你的阅卷任务");
+        }
       },
       "人工评分已提交"
     );
@@ -1572,15 +1679,45 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
             {scoringSummary?.run && ["queued", "processing", "needs_review", "failed"].includes(scoringSummary.run.status) ? <Popconfirm title="取消本次评分？" description="未完成的自动处理和人工任务将停止，已保留的历史结果不会删除。" okText="取消评分" cancelText="保留" okButtonProps={{ danger: true }} onConfirm={() => void cancelCurrentScoringRun()}>
               <Button danger icon={<CircleStop size={15} />} loading={actioning === "cancel-scoring"}>取消评分</Button>
             </Popconfirm> : null}
-            {scoringSummary?.run ? (
+            {!hasUnresolvedScoringRun && scoringSummary?.run ? (
               <Popconfirm title="重新开始自动评分？" description="已确认的结果会保留，未完成项将重新处理" okText="重新评分" cancelText="暂不" onConfirm={() => void startExamScoring()}>
-                <Button icon={<Play size={15} />} loading={actioning === "start-scoring"}>重新评分</Button>
+                <Button icon={<Play size={15} />} disabled={!scoringReadiness?.ready} loading={actioning === "start-scoring"}>重新评分</Button>
               </Popconfirm>
-            ) : (
-              <Button type="primary" icon={<Play size={15} />} loading={actioning === "start-scoring"} onClick={() => void startExamScoring()}>开始评分</Button>
-            )}
+            ) : !hasUnresolvedScoringRun ? <Button type="primary" icon={<Play size={15} />} disabled={!scoringReadiness?.ready} loading={actioning === "start-scoring"} onClick={() => void startExamScoring()}>开始评分</Button> : null}
           </Space>
         </div>
+        {scoringReadiness ? (
+          <Alert
+            className="grading-readiness-alert"
+            type={hasUnresolvedScoringRun ? "info" : scoringReadiness.ready ? "success" : "error"}
+            showIcon
+            message={hasUnresolvedScoringRun
+              ? "已有评分任务，不能重复启动"
+              : scoringReadiness.ready
+                ? "评分启动条件已满足"
+                : `${scoringBlockingChecks.length} 项条件阻止启动评分`}
+            description={(
+              <div className="grading-readiness-content">
+                <div className="grading-readiness-counts">
+                  <span>题目 <strong>{scoringReadiness.total_questions}</strong></span>
+                  <span>题块 <strong>{scoringReadiness.ready_segments}/{scoringReadiness.total_segments}</strong></span>
+                  <span>预计自动 <strong>{scoringReadiness.automatic_candidates}</strong></span>
+                  <span>预计人工 <strong>{scoringReadiness.manual_review_candidates}</strong></span>
+                </div>
+                {(hasUnresolvedScoringRun ? scoringBlockingChecks.filter((check) => check.code === "active_run_clear") : [...scoringBlockingChecks, ...scoringWarningChecks]).length ? (
+                  <ul className="grading-readiness-issues">
+                    {(hasUnresolvedScoringRun ? scoringBlockingChecks.filter((check) => check.code === "active_run_clear") : [...scoringBlockingChecks, ...scoringWarningChecks]).map((check) => (
+                      <li key={check.code} className={check.severity}>
+                        <strong>{check.label}</strong>
+                        <span>{check.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : <span className="grading-readiness-ok">全部题块均可进入自动处理或人工复核。</span>}
+              </div>
+            )}
+          />
+        ) : null}
         {scoringSummary?.run ? <div className="grading-run-strip">
           <StatusTag tone={scoringSummary.run.status === "completed" ? "success" : scoringSummary.run.status === "failed" ? "danger" : scoringSummary.run.status === "needs_review" ? "warning" : "processing"}>{scoringRunStatusLabels[scoringSummary.run.status] ?? "处理中"}</StatusTag>
           <span>总计 <strong>{scoringSummary.run.total_count}</strong></span>

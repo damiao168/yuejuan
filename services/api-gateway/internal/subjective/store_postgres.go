@@ -13,6 +13,194 @@ type PostgresStore struct {
 	db *sql.DB
 }
 
+func (s *PostgresStore) GetOrCreateRun(ctx context.Context, tenantID string, _ string, input CreateRunInput) (GradingRun, error) {
+	if tenantID == "" || input.AnswerSegmentID == "" || input.QuestionID == "" || input.RequestID == "" {
+		return GradingRun{}, ErrInvalidInput
+	}
+	status := RunProcessing
+	attemptCount := 1
+	if input.BatchID != "" {
+		status = RunQueued
+		attemptCount = 0
+	}
+	row := s.db.QueryRowContext(ctx, `
+INSERT INTO subjective_grading_run (
+  tenant_id, batch_id, answer_segment_id, answer_version, question_id, rubric_version,
+  model_version, prompt_version, min_confidence, request_id, status, attempt_count, started_at
+)
+VALUES ($1::uuid, NULLIF($2, '')::uuid, $3::uuid, $4, $5::uuid, $6, $7, $8, $9, $10, $11, $12,
+  CASE WHEN $11 = 'processing' THEN now() ELSE NULL END)
+ON CONFLICT (tenant_id, request_id) DO UPDATE SET updated_at = subjective_grading_run.updated_at
+RETURNING id::text, tenant_id::text, COALESCE(batch_id::text, ''), answer_segment_id::text, answer_version,
+  question_id::text, rubric_version, model_version, prompt_version, min_confidence::float8, request_id,
+  status, attempt_count, COALESCE(grade_id::text, ''), COALESCE(error_code, ''),
+  started_at, completed_at, created_at, updated_at
+`, tenantID, input.BatchID, input.AnswerSegmentID, input.AnswerVersion, input.QuestionID, input.RubricVersion, input.ModelVersion, input.PromptVersion, input.MinConfidence, input.RequestID, status, attemptCount)
+	return scanRun(row)
+}
+
+func (s *PostgresStore) UpdateRun(ctx context.Context, tenantID string, runID string, input UpdateRunInput) (GradingRun, error) {
+	if input.Status != RunQueued && input.Status != RunProcessing && input.Status != RunSucceeded && input.Status != RunFailed && input.Status != RunConflict {
+		return GradingRun{}, ErrInvalidInput
+	}
+	row := s.db.QueryRowContext(ctx, `
+UPDATE subjective_grading_run
+SET status=$3,
+  grade_id=NULLIF($4, '')::uuid,
+  error_code=$5,
+  attempt_count=CASE WHEN $6 > 0 THEN $6 ELSE attempt_count END,
+  started_at=CASE WHEN $3 = 'processing' THEN COALESCE(started_at, now()) ELSE started_at END,
+  completed_at=CASE WHEN $3 IN ('succeeded','failed','conflict') THEN now() ELSE completed_at END,
+  updated_at=now()
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL
+RETURNING id::text, tenant_id::text, COALESCE(batch_id::text, ''), answer_segment_id::text, answer_version,
+  question_id::text, rubric_version, model_version, prompt_version, min_confidence::float8, request_id,
+  status, attempt_count, COALESCE(grade_id::text, ''), COALESCE(error_code, ''),
+  started_at, completed_at, created_at, updated_at
+`, tenantID, runID, input.Status, input.GradeID, input.ErrorCode, input.AttemptCount)
+	return scanRun(row)
+}
+
+func (s *PostgresStore) GetRun(ctx context.Context, tenantID string, runID string) (GradingRun, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id::text, tenant_id::text, COALESCE(batch_id::text, ''), answer_segment_id::text, answer_version,
+  question_id::text, rubric_version, model_version, prompt_version, min_confidence::float8, request_id,
+  status, attempt_count, COALESCE(grade_id::text, ''), COALESCE(error_code, ''),
+  started_at, completed_at, created_at, updated_at
+FROM subjective_grading_run
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL
+`, tenantID, runID)
+	return scanRun(row)
+}
+
+func (s *PostgresStore) CreateBatch(ctx context.Context, tenantID string, actorID string, input CreateBatchInput) (GradingBatch, error) {
+	segments, err := normalizeBatchSegments(input.SegmentIDs)
+	if err != nil || tenantID == "" || input.IdempotencyKey == "" || actorID == "" {
+		return GradingBatch{}, ErrInvalidInput
+	}
+	raw, err := json.Marshal(segments)
+	if err != nil {
+		return GradingBatch{}, err
+	}
+	row := s.db.QueryRowContext(ctx, `
+INSERT INTO subjective_grading_batch (tenant_id, idempotency_key, status, segment_ids, total_count, created_by)
+VALUES ($1::uuid, $2, 'planned', $3::jsonb, $4, $5::uuid)
+ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET updated_at = subjective_grading_batch.updated_at
+RETURNING id::text, tenant_id::text, idempotency_key, status, segment_ids,
+  total_count, queued_count, processing_count, succeeded_count, failed_count,
+  created_by::text, created_at, updated_at
+`, tenantID, input.IdempotencyKey, raw, len(segments), actorID)
+	batch, err := scanBatch(row)
+	if err != nil {
+		return GradingBatch{}, err
+	}
+	if !sameStringSlice(batch.SegmentIDs, segments) {
+		return GradingBatch{}, ErrIdempotencyConflict
+	}
+	return batch, nil
+}
+
+func (s *PostgresStore) GetBatch(ctx context.Context, tenantID string, batchID string) (GradingBatch, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id::text, tenant_id::text, idempotency_key, status, segment_ids,
+  total_count, queued_count, processing_count, succeeded_count, failed_count,
+  created_by::text, created_at, updated_at
+FROM subjective_grading_batch
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL
+`, tenantID, batchID)
+	return scanBatch(row)
+}
+
+func (s *PostgresStore) RefreshBatch(ctx context.Context, tenantID string, batchID string) (GradingBatch, error) {
+	row := s.db.QueryRowContext(ctx, `
+WITH counts AS (
+  SELECT
+    count(*) FILTER (WHERE status = 'queued')::int AS queued_count,
+    count(*) FILTER (WHERE status = 'processing')::int AS processing_count,
+    count(*) FILTER (WHERE status = 'succeeded')::int AS succeeded_count,
+    count(*) FILTER (WHERE status IN ('failed', 'conflict'))::int AS failed_count
+  FROM subjective_grading_run
+  WHERE tenant_id=$1::uuid AND batch_id=$2::uuid AND deleted_at IS NULL
+)
+UPDATE subjective_grading_batch AS batch
+SET queued_count=counts.queued_count,
+  processing_count=counts.processing_count,
+  succeeded_count=counts.succeeded_count,
+  failed_count=counts.failed_count,
+  status=CASE
+    WHEN batch.status IN ('planned', 'cancelled') THEN batch.status
+    WHEN counts.succeeded_count + counts.failed_count = batch.total_count AND counts.failed_count > 0 THEN 'failed'
+    WHEN counts.succeeded_count = batch.total_count THEN 'completed'
+    ELSE 'processing'
+  END,
+  updated_at=now()
+FROM counts
+WHERE batch.tenant_id=$1::uuid AND batch.id=$2::uuid AND batch.deleted_at IS NULL
+RETURNING batch.id::text, batch.tenant_id::text, batch.idempotency_key, batch.status, batch.segment_ids,
+  batch.total_count, batch.queued_count, batch.processing_count, batch.succeeded_count, batch.failed_count,
+  batch.created_by::text, batch.created_at, batch.updated_at
+`, tenantID, batchID)
+	return scanBatch(row)
+}
+
+func (s *PostgresStore) UpdateBatch(ctx context.Context, tenantID string, batchID string, input UpdateBatchInput) (GradingBatch, error) {
+	if input.Status != "planned" && input.Status != "processing" && input.Status != "completed" && input.Status != "failed" && input.Status != "cancelled" {
+		return GradingBatch{}, ErrInvalidInput
+	}
+	row := s.db.QueryRowContext(ctx, `
+UPDATE subjective_grading_batch
+SET status=$3, queued_count=$4, processing_count=$5, succeeded_count=$6, failed_count=$7, updated_at=now()
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL
+RETURNING id::text, tenant_id::text, idempotency_key, status, segment_ids,
+  total_count, queued_count, processing_count, succeeded_count, failed_count,
+  created_by::text, created_at, updated_at
+`, tenantID, batchID, input.Status, input.QueuedCount, input.ProcessingCount, input.SucceededCount, input.FailedCount)
+	return scanBatch(row)
+}
+
+func scanBatch(row gradeScanner) (GradingBatch, error) {
+	var out GradingBatch
+	var segmentRaw []byte
+	if err := row.Scan(&out.ID, &out.TenantID, &out.IdempotencyKey, &out.Status, &segmentRaw, &out.TotalCount, &out.QueuedCount, &out.ProcessingCount, &out.SucceededCount, &out.FailedCount, &out.CreatedBy, &out.CreatedAt, &out.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return GradingBatch{}, ErrNotFound
+		}
+		return GradingBatch{}, err
+	}
+	if err := json.Unmarshal(segmentRaw, &out.SegmentIDs); err != nil {
+		return GradingBatch{}, err
+	}
+	out.CreatedAt = out.CreatedAt.UTC()
+	out.UpdatedAt = out.UpdatedAt.UTC()
+	return out, nil
+}
+
+type runScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRun(row runScanner) (GradingRun, error) {
+	var out GradingRun
+	var startedAt, completedAt sql.NullTime
+	if err := row.Scan(&out.ID, &out.TenantID, &out.BatchID, &out.AnswerSegmentID, &out.AnswerVersion, &out.QuestionID, &out.RubricVersion, &out.ModelVersion, &out.PromptVersion, &out.MinConfidence, &out.RequestID, &out.Status, &out.AttemptCount, &out.GradeID, &out.ErrorCode, &startedAt, &completedAt, &out.CreatedAt, &out.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return GradingRun{}, ErrNotFound
+		}
+		return GradingRun{}, err
+	}
+	if startedAt.Valid {
+		value := startedAt.Time.UTC()
+		out.StartedAt = &value
+	}
+	if completedAt.Valid {
+		value := completedAt.Time.UTC()
+		out.CompletedAt = &value
+	}
+	out.CreatedAt = out.CreatedAt.UTC()
+	out.UpdatedAt = out.UpdatedAt.UTC()
+	return out, nil
+}
+
 func NewPostgresStore(db *sql.DB) *PostgresStore {
 	return &PostgresStore{db: db}
 }
@@ -157,27 +345,38 @@ INSERT INTO ai_grade (
   model_version, prompt_version, student_feedback, teacher_note,
   rubric_version, delivery_mode, capability_profile, adapter_request_id,
   adapter_name, provider_key, deployment_key, deployment_region,
-  adapter_attempts, adapter_latency_ms, adapter_repair_attempted
+  adapter_attempts, adapter_latency_ms, adapter_repair_attempted, subjective_grading_run_id
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, 'llm-adapter', $8, $9, $10,
   $11, $12, $13, $14, $15, false, $16, $17, $18, $19, NULLIF($20, ''),
-  $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
+  $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, NULLIF($36, ''))
+ON CONFLICT (tenant_id, adapter_request_id) WHERE adapter_request_id <> '' AND deleted_at IS NULL DO NOTHING
 RETURNING id::text, tenant_id::text, answer_segment_id::text, question_id::text, question_no, question_type,
   answer_version, grader_type, model_version, prompt_version, rubric_version, delivery_mode, capability_profile,
   adapter_request_id, adapter_name, provider_key, deployment_key, deployment_region,
   adapter_attempts, adapter_latency_ms, adapter_repair_attempted,
   suggested_score::float8, max_score::float8, confidence::float8,
   matched_points, missing_points, evidence, risk_flags, needs_human_review, student_feedback, teacher_note,
-  mock, status, COALESCE(failure_reason, ''), raw_output, created_by::text, created_at
+  mock, status, COALESCE(failure_reason, ''), raw_output, created_by::text, created_at,
+  COALESCE(subjective_grading_run_id::text, '')
 `, tenantID, grade.AnswerSegmentID, grade.QuestionID, grade.QuestionNo, grade.QuestionType,
 		grade.AnswerVersion, grade.GraderType, grade.SuggestedScore, grade.MaxScore, grade.Confidence,
 		matched, missing, evidence, risks, grade.NeedsHumanReview, grade.Mock, raw, actorID,
 		grade.Status, grade.FailureReason, grade.ModelVersion, grade.PromptVersion, grade.StudentFeedback, grade.TeacherNote,
 		grade.RubricVersion, grade.DeliveryMode, grade.CapabilityProfile, grade.AdapterRequestID,
 		grade.AdapterName, grade.ProviderKey, grade.DeploymentKey, grade.DeploymentRegion,
-		grade.AdapterAttempts, grade.AdapterLatencyMS, grade.AdapterRepairAttempted)
+		grade.AdapterAttempts, grade.AdapterLatencyMS, grade.AdapterRepairAttempted, grade.RunID)
 	var out Grade
 	if err := scanGrade(row, &out); err != nil {
+		if errors.Is(err, ErrNotFound) && grade.AdapterRequestID != "" {
+			existing, lookupErr := s.GetGradeByAdapterRequestID(ctx, tenantID, grade.AdapterRequestID)
+			if lookupErr == nil {
+				if sameGradeIdentity(existing, grade) {
+					return existing, nil
+				}
+				return Grade{}, ErrIdempotencyConflict
+			}
+		}
 		return Grade{}, err
 	}
 	if !out.Mock &&
@@ -207,6 +406,31 @@ VALUES (
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		return Grade{}, err
+	}
+	return out, nil
+}
+
+func (s *PostgresStore) GetGradeByAdapterRequestID(ctx context.Context, tenantID string, requestID string) (Grade, error) {
+	if requestID == "" {
+		return Grade{}, ErrNotFound
+	}
+	row := s.db.QueryRowContext(ctx, `
+SELECT id::text, tenant_id::text, answer_segment_id::text, question_id::text, question_no, question_type,
+  answer_version, grader_type, model_version, prompt_version, rubric_version, delivery_mode, capability_profile,
+  adapter_request_id, adapter_name, provider_key, deployment_key, deployment_region,
+  adapter_attempts, adapter_latency_ms, adapter_repair_attempted,
+  suggested_score::float8, max_score::float8, confidence::float8,
+  matched_points, missing_points, evidence, risk_flags, needs_human_review, student_feedback, teacher_note,
+  mock, status, COALESCE(failure_reason, ''), raw_output, created_by::text, created_at,
+  COALESCE(subjective_grading_run_id::text, '')
+FROM ai_grade
+WHERE tenant_id = $1 AND adapter_request_id = $2 AND deleted_at IS NULL
+ORDER BY created_at DESC
+LIMIT 1
+`, tenantID, requestID)
+	var out Grade
+	if err := scanGrade(row, &out); err != nil {
 		return Grade{}, err
 	}
 	return out, nil
@@ -256,6 +480,7 @@ func scanGrade(row gradeScanner, out *Grade) error {
 		&rawOutput,
 		&out.CreatedBy,
 		&out.CreatedAt,
+		&out.RunID,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound

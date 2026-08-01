@@ -95,7 +95,13 @@
 | STORY-058 | Grading Agent 服务实现（lab 智能体接入线） | Approved |
 | STORY-059 | 平台接入与评分结果落库（lab 智能体接入线） | Approved |
 | STORY-060 | 客观题自动化产能兑现与答卷完整性保障 | Software Accepted / Physical Validation Pending |
-| STORY-061 | 多厂商原生模型治理、影子评测与策略中心 | In Progress（061A1、061A2 完成） |
+| STORY-061 | 多厂商原生模型治理、影子评测与策略中心 | Foundation Complete / Expansion Paused（已完成至 061C2） |
+| STORY-062 | 阅卷主链可靠性与教师连续阅卷 | Software Accepted（不等于 Production Ready） |
+| STORY-063 | 主观题 AI 影子批处理与人工复核衔接 | In Progress（幂等基础切片已完成） |
+| STORY-064 | 阅卷质量中心与评分证据治理 | Planned |
+| STORY-065 | 学生成绩、申诉与重发布闭环 | Planned |
+| STORY-066 | 学校系统集成、离线采集与现场运维 | Planned |
+| STORY-067 | 限量学校试点与发布门禁 | Planned |
 
 ## 编号语义说明（2026-07-26）
 
@@ -104,3 +110,16 @@
 STORY-061 现用于多厂商原生模型治理、影子评测与策略中心；历史文档中曾将“正式发布门禁”或其他能力标为 STORY-061 的引用继续顺延，后续单独编号。
 
 STORY-053 之后按 V1.0 正式产品交付总控任务继续推进，不提前宣称 Production Ready。
+
+### 当前编号映射（2026-08-01）
+
+为避免历史路线图与实际交付编号混淆，当前实施顺序固定为：
+
+- STORY-062：阅卷主链可靠性与教师连续阅卷（软件已验收）；
+- STORY-063：主观题 AI 影子批处理与人工复核衔接；
+- STORY-064：阅卷质量中心与评分证据治理；
+- STORY-065：学生成绩、申诉与重发布闭环；
+- STORY-066：学校系统集成、离线采集与现场运维；
+- STORY-067：限量学校试点与发布门禁。
+
+旧路线图中将上述能力标作 STORY-059～064 的内容属于历史编号，不代表当前 Story 状态；新增实现、验收和审批记录均以本表为准。

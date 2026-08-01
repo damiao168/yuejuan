@@ -224,7 +224,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 			CapabilityProfile: cfg.AIService.CapabilityProfile,
 		})
 	}
-	subjectiveHandler := subjective.NewHandler(subjectiveStore, subjectiveAdapter, authStore)
+	subjectiveHandler := subjective.NewHandler(subjectiveStore, subjectiveAdapter, authStore).WithWorkerRuntimeStore(workerRuntimeStore)
 	evidenceHandler := evidence.NewHandler(evidenceStore, evidence.NewEngine(), authStore)
 	reviewHandler := review.NewHandler(reviewStore, authStore, segmentHandler.GetImage, fileHandler.Download)
 	scoreHandler := score.NewHandler(scoreStore, authStore)
@@ -393,6 +393,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/model-evaluation-runs/{id}/candidates", requireModelEvaluationManage(modelGovernanceHandler.AddEvaluationCandidate))
 	mux.Handle("POST /api/v1/model-evaluation-runs/{id}/complete", requireModelEvaluationManage(modelGovernanceHandler.CompleteEvaluationRun))
 	mux.Handle("POST /api/v1/model-evaluation-runs/{id}/invalidate", requireModelEvaluationManage(modelGovernanceHandler.InvalidateEvaluationRun))
+	mux.Handle("GET /api/v1/model-approvals", requireModelRead(modelGovernanceHandler.ListModelApprovals))
+	mux.Handle("POST /api/v1/model-approvals", requireModelEvaluationManage(modelGovernanceHandler.CreateModelApproval))
+	mux.Handle("POST /api/v1/model-approvals/{id}/revoke", requireModelEvaluationManage(modelGovernanceHandler.RevokeModelApproval))
 
 	mux.Handle("POST /api/v1/tenants", requireTenantManage(orgHandler.CreateTenant))
 	mux.Handle("GET /api/v1/tenants", requireAuth(http.HandlerFunc(orgHandler.ListTenants)))
@@ -504,6 +507,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/internal/answer-segments/{id}/image", requireWorkerExecute(segmentHandler.GetImage))
 	mux.Handle("POST /api/v1/internal/omr-runs/{runId}/result", requireWorkerExecute(gradingHandler.CompleteOMR))
 	mux.Handle("POST /api/v1/internal/omr-runs/{runId}/failure", requireWorkerExecute(gradingHandler.FailOMR))
+	mux.Handle("POST /api/v1/internal/subjective-grading/runs/{runId}/result", requireWorkerExecute(subjectiveHandler.CompleteWorker))
+	mux.Handle("POST /api/v1/internal/subjective-grading/runs/{runId}/failure", requireWorkerExecute(subjectiveHandler.FailWorker))
+	mux.Handle("POST /api/v1/internal/subjective-grading/runs/{runId}/execute", requireWorkerExecute(subjectiveHandler.ExecuteWorker))
 	mux.Handle("GET /api/v1/internal/worker/metrics", requireWorkerRead(workerRuntimeHandler.Metrics))
 
 	mux.Handle("POST /api/v1/submissions/{id}/ocr-tasks", requireOCRManage(ocrHandler.CreateTask))
@@ -545,6 +551,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/omr-calibrations/{id}/approve", requireGradingManage(gradingHandler.ApproveOMRCalibration))
 	mux.Handle("POST /api/v1/omr-calibrations/{id}/revoke", requireGradingManage(gradingHandler.RevokeOMRCalibration))
 	mux.Handle("POST /api/v1/omr-calibrations/{id}/discard", requireGradingManage(gradingHandler.DiscardOMRCalibration))
+	mux.Handle("GET /api/v1/exams/{examId}/scoring-readiness", requireGradingManage(gradingHandler.GetScoringReadiness))
 	mux.Handle("POST /api/v1/exams/{examId}/scoring-runs", requireGradingManage(gradingHandler.StartScoringRun))
 	mux.Handle("GET /api/v1/exams/{examId}/scoring-summary", requireGradingManage(gradingHandler.GetScoringSummary))
 	mux.Handle("GET /api/v1/exams/{examId}/automation-results", requireGradingManage(gradingHandler.GetExamAutomationResults))
@@ -553,6 +560,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/scoring-runs/{runId}/retry-failed", requireGradingManage(gradingHandler.RetryFailedScoringRun))
 	mux.Handle("POST /api/v1/answer-segments/{id}/reprocess-score", requireGradingManage(gradingHandler.ReprocessSegmentScore))
 	mux.Handle("POST /api/v1/answer-segments/{id}/subjective-ai-grade", requireGradingManage(subjectiveHandler.Grade))
+	mux.Handle("POST /api/v1/subjective-grading-batches", requireGradingManage(subjectiveHandler.CreateBatch))
+	mux.Handle("GET /api/v1/subjective-grading-batches/{batchId}", requireGradingManage(subjectiveHandler.GetBatch))
+	mux.Handle("POST /api/v1/subjective-grading-batches/{batchId}/enqueue", requireGradingManage(subjectiveHandler.EnqueueBatch))
 	mux.Handle("POST /api/v1/ai-grades/{id}/verify-evidence", requireEvidenceManage(evidenceHandler.Verify))
 	mux.Handle("PUT /api/v1/exams/{examId}/double-mark-policy", requireReviewManage(reviewHandler.SetExamDoubleMarkPolicy))
 	mux.Handle("PUT /api/v1/questions/{id}/double-mark-policy", requireReviewManage(reviewHandler.SetQuestionDoubleMarkPolicy))

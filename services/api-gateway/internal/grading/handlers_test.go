@@ -191,6 +191,45 @@ func TestScoringRecoveryEndpointsCoordinateWorkerRuntime(t *testing.T) {
 	assertAuditAction(t, authStore, "grading.segment_score_reprocessed")
 }
 
+func TestScoringReadinessEndpointAndBlockedStartReturnActionableChecks(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"grading:manage"})
+	store := newScoringRecoveryTestStore()
+	store.readiness = grading.ScoringReadiness{
+		Ready:          false,
+		ExamStatus:     "collecting",
+		TotalQuestions: 19,
+		TotalSegments:  76,
+		ReadySegments:  75,
+		Checks: []grading.ScoringReadinessCheck{{
+			Code: "answer_segments_processed", Label: "题块处理", Passed: false, Severity: "blocker",
+			Message: "仍有 1 个题块未处理完成或裁剪影像不可用。", Count: 1,
+		}},
+	}
+	store.startErr = &grading.ScoringReadinessError{Readiness: store.readiness}
+	router := testRouter(authStore, store)
+	token := login(t, router)
+
+	req := authedRequest(http.MethodGet, "/api/v1/exams/exam-1/scoring-readiness", nil, token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"ready":false`) ||
+		!strings.Contains(rec.Body.String(), `"code":"answer_segments_processed"`) ||
+		!strings.Contains(rec.Body.String(), `"count":1`) {
+		t.Fatalf("readiness should expose actionable checks, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = authedRequest(http.MethodPost, "/api/v1/exams/exam-1/scoring-runs", bytes.NewBufferString(`{"idempotency_key":"blocked-start"}`), token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict ||
+		!strings.Contains(rec.Body.String(), `"code":"scoring_not_ready"`) ||
+		!strings.Contains(rec.Body.String(), `"scoring_readiness"`) ||
+		strings.Contains(rec.Body.String(), `"code":"grading_operation_failed"`) {
+		t.Fatalf("blocked start should return readiness instead of generic 500, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func testRouter(authStore *auth.MemoryStore, gradingStore grading.Store, optionalStores ...any) http.Handler {
 	cfg := config.Config{
 		Service: config.ServiceConfig{Name: "test", Environment: "test", ReadinessTimeout: time.Millisecond},
@@ -203,6 +242,8 @@ func testRouter(authStore *auth.MemoryStore, gradingStore grading.Store, optiona
 type scoringRecoveryTestStore struct {
 	*grading.MemoryStore
 	run                  grading.ScoringRun
+	readiness            grading.ScoringReadiness
+	startErr             error
 	detail               grading.ScoringRunDetail
 	taskIDs              []string
 	failed               []grading.FailedOMRTask
@@ -216,6 +257,10 @@ func newScoringRecoveryTestStore() *scoringRecoveryTestStore {
 	return &scoringRecoveryTestStore{
 		MemoryStore: grading.NewMemoryStore(),
 		run:         run,
+		readiness: grading.ScoringReadiness{
+			Ready: true, ExamStatus: "collecting", TotalQuestions: 1, TotalSegments: 1, ReadySegments: 1,
+			AutomaticCandidates: 1, Checks: []grading.ScoringReadinessCheck{},
+		},
 		detail: grading.ScoringRunDetail{Run: run, Items: []grading.ScoringRunItem{{
 			AnswerSegmentID: "segment-1", QuestionID: "question-1", QuestionNo: "Q1", QuestionType: "single_choice", AnonymousCode: "SIM-001", State: "confirmed",
 			RecognitionSource: "omr", RecognizedAnswer: "A", RecognitionDecision: "confirmed", RecognitionConfidence: &confidence,
@@ -224,7 +269,14 @@ func newScoringRecoveryTestStore() *scoringRecoveryTestStore {
 	}
 }
 
+func (s *scoringRecoveryTestStore) GetScoringReadiness(_ context.Context, _ string, _ string) (grading.ScoringReadiness, error) {
+	return s.readiness, nil
+}
+
 func (s *scoringRecoveryTestStore) StartScoringRun(_ context.Context, _ string, _ string, _ string, _ grading.StartScoringRunInput) (grading.ScoringRun, error) {
+	if s.startErr != nil {
+		return grading.ScoringRun{}, s.startErr
+	}
 	return s.run, nil
 }
 

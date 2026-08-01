@@ -1,0 +1,16 @@
+[project]
+name = "edugrade-subjective-grading-worker"
+version = "0.1.0"
+description = "EduGrade governed subjective grading worker"
+requires-python = ">=3.11,<3.13"
+dependencies = []
+
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["subjective_grading_worker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

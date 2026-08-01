@@ -30,6 +30,8 @@ var (
 	ErrProductionUnsafe  = errors.New("model governance production configuration is unsafe")
 	ErrInvalidApproval   = errors.New("invalid model sandbox approval")
 	ErrInvalidEvaluation = errors.New("invalid model evaluation")
+	ErrInvalidPromotion  = errors.New("invalid model promotion")
+	ErrModelNotApproved  = errors.New("model scope is not approved")
 
 	governanceKey = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 )

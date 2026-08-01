@@ -132,6 +132,10 @@ export const routes: AppRoute[] = [
     experiences: { admin: { title: "模型治理", group: "系统管理" } }
   },
   {
+    key: "subjectiveGradingBatches", path: "/grading/subjective-batches", title: "主观题批次", group: "阅卷与质量", icon: <Sparkles size={18} />, permissions: ["grading:manage"], mock: false, productionReady: true,
+    experiences: { admin: { title: "主观题批次", group: "阅卷与质量" } }
+  },
+  {
     key: "systemStatus", path: "/system/status", title: "系统运维", group: "系统管理", icon: <ServerCog size={18} />, permissions: ["system:read"], allowedRoles: ["platform_admin"], mock: false, productionReady: true,
     experiences: { admin: { title: "系统运维", group: "系统管理" } }
   },

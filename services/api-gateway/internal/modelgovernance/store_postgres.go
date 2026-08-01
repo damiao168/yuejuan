@@ -798,6 +798,185 @@ WHERE tenant_id = $1 AND id::text = $2
 	return ErrConflict
 }
 
+func (s *PostgresStore) ListModelApprovals(ctx context.Context, tenantID string) ([]ModelApproval, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id::text, tenant_id::text, evaluation_run_id::text,
+       evaluation_candidate_id::text, deployment_id::text,
+       provider_key, deployment_key, model_version, prompt_version, rubric_version,
+       dataset_reference, dataset_sha256, authorization_reference,
+       subject, grade, question_type, modality, manual_review_rate,
+       decision_reference, expires_at, revoked_at, created_at
+FROM model_approval
+WHERE tenant_id = $1
+ORDER BY created_at DESC, id
+`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ModelApproval{}
+	for rows.Next() {
+		item, scanErr := scanModelApproval(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) CreateModelApproval(
+	ctx context.Context,
+	tenantID string,
+	actorID string,
+	input ModelApprovalInput,
+) (ModelApproval, error) {
+	now := time.Now().UTC()
+	if ValidateModelApprovalInput(input, now) != nil {
+		return ModelApproval{}, ErrInvalidPromotion
+	}
+	run, err := s.evaluationRunWithCandidates(ctx, tenantID, input.EvaluationRunID)
+	if err != nil {
+		return ModelApproval{}, err
+	}
+	if run.Status != EvaluationStatusCompleted ||
+		run.EvidenceClass != EvaluationEvidenceAuthorizedFrozenSet {
+		return ModelApproval{}, ErrInvalidPromotion
+	}
+	var candidate EvaluationCandidate
+	found := false
+	for _, item := range run.Candidates {
+		if item.DeploymentID == input.DeploymentID {
+			candidate = item
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ModelApproval{}, ErrNotFound
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ModelApproval{}, err
+	}
+	defer tx.Rollback()
+	lockKey := strings.Join([]string{
+		tenantID, candidate.DeploymentID, candidate.ModelVersion,
+		candidate.PromptVersion, candidate.RubricVersion,
+		run.Subject, run.Grade, run.QuestionType, run.Modality,
+	}, "\x1f")
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return ModelApproval{}, err
+	}
+	var duplicate bool
+	if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM model_approval
+  WHERE tenant_id = $1
+    AND deployment_id = $2
+    AND model_version = $3
+    AND prompt_version = $4
+    AND rubric_version = $5
+    AND subject = $6
+    AND grade = $7
+    AND question_type = $8
+    AND modality = $9
+    AND revoked_at IS NULL
+    AND expires_at > now()
+)
+`, tenantID, candidate.DeploymentID, candidate.ModelVersion,
+		candidate.PromptVersion, candidate.RubricVersion,
+		run.Subject, run.Grade, run.QuestionType, run.Modality).Scan(&duplicate); err != nil {
+		return ModelApproval{}, err
+	}
+	if duplicate {
+		return ModelApproval{}, ErrConflict
+	}
+	row := tx.QueryRowContext(ctx, `
+INSERT INTO model_approval (
+  tenant_id, evaluation_run_id, evaluation_candidate_id, deployment_id,
+  provider_key, deployment_key, model_version, prompt_version, rubric_version,
+  dataset_reference, dataset_sha256, authorization_reference,
+  subject, grade, question_type, modality,
+  manual_review_rate, decision_reference, expires_at, created_by
+)
+VALUES (
+  $1, $2, $3, $4,
+  $5, $6, $7, $8, $9,
+  $10, $11, $12,
+  $13, $14, $15, $16,
+  $17, $18, $19, NULLIF($20, '')::uuid
+)
+RETURNING id::text, tenant_id::text, evaluation_run_id::text,
+          evaluation_candidate_id::text, deployment_id::text,
+          provider_key, deployment_key, model_version, prompt_version, rubric_version,
+          dataset_reference, dataset_sha256, authorization_reference,
+          subject, grade, question_type, modality, manual_review_rate,
+          decision_reference, expires_at, revoked_at, created_at
+`, tenantID, run.ID, candidate.ID, candidate.DeploymentID,
+		candidate.ProviderKey, candidate.DeploymentKey, candidate.ModelVersion,
+		candidate.PromptVersion, candidate.RubricVersion,
+		run.DatasetReference, run.DatasetSHA256, run.AuthorizationRef,
+		run.Subject, run.Grade, run.QuestionType, run.Modality,
+		input.ManualReviewRate, strings.TrimSpace(input.DecisionReference),
+		input.ExpiresAt.UTC(), actorID)
+	item, err := scanModelApproval(row)
+	if err != nil {
+		return ModelApproval{}, mapModelApprovalStoreError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return ModelApproval{}, mapModelApprovalStoreError(err)
+	}
+	return item, nil
+}
+
+func (s *PostgresStore) RevokeModelApproval(
+	ctx context.Context,
+	tenantID string,
+	actorID string,
+	id string,
+	reason string,
+) (ModelApproval, error) {
+	if strings.TrimSpace(reason) == "" {
+		return ModelApproval{}, ErrInvalidPromotion
+	}
+	row := s.db.QueryRowContext(ctx, `
+UPDATE model_approval
+SET revoked_at = now(),
+    revoked_by = NULLIF($3, '')::uuid,
+    revocation_reason = $4
+WHERE tenant_id = $1
+  AND id::text = $2
+  AND revoked_at IS NULL
+RETURNING id::text, tenant_id::text, evaluation_run_id::text,
+          evaluation_candidate_id::text, deployment_id::text,
+          provider_key, deployment_key, model_version, prompt_version, rubric_version,
+          dataset_reference, dataset_sha256, authorization_reference,
+          subject, grade, question_type, modality, manual_review_rate,
+          decision_reference, expires_at, revoked_at, created_at
+`, tenantID, id, actorID, strings.TrimSpace(reason))
+	item, err := scanModelApproval(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		var exists bool
+		checkErr := s.db.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM model_approval WHERE tenant_id = $1 AND id::text = $2)`,
+			tenantID, id,
+		).Scan(&exists)
+		if checkErr != nil {
+			return ModelApproval{}, checkErr
+		}
+		if exists {
+			return ModelApproval{}, ErrConflict
+		}
+		return ModelApproval{}, ErrNotFound
+	}
+	if err != nil {
+		return ModelApproval{}, mapModelApprovalStoreError(err)
+	}
+	return item, nil
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
@@ -909,6 +1088,23 @@ func scanEvaluationCandidate(row rowScanner) (EvaluationCandidate, error) {
 	return PopulateEvaluationMetrics(item), nil
 }
 
+func scanModelApproval(row rowScanner) (ModelApproval, error) {
+	var item ModelApproval
+	if err := row.Scan(
+		&item.ID, &item.TenantID, &item.EvaluationRunID,
+		&item.EvaluationCandidateID, &item.DeploymentID,
+		&item.ProviderKey, &item.DeploymentKey, &item.ModelVersion,
+		&item.PromptVersion, &item.RubricVersion,
+		&item.DatasetReference, &item.DatasetSHA256, &item.AuthorizationRef,
+		&item.Subject, &item.Grade, &item.QuestionType, &item.Modality,
+		&item.ManualReviewRate, &item.DecisionReference,
+		&item.ExpiresAt, &item.RevokedAt, &item.CreatedAt,
+	); err != nil {
+		return ModelApproval{}, err
+	}
+	return item, nil
+}
+
 func mapStoreError(err error) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
@@ -947,6 +1143,22 @@ func mapEvaluationStoreError(err error) error {
 			return ErrConflict
 		case "23514", "23503", "22P02":
 			return ErrInvalidEvaluation
+		}
+	}
+	return err
+}
+
+func mapModelApprovalStoreError(err error) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505":
+			return ErrConflict
+		case "23514", "23503", "22P02":
+			return ErrInvalidPromotion
 		}
 	}
 	return err

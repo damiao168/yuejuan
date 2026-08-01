@@ -213,7 +213,7 @@ func writeRuntimeError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func requiresSourceActivation(sourceType string) bool {
-	return sourceType == "image_quality_run" || sourceType == "ocr_task" || sourceType == "capture_file" || sourceType == "omr_run"
+	return sourceType == "image_quality_run" || sourceType == "ocr_task" || sourceType == "capture_file" || sourceType == "omr_run" || sourceType == "subjective_grading_run"
 }
 
 func runtimeUser(r *http.Request) auth.User {

@@ -12,23 +12,25 @@ import (
 )
 
 type MemoryStore struct {
-	mu          sync.RWMutex
-	providers   map[string]Provider
-	deployments map[string]Deployment
-	policies    map[string]TenantPolicy
-	approvals   map[string]SandboxApproval
-	evaluations map[string]EvaluationRun
-	candidates  map[string]EvaluationCandidate
+	mu             sync.RWMutex
+	providers      map[string]Provider
+	deployments    map[string]Deployment
+	policies       map[string]TenantPolicy
+	approvals      map[string]SandboxApproval
+	evaluations    map[string]EvaluationRun
+	candidates     map[string]EvaluationCandidate
+	modelApprovals map[string]ModelApproval
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		providers:   map[string]Provider{},
-		deployments: map[string]Deployment{},
-		policies:    map[string]TenantPolicy{},
-		approvals:   map[string]SandboxApproval{},
-		evaluations: map[string]EvaluationRun{},
-		candidates:  map[string]EvaluationCandidate{},
+		providers:      map[string]Provider{},
+		deployments:    map[string]Deployment{},
+		policies:       map[string]TenantPolicy{},
+		approvals:      map[string]SandboxApproval{},
+		evaluations:    map[string]EvaluationRun{},
+		candidates:     map[string]EvaluationCandidate{},
+		modelApprovals: map[string]ModelApproval{},
 	}
 }
 
@@ -600,6 +602,127 @@ func (s *MemoryStore) hasLocalEvaluationCandidateLocked(tenantID string, candida
 		}
 	}
 	return false
+}
+
+func (s *MemoryStore) ListModelApprovals(_ context.Context, tenantID string) ([]ModelApproval, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []ModelApproval{}
+	for _, item := range s.modelApprovals {
+		if item.TenantID == tenantID {
+			out = append(out, item)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (s *MemoryStore) CreateModelApproval(
+	_ context.Context,
+	tenantID string,
+	_ string,
+	input ModelApprovalInput,
+) (ModelApproval, error) {
+	now := time.Now().UTC()
+	if ValidateModelApprovalInput(input, now) != nil {
+		return ModelApproval{}, ErrInvalidPromotion
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run, ok := s.evaluations[input.EvaluationRunID]
+	if !ok || run.TenantID != tenantID {
+		return ModelApproval{}, ErrNotFound
+	}
+	if run.Status != EvaluationStatusCompleted ||
+		run.EvidenceClass != EvaluationEvidenceAuthorizedFrozenSet {
+		return ModelApproval{}, ErrInvalidPromotion
+	}
+	var candidate EvaluationCandidate
+	found := false
+	for _, item := range s.candidates {
+		if item.TenantID == tenantID &&
+			item.RunID == run.ID &&
+			item.DeploymentID == input.DeploymentID {
+			candidate = item
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ModelApproval{}, ErrNotFound
+	}
+	for _, item := range s.modelApprovals {
+		if item.TenantID == tenantID && item.DecisionReference == input.DecisionReference {
+			return ModelApproval{}, ErrConflict
+		}
+		if item.TenantID == tenantID &&
+			item.DeploymentID == candidate.DeploymentID &&
+			item.ModelVersion == candidate.ModelVersion &&
+			item.PromptVersion == candidate.PromptVersion &&
+			item.RubricVersion == candidate.RubricVersion &&
+			item.Subject == run.Subject &&
+			item.Grade == run.Grade &&
+			item.QuestionType == run.QuestionType &&
+			item.Modality == run.Modality &&
+			item.IsActive(now) {
+			return ModelApproval{}, ErrConflict
+		}
+	}
+	item := ModelApproval{
+		ID:                    uuid.NewString(),
+		TenantID:              tenantID,
+		EvaluationRunID:       run.ID,
+		EvaluationCandidateID: candidate.ID,
+		DeploymentID:          candidate.DeploymentID,
+		ProviderKey:           candidate.ProviderKey,
+		DeploymentKey:         candidate.DeploymentKey,
+		ModelVersion:          candidate.ModelVersion,
+		PromptVersion:         candidate.PromptVersion,
+		RubricVersion:         candidate.RubricVersion,
+		DatasetReference:      run.DatasetReference,
+		DatasetSHA256:         run.DatasetSHA256,
+		AuthorizationRef:      run.AuthorizationRef,
+		Subject:               run.Subject,
+		Grade:                 run.Grade,
+		QuestionType:          run.QuestionType,
+		Modality:              run.Modality,
+		ManualReviewRate:      input.ManualReviewRate,
+		DecisionReference:     strings.TrimSpace(input.DecisionReference),
+		ExpiresAt:             input.ExpiresAt.UTC(),
+		CreatedAt:             now,
+	}
+	s.modelApprovals[item.ID] = item
+	return item, nil
+}
+
+func (s *MemoryStore) RevokeModelApproval(
+	_ context.Context,
+	tenantID string,
+	_ string,
+	id string,
+	reason string,
+) (ModelApproval, error) {
+	if strings.TrimSpace(reason) == "" {
+		return ModelApproval{}, ErrInvalidPromotion
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.modelApprovals[id]
+	if !ok || item.TenantID != tenantID {
+		return ModelApproval{}, ErrNotFound
+	}
+	if item.RevokedAt != nil {
+		return ModelApproval{}, ErrConflict
+	}
+	now := time.Now().UTC()
+	item.RevokedAt = &now
+	s.modelApprovals[id] = item
+	return item, nil
 }
 
 func sanitizeProvider(provider Provider) Provider {

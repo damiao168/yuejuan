@@ -1,0 +1,12 @@
+ARG SUBJECTIVE_PYTHON_IMAGE=python:3.11.15-slim-trixie
+FROM ${SUBJECTIVE_PYTHON_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY services/subjective-grading-worker/pyproject.toml ./pyproject.toml
+COPY services/subjective-grading-worker/subjective_grading_worker ./subjective_grading_worker
+RUN python -m pip install --no-cache-dir --timeout 180 --retries 10 "pip==26.1.2" "setuptools==83.0.0" \
+    && python -m pip install --no-cache-dir --no-deps .
+USER nobody
+CMD ["python", "-m", "subjective_grading_worker"]

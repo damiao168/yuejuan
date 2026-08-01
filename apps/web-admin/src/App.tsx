@@ -33,6 +33,7 @@ const GradingWorkbenchPage = lazy(() => import("./pages/GradingWorkbenchPage").t
 const AdminGradingOperationsPage = lazy(() => import("./pages/AdminGradingOperationsPage").then((module) => ({ default: module.AdminGradingOperationsPage })));
 const LearningReportsPage = lazy(() => import("./pages/LearningReportsPage").then((module) => ({ default: module.LearningReportsPage })));
 const ModelGovernancePage = lazy(() => import("./pages/ModelGovernancePage").then((module) => ({ default: module.ModelGovernancePage })));
+const SubjectiveGradingBatchPage = lazy(() => import("./pages/SubjectiveGradingBatchPage").then((module) => ({ default: module.SubjectiveGradingBatchPage })));
 const OrganizationSetupPage = lazy(() => import("./pages/OrganizationSetupPage").then((module) => ({ default: module.OrganizationSetupPage })));
 const ExamWorkspacePage = lazy(() => import("./pages/ExamWorkspacePage").then((module) => ({ default: module.ExamWorkspacePage })));
 const AnswerSheetTemplatePage = lazy(() => import("./pages/AnswerSheetTemplatePage").then((module) => ({ default: module.AnswerSheetTemplatePage })));
@@ -338,6 +339,8 @@ function App() {
         canManagePolicy={hasEveryPermission(user, ["model:policy:manage"])}
         canManageEvaluations={hasEveryPermission(user, ["model:evaluation:manage"])}
       />
+    ) : route.path === "/grading/subjective-batches" ? (
+      <SubjectiveGradingBatchPage />
     ) : (
       <ModulePage route={route} experience={navigationExperience} onNavigate={navigate} />
     );

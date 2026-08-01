@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/server"
 	"edugrade-enterprise/services/api-gateway/internal/subjective"
 	"edugrade-enterprise/services/api-gateway/internal/submission"
+	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
 
 const tenantID = "00000000-0000-0000-0000-000000000002"
@@ -151,6 +153,196 @@ func TestInvalidAdapterOutputCreatesFailedGrade(t *testing.T) {
 	assertAuditAction(t, authStore, "subjective.ai_grade_failed")
 }
 
+func TestSubjectiveGradeIdempotencyAvoidsDuplicateAdapterCall(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"grading:manage"})
+	store := subjective.NewMemoryStore()
+	store.AddContext(tenantID, "segment-1", subjectiveContext("short_answer", 8, "synthetic answer", nil))
+	adapter := &countingAdapter{}
+	handler := subjective.NewHandler(store, adapter, authStore)
+	body := `{"idempotency_key":"teacher-retry-001","model_policy":{"model_version":"real-compatible-test","prompt_version":"prompt-v1","min_confidence":0.8}}`
+	first := callSubjectiveRequest(t, handler, "segment-1", body)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first request expected 201, got %d %s", first.Code, first.Body.String())
+	}
+	second := callSubjectiveRequest(t, handler, "segment-1", body)
+	if second.Code != http.StatusOK || !strings.Contains(second.Body.String(), `"idempotent_replay":true`) {
+		t.Fatalf("replay expected 200 with replay marker, got %d %s", second.Code, second.Body.String())
+	}
+	if calls := atomic.LoadInt32(&adapter.calls); calls != 1 {
+		t.Fatalf("idempotent replay must call adapter once, got %d", calls)
+	}
+	if !strings.Contains(first.Body.String(), `"subjective_grading_run_id":"subjective-run-`) {
+		t.Fatalf("grade must link to a durable subjective run: %s", first.Body.String())
+	}
+}
+
+func TestMemorySubjectiveRunLifecycleIsIdempotent(t *testing.T) {
+	store := subjective.NewMemoryStore()
+	input := subjective.CreateRunInput{AnswerSegmentID: "segment-1", AnswerVersion: "answer-v1", QuestionID: "question-1", RubricVersion: "rubric-v1", ModelVersion: "model-v1", PromptVersion: "prompt-v1", RequestID: "request-1"}
+	first, err := store.GetOrCreateRun(context.Background(), tenantID, userID, input)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	replay, err := store.GetOrCreateRun(context.Background(), tenantID, userID, input)
+	if err != nil || replay.ID != first.ID {
+		t.Fatalf("run creation must be idempotent: first=%#v replay=%#v err=%v", first, replay, err)
+	}
+	completed, err := store.UpdateRun(context.Background(), tenantID, first.ID, subjective.UpdateRunInput{Status: subjective.RunSucceeded, GradeID: "grade-1"})
+	if err != nil || completed.Status != subjective.RunSucceeded || completed.GradeID != "grade-1" || completed.CompletedAt == nil {
+		t.Fatalf("run completion not persisted: %#v err=%v", completed, err)
+	}
+}
+
+func TestSubjectiveWorkerResultValidatesVersionsAndCompletesDomainRun(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"grading:manage", "orchestrator:manage"})
+	store := subjective.NewMemoryStore()
+	store.AddContext(tenantID, "segment-1", subjectiveContext("short_answer", 8, "synthetic answer", nil))
+	runtime := workerruntime.NewMemoryStore()
+	handler := subjective.NewHandler(store, fixedAdapter{}, authStore).WithWorkerRuntimeStore(runtime)
+	run, err := store.GetOrCreateRun(context.Background(), tenantID, userID, subjective.CreateRunInput{AnswerSegmentID: "segment-1", AnswerVersion: "answer-v1", QuestionID: "question-short_answer", RubricVersion: "v1", ModelVersion: "model-v1", PromptVersion: "prompt-v1", MinConfidence: 0.8, RequestID: "worker-request-1"})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	task, err := runtime.CreateTask(context.Background(), tenantID, userID, workerruntime.CreateTaskInput{TaskType: "ai_grade", QueueName: "subjective-grading", SourceType: "subjective_grading_run", SourceID: run.ID, PayloadSchemaVersion: "subjective-grade-v1", Payload: map[string]any{"answer_segment_id": "segment-1", "answer_version": "answer-v1", "rubric_version": "v1", "model_version": "model-v1", "prompt_version": "prompt-v1"}, IdempotencyKey: "subjective-task-1", MaxAttempts: 2, RetryBackoffSeconds: 1})
+	if err != nil {
+		t.Fatalf("create worker task: %v", err)
+	}
+	claimed, err := runtime.Claim(context.Background(), tenantID, workerruntime.ClaimInput{QueueName: "subjective-grading", WorkerService: "subjective-worker", WorkerInstanceID: "worker-a", Limit: 1, LeaseSeconds: 300})
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim worker task: %v %#v", err, claimed)
+	}
+	badExecuteBody, _ := json.Marshal(map[string]string{"task_id": task.ID, "lease_token": "wrong-lease"})
+	badExecuteReq := httptest.NewRequest(http.MethodPost, "/api/v1/internal/subjective-grading/runs/"+run.ID+"/execute", bytes.NewReader(badExecuteBody))
+	badExecuteReq.SetPathValue("runId", run.ID)
+	badExecuteReq = badExecuteReq.WithContext(auth.WithUser(badExecuteReq.Context(), auth.User{ID: userID, TenantID: tenantID, Permissions: []string{"orchestrator:manage"}}))
+	badExecuteRec := httptest.NewRecorder()
+	handler.ExecuteWorker(badExecuteRec, badExecuteReq)
+	if badExecuteRec.Code != http.StatusConflict || !strings.Contains(badExecuteRec.Body.String(), "subjective_task_lease_mismatch") {
+		t.Fatalf("worker execute with wrong lease expected 409, got %d %s", badExecuteRec.Code, badExecuteRec.Body.String())
+	}
+	validExecuteBody, _ := json.Marshal(map[string]string{"task_id": task.ID, "lease_token": claimed[0].LeaseToken})
+	validExecuteReq := httptest.NewRequest(http.MethodPost, "/api/v1/internal/subjective-grading/runs/"+run.ID+"/execute", bytes.NewReader(validExecuteBody))
+	validExecuteReq.SetPathValue("runId", run.ID)
+	validExecuteReq = validExecuteReq.WithContext(auth.WithUser(validExecuteReq.Context(), auth.User{ID: userID, TenantID: tenantID, Permissions: []string{"orchestrator:manage"}}))
+	validExecuteRec := httptest.NewRecorder()
+	handler.ExecuteWorker(validExecuteRec, validExecuteReq)
+	if validExecuteRec.Code != http.StatusOK {
+		t.Fatalf("worker execute with active lease expected 200, got %d %s", validExecuteRec.Code, validExecuteRec.Body.String())
+	}
+	output, err := (fixedAdapter{}).Grade(context.Background(), subjective.AdapterInput{RequestID: run.RequestID, SegmentID: "segment-1", Question: paper.Question{ID: "question-short_answer", QuestionType: "short_answer", Score: 8}, Rubric: paper.Rubric{ID: "rubric-short_answer", Version: "v1"}, AnswerText: "synthetic answer", ModelPolicy: subjective.ModelPolicy{ModelVersion: run.ModelVersion, PromptVersion: run.PromptVersion, MinConfidence: run.MinConfidence}})
+	if err != nil {
+		t.Fatalf("build worker output: %v", err)
+	}
+	raw, _ := json.Marshal(subjective.WorkerResultInput{TaskID: task.ID, LeaseToken: claimed[0].LeaseToken, ResultSchemaVersion: "subjective-grade-result-v1", DurationMS: 22, Output: output})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/subjective-grading/runs/"+run.ID+"/result", bytes.NewReader(raw))
+	req.SetPathValue("runId", run.ID)
+	req = req.WithContext(auth.WithUser(req.Context(), auth.User{ID: userID, TenantID: tenantID, Permissions: []string{"orchestrator:manage"}}))
+	rec := httptest.NewRecorder()
+	handler.CompleteWorker(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("worker result expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	updated, err := store.GetRun(context.Background(), tenantID, run.ID)
+	if err != nil || updated.Status != subjective.RunSucceeded || updated.GradeID == "" {
+		t.Fatalf("run should be succeeded and linked to grade: %#v err=%v", updated, err)
+	}
+	storedTask, err := runtime.Get(context.Background(), tenantID, task.ID)
+	if err != nil || storedTask.Status != workerruntime.StatusSucceeded {
+		t.Fatalf("worker task should be completed: %#v err=%v", storedTask, err)
+	}
+}
+
+func TestSubjectiveBatchCreationValidatesSegmentsAndIsIdempotent(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"grading:manage"})
+	store := subjective.NewMemoryStore()
+	store.AddContext(tenantID, "segment-1", subjectiveContext("short_answer", 8, "answer one", nil))
+	store.AddContext(tenantID, "segment-2", subjectiveContext("essay", 20, "answer two", nil))
+	runtime := workerruntime.NewMemoryStore()
+	handler := subjective.NewHandler(store, fixedAdapter{}, authStore).WithWorkerRuntimeStore(runtime)
+	request := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/subjective-grading-batches", bytes.NewBufferString(body))
+		req = req.WithContext(auth.WithUser(req.Context(), auth.User{ID: userID, TenantID: tenantID, Permissions: []string{"grading:manage"}}))
+		rec := httptest.NewRecorder()
+		handler.CreateBatch(rec, req)
+		return rec
+	}
+	first := request(`{"idempotency_key":"batch-retry-1","segment_ids":["segment-1","segment-2"]}`)
+	if first.Code != http.StatusCreated || !strings.Contains(first.Body.String(), `"total_count":2`) || !strings.Contains(first.Body.String(), `"status":"planned"`) {
+		t.Fatalf("batch expected planned 201, got %d %s", first.Code, first.Body.String())
+	}
+	var created struct {
+		Batch subjective.GradingBatch `json:"batch"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &created); err != nil || created.Batch.ID == "" {
+		t.Fatalf("decode created batch: %v %s", err, first.Body.String())
+	}
+	enqueueReq := httptest.NewRequest(http.MethodPost, "/api/v1/subjective-grading-batches/"+created.Batch.ID+"/enqueue", nil)
+	enqueueReq.SetPathValue("batchId", created.Batch.ID)
+	enqueueReq = enqueueReq.WithContext(auth.WithUser(enqueueReq.Context(), auth.User{ID: userID, TenantID: tenantID, Permissions: []string{"grading:manage"}}))
+	enqueueRec := httptest.NewRecorder()
+	handler.EnqueueBatch(enqueueRec, enqueueReq)
+	if enqueueRec.Code != http.StatusOK || !strings.Contains(enqueueRec.Body.String(), `"queued_count":2`) {
+		t.Fatalf("enqueue expected two queued tasks, got %d %s", enqueueRec.Code, enqueueRec.Body.String())
+	}
+	requeued := httptest.NewRecorder()
+	handler.EnqueueBatch(requeued, enqueueReq)
+	if requeued.Code != http.StatusOK || !strings.Contains(requeued.Body.String(), `"queued_count":2`) {
+		t.Fatalf("repeated enqueue should be idempotent, got %d %s", requeued.Code, requeued.Body.String())
+	}
+	claimed, err := runtime.Claim(context.Background(), tenantID, workerruntime.ClaimInput{QueueName: "subjective-grading", WorkerService: "subjective-worker", WorkerInstanceID: "worker-b", Limit: 1, LeaseSeconds: 300})
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim one batch task: %v %#v", err, claimed)
+	}
+	run, err := store.GetRun(context.Background(), tenantID, claimed[0].SourceID)
+	if err != nil || run.Status != subjective.RunQueued {
+		t.Fatalf("batch run must remain queued until worker execution: %#v err=%v", run, err)
+	}
+	executeBody, _ := json.Marshal(map[string]string{"task_id": claimed[0].ID, "lease_token": claimed[0].LeaseToken})
+	executeReq := httptest.NewRequest(http.MethodPost, "/api/v1/internal/subjective-grading/runs/"+run.ID+"/execute", bytes.NewReader(executeBody))
+	executeReq.SetPathValue("runId", run.ID)
+	executeReq = executeReq.WithContext(auth.WithUser(executeReq.Context(), auth.User{ID: userID, TenantID: tenantID, Permissions: []string{"orchestrator:manage"}}))
+	executeRec := httptest.NewRecorder()
+	handler.ExecuteWorker(executeRec, executeReq)
+	if executeRec.Code != http.StatusOK {
+		t.Fatalf("execute batch task expected 200, got %d %s", executeRec.Code, executeRec.Body.String())
+	}
+	getBatchReq := httptest.NewRequest(http.MethodGet, "/api/v1/subjective-grading-batches/"+created.Batch.ID, nil)
+	getBatchReq.SetPathValue("batchId", created.Batch.ID)
+	getBatchReq = getBatchReq.WithContext(auth.WithUser(getBatchReq.Context(), auth.User{ID: userID, TenantID: tenantID, Permissions: []string{"grading:manage"}}))
+	getBatchRec := httptest.NewRecorder()
+	handler.GetBatch(getBatchRec, getBatchReq)
+	if getBatchRec.Code != http.StatusOK || !strings.Contains(getBatchRec.Body.String(), `"queued_count":1`) || !strings.Contains(getBatchRec.Body.String(), `"processing_count":1`) {
+		t.Fatalf("batch refresh should expose live worker progress, got %d %s", getBatchRec.Code, getBatchRec.Body.String())
+	}
+	second := request(`{"idempotency_key":"batch-retry-1","segment_ids":["segment-1","segment-2"]}`)
+	if second.Code != http.StatusCreated || !strings.Contains(second.Body.String(), `"subjective-batch-`) {
+		t.Fatalf("batch replay should return same durable batch, got %d %s", second.Code, second.Body.String())
+	}
+	conflict := request(`{"idempotency_key":"batch-retry-1","segment_ids":["segment-2","segment-1"]}`)
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), `subjective_grade_idempotency_conflict`) {
+		t.Fatalf("changed batch request expected 409 conflict, got %d %s", conflict.Code, conflict.Body.String())
+	}
+	invalid := request(`{"idempotency_key":"batch-invalid","segment_ids":["segment-1","segment-1"]}`)
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate segment IDs expected 400, got %d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestSubjectiveGradeRejectsUnknownFieldsAndInvalidIdempotencyKey(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"grading:manage"})
+	store := subjective.NewMemoryStore()
+	store.AddContext(tenantID, "segment-1", subjectiveContext("short_answer", 8, "synthetic answer", nil))
+	handler := subjective.NewHandler(store, fixedAdapter{}, authStore)
+	unknown := callSubjectiveRequest(t, handler, "segment-1", `{"unexpected":true}`)
+	if unknown.Code != http.StatusBadRequest {
+		t.Fatalf("unknown field expected 400, got %d %s", unknown.Code, unknown.Body.String())
+	}
+	invalidKey := callSubjectiveRequest(t, handler, "segment-1", `{"idempotency_key":"bad key"}`)
+	if invalidKey.Code != http.StatusBadRequest {
+		t.Fatalf("invalid idempotency key expected 400, got %d %s", invalidKey.Code, invalidKey.Body.String())
+	}
+}
+
 func TestSubjectivePermissionDeniedAndUnauthenticated(t *testing.T) {
 	store := subjective.NewMemoryStore()
 	store.AddContext(tenantID, "segment-1", subjectiveContext("short_answer", 5, "synthetic answer", nil))
@@ -214,6 +406,15 @@ func (invalidAdapter) Grade(_ context.Context, input subjective.AdapterInput) (s
 		RawOutput:      map[string]any{"adapter": "invalid-test-adapter"},
 		Mock:           false,
 	}, nil
+}
+
+type countingAdapter struct{ calls int32 }
+
+func (a *countingAdapter) Name() string { return "counting-test-adapter" }
+
+func (a *countingAdapter) Grade(ctx context.Context, input subjective.AdapterInput) (subjective.AdapterOutput, error) {
+	atomic.AddInt32(&a.calls, 1)
+	return fixedAdapter{}.Grade(ctx, input)
 }
 
 func testRouter(authStore *auth.MemoryStore, subjectiveStore subjective.Store) http.Handler {
@@ -287,6 +488,16 @@ func callSubjectiveHandler(t *testing.T, handler *subjective.Handler, segmentID 
 		t.Fatalf("subjective grade expected 201, got %d %s", rec.Code, rec.Body.String())
 	}
 	return rec.Body.String()
+}
+
+func callSubjectiveRequest(t *testing.T, handler *subjective.Handler, segmentID string, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/answer-segments/"+segmentID+"/subjective-ai-grade", bytes.NewBufferString(body))
+	req.SetPathValue("id", segmentID)
+	req = req.WithContext(auth.WithUser(req.Context(), auth.User{ID: userID, TenantID: tenantID, TenantCode: "demo", Username: "subjective_admin", Status: "active", Permissions: []string{"grading:manage"}}))
+	rec := httptest.NewRecorder()
+	handler.Grade(rec, req)
+	return rec
 }
 
 func subjectiveContext(kind string, score float64, answerText string, ocrConfidence *float64) subjective.Context {

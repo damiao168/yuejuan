@@ -21,6 +21,15 @@ var (
 	ErrAnswerMissing           = errors.New("answer segment has no recorded answer")
 	ErrRubricMissing           = errors.New("question has no rubric")
 	ErrInvalidModelOutput      = errors.New("invalid model output")
+	ErrIdempotencyConflict     = errors.New("subjective grading idempotency conflict")
+)
+
+const (
+	RunQueued     = "queued"
+	RunProcessing = "processing"
+	RunSucceeded  = "succeeded"
+	RunFailed     = "failed"
+	RunConflict   = "conflict"
 )
 
 type ModelPolicy struct {
@@ -30,7 +39,8 @@ type ModelPolicy struct {
 }
 
 type GradeRequest struct {
-	ModelPolicy ModelPolicy `json:"model_policy"`
+	ModelPolicy    ModelPolicy `json:"model_policy"`
+	IdempotencyKey string      `json:"idempotency_key,omitempty"`
 }
 
 type Context struct {
@@ -114,6 +124,7 @@ type Grade struct {
 	DeliveryMode           string                `json:"delivery_mode"`
 	CapabilityProfile      string                `json:"capability_profile"`
 	AdapterRequestID       string                `json:"adapter_request_id"`
+	RunID                  string                `json:"subjective_grading_run_id,omitempty"`
 	AdapterName            string                `json:"adapter_name"`
 	ProviderKey            string                `json:"provider_key"`
 	DeploymentKey          string                `json:"deployment_key"`
@@ -139,9 +150,104 @@ type Grade struct {
 	CreatedAt              time.Time             `json:"created_at"`
 }
 
+type GradingRun struct {
+	ID              string     `json:"id"`
+	TenantID        string     `json:"tenant_id"`
+	AnswerSegmentID string     `json:"answer_segment_id"`
+	BatchID         string     `json:"batch_id,omitempty"`
+	AnswerVersion   string     `json:"answer_version"`
+	QuestionID      string     `json:"question_id"`
+	RubricVersion   string     `json:"rubric_version"`
+	ModelVersion    string     `json:"model_version"`
+	PromptVersion   string     `json:"prompt_version"`
+	MinConfidence   float64    `json:"min_confidence"`
+	RequestID       string     `json:"request_id"`
+	Status          string     `json:"status"`
+	AttemptCount    int        `json:"attempt_count"`
+	GradeID         string     `json:"grade_id,omitempty"`
+	ErrorCode       string     `json:"error_code,omitempty"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+type CreateRunInput struct {
+	AnswerSegmentID string
+	BatchID         string
+	AnswerVersion   string
+	QuestionID      string
+	RubricVersion   string
+	ModelVersion    string
+	PromptVersion   string
+	MinConfidence   float64
+	RequestID       string
+}
+
+type UpdateRunInput struct {
+	Status       string
+	GradeID      string
+	ErrorCode    string
+	AttemptCount int
+}
+
+type WorkerResultInput struct {
+	TaskID              string        `json:"task_id"`
+	LeaseToken          string        `json:"lease_token"`
+	ResultSchemaVersion string        `json:"result_schema_version"`
+	DurationMS          int           `json:"duration_ms"`
+	Output              AdapterOutput `json:"output"`
+}
+
+type WorkerFailureInput struct {
+	TaskID      string         `json:"task_id"`
+	LeaseToken  string         `json:"lease_token"`
+	Retryable   bool           `json:"retryable"`
+	ErrorCode   string         `json:"error_code"`
+	ErrorDetail map[string]any `json:"error_detail"`
+	DurationMS  int            `json:"duration_ms"`
+}
+
+type GradingBatch struct {
+	ID              string    `json:"id"`
+	TenantID        string    `json:"tenant_id"`
+	IdempotencyKey  string    `json:"idempotency_key"`
+	Status          string    `json:"status"`
+	SegmentIDs      []string  `json:"segment_ids"`
+	TotalCount      int       `json:"total_count"`
+	QueuedCount     int       `json:"queued_count"`
+	ProcessingCount int       `json:"processing_count"`
+	SucceededCount  int       `json:"succeeded_count"`
+	FailedCount     int       `json:"failed_count"`
+	CreatedBy       string    `json:"created_by"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type CreateBatchInput struct {
+	IdempotencyKey string   `json:"idempotency_key"`
+	SegmentIDs     []string `json:"segment_ids"`
+}
+
+type UpdateBatchInput struct {
+	Status          string
+	QueuedCount     int
+	ProcessingCount int
+	SucceededCount  int
+	FailedCount     int
+}
+
 type Store interface {
 	LoadContext(ctx context.Context, tenantID string, segmentID string) (Context, error)
+	GetRun(ctx context.Context, tenantID string, runID string) (GradingRun, error)
+	GetGradeByAdapterRequestID(ctx context.Context, tenantID string, requestID string) (Grade, error)
 	CreateGrade(ctx context.Context, tenantID string, actorID string, grade Grade) (Grade, error)
+	GetOrCreateRun(ctx context.Context, tenantID string, actorID string, input CreateRunInput) (GradingRun, error)
+	UpdateRun(ctx context.Context, tenantID string, runID string, input UpdateRunInput) (GradingRun, error)
+	CreateBatch(ctx context.Context, tenantID string, actorID string, input CreateBatchInput) (GradingBatch, error)
+	GetBatch(ctx context.Context, tenantID string, batchID string) (GradingBatch, error)
+	RefreshBatch(ctx context.Context, tenantID string, batchID string) (GradingBatch, error)
+	UpdateBatch(ctx context.Context, tenantID string, batchID string, input UpdateBatchInput) (GradingBatch, error)
 }
 
 type LLMGradingAdapter interface {

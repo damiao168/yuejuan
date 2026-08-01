@@ -266,6 +266,27 @@ export interface ScoringSummary {
   questions: ScoringQuestionSummary[];
 }
 
+export interface ScoringReadinessCheck {
+  code: string;
+  label: string;
+  passed: boolean;
+  severity: "blocker" | "warning";
+  message: string;
+  count?: number;
+}
+
+export interface ScoringReadiness {
+  ready: boolean;
+  exam_status: string;
+  total_questions: number;
+  total_segments: number;
+  ready_segments: number;
+  automatic_candidates: number;
+  manual_review_candidates: number;
+  active_run?: ScoringRun;
+  checks: ScoringReadinessCheck[];
+}
+
 export interface ScoringRunItem {
   answer_segment_id: string;
   submission_id: string;
@@ -514,6 +535,10 @@ export async function startScoringRun(examId: string, idempotencyKey: string) {
     method: "POST",
     body: JSON.stringify({ idempotency_key: idempotencyKey })
   });
+}
+
+export async function getScoringReadiness(examId: string) {
+  return apiClient.request<{ scoring_readiness: ScoringReadiness }>(`/api/v1/exams/${encodeURIComponent(examId)}/scoring-readiness`);
 }
 
 export async function getScoringSummary(examId: string) {

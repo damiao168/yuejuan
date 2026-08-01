@@ -52,6 +52,27 @@ type ScoringSummary struct {
 	Questions []ScoringQuestionSummary `json:"questions"`
 }
 
+type ScoringReadinessCheck struct {
+	Code     string `json:"code"`
+	Label    string `json:"label"`
+	Passed   bool   `json:"passed"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+	Count    int    `json:"count,omitempty"`
+}
+
+type ScoringReadiness struct {
+	Ready                  bool                    `json:"ready"`
+	ExamStatus             string                  `json:"exam_status"`
+	TotalQuestions         int                     `json:"total_questions"`
+	TotalSegments          int                     `json:"total_segments"`
+	ReadySegments          int                     `json:"ready_segments"`
+	AutomaticCandidates    int                     `json:"automatic_candidates"`
+	ManualReviewCandidates int                     `json:"manual_review_candidates"`
+	ActiveRun              *ScoringRun             `json:"active_run,omitempty"`
+	Checks                 []ScoringReadinessCheck `json:"checks"`
+}
+
 // ScoringRunItem is the operator-facing state of one answer segment in a run.
 // It intentionally contains no student identity; the grading workspace remains
 // the only place that resolves an anonymous task to protected answer assets.
@@ -152,6 +173,7 @@ type OMRFailureInput struct {
 }
 
 type ScoringRunStore interface {
+	GetScoringReadiness(context.Context, string, string) (ScoringReadiness, error)
 	StartScoringRun(context.Context, string, string, string, StartScoringRunInput) (ScoringRun, error)
 	GetScoringSummary(context.Context, string, string) (ScoringSummary, error)
 	GetOMRRun(context.Context, string, string) (OMRRun, error)
@@ -236,6 +258,15 @@ func (s *PostgresStore) startScoringRun(ctx context.Context, tenantID, examID, a
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return ScoringRun{}, err
+	}
+	if segmentID == "" {
+		readiness, readinessErr := calculateScoringReadiness(ctx, tx, tenantID, examID)
+		if readinessErr != nil {
+			return ScoringRun{}, readinessErr
+		}
+		if !readiness.Ready {
+			return ScoringRun{}, &ScoringReadinessError{Readiness: readiness}
+		}
 	}
 	var unresolvedRunID string
 	err = tx.QueryRowContext(ctx, `

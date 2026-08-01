@@ -15,10 +15,12 @@ type MemoryStore struct {
 	next     int
 	contexts map[string]Context
 	grades   map[string][]Grade
+	runs     map[string]GradingRun
+	batches  map[string]GradingBatch
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{next: 1, contexts: map[string]Context{}, grades: map[string][]Grade{}}
+	return &MemoryStore{next: 1, contexts: map[string]Context{}, grades: map[string][]Grade{}, runs: map[string]GradingRun{}, batches: map[string]GradingBatch{}}
 }
 
 func (s *MemoryStore) AddContext(tenantID string, segmentID string, ctx Context) {
@@ -50,6 +52,16 @@ func (s *MemoryStore) CreateGrade(_ context.Context, tenantID string, actorID st
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if grade.AdapterRequestID != "" {
+		for _, existing := range s.grades[key(tenantID, grade.AnswerSegmentID)] {
+			if existing.AdapterRequestID == grade.AdapterRequestID {
+				if sameGradeIdentity(existing, grade) {
+					return existing, nil
+				}
+				return Grade{}, ErrIdempotencyConflict
+			}
+		}
+	}
 	grade.ID = s.id("ai-grade")
 	grade.TenantID = tenantID
 	grade.CreatedBy = actorID
@@ -61,6 +73,222 @@ func (s *MemoryStore) CreateGrade(_ context.Context, tenantID string, actorID st
 	grade.RiskFlags = cloneStrings(grade.RiskFlags)
 	s.grades[key(tenantID, grade.AnswerSegmentID)] = append(s.grades[key(tenantID, grade.AnswerSegmentID)], grade)
 	return grade, nil
+}
+
+func (s *MemoryStore) GetGradeByAdapterRequestID(_ context.Context, tenantID string, requestID string) (Grade, error) {
+	if requestID == "" {
+		return Grade{}, ErrNotFound
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, grades := range s.grades {
+		for _, grade := range grades {
+			if grade.TenantID == tenantID && grade.AdapterRequestID == requestID {
+				return grade, nil
+			}
+		}
+	}
+	return Grade{}, ErrNotFound
+}
+
+func (s *MemoryStore) GetOrCreateRun(_ context.Context, tenantID string, _ string, input CreateRunInput) (GradingRun, error) {
+	if tenantID == "" || input.AnswerSegmentID == "" || input.RequestID == "" {
+		return GradingRun{}, ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	runKey := key(tenantID, input.RequestID)
+	if existing, ok := s.runs[runKey]; ok {
+		return existing, nil
+	}
+	now := time.Now().UTC()
+	status := RunProcessing
+	attemptCount := 1
+	var startedAt *time.Time
+	if input.BatchID == "" {
+		startedAt = &now
+	} else {
+		status = RunQueued
+		attemptCount = 0
+	}
+	run := GradingRun{ID: s.id("subjective-run"), TenantID: tenantID, AnswerSegmentID: input.AnswerSegmentID, BatchID: input.BatchID, AnswerVersion: input.AnswerVersion, QuestionID: input.QuestionID, RubricVersion: input.RubricVersion, ModelVersion: input.ModelVersion, PromptVersion: input.PromptVersion, MinConfidence: input.MinConfidence, RequestID: input.RequestID, Status: status, AttemptCount: attemptCount, StartedAt: startedAt, CreatedAt: now, UpdatedAt: now}
+	s.runs[runKey] = run
+	return run, nil
+}
+
+func (s *MemoryStore) GetRun(_ context.Context, tenantID string, runID string) (GradingRun, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, run := range s.runs {
+		if run.TenantID == tenantID && run.ID == runID {
+			return run, nil
+		}
+	}
+	return GradingRun{}, ErrNotFound
+}
+
+func (s *MemoryStore) UpdateRun(_ context.Context, tenantID string, runID string, input UpdateRunInput) (GradingRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for runKey, run := range s.runs {
+		if run.TenantID != tenantID || run.ID != runID {
+			continue
+		}
+		if input.Status != RunQueued && input.Status != RunProcessing && input.Status != RunSucceeded && input.Status != RunFailed && input.Status != RunConflict {
+			return GradingRun{}, ErrInvalidInput
+		}
+		run.Status = input.Status
+		if input.GradeID != "" {
+			run.GradeID = input.GradeID
+		}
+		if input.ErrorCode != "" {
+			run.ErrorCode = input.ErrorCode
+		}
+		if input.AttemptCount > 0 {
+			run.AttemptCount = input.AttemptCount
+		}
+		now := time.Now().UTC()
+		run.UpdatedAt = now
+		if input.Status == RunProcessing && run.StartedAt == nil {
+			run.StartedAt = &now
+		}
+		if input.Status == RunSucceeded || input.Status == RunFailed || input.Status == RunConflict {
+			run.CompletedAt = &now
+		} else {
+			run.CompletedAt = nil
+		}
+		s.runs[runKey] = run
+		return run, nil
+	}
+	return GradingRun{}, ErrNotFound
+}
+
+func (s *MemoryStore) CreateBatch(_ context.Context, tenantID string, actorID string, input CreateBatchInput) (GradingBatch, error) {
+	segments, err := normalizeBatchSegments(input.SegmentIDs)
+	if err != nil || tenantID == "" || input.IdempotencyKey == "" {
+		return GradingBatch{}, ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	batchKey := key(tenantID, input.IdempotencyKey)
+	if existing, ok := s.batches[batchKey]; ok {
+		if !sameStringSlice(existing.SegmentIDs, segments) {
+			return GradingBatch{}, ErrIdempotencyConflict
+		}
+		return existing, nil
+	}
+	now := time.Now().UTC()
+	batch := GradingBatch{ID: s.id("subjective-batch"), TenantID: tenantID, IdempotencyKey: input.IdempotencyKey, Status: "planned", SegmentIDs: cloneStrings(segments), TotalCount: len(segments), CreatedBy: actorID, CreatedAt: now, UpdatedAt: now}
+	s.batches[batchKey] = batch
+	return batch, nil
+}
+
+func (s *MemoryStore) GetBatch(_ context.Context, tenantID string, batchID string) (GradingBatch, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, batch := range s.batches {
+		if batch.TenantID == tenantID && batch.ID == batchID {
+			batch.SegmentIDs = cloneStrings(batch.SegmentIDs)
+			return batch, nil
+		}
+	}
+	return GradingBatch{}, ErrNotFound
+}
+
+func (s *MemoryStore) RefreshBatch(_ context.Context, tenantID string, batchID string) (GradingBatch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for batchKey, batch := range s.batches {
+		if batch.TenantID != tenantID || batch.ID != batchID {
+			continue
+		}
+		if batch.Status == "planned" || batch.Status == "cancelled" {
+			batch.SegmentIDs = cloneStrings(batch.SegmentIDs)
+			return batch, nil
+		}
+		queued, processing, succeeded, failed := 0, 0, 0, 0
+		for _, run := range s.runs {
+			if run.TenantID != tenantID || run.BatchID != batchID {
+				continue
+			}
+			switch run.Status {
+			case RunQueued:
+				queued++
+			case RunProcessing:
+				processing++
+			case RunSucceeded:
+				succeeded++
+			case RunFailed, RunConflict:
+				failed++
+			}
+		}
+		status := "processing"
+		if succeeded+failed == batch.TotalCount {
+			if failed > 0 {
+				status = "failed"
+			} else {
+				status = "completed"
+			}
+		}
+		batch.Status, batch.QueuedCount, batch.ProcessingCount, batch.SucceededCount, batch.FailedCount = status, queued, processing, succeeded, failed
+		batch.UpdatedAt = time.Now().UTC()
+		s.batches[batchKey] = batch
+		batch.SegmentIDs = cloneStrings(batch.SegmentIDs)
+		return batch, nil
+	}
+	return GradingBatch{}, ErrNotFound
+}
+
+func (s *MemoryStore) UpdateBatch(_ context.Context, tenantID string, batchID string, input UpdateBatchInput) (GradingBatch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for batchKey, batch := range s.batches {
+		if batch.TenantID != tenantID || batch.ID != batchID {
+			continue
+		}
+		if input.Status != "planned" && input.Status != "processing" && input.Status != "completed" && input.Status != "failed" && input.Status != "cancelled" {
+			return GradingBatch{}, ErrInvalidInput
+		}
+		if input.QueuedCount < 0 || input.ProcessingCount < 0 || input.SucceededCount < 0 || input.FailedCount < 0 || input.QueuedCount+input.ProcessingCount+input.SucceededCount+input.FailedCount > batch.TotalCount {
+			return GradingBatch{}, ErrInvalidInput
+		}
+		batch.Status, batch.QueuedCount, batch.ProcessingCount, batch.SucceededCount, batch.FailedCount = input.Status, input.QueuedCount, input.ProcessingCount, input.SucceededCount, input.FailedCount
+		batch.UpdatedAt = time.Now().UTC()
+		s.batches[batchKey] = batch
+		return batch, nil
+	}
+	return GradingBatch{}, ErrNotFound
+}
+
+func normalizeBatchSegments(input []string) ([]string, error) {
+	if len(input) == 0 || len(input) > 1000 {
+		return nil, ErrInvalidInput
+	}
+	seen := map[string]struct{}{}
+	segments := make([]string, 0, len(input))
+	for _, segmentID := range input {
+		if segmentID == "" {
+			return nil, ErrInvalidInput
+		}
+		if _, ok := seen[segmentID]; ok {
+			return nil, ErrInvalidInput
+		}
+		seen[segmentID] = struct{}{}
+		segments = append(segments, segmentID)
+	}
+	return segments, nil
+}
+
+func sameStringSlice(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func ContextForTest(kind string, score float64, answerText string, ocrConfidence *float64) Context {

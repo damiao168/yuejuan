@@ -279,6 +279,16 @@ func (h *Handler) StartScoringRun(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, map[string]any{"scoring_run": run})
 }
 
+func (h *Handler) GetScoringReadiness(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	readiness, err := h.scoringStore().GetScoringReadiness(r.Context(), user.TenantID, r.PathValue("examId"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"scoring_readiness": readiness})
+}
+
 func (h *Handler) GetScoringSummary(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	summary, err := h.scoringStore().GetScoringSummary(r.Context(), user.TenantID, r.PathValue("examId"))
@@ -538,6 +548,17 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 }
 
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	var readinessErr *ScoringReadinessError
+	if errors.As(err, &readinessErr) {
+		httpx.JSON(w, http.StatusConflict, map[string]any{
+			"error": map[string]any{
+				"code":    "scoring_not_ready",
+				"message": "考试尚未满足评分启动条件",
+			},
+			"scoring_readiness": readinessErr.Readiness,
+		})
+		return
+	}
 	switch {
 	case errors.Is(err, ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, "grading_resource_not_found", "grading resource not found")

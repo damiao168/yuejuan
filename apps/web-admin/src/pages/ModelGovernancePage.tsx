@@ -36,12 +36,14 @@ import {
   getModelPolicy,
   listModelDeployments,
   listModelEvaluationRuns,
+  listModelApprovals,
   listModelProviders,
   probeModelSecret,
   updateModelPolicy,
   type CreateDeploymentInput,
   type CreateProviderInput,
   type EvaluationRun,
+  type ModelApproval,
   type ModelDeployment,
   type ModelProvider,
   type PolicyMode,
@@ -52,8 +54,9 @@ import {
 import { ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { ModelEvaluationWorkspace } from "../components/model-governance/ModelEvaluationWorkspace";
+import { ModelApprovalWorkspace } from "../components/model-governance/ModelApprovalWorkspace";
 
-type GovernanceView = "providers" | "deployments" | "evaluations" | "policy";
+type GovernanceView = "providers" | "deployments" | "evaluations" | "approvals" | "policy";
 
 const policyModeLabels: Record<PolicyMode, string> = {
   local_only: "仅本地",
@@ -111,6 +114,7 @@ export function ModelGovernancePage({
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [deployments, setDeployments] = useState<ModelDeployment[]>([]);
   const [evaluationRuns, setEvaluationRuns] = useState<EvaluationRun[]>([]);
+  const [modelApprovals, setModelApprovals] = useState<ModelApproval[]>([]);
   const [policy, setPolicy] = useState<TenantModelPolicy | null>(null);
   const [activeView, setActiveView] = useState<GovernanceView>("providers");
   const [loading, setLoading] = useState(true);
@@ -130,16 +134,18 @@ export function ModelGovernancePage({
     setLoading(true);
     setError(undefined);
     try {
-      const [providerResponse, deploymentResponse, policyResponse, evaluationResponse] = await Promise.all([
+      const [providerResponse, deploymentResponse, policyResponse, evaluationResponse, approvalResponse] = await Promise.all([
         listModelProviders(),
         listModelDeployments(),
         getModelPolicy(),
-        listModelEvaluationRuns()
+        listModelEvaluationRuns(),
+        listModelApprovals()
       ]);
       setProviders(providerResponse.providers);
       setDeployments(deploymentResponse.deployments);
       setPolicy(policyResponse.policy);
       setEvaluationRuns(evaluationResponse.evaluation_runs);
+      setModelApprovals(approvalResponse.model_approvals);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -465,6 +471,7 @@ export function ModelGovernancePage({
                   { value: "providers", label: `供应商 ${providers.length}` },
                   { value: "deployments", label: `部署 ${deployments.length}` },
                   { value: "evaluations", label: `评测 ${evaluationRuns.length}` },
+                  { value: "approvals", label: `批准 ${modelApprovals.filter((item) => !item.revoked_at && new Date(item.expires_at).getTime() > Date.now()).length}` },
                   { value: "policy", label: "租户策略" }
                 ]}
               />
@@ -502,6 +509,14 @@ export function ModelGovernancePage({
                     runs={evaluationRuns}
                     deployments={deployments}
                     loading={loading}
+                    canManage={canManageEvaluations}
+                    onRefresh={load}
+                  />
+                ) : null}
+                {activeView === "approvals" ? (
+                  <ModelApprovalWorkspace
+                    approvals={modelApprovals}
+                    evaluationRuns={evaluationRuns}
                     canManage={canManageEvaluations}
                     onRefresh={load}
                   />

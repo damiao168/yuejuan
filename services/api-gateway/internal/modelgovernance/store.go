@@ -21,6 +21,9 @@ type Store interface {
 	AddEvaluationCandidate(ctx context.Context, tenantID string, actorID string, runID string, input EvaluationCandidateInput) (EvaluationCandidate, error)
 	CompleteEvaluationRun(ctx context.Context, tenantID string, actorID string, runID string, reason string) (EvaluationRun, error)
 	InvalidateEvaluationRun(ctx context.Context, tenantID string, actorID string, runID string, reason string) (EvaluationRun, error)
+	ListModelApprovals(ctx context.Context, tenantID string) ([]ModelApproval, error)
+	CreateModelApproval(ctx context.Context, tenantID string, actorID string, input ModelApprovalInput) (ModelApproval, error)
+	RevokeModelApproval(ctx context.Context, tenantID string, actorID string, id string, reason string) (ModelApproval, error)
 }
 
 func ProviderFromInput(input ProviderInput) Provider {

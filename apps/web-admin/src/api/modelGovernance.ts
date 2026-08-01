@@ -198,6 +198,40 @@ export interface AddEvaluationCandidateInput {
   reason: string;
 }
 
+export interface ModelApproval {
+  id: string;
+  tenant_id?: string;
+  evaluation_run_id: string;
+  evaluation_candidate_id: string;
+  deployment_id: string;
+  provider_key: string;
+  deployment_key: string;
+  model_version: string;
+  prompt_version: string;
+  rubric_version: string;
+  dataset_reference: string;
+  dataset_sha256: string;
+  authorization_reference: string;
+  subject: string;
+  grade: string;
+  question_type: string;
+  modality: "text" | "image";
+  manual_review_rate: number;
+  decision_reference: string;
+  expires_at: string;
+  revoked_at?: string;
+  created_at: string;
+}
+
+export interface CreateModelApprovalInput {
+  evaluation_run_id: string;
+  deployment_id: string;
+  manual_review_rate: number;
+  decision_reference: string;
+  expires_at: string;
+  reason: string;
+}
+
 export function listModelProviders() {
   return apiClient.request<{ providers: ModelProvider[] }>("/api/v1/model-providers");
 }
@@ -265,6 +299,24 @@ export function completeModelEvaluationRun(runID: string, reason: string) {
 
 export function invalidateModelEvaluationRun(runID: string, reason: string) {
   return apiClient.request<{ evaluation_run: EvaluationRun }>(`/api/v1/model-evaluation-runs/${runID}/invalidate`, {
+    method: "POST",
+    body: JSON.stringify({ reason })
+  });
+}
+
+export function listModelApprovals() {
+  return apiClient.request<{ model_approvals: ModelApproval[] }>("/api/v1/model-approvals");
+}
+
+export function createModelApproval(input: CreateModelApprovalInput) {
+  return apiClient.request<{ model_approval: ModelApproval }>("/api/v1/model-approvals", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function revokeModelApproval(approvalID: string, reason: string) {
+  return apiClient.request<{ model_approval: ModelApproval }>(`/api/v1/model-approvals/${approvalID}/revoke`, {
     method: "POST",
     body: JSON.stringify({ reason })
   });

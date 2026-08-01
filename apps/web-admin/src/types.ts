@@ -14,6 +14,7 @@ export type ViewKey =
   | "system"
   | "systemStatus"
   | "modelGovernance"
+  | "subjectiveGradingBatches"
   | "audit"
   | "organization"
   | "examWorkspace";

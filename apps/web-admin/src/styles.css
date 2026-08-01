@@ -1549,6 +1549,28 @@ body {
 .model-evaluation-form .ant-input-number { width: 100%; }
 .model-evaluation-transition-form { margin-top: 18px; }
 
+.model-approval-workspace { min-width: 0; }
+
+.model-approval-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 20px 16px;
+}
+
+.model-approval-heading > div > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.model-approval-heading p { margin: 5px 0 0; color: var(--text-muted); }
+.model-approval-boundary { margin: 0 20px 16px; }
+
 .model-governance-identity {
   display: flex;
   min-width: 0;
@@ -1679,6 +1701,8 @@ body {
   .model-evaluation-detail > header p span { display: block; margin: 3px 0 0; }
   .model-evaluation-evidence { padding: 0 18px 14px; }
   .model-evaluation-detail > footer { align-items: flex-start; flex-direction: column; padding-inline: 18px; }
+  .model-approval-heading { align-items: stretch; flex-direction: column; padding-inline: 12px; }
+  .model-approval-boundary { margin-inline: 12px; }
   .model-policy-primary { padding: 28px 22px; }
   .model-policy-inspector { padding: 20px 22px; }
   .model-governance-form-row,
@@ -3186,6 +3210,62 @@ select {
   padding: 8px 10px;
   border: 1px solid var(--border);
   background: var(--surface-muted);
+}
+
+.grading-readiness-alert .ant-alert-description {
+  margin-top: 8px;
+}
+
+.grading-readiness-content {
+  display: grid;
+  gap: 9px;
+}
+
+.grading-readiness-counts {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.grading-readiness-counts strong {
+  margin-left: 4px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.grading-readiness-issues {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.grading-readiness-issues li {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  font-size: 13px;
+}
+
+.grading-readiness-issues li strong {
+  flex: 0 0 92px;
+}
+
+.grading-readiness-issues li.blocker strong {
+  color: var(--danger);
+}
+
+.grading-readiness-issues li.warning strong {
+  color: var(--warning);
+}
+
+.grading-readiness-ok {
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
 .reviewer-progress-panel {
