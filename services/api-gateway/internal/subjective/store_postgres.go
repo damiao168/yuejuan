@@ -349,7 +349,7 @@ INSERT INTO ai_grade (
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, 'llm-adapter', $8, $9, $10,
   $11, $12, $13, $14, $15, false, $16, $17, $18, $19, NULLIF($20, ''),
-  $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, NULLIF($36, ''))
+  $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, NULLIF($36, '')::uuid)
 ON CONFLICT (tenant_id, adapter_request_id) WHERE adapter_request_id <> '' AND deleted_at IS NULL DO NOTHING
 RETURNING id::text, tenant_id::text, answer_segment_id::text, question_id::text, question_no, question_type,
   answer_version, grader_type, model_version, prompt_version, rubric_version, delivery_mode, capability_profile,
