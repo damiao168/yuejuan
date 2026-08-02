@@ -35,6 +35,7 @@ const LearningReportsPage = lazy(() => import("./pages/LearningReportsPage").the
 const ModelGovernancePage = lazy(() => import("./pages/ModelGovernancePage").then((module) => ({ default: module.ModelGovernancePage })));
 const SubjectiveGradingBatchPage = lazy(() => import("./pages/SubjectiveGradingBatchPage").then((module) => ({ default: module.SubjectiveGradingBatchPage })));
 const OrganizationSetupPage = lazy(() => import("./pages/OrganizationSetupPage").then((module) => ({ default: module.OrganizationSetupPage })));
+const PlatformSchoolsPage = lazy(() => import("./pages/PlatformSchoolsPage").then((module) => ({ default: module.PlatformSchoolsPage })));
 const ExamWorkspacePage = lazy(() => import("./pages/ExamWorkspacePage").then((module) => ({ default: module.ExamWorkspacePage })));
 const AnswerSheetTemplatePage = lazy(() => import("./pages/AnswerSheetTemplatePage").then((module) => ({ default: module.AnswerSheetTemplatePage })));
 const CaptureBatchPage = lazy(() => import("./pages/CaptureBatchPage").then((module) => ({ default: module.CaptureBatchPage })));
@@ -280,6 +281,8 @@ function App() {
       <ExamManagementPage mode={experience} canManage={experience === "admin" && hasEveryPermission(user, ["exam:manage"])} currentUser={user} onOpenWorkspace={(examId) => navigate(`/exams/${encodeURIComponent(examId)}/overview`)} />
     ) : route.path === "/organization/setup" ? (
       <OrganizationSetupPage onNavigate={navigate} />
+    ) : route.path === "/platform/schools" ? (
+      <PlatformSchoolsPage />
     ) : route.path === "/papers" ? (
       <PaperRubricPage canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} />
     ) : route.path === "/capture" ? (

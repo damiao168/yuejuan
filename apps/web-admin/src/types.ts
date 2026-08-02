@@ -17,6 +17,7 @@ export type ViewKey =
   | "subjectiveGradingBatches"
   | "audit"
   | "organization"
+  | "platformSchools"
   | "examWorkspace";
 
 export type StatusTone = "success" | "warning" | "danger" | "info" | "processing" | "neutral";

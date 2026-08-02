@@ -24,6 +24,14 @@ export function hasAnyPermission(user: SessionUser | null, permissions: string[]
   return Boolean(user && permissions.some((permission) => user.permissions.includes(permission)));
 }
 
+export function productIdentityLabel(user: SessionUser): string {
+  if (user.roles.includes("platform_admin")) return "平台管理";
+  if (user.roles.some((role) => ["tenant_admin", "school_admin"].includes(role))) return "学校管理";
+  if (user.roles.some((role) => ["teacher", "grader", "arbitrator"].includes(role))) return "阅卷端";
+  if (user.roles.includes("student")) return "学生端";
+  return "工作台";
+}
+
 export function sessionFromAuthUser(user: AuthUser): SessionUser {
   const role = user.roles[0] ?? "user";
   const displayName = normalizeDisplayName(user.display_name);

@@ -22,6 +22,7 @@ class FakeAPI:
             raise self.pending_error
         return [{
             "id": "runtime-1",
+            "tenant_id": "tenant-1",
             "source_id": "task-1",
             "lease_token": "lease-1",
             "payload": {
@@ -31,25 +32,25 @@ class FakeAPI:
             },
         }]
 
-    def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds):
+    def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds, tenant_id=None):
         self.heartbeats.append((runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds))
 
-    def start_task(self, task_id):
+    def start_task(self, task_id, tenant_id=None):
         self.started.append(task_id)
 
-    def get_task_input(self, task_id):
+    def get_task_input(self, task_id, tenant_id=None):
         return {"pages": [{"id": "page-1", "download_url": "/files/file-1/download", "file_asset_id": "file-1"}]}
 
-    def download(self, url):
+    def download(self, url, tenant_id=None):
         value = self.downloads.get(url, b"image")
         if isinstance(value, Exception):
             raise value
         return value
 
-    def complete_task(self, task_id, payload):
+    def complete_task(self, task_id, payload, tenant_id=None):
         self.completed.append((task_id, payload))
 
-    def fail_task(self, task_id, message, runtime_task_id, lease_token, retryable):
+    def fail_task(self, task_id, message, runtime_task_id, lease_token, retryable, tenant_id=None):
         self.failed.append((task_id, message))
         self.runtime_failed.append((runtime_task_id, lease_token, message, retryable, 0))
 
@@ -209,13 +210,14 @@ class RunnerTests(unittest.TestCase):
                 self.heartbeat_active = threading.Event()
                 self.terminal_while_heartbeat_active = False
 
-            def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds):
+            def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds, tenant_id=None):
                 super().heartbeat_task(
                     runtime_task_id,
                     lease_token,
                     worker_instance_id,
                     lease_seconds,
                     timeout_seconds,
+                    tenant_id,
                 )
                 if len(self.heartbeats) != 2:
                     return
@@ -224,9 +226,9 @@ class RunnerTests(unittest.TestCase):
                 time.sleep(0.15)
                 self.heartbeat_active.clear()
 
-            def complete_task(self, task_id, payload):
+            def complete_task(self, task_id, payload, tenant_id=None):
                 self.terminal_while_heartbeat_active = self.heartbeat_active.is_set()
-                super().complete_task(task_id, payload)
+                super().complete_task(task_id, payload, tenant_id)
 
         class FinishWhileHeartbeatIsBlocked(FakeEngine):
             def recognize(self, image_bytes):
@@ -260,13 +262,14 @@ class RunnerTests(unittest.TestCase):
                 super().__init__()
                 self.periodic_attempted = threading.Event()
 
-            def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds):
+            def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds, tenant_id=None):
                 super().heartbeat_task(
                     runtime_task_id,
                     lease_token,
                     worker_instance_id,
                     lease_seconds,
                     timeout_seconds,
+                    tenant_id,
                 )
                 if len(self.heartbeats) >= 2:
                     self.periodic_attempted.set()

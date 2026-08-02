@@ -62,9 +62,10 @@ class OCRRunner:
         runtime_task_id = str(runtime_task["id"])
         lease_token = str(runtime_task["lease_token"])
         task_id = str(runtime_task["source_id"])
+        tenant_id = str(runtime_task["tenant_id"])
         incompatibility = self._runtime_incompatibility(runtime_task)
         if incompatibility is not None:
-            self.api.fail_task(task_id, incompatibility, runtime_task_id, lease_token, False)
+            self.api.fail_task(task_id, incompatibility, runtime_task_id, lease_token, False, tenant_id)
             return
         with _LeaseHeartbeat(
             api=self.api,
@@ -74,28 +75,29 @@ class OCRRunner:
             interval=self.config.heartbeat_interval,
             lease_seconds=self.config.lease_seconds,
             request_timeout=self.config.heartbeat_timeout,
+            tenant_id=tenant_id,
         ) as heartbeat:
-            self.api.start_task(task_id)
-            task_input = self.api.get_task_input(task_id)
+            self.api.start_task(task_id, tenant_id)
+            task_input = self.api.get_task_input(task_id, tenant_id)
             image_hash = hashlib.sha256()
             results: list[dict[str, Any]] = []
             for page in task_input.get("pages", []):
                 heartbeat.raise_if_failed()
                 page_id = str(page["id"])
                 try:
-                    image_bytes = self.api.download(str(page["download_url"]))
+                    image_bytes = self.api.download(str(page["download_url"]), tenant_id)
                 except AuthenticationError:
                     raise
                 except APIError:
                     heartbeat.stop()
-                    self.api.fail_task(task_id, "download_failed", runtime_task_id, lease_token, True)
+                    self.api.fail_task(task_id, "download_failed", runtime_task_id, lease_token, True, tenant_id)
                     return
                 image_hash.update(image_bytes)
                 try:
                     blocks = self.engine.recognize(image_bytes)
                 except Exception:  # noqa: BLE001 - Paddle backends raise heterogeneous runtime exceptions.
                     heartbeat.stop()
-                    self.api.fail_task(task_id, "ocr_engine_failed", runtime_task_id, lease_token, True)
+                    self.api.fail_task(task_id, "ocr_engine_failed", runtime_task_id, lease_token, True, tenant_id)
                     return
                 for block in blocks:
                     if not _valid_block(block.text, block.bbox, block.confidence):
@@ -111,7 +113,7 @@ class OCRRunner:
             heartbeat.raise_if_failed()
             if not results:
                 heartbeat.stop()
-                self.api.fail_task(task_id, "empty_ocr_result", runtime_task_id, lease_token, False)
+                self.api.fail_task(task_id, "empty_ocr_result", runtime_task_id, lease_token, False, tenant_id)
                 return
             duration_ms = int((time.monotonic() - start) * 1000)
             payload = {
@@ -126,7 +128,7 @@ class OCRRunner:
                 "results": results,
             }
             heartbeat.stop()
-            self.api.complete_task(task_id, payload)
+            self.api.complete_task(task_id, payload, tenant_id)
 
     def _config_hash(self) -> str:
         if self.config.config_hash:
@@ -165,6 +167,7 @@ class _LeaseHeartbeat:
         interval: float,
         lease_seconds: int,
         request_timeout: float,
+        tenant_id: str,
     ) -> None:
         self.api = api
         self.runtime_task_id = runtime_task_id
@@ -173,6 +176,7 @@ class _LeaseHeartbeat:
         self.interval = interval
         self.lease_seconds = lease_seconds
         self.request_timeout = request_timeout
+        self.tenant_id = tenant_id
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._error: Exception | None = None
@@ -220,6 +224,7 @@ class _LeaseHeartbeat:
             self.worker_id,
             self.lease_seconds,
             self.request_timeout,
+            self.tenant_id,
         )
 
 

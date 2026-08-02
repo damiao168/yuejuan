@@ -108,9 +108,9 @@ assert(
 );
 
 assert(
-  /teacher:\s*\["overview", "paper", "questions", "grading", "quality", "scores", "appeals", "reports"\]/.test(routes)
+  /teacher:\s*\[\]/.test(routes)
     && /hasExamWorkspaceSectionAccess/.test(app),
-  "Teacher exam workspaces must use the approved section allowlist for navigation and deep links."
+  "Teacher identities must remain outside administrator exam workspaces for navigation and deep links."
 );
 
 assert(

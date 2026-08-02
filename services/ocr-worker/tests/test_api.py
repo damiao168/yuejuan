@@ -41,6 +41,21 @@ class APITests(unittest.TestCase):
         with self.assertRaisesRegex(APIError, "configured API origin"):
             client.download("https://attacker.invalid/collect")
 
+    @patch("ocr_worker.api.request.urlopen", return_value=FakeResponse())
+    def test_target_tenant_header_is_sent_for_claimed_task_requests(self, urlopen):
+        client = EduGradeClient(
+            base_url="http://api-gateway:8080",
+            tenant_code="platform",
+            username="ocr-worker",
+            password="test-only",
+            token="worker-token",
+        )
+
+        client.start_task("task-1", "tenant-1")
+
+        req = urlopen.call_args.args[0]
+        self.assertEqual(req.headers["X-edugrade-tenant-id"], "tenant-1")
+
 
 if __name__ == "__main__":
     unittest.main()

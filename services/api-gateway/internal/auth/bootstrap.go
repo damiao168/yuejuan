@@ -77,6 +77,10 @@ func normalizeBootstrapAdminInput(input BootstrapAdminInput) BootstrapAdminInput
 }
 
 func strongBootstrapPassword(password string) bool {
+	return StrongPassword(password)
+}
+
+func StrongPassword(password string) bool {
 	if len([]rune(password)) < 12 {
 		return false
 	}

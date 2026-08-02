@@ -105,6 +105,14 @@ RETURNING `+taskColumns, tenantID, task.ID, result, complete.ResultSchemaVersion
 }
 
 func (s *PostgresStore) Claim(ctx context.Context, tenantID string, input ClaimInput) ([]Task, error) {
+	return s.claim(ctx, tenantID, false, input)
+}
+
+func (s *PostgresStore) ClaimAcrossTenants(ctx context.Context, platformTenantID string, input ClaimInput) ([]Task, error) {
+	return s.claim(ctx, platformTenantID, true, input)
+}
+
+func (s *PostgresStore) claim(ctx context.Context, heartbeatTenantID string, acrossTenants bool, input ClaimInput) ([]Task, error) {
 	input = normalizeClaimInput(input)
 	if validateClaimInput(input) != nil {
 		return nil, ErrInvalidInput
@@ -118,13 +126,16 @@ func (s *PostgresStore) Claim(ctx context.Context, tenantID string, input ClaimI
 	if err != nil {
 		return nil, err
 	}
-	if err := upsertWorkerHeartbeat(ctx, tx, tenantID, input.WorkerService, input.WorkerInstanceID, input.QueueName, dbNow, map[string]any{"state": "polling"}); err != nil {
+	if err := upsertWorkerHeartbeat(ctx, tx, heartbeatTenantID, input.WorkerService, input.WorkerInstanceID, input.QueueName, dbNow, map[string]any{"state": "polling"}); err != nil {
 		return nil, err
 	}
 	exhaustedRows, err := tx.QueryContext(ctx, `
-SELECT id::text, status
+SELECT tenant_id::text, id::text, status
 FROM agent_worker_task
-WHERE tenant_id = $1
+WHERE ($5 OR tenant_id = $1)
+  AND (NOT $5 OR tenant_id IN (
+    SELECT id FROM tenant WHERE status = 'active' AND deleted_at IS NULL
+  ))
   AND queue_name = $2
   AND (
     (status = 'queued' AND (not_before IS NULL OR not_before <= $4))
@@ -134,18 +145,19 @@ WHERE tenant_id = $1
 ORDER BY priority ASC, created_at ASC, id ASC
 LIMIT $3
 FOR UPDATE SKIP LOCKED
-`, tenantID, input.QueueName, input.Limit, dbNow)
+`, heartbeatTenantID, input.QueueName, input.Limit, dbNow, acrossTenants)
 	if err != nil {
 		return nil, err
 	}
 	type exhaustedTask struct {
-		id     string
-		status string
+		tenantID string
+		id       string
+		status   string
 	}
 	exhausted := make([]exhaustedTask, 0)
 	for exhaustedRows.Next() {
 		var item exhaustedTask
-		if err := exhaustedRows.Scan(&item.id, &item.status); err != nil {
+		if err := exhaustedRows.Scan(&item.tenantID, &item.id, &item.status); err != nil {
 			exhaustedRows.Close()
 			return nil, err
 		}
@@ -168,7 +180,7 @@ UPDATE agent_worker_task_attempt
 SET status = 'lease_expired', completed_at = $3, error_code = 'lease_expired',
   error_detail = '{"reason":"max_attempts_exhausted"}'::jsonb
 WHERE tenant_id = $1 AND task_id = $2::uuid AND completed_at IS NULL
-`, tenantID, item.id, dbNow); err != nil {
+`, item.tenantID, item.id, dbNow); err != nil {
 			return nil, err
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -178,15 +190,18 @@ SET status = 'dead_letter', max_attempts = GREATEST(max_attempts, attempt_count)
   error_code = $3, error_detail = '{"reason":"max_attempts_exhausted"}'::jsonb,
   completed_at = $4, updated_at = $4
 WHERE tenant_id = $1 AND id = $2::uuid
-`, tenantID, item.id, errorCode, dbNow); err != nil {
+`, item.tenantID, item.id, errorCode, dbNow); err != nil {
 			return nil, err
 		}
 	}
 
 	rows, err := tx.QueryContext(ctx, `
-SELECT id::text, status
+SELECT tenant_id::text, id::text, status
 FROM agent_worker_task
-WHERE tenant_id = $1
+WHERE ($5 OR tenant_id = $1)
+  AND (NOT $5 OR tenant_id IN (
+    SELECT id FROM tenant WHERE status = 'active' AND deleted_at IS NULL
+  ))
   AND queue_name = $2
   AND (
     (status = 'queued' AND (not_before IS NULL OR not_before <= $4))
@@ -196,18 +211,19 @@ WHERE tenant_id = $1
 ORDER BY priority ASC, created_at ASC, id ASC
 LIMIT $3
 FOR UPDATE SKIP LOCKED
-`, tenantID, input.QueueName, input.Limit, dbNow)
+`, heartbeatTenantID, input.QueueName, input.Limit, dbNow, acrossTenants)
 	if err != nil {
 		return nil, err
 	}
 	type claimableTask struct {
-		id     string
-		status string
+		tenantID string
+		id       string
+		status   string
 	}
 	claimable := make([]claimableTask, 0, input.Limit)
 	for rows.Next() {
 		var item claimableTask
-		if err := rows.Scan(&item.id, &item.status); err != nil {
+		if err := rows.Scan(&item.tenantID, &item.id, &item.status); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -227,7 +243,7 @@ FOR UPDATE SKIP LOCKED
 UPDATE agent_worker_task_attempt
 SET status = 'lease_expired', completed_at = $3, error_code = 'lease_expired'
 WHERE tenant_id = $1 AND task_id = $2::uuid AND completed_at IS NULL
-`, tenantID, item.id, dbNow); err != nil {
+`, item.tenantID, item.id, dbNow); err != nil {
 				return nil, err
 			}
 		}
@@ -240,7 +256,7 @@ SET status = 'leased', attempt_count = attempt_count + 1, not_before = NULL,
   worker_service = $6, worker_instance_id = $7, updated_at = $8
 WHERE tenant_id = $1 AND id = $2::uuid AND attempt_count < max_attempts
 RETURNING `+taskColumns,
-			tenantID, item.id, token, expires, input.WorkerService+":"+input.WorkerInstanceID,
+			item.tenantID, item.id, token, expires, input.WorkerService+":"+input.WorkerInstanceID,
 			input.WorkerService, input.WorkerInstanceID, dbNow)
 		task, err := scanTask(row)
 		if err != nil {
@@ -251,7 +267,7 @@ INSERT INTO agent_worker_task_attempt (
   tenant_id, task_id, attempt_no, worker_service, worker_instance_id, lease_token, status, started_at
 )
 VALUES ($1, $2::uuid, $3, $4, $5, $6, 'leased', $7)
-`, tenantID, item.id, task.AttemptCount, input.WorkerService, input.WorkerInstanceID, token, dbNow)
+`, item.tenantID, item.id, task.AttemptCount, input.WorkerService, input.WorkerInstanceID, token, dbNow)
 		if err != nil {
 			return nil, err
 		}
@@ -516,6 +532,14 @@ ORDER BY created_at DESC LIMIT 1
 }
 
 func (s *PostgresStore) Metrics(ctx context.Context, tenantID string) (Metrics, error) {
+	return s.metrics(ctx, tenantID, false)
+}
+
+func (s *PostgresStore) MetricsAcrossTenants(ctx context.Context, platformTenantID string) (Metrics, error) {
+	return s.metrics(ctx, platformTenantID, true)
+}
+
+func (s *PostgresStore) metrics(ctx context.Context, tenantID string, acrossTenants bool) (Metrics, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT queue_name,
   count(*) FILTER (WHERE status = 'queued'),
@@ -528,10 +552,13 @@ SELECT queue_name,
   count(*) FILTER (WHERE status IN ('failed', 'dead_letter') AND updated_at >= now() - interval '1 hour'),
   COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL), 0)::int
 FROM agent_worker_task
-WHERE tenant_id = $1
+WHERE ($2 OR tenant_id = $1)
+  AND (NOT $2 OR tenant_id IN (
+    SELECT id FROM tenant WHERE status = 'active' AND deleted_at IS NULL
+  ))
 GROUP BY queue_name
 ORDER BY queue_name
-`, tenantID)
+`, tenantID, acrossTenants)
 	if err != nil {
 		return Metrics{}, err
 	}
@@ -555,16 +582,24 @@ ORDER BY queue_name
 		if err := s.db.QueryRowContext(ctx, `
 SELECT count(*) FROM agent_worker_task_attempt a
 JOIN agent_worker_task t ON t.tenant_id = a.tenant_id AND t.id = a.task_id
-WHERE a.tenant_id = $1 AND t.queue_name = $2 AND a.status = 'failed'
+WHERE ($3 OR a.tenant_id = $1) AND t.queue_name = $2 AND a.status = 'failed'
+  AND (NOT $3 OR a.tenant_id IN (
+    SELECT id FROM tenant WHERE status = 'active' AND deleted_at IS NULL
+  ))
   AND a.completed_at >= now() - interval '1 hour' AND a.attempt_no < t.max_attempts
-`, tenantID, out.Queues[index].QueueName).Scan(&out.Queues[index].RetryLastHour); err != nil {
+`, tenantID, out.Queues[index].QueueName, acrossTenants).Scan(&out.Queues[index].RetryLastHour); err != nil {
 			return Metrics{}, err
 		}
 	}
 	workerRows, err := s.db.QueryContext(ctx, `
 SELECT tenant_id::text, worker_service, worker_instance_id, queue_name, last_seen_at, metadata
-FROM agent_worker_heartbeat WHERE tenant_id = $1 ORDER BY last_seen_at DESC
-`, tenantID)
+FROM agent_worker_heartbeat
+WHERE ($2 OR tenant_id = $1)
+  AND (NOT $2 OR tenant_id IN (
+    SELECT id FROM tenant WHERE status = 'active' AND deleted_at IS NULL
+  ))
+ORDER BY last_seen_at DESC
+`, tenantID, acrossTenants)
 	if err != nil {
 		return Metrics{}, err
 	}

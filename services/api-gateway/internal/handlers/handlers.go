@@ -136,9 +136,17 @@ func (h *Handlers) ocrWorkerStatus(r *http.Request, now time.Time) (WorkerServic
 		return buildWorkerServiceStatus(workerruntime.Metrics{}, "ocr_worker", "ocr-worker", "ocr", now, staleAfter), fmt.Errorf("worker runtime store is unavailable")
 	}
 	user, _ := auth.UserFromContext(r.Context())
-	metrics, err := h.runtime.Metrics(r.Context(), user.TenantID)
+	metrics, err := h.runtime.MetricsAcrossTenants(r.Context(), auth.PlatformTenantID)
 	if err != nil {
 		return buildWorkerServiceStatus(workerruntime.Metrics{}, "ocr_worker", "ocr-worker", "ocr", now, staleAfter), err
+	}
+	if user.TenantID != auth.PlatformTenantID {
+		scoped, scopedErr := h.runtime.Metrics(r.Context(), user.TenantID)
+		if scopedErr != nil {
+			return buildWorkerServiceStatus(workerruntime.Metrics{}, "ocr_worker", "ocr-worker", "ocr", now, staleAfter), scopedErr
+		}
+		scoped.Workers = metrics.Workers
+		metrics = scoped
 	}
 	return buildWorkerServiceStatus(metrics, "ocr_worker", "ocr-worker", "ocr", now, staleAfter), nil
 }

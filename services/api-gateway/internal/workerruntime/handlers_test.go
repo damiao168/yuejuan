@@ -60,6 +60,56 @@ func TestHandlerClaimHeartbeatCompleteAndAudit(t *testing.T) {
 	}
 }
 
+func TestPlatformWorkerClaimsAndHeartbeatsSchoolTask(t *testing.T) {
+	store := workerruntime.NewMemoryStore()
+	audit := auth.NewMemoryStore()
+	handler := workerruntime.NewHandler(store, audit)
+	input := imageQualityTaskInput()
+	input.TaskType = "ocr"
+	input.QueueName = "ocr"
+	input.SourceType = "ocr_task"
+	input.IdempotencyKey = "ocr:school-task"
+	task, err := store.CreateTask(t.Context(), runtimeTenantID, "school-actor", input)
+	if err != nil {
+		t.Fatalf("create school task: %v", err)
+	}
+	platformWorker := auth.User{
+		ID: auth.PlatformTenantID, TenantID: auth.PlatformTenantID,
+		Roles: []string{"page_processing_worker"}, Permissions: []string{"ocr:manage"},
+	}
+	claim := httptest.NewRequest(http.MethodPost, "/api/v1/internal/worker/tasks/claim", bytes.NewBufferString(
+		`{"queue_name":"ocr","worker_service":"ocr-worker","worker_instance_id":"platform-ocr-1","limit":1,"lease_seconds":300}`,
+	))
+	claim = claim.WithContext(auth.WithUser(claim.Context(), platformWorker))
+	claimRec := httptest.NewRecorder()
+
+	handler.Claim(claimRec, claim)
+
+	var claimed struct {
+		Tasks []workerruntime.Task `json:"tasks"`
+	}
+	if claimRec.Code != http.StatusOK || json.NewDecoder(claimRec.Body).Decode(&claimed) != nil || len(claimed.Tasks) != 1 {
+		t.Fatalf("global claim expected school task, got %d %s", claimRec.Code, claimRec.Body.String())
+	}
+	if claimed.Tasks[0].TenantID != runtimeTenantID {
+		t.Fatalf("claimed wrong tenant task: %#v", claimed.Tasks[0])
+	}
+
+	heartbeat := httptest.NewRequest(http.MethodPost, "/api/v1/internal/worker/tasks/"+task.ID+"/heartbeat", bytes.NewBufferString(
+		`{"lease_token":"`+claimed.Tasks[0].LeaseToken+`","worker_service":"ocr-worker","worker_instance_id":"platform-ocr-1","state":"running"}`,
+	))
+	heartbeat.SetPathValue("taskId", task.ID)
+	heartbeat.Header.Set(auth.WorkerTenantHeader, runtimeTenantID)
+	heartbeat = heartbeat.WithContext(auth.WithUser(heartbeat.Context(), platformWorker))
+	heartbeatRec := httptest.NewRecorder()
+
+	auth.PlatformWorkerTenantScope(http.HandlerFunc(handler.Heartbeat)).ServeHTTP(heartbeatRec, heartbeat)
+
+	if heartbeatRec.Code != http.StatusOK {
+		t.Fatalf("school task heartbeat expected 200, got %d %s", heartbeatRec.Code, heartbeatRec.Body.String())
+	}
+}
+
 func TestHandlerRejectsSensitivePayload(t *testing.T) {
 	store := workerruntime.NewMemoryStore()
 	handler := workerruntime.NewHandler(store, auth.NewMemoryStore())

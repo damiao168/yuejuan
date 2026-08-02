@@ -157,6 +157,7 @@ type Metrics struct {
 type Store interface {
 	CreateTask(ctx context.Context, tenantID string, actorID string, input CreateTaskInput) (Task, error)
 	Claim(ctx context.Context, tenantID string, input ClaimInput) ([]Task, error)
+	ClaimAcrossTenants(ctx context.Context, platformTenantID string, input ClaimInput) ([]Task, error)
 	Heartbeat(ctx context.Context, tenantID string, taskID string, input HeartbeatInput) (Task, error)
 	Complete(ctx context.Context, tenantID string, taskID string, input CompleteInput) (Task, error)
 	Fail(ctx context.Context, tenantID string, taskID string, input FailInput) (Task, error)
@@ -165,4 +166,5 @@ type Store interface {
 	Get(ctx context.Context, tenantID string, taskID string) (Task, error)
 	GetBySource(ctx context.Context, tenantID string, sourceType string, sourceID string) (Task, error)
 	Metrics(ctx context.Context, tenantID string) (Metrics, error)
+	MetricsAcrossTenants(ctx context.Context, platformTenantID string) (Metrics, error)
 }

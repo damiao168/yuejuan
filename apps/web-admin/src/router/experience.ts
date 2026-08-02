@@ -51,7 +51,7 @@ export function pathForExperience(pathname: string, experience: ProductExperienc
 }
 
 export function experienceLabel(experience: ProductExperience): string {
-  return experience === "admin" ? "管理端" : "教师端";
+  return experience === "admin" ? "管理端" : "阅卷端";
 }
 
 function normalizePath(pathname: string): string {

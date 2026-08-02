@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 )
 
 type PostgresStore struct {
@@ -14,8 +15,14 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 	return &PostgresStore{db: db}
 }
 
-func (s *PostgresStore) CreateTenant(ctx context.Context, input Tenant) (Tenant, error) {
-	row := s.db.QueryRowContext(ctx, `
+func (s *PostgresStore) CreateTenant(ctx context.Context, input TenantProvision) (Tenant, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Tenant{}, err
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRowContext(ctx, `
 WITH new_id AS (SELECT gen_random_uuid() AS id)
 INSERT INTO tenant (id, tenant_id, name, code, status)
 SELECT id, id, $1, $2, COALESCE(NULLIF($3, ''), 'active') FROM new_id
@@ -23,6 +30,84 @@ RETURNING id::text, name, code, status
 `, input.Name, input.Code, input.Status)
 	var out Tenant
 	if err := row.Scan(&out.ID, &out.Name, &out.Code, &out.Status); err != nil {
+		return Tenant{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO permission (tenant_id, code, name, resource, action, description)
+SELECT $1::uuid, code, name, resource, action, description
+FROM permission
+WHERE tenant_id = '00000000-0000-0000-0000-000000000001'::uuid
+  AND deleted_at IS NULL
+ON CONFLICT (tenant_id, code) DO NOTHING
+`, out.ID); err != nil {
+		return Tenant{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO role (tenant_id, code, name, scope_type, description)
+SELECT $1::uuid, code, name, scope_type, description
+FROM role
+WHERE tenant_id = '00000000-0000-0000-0000-000000000001'::uuid
+  AND code IN ('tenant_admin', 'school_admin', 'teacher', 'grader', 'auditor', 'arbitrator', 'student', 'page_processing_worker')
+  AND deleted_at IS NULL
+ON CONFLICT (tenant_id, code) DO NOTHING
+`, out.ID); err != nil {
+		return Tenant{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO role_permission (tenant_id, role_id, permission_id)
+SELECT $1::uuid, target_role.id, target_permission.id
+FROM role_permission source_assignment
+JOIN role source_role
+  ON source_role.tenant_id = source_assignment.tenant_id
+ AND source_role.id = source_assignment.role_id
+JOIN permission source_permission
+  ON source_permission.tenant_id = source_assignment.tenant_id
+ AND source_permission.id = source_assignment.permission_id
+JOIN role target_role
+  ON target_role.tenant_id = $1::uuid
+ AND target_role.code = source_role.code
+JOIN permission target_permission
+  ON target_permission.tenant_id = $1::uuid
+ AND target_permission.code = source_permission.code
+WHERE source_assignment.tenant_id = '00000000-0000-0000-0000-000000000001'::uuid
+  AND source_assignment.deleted_at IS NULL
+ON CONFLICT (tenant_id, role_id, permission_id) DO NOTHING
+`, out.ID); err != nil {
+		return Tenant{}, err
+	}
+
+	var schoolID string
+	if err := tx.QueryRowContext(ctx, `
+INSERT INTO school (tenant_id, name, code, status)
+VALUES ($1::uuid, $2, $3, 'active')
+RETURNING id::text
+`, out.ID, input.Name, input.Code).Scan(&schoolID); err != nil {
+		return Tenant{}, err
+	}
+	var userID string
+	if err := tx.QueryRowContext(ctx, `
+INSERT INTO app_user (tenant_id, school_id, username, display_name, password_hash, status)
+VALUES ($1::uuid, $2::uuid, $3, $4, $5, 'active')
+RETURNING id::text
+`, out.ID, schoolID, input.AdminUsername, input.AdminDisplayName, input.PasswordHash).Scan(&userID); err != nil {
+		return Tenant{}, err
+	}
+	roleResult, err := tx.ExecContext(ctx, `
+INSERT INTO user_role (tenant_id, user_id, role_id, data_scope)
+SELECT $1::uuid, $2::uuid, role.id,
+       jsonb_build_object('scope', 'school', 'school_id', $3, 'school_name', $4)
+FROM role
+WHERE tenant_id = $1::uuid AND code = 'school_admin' AND deleted_at IS NULL
+`, out.ID, userID, schoolID, input.Name)
+	if err != nil {
+		return Tenant{}, err
+	}
+	assigned, err := roleResult.RowsAffected()
+	if err != nil || assigned != 1 {
+		return Tenant{}, fmt.Errorf("school administrator role provisioning failed")
+	}
+	if err := tx.Commit(); err != nil {
 		return Tenant{}, err
 	}
 	return out, nil

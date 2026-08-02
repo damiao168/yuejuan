@@ -96,6 +96,14 @@ func (s *MemoryStore) createTaskLocked(tenantID string, actorID string, input Cr
 }
 
 func (s *MemoryStore) Claim(_ context.Context, tenantID string, input ClaimInput) ([]Task, error) {
+	return s.claim(tenantID, false, input)
+}
+
+func (s *MemoryStore) ClaimAcrossTenants(_ context.Context, platformTenantID string, input ClaimInput) ([]Task, error) {
+	return s.claim(platformTenantID, true, input)
+}
+
+func (s *MemoryStore) claim(heartbeatTenantID string, acrossTenants bool, input ClaimInput) ([]Task, error) {
 	input = normalizeClaimInput(input)
 	if validateClaimInput(input) != nil {
 		return nil, ErrInvalidInput
@@ -103,10 +111,10 @@ func (s *MemoryStore) Claim(_ context.Context, tenantID string, input ClaimInput
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
-	s.recordWorkerHeartbeat(tenantID, input.WorkerService, input.WorkerInstanceID, input.QueueName, now, map[string]any{"state": "polling"})
+	s.recordWorkerHeartbeat(heartbeatTenantID, input.WorkerService, input.WorkerInstanceID, input.QueueName, now, map[string]any{"state": "polling"})
 	candidates := make([]Task, 0)
 	for _, task := range s.tasks {
-		if task.TenantID != tenantID || task.QueueName != input.QueueName {
+		if (!acrossTenants && task.TenantID != heartbeatTenantID) || task.QueueName != input.QueueName {
 			continue
 		}
 		ready := task.Status == StatusQueued && (task.NotBefore == nil || !task.NotBefore.After(now))
@@ -167,7 +175,7 @@ func (s *MemoryStore) Claim(_ context.Context, tenantID string, input ClaimInput
 		task.NotBefore = nil
 		task.UpdatedAt = now
 		task.Attempts = append(task.Attempts, Attempt{
-			ID: s.id("worker-attempt"), TenantID: tenantID, TaskID: task.ID, AttemptNo: task.AttemptCount,
+			ID: s.id("worker-attempt"), TenantID: task.TenantID, TaskID: task.ID, AttemptNo: task.AttemptCount,
 			WorkerService: input.WorkerService, WorkerInstanceID: input.WorkerInstanceID, LeaseToken: token,
 			Status: StatusLeased, StartedAt: now, ErrorDetail: map[string]any{},
 		})
@@ -462,13 +470,21 @@ func (s *MemoryStore) getBySourceLocked(tenantID string, sourceType string, sour
 }
 
 func (s *MemoryStore) Metrics(_ context.Context, tenantID string) (Metrics, error) {
+	return s.metrics(tenantID, false), nil
+}
+
+func (s *MemoryStore) MetricsAcrossTenants(_ context.Context, platformTenantID string) (Metrics, error) {
+	return s.metrics(platformTenantID, true), nil
+}
+
+func (s *MemoryStore) metrics(tenantID string, acrossTenants bool) Metrics {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	byQueue := map[string]*QueueMetrics{}
 	durations := map[string][]int{}
 	cutoff := time.Now().UTC().Add(-time.Hour)
 	for _, task := range s.tasks {
-		if task.TenantID != tenantID {
+		if !acrossTenants && task.TenantID != tenantID {
 			continue
 		}
 		metric := byQueue[task.QueueName]
@@ -511,12 +527,12 @@ func (s *MemoryStore) Metrics(_ context.Context, tenantID string) (Metrics, erro
 	}
 	sort.Slice(out.Queues, func(i, j int) bool { return out.Queues[i].QueueName < out.Queues[j].QueueName })
 	for _, worker := range s.heartbeats {
-		if worker.TenantID == tenantID {
+		if acrossTenants || worker.TenantID == tenantID {
 			out.Workers = append(out.Workers, worker)
 		}
 	}
 	sort.Slice(out.Workers, func(i, j int) bool { return out.Workers[i].LastSeenAt.After(out.Workers[j].LastSeenAt) })
-	return out, nil
+	return out
 }
 
 func (s *MemoryStore) ForceExpireLeaseForTest(taskID string) {

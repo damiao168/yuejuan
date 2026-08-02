@@ -29,15 +29,15 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
-func (s *MemoryStore) CreateTenant(_ context.Context, input Tenant) (Tenant, error) {
+func (s *MemoryStore) CreateTenant(_ context.Context, input TenantProvision) (Tenant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	input.ID = s.id("tenant")
-	if input.Status == "" {
-		input.Status = "active"
+	item := Tenant{ID: s.id("tenant"), Name: input.Name, Code: input.Code, Status: input.Status}
+	if item.Status == "" {
+		item.Status = "active"
 	}
-	s.tenants[input.ID] = input
-	return input, nil
+	s.tenants[item.ID] = item
+	return item, nil
 }
 
 func (s *MemoryStore) ListTenants(_ context.Context, tenantID string, canListAll bool) ([]Tenant, error) {

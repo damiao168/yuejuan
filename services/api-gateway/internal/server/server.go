@@ -362,6 +362,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	requireWorkerRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequireAnyPermission("ocr:manage", "orchestrator:manage", "system:read")(handler))
 	}
+	withPlatformWorkerTenantScope := func(handler http.HandlerFunc) http.HandlerFunc {
+		return auth.PlatformWorkerTenantScope(handler).ServeHTTP
+	}
 
 	mux.HandleFunc("GET /health", h.Health)
 	mux.Handle("GET /ready", requireSystemRead(h.Ready))
@@ -444,7 +447,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 
 	mux.Handle("POST /api/v1/files", requireFileManage(fileHandler.Upload))
 	mux.Handle("GET /api/v1/files/{id}", requireFileManage(fileHandler.Get))
-	mux.Handle("GET /api/v1/files/{id}/download", requireFileManage(fileHandler.Download))
+	mux.Handle("GET /api/v1/files/{id}/download", requireFileManage(withPlatformWorkerTenantScope(fileHandler.Download)))
 	mux.Handle("DELETE /api/v1/files/{id}", requireFileManage(fileHandler.Delete))
 
 	mux.Handle("POST /api/v1/exams/{examId}/submissions", requireSubmissionManage(submissionHandler.Create))
@@ -492,12 +495,12 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/internal/image-quality/runs/{runId}/result", requireOCRManage(imageQualityHandler.SubmitResult))
 	mux.Handle("POST /api/v1/internal/worker/tasks", requireWorkerExecute(workerRuntimeHandler.CreateTask))
 	mux.Handle("POST /api/v1/internal/worker/tasks/claim", requireWorkerExecute(workerRuntimeHandler.Claim))
-	mux.Handle("GET /api/v1/internal/worker/tasks/{taskId}", requireWorkerRead(workerRuntimeHandler.Get))
-	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/heartbeat", requireWorkerExecute(workerRuntimeHandler.Heartbeat))
-	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/complete", requireWorkerExecute(workerRuntimeHandler.Complete))
-	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/fail", requireWorkerExecute(workerRuntimeHandler.Fail))
-	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/cancel", requireWorkerExecute(workerRuntimeHandler.Cancel))
-	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/requeue", requireWorkerExecute(workerRuntimeHandler.Requeue))
+	mux.Handle("GET /api/v1/internal/worker/tasks/{taskId}", requireWorkerRead(withPlatformWorkerTenantScope(workerRuntimeHandler.Get)))
+	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/heartbeat", requireWorkerExecute(withPlatformWorkerTenantScope(workerRuntimeHandler.Heartbeat)))
+	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/complete", requireWorkerExecute(withPlatformWorkerTenantScope(workerRuntimeHandler.Complete)))
+	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/fail", requireWorkerExecute(withPlatformWorkerTenantScope(workerRuntimeHandler.Fail)))
+	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/cancel", requireWorkerExecute(withPlatformWorkerTenantScope(workerRuntimeHandler.Cancel)))
+	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/requeue", requireWorkerExecute(withPlatformWorkerTenantScope(workerRuntimeHandler.Requeue)))
 	mux.Handle("POST /api/v1/internal/capture/files/{fileId}/result", requireWorkerExecute(captureHandler.CompleteFile))
 	mux.Handle("POST /api/v1/internal/capture/files/{fileId}/fail", requireWorkerExecute(captureHandler.FailFile))
 	mux.Handle("POST /api/v1/internal/page-registration-runs/{runId}/result", requireWorkerExecute(captureHandler.CompleteRegistration))
@@ -516,10 +519,10 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/submissions/{id}/ocr-tasks", requireOCRManage(ocrHandler.ListBySubmission))
 	mux.Handle("GET /api/v1/ocr-tasks/pending", requireOCRManage(ocrHandler.ListPending))
 	mux.Handle("GET /api/v1/ocr-tasks/{id}", requireOCRManage(ocrHandler.GetTask))
-	mux.Handle("GET /api/v1/ocr-tasks/{id}/input", requireOCRManage(ocrHandler.GetTaskInput))
-	mux.Handle("POST /api/v1/ocr-tasks/{id}/start", requireOCRManage(ocrHandler.StartTask))
-	mux.Handle("POST /api/v1/ocr-tasks/{id}/results", requireOCRManage(ocrHandler.CompleteTask))
-	mux.Handle("POST /api/v1/ocr-tasks/{id}/fail", requireOCRManage(ocrHandler.FailTask))
+	mux.Handle("GET /api/v1/ocr-tasks/{id}/input", requireOCRManage(withPlatformWorkerTenantScope(ocrHandler.GetTaskInput)))
+	mux.Handle("POST /api/v1/ocr-tasks/{id}/start", requireOCRManage(withPlatformWorkerTenantScope(ocrHandler.StartTask)))
+	mux.Handle("POST /api/v1/ocr-tasks/{id}/results", requireOCRManage(withPlatformWorkerTenantScope(ocrHandler.CompleteTask)))
+	mux.Handle("POST /api/v1/ocr-tasks/{id}/fail", requireOCRManage(withPlatformWorkerTenantScope(ocrHandler.FailTask)))
 
 	mux.Handle("POST /api/v1/submissions/{id}/segment-answers", requireSegmentManage(segmentHandler.Generate))
 	mux.Handle("GET /api/v1/submissions/{id}/answer-segments", requireSegmentManage(segmentHandler.ListBySubmission))

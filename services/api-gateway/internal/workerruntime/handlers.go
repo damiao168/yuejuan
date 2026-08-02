@@ -50,7 +50,13 @@ func (h *Handler) Claim(w http.ResponseWriter, r *http.Request) {
 	if !decodeRuntimeJSON(w, r, &input) {
 		return
 	}
-	tasks, err := h.store.Claim(r.Context(), user.TenantID, input)
+	var tasks []Task
+	var err error
+	if auth.IsPlatformWorker(user) {
+		tasks, err = h.store.ClaimAcrossTenants(r.Context(), user.TenantID, input)
+	} else {
+		tasks, err = h.store.Claim(r.Context(), user.TenantID, input)
+	}
 	if err != nil {
 		writeRuntimeError(w, r, err)
 		return
@@ -169,7 +175,13 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	user := runtimeUser(r)
-	metrics, err := h.store.Metrics(r.Context(), user.TenantID)
+	var metrics Metrics
+	var err error
+	if user.TenantID == auth.PlatformTenantID {
+		metrics, err = h.store.MetricsAcrossTenants(r.Context(), user.TenantID)
+	} else {
+		metrics, err = h.store.Metrics(r.Context(), user.TenantID)
+	}
 	if err != nil {
 		writeRuntimeError(w, r, err)
 		return
@@ -223,8 +235,12 @@ func runtimeUser(r *http.Request) auth.User {
 
 func (h *Handler) auditTask(r *http.Request, action string, task Task, reason string) {
 	user := runtimeUser(r)
+	actorID := user.ID
+	if auth.IsPlatformWorker(user) && task.TenantID != user.TenantID {
+		actorID = ""
+	}
 	auth.RecordAudit(r.Context(), h.audit, auth.AuditEvent{
-		TenantID: task.TenantID, ActorID: user.ID, Action: action, TargetType: "agent_worker_task",
+		TenantID: task.TenantID, ActorID: actorID, Action: action, TargetType: "agent_worker_task",
 		TargetID: task.ID, AfterValue: map[string]any{"status": task.Status, "task_type": task.TaskType, "source_type": task.SourceType, "source_id": task.SourceID, "attempt_count": task.AttemptCount},
 		Reason: reason, IPAddress: r.RemoteAddr, UserAgent: r.UserAgent(), RequestID: logger.RequestID(r.Context()),
 	})

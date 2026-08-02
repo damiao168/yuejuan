@@ -26,15 +26,39 @@ func (h *Handler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusForbidden, "platform_tenant_required", "tenant administration requires the platform tenant")
 		return
 	}
-	var input Tenant
+	var input struct {
+		Name             string `json:"name"`
+		Code             string `json:"code"`
+		Status           string `json:"status"`
+		AdminUsername    string `json:"admin_username"`
+		AdminDisplayName string `json:"admin_display_name"`
+		AdminPassword    string `json:"admin_password"`
+	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if input.Name == "" || input.Code == "" {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "name and code are required")
+	input.Name = strings.TrimSpace(input.Name)
+	input.Code = strings.ToLower(strings.TrimSpace(input.Code))
+	input.AdminUsername = strings.TrimSpace(input.AdminUsername)
+	input.AdminDisplayName = strings.TrimSpace(input.AdminDisplayName)
+	if input.Name == "" || input.Code == "" || input.AdminUsername == "" || input.AdminDisplayName == "" || input.AdminPassword == "" {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "school and administrator fields are required")
 		return
 	}
-	out, err := h.store.CreateTenant(r.Context(), input)
+	if !auth.StrongPassword(input.AdminPassword) {
+		httpx.Error(w, r, http.StatusBadRequest, "weak_password", "password must contain upper, lower, number and symbol and be at least 12 characters")
+		return
+	}
+	hash, err := auth.HashPassword(input.AdminPassword)
+	if err != nil {
+		httpx.Error(w, r, http.StatusInternalServerError, "password_hash_failed", "failed to create school")
+		return
+	}
+	out, err := h.store.CreateTenant(r.Context(), TenantProvision{
+		Name: input.Name, Code: input.Code, Status: input.Status,
+		AdminUsername: input.AdminUsername, AdminDisplayName: input.AdminDisplayName,
+		PasswordHash: hash,
+	})
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "tenant_create_failed", "failed to create tenant")
 		return

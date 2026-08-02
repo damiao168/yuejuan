@@ -66,6 +66,7 @@ class EduGradeClient:
         worker_instance_id: str,
         lease_seconds: int,
         timeout_seconds: float,
+        tenant_id: str | None = None,
     ) -> None:
         self._request(
             "POST",
@@ -78,18 +79,27 @@ class EduGradeClient:
                 "lease_seconds": lease_seconds,
             },
             timeout=timeout_seconds,
+            tenant_id=tenant_id,
         )
 
-    def start_task(self, task_id: str) -> None:
-        self._request("POST", f"/api/v1/ocr-tasks/{task_id}/start", {})
+    def start_task(self, task_id: str, tenant_id: str | None = None) -> None:
+        self._request("POST", f"/api/v1/ocr-tasks/{task_id}/start", {}, tenant_id=tenant_id)
 
-    def get_task_input(self, task_id: str) -> dict[str, Any]:
-        return self._request("GET", f"/api/v1/ocr-tasks/{task_id}/input")
+    def get_task_input(self, task_id: str, tenant_id: str | None = None) -> dict[str, Any]:
+        return self._request("GET", f"/api/v1/ocr-tasks/{task_id}/input", tenant_id=tenant_id)
 
-    def complete_task(self, task_id: str, payload: dict[str, Any]) -> None:
-        self._request("POST", f"/api/v1/ocr-tasks/{task_id}/results", payload)
+    def complete_task(self, task_id: str, payload: dict[str, Any], tenant_id: str | None = None) -> None:
+        self._request("POST", f"/api/v1/ocr-tasks/{task_id}/results", payload, tenant_id=tenant_id)
 
-    def fail_task(self, task_id: str, message: str, runtime_task_id: str, lease_token: str, retryable: bool) -> None:
+    def fail_task(
+        self,
+        task_id: str,
+        message: str,
+        runtime_task_id: str,
+        lease_token: str,
+        retryable: bool,
+        tenant_id: str | None = None,
+    ) -> None:
         self._request(
             "POST",
             f"/api/v1/ocr-tasks/{task_id}/fail",
@@ -99,10 +109,11 @@ class EduGradeClient:
                 "runtime_lease_token": lease_token,
                 "retryable": retryable,
             },
+            tenant_id=tenant_id,
         )
 
-    def download(self, url: str) -> bytes:
-        req = self._build_request("GET", url, None)
+    def download(self, url: str, tenant_id: str | None = None) -> bytes:
+        req = self._build_request("GET", url, None, tenant_id=tenant_id)
         try:
             with request.urlopen(req, timeout=60) as response:
                 return response.read()
@@ -120,8 +131,15 @@ class EduGradeClient:
         payload: dict[str, Any] | None = None,
         require_auth: bool = True,
         timeout: float = 60,
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
-        req = self._build_request(method, path, payload if method != "GET" else None, require_auth=require_auth)
+        req = self._build_request(
+            method,
+            path,
+            payload if method != "GET" else None,
+            require_auth=require_auth,
+            tenant_id=tenant_id,
+        )
         try:
             with request.urlopen(req, timeout=timeout) as response:
                 raw = response.read()
@@ -135,7 +153,14 @@ class EduGradeClient:
             return {}
         return json.loads(raw.decode("utf-8"))
 
-    def _build_request(self, method: str, path_or_url: str, payload: dict[str, Any] | None, require_auth: bool = True) -> request.Request:
+    def _build_request(
+        self,
+        method: str,
+        path_or_url: str,
+        payload: dict[str, Any] | None,
+        require_auth: bool = True,
+        tenant_id: str | None = None,
+    ) -> request.Request:
         url = _trusted_service_url(self.base_url, path_or_url)
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         headers = {"Accept": "application/json"}
@@ -143,6 +168,8 @@ class EduGradeClient:
             headers["Content-Type"] = "application/json"
         if require_auth and self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        if tenant_id:
+            headers["X-EduGrade-Tenant-ID"] = tenant_id
         return request.Request(url, data=body, headers=headers, method=method)
 
 

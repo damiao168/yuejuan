@@ -14,6 +14,15 @@ type Tenant struct {
 	Status string `json:"status"`
 }
 
+type TenantProvision struct {
+	Name             string
+	Code             string
+	Status           string
+	AdminUsername    string
+	AdminDisplayName string
+	PasswordHash     string
+}
+
 type School struct {
 	ID       string `json:"id"`
 	TenantID string `json:"tenant_id"`
@@ -64,7 +73,7 @@ type CSVImportResult struct {
 }
 
 type Store interface {
-	CreateTenant(ctx context.Context, input Tenant) (Tenant, error)
+	CreateTenant(ctx context.Context, input TenantProvision) (Tenant, error)
 	ListTenants(ctx context.Context, tenantID string, canListAll bool) ([]Tenant, error)
 	UpdateTenantStatus(ctx context.Context, id string, status string) (Tenant, error)
 	CreateSchool(ctx context.Context, tenantID string, input School) (School, error)

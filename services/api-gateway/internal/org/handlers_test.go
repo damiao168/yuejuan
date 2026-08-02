@@ -135,7 +135,7 @@ func TestNonPlatformTenantCannotAdministerOtherTenants(t *testing.T) {
 func TestPlatformTenantCanCreateTenant(t *testing.T) {
 	store := org.NewMemoryStore()
 	handler := org.NewHandler(store, auth.NewMemoryStore())
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants", bytes.NewBufferString(`{"name":"Managed Tenant","code":"managed"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants", bytes.NewBufferString(`{"name":"Managed Tenant","code":"managed","admin_username":"school_admin","admin_display_name":"School Admin","admin_password":"SchoolStart123!"}`))
 	req = req.WithContext(auth.WithUser(req.Context(), auth.User{ID: "platform-admin", TenantID: auth.PlatformTenantID}))
 	rec := httptest.NewRecorder()
 

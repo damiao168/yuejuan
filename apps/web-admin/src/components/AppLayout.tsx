@@ -1,13 +1,15 @@
 import { useState, type ReactNode } from "react";
 import { Avatar, Breadcrumb, Button, ConfigProvider, Drawer, Dropdown, Grid, Layout, Menu, Segmented, Space, theme } from "antd";
 import { ArrowLeft, ChevronDown, Menu as MenuIcon, UserRound } from "lucide-react";
-import type { SessionUser } from "../auth/session";
+import { productIdentityLabel, type SessionUser } from "../auth/session";
 import type { AppRoute } from "../router/routes";
 import { hasRouteAccess, routeGroups, routePresentation, visibleRoutes } from "../router/routes";
 import { experienceLabel, type ProductExperience } from "../router/experience";
 import { MockBadge } from "./MockBadge";
 
 const { Header, Sider, Content } = Layout;
+const DESKTOP_NAVIGATION_WIDTH = 216;
+const MOBILE_NAVIGATION_WIDTH = 280;
 
 export function AppLayout({
   user,
@@ -36,6 +38,11 @@ export function AppLayout({
   const permittedRoutes = visibleRoutes(experience).filter((route) => hasRouteAccess(user, route, experience));
   const selectedPath = currentRoute.key === "examWorkspace" ? "/exams" : currentRoute.path;
   const currentPresentation = routePresentation(currentRoute, experience);
+  const breadcrumbItems = currentRoute.path === "/dashboard"
+    ? [{ title: "首页" }, { title: "工作台" }]
+    : currentPresentation.group === currentPresentation.title
+      ? [{ title: currentPresentation.title }]
+      : [{ title: currentPresentation.group }, { title: currentPresentation.title }];
   const menuItems = routeGroups(experience)
     .map((group) => {
       const children = permittedRoutes
@@ -61,7 +68,7 @@ export function AppLayout({
         <div className="brand-mark">E</div>
         <div className="brand-copy">
           <strong>EduGrade</strong>
-          <span>{availableExperiences.length > 1 ? user.school : experienceLabel(experience)}</span>
+          <span>{availableExperiences.length > 1 ? user.school : productIdentityLabel(user)}</span>
         </div>
       </button>
       {availableExperiences.length > 1 ? (
@@ -102,13 +109,13 @@ export function AppLayout({
       }}
     >
       <Layout className={immersive ? "app-frame immersive-frame" : "app-frame"}>
-        {!immersive && desktopNavigation ? <Sider width={244} className="sidebar">{navigation}</Sider> : null}
+        {!immersive && desktopNavigation ? <Sider width={DESKTOP_NAVIGATION_WIDTH} className="sidebar">{navigation}</Sider> : null}
         {!immersive && !desktopNavigation ? (
           <Drawer
             className="mobile-navigation"
             title={null}
             placement="left"
-            width={300}
+            width={MOBILE_NAVIGATION_WIDTH}
             open={navigationOpen}
             onClose={() => setNavigationOpen(false)}
             styles={{ body: { padding: 0 } }}
@@ -123,7 +130,7 @@ export function AppLayout({
               {immersive ? <Space size="middle">
                 <Button type="text" icon={<ArrowLeft size={17} />} aria-label="退出阅卷" onClick={() => onNavigate("/dashboard")}>退出阅卷</Button>
                 <strong>{experienceLabel(experience)} · {currentPresentation.title}</strong>
-              </Space> : <Breadcrumb items={[{ title: currentPresentation.group }, { title: currentPresentation.title }]} />}
+              </Space> : <Breadcrumb items={breadcrumbItems} />}
               {currentRoute.mock ? <MockBadge compact={true} /> : null}
             </div>
             <Space className="topbar-actions">

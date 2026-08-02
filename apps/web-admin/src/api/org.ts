@@ -1,5 +1,20 @@
 import { apiClient } from "./client";
 
+export interface Tenant {
+  id: string;
+  name: string;
+  code: string;
+  status: string;
+}
+
+export interface CreateTenantPayload {
+  name: string;
+  code: string;
+  admin_username: string;
+  admin_display_name: string;
+  admin_password: string;
+}
+
 export interface School {
   id: string;
   tenant_id: string;
@@ -53,6 +68,24 @@ export async function createSchool(payload: Pick<School, "name" | "code">) {
   return apiClient.request<{ school: School }>("/api/v1/schools", {
     method: "POST",
     body: JSON.stringify({ ...payload, status: "active" })
+  });
+}
+
+export async function listTenants() {
+  return apiClient.request<{ tenants: Tenant[] }>("/api/v1/tenants");
+}
+
+export async function createTenant(payload: CreateTenantPayload) {
+  return apiClient.request<{ tenant: Tenant }>("/api/v1/tenants", {
+    method: "POST",
+    body: JSON.stringify({ ...payload, status: "active" })
+  });
+}
+
+export async function updateTenantStatus(id: string, status: "active" | "disabled") {
+  return apiClient.request<{ tenant: Tenant }>(`/api/v1/tenants/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status })
   });
 }
 
