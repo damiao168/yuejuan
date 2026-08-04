@@ -197,22 +197,6 @@ func blockingIssues(stats Statistics) []BlockingIssue {
 	return issues
 }
 
-func scopedSchoolID(scope map[string]any) string {
-	for _, value := range scope {
-		nested, ok := value.(map[string]any)
-		if !ok {
-			continue
-		}
-		if schoolID, ok := nested["school_id"].(string); ok {
-			return strings.TrimSpace(schoolID)
-		}
-	}
-	if schoolID, ok := scope["school_id"].(string); ok {
-		return strings.TrimSpace(schoolID)
-	}
-	return ""
-}
-
 func dashboardActivity(action string) bool {
 	return strings.HasPrefix(action, "exam.") ||
 		strings.HasPrefix(action, "submission.") ||
