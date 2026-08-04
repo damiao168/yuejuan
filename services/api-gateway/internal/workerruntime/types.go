@@ -57,6 +57,7 @@ type Task struct {
 	DurationMS           int            `json:"duration_ms,omitempty"`
 	ErrorCode            string         `json:"error_code,omitempty"`
 	ErrorDetail          map[string]any `json:"error_detail,omitempty"`
+	Revision             int64          `json:"revision"`
 	CreatedBy            string         `json:"created_by,omitempty"`
 	CreatedAt            time.Time      `json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at"`
@@ -164,6 +165,7 @@ type Store interface {
 	Cancel(ctx context.Context, tenantID string, taskID string) (Task, error)
 	Requeue(ctx context.Context, tenantID string, taskID string) (Task, error)
 	Get(ctx context.Context, tenantID string, taskID string) (Task, error)
+	AuthorizeLease(ctx context.Context, taskID string, leaseToken string, workerService string, workerInstanceID string, now time.Time) (Task, error)
 	GetBySource(ctx context.Context, tenantID string, sourceType string, sourceID string) (Task, error)
 	Metrics(ctx context.Context, tenantID string) (Metrics, error)
 	MetricsAcrossTenants(ctx context.Context, platformTenantID string) (Metrics, error)

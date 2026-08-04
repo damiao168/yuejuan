@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/pagination"
 )
 
 type Handler struct {
@@ -44,10 +47,32 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 50, 200)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 200")
+		return
+	}
 	filter := ListFilter{
 		Status:     r.URL.Query().Get("status"),
 		AssignedTo: r.URL.Query().Get("assigned_to"),
 		ExamID:     r.URL.Query().Get("exam_id"),
+		Limit:      limit + 1,
+	}
+	parts, err := pagination.DecodeParts(r.URL.Query().Get("cursor"), 3)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
+	if len(parts) == 3 {
+		filter.CursorPriority, err = strconv.Atoi(parts[0])
+		if err == nil {
+			filter.CursorCreatedAt, err = time.Parse(time.RFC3339Nano, parts[1])
+		}
+		if err != nil {
+			httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+			return
+		}
+		filter.CursorID = parts[2]
 	}
 	if reviewWorkerScoped(user) {
 		filter.AssignedTo = user.ID
@@ -57,7 +82,16 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+	hasMore := len(tasks) > limit
+	if hasMore {
+		tasks = tasks[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(tasks) > 0 {
+		last := tasks[len(tasks)-1]
+		nextCursor = pagination.EncodeParts(strconv.Itoa(last.Priority), last.CreatedAt.UTC().Format(time.RFC3339Nano), last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"tasks": tasks, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
@@ -247,7 +281,7 @@ func (h *Handler) authorizeActiveRole(w http.ResponseWriter, r *http.Request, te
 		writeStoreError(w, r, ErrInvalidInput)
 		return false
 	}
-	users, err := h.audit.ListManagedUsers(r.Context(), tenantID)
+	users, err := h.audit.ListManagedUsers(r.Context(), tenantID, auth.ManagedUserFilter{UserID: userID, Limit: 2})
 	if err != nil {
 		writeStoreError(w, r, err)
 		return false
@@ -529,10 +563,23 @@ func (h *Handler) CreateArbitrationTask(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handler) ListArbitrationTasks(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 50, 200)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 200")
+		return
+	}
+	cursor, err := pagination.Decode(r.URL.Query().Get("cursor"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
 	filter := ArbitrationFilter{
-		Status:     r.URL.Query().Get("status"),
-		AssignedTo: r.URL.Query().Get("assigned_to"),
-		ExamID:     r.URL.Query().Get("exam_id"),
+		Status:          r.URL.Query().Get("status"),
+		AssignedTo:      r.URL.Query().Get("assigned_to"),
+		ExamID:          r.URL.Query().Get("exam_id"),
+		Limit:           limit + 1,
+		CursorCreatedAt: cursor.CreatedAt,
+		CursorID:        cursor.ID,
 	}
 	if arbitrationWorkerScoped(user) {
 		filter.AssignedTo = user.ID
@@ -542,7 +589,16 @@ func (h *Handler) ListArbitrationTasks(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"arbitration_tasks": tasks})
+	hasMore := len(tasks) > limit
+	if hasMore {
+		tasks = tasks[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(tasks) > 0 {
+		last := tasks[len(tasks)-1]
+		nextCursor = pagination.Encode(last.CreatedAt, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"arbitration_tasks": tasks, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) GetArbitrationTask(w http.ResponseWriter, r *http.Request) {
@@ -632,7 +688,7 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrInvalidTransition):
 		httpx.Error(w, r, http.StatusConflict, "invalid_review_transition", "review task transition is invalid")
 	case errors.Is(err, ErrRevisionConflict):
-		httpx.Error(w, r, http.StatusConflict, "review_draft_revision_conflict", "review draft was updated in another session")
+		httpx.Error(w, r, http.StatusConflict, "resource_version_conflict", "resource was updated in another session; refresh and retry")
 	default:
 		httpx.Error(w, r, http.StatusInternalServerError, "review_operation_failed", "review operation failed")
 	}

@@ -38,6 +38,9 @@ class ImageQualityRunner:
         jobs = self.client.claim_jobs(self.config.worker_instance_id, self.config.batch_size, self.config.lease_seconds)
         processed = 0
         for job in jobs:
+            activate_job = getattr(self.client, "activate_job", None)
+            if callable(activate_job):
+                activate_job(job)
             try:
                 self._process_job(job)
             except Exception as exc:  # noqa: BLE001 - task boundary must report arbitrary decoder/client failures.

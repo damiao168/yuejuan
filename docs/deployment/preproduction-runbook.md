@@ -1,6 +1,6 @@
 # EduGrade Enterprise 预生产部署 Runbook
 
-适用版本：当前 `main`（至 STORY-060）
+适用版本：当前 `main`
 
 适用拓扑：Windows 主机 + Docker Desktop/Engine + Docker Compose 单机私有化部署
 
@@ -8,7 +8,7 @@
 
 本 Runbook 用于单机内网部署、受控试点和预生产验收。它覆盖 PostgreSQL、Redis、MinIO、Qdrant、API Gateway、Web Admin、Nginx、内部 `grading-agent`，以及按 profile 启用的 OCR、图像质量、页面处理和可观测性服务的启动、迁移、初始化、登录、备份与恢复验证。
 
-该拓扑不提供多机高可用、自动故障转移、跨地域灾备或完整安全扫描。`grading-agent` 可调用受控的本地 llama.cpp 模型，但只产生必须由教师复核的建议；Lab 当前仍为 `Pilot NOT_READY`。OCR、图像质量和页面处理 worker 通过 profile 单独启用；扫描仪驱动、无人工最终定分等未实现能力不因部署成功而变成生产能力。
+该拓扑不提供多机高可用、自动故障转移或跨地域灾备。CI 已提供依赖检查、SBOM 和 High/Critical 漏洞门禁，但不能替代学校环境的网络、主机与镜像仓库安全评估。`grading-agent` 可调用受控的本地 llama.cpp 模型，但只产生必须由教师复核的建议；Lab 当前仍为 `Pilot NOT_READY`。OCR、图像质量和页面处理 worker 通过 profile 单独启用；扫描仪驱动、无人工最终定分等未实现能力不因部署成功而变成生产能力。
 
 ## 2. 主机要求
 
@@ -96,17 +96,18 @@ try {
 STORY-052 之前部署的数据库可能已有表但没有 `schema_migration`。必须先确认该库确实已经应用仓库当前全部 migration，再执行一次：
 
 ```powershell
-.\scripts\init.ps1 -SkipBuild -SkipSmoke -BaselineExistingMigrations
+.\scripts\init.ps1 -SkipBuild -SkipSmoke -MigrationBaselineVersion 000020
 ```
 
-该参数只允许使用一次。它会记录当前 migration 文件名和 SHA-256，不会重放 SQL。没有显式参数时，检测到“已有 schema、无 migration history”会退出并返回说明。
+该参数只允许在确认旧库确实对应 000020 时使用一次。迁移器会先校验表、字段类型、非空约束、默认值、索引和租户复合外键指纹，只登记到 000020，再执行后续 migration；不会再把全部文件直接标记为已执行。没有显式版本或指纹不匹配时会拒绝启动迁移。
 
 已应用 migration 文件不得原地修改；校验和变化会阻止继续部署。修正数据库结构必须新增 migration。
 
 ## 7. 访问与冒烟
 
 - Web/Nginx：[http://127.0.0.1:8088](http://127.0.0.1:8088)
-- API health：[http://127.0.0.1:8080/health](http://127.0.0.1:8080/health)
+- API liveness：[http://127.0.0.1:8080/health/live](http://127.0.0.1:8080/health/live)
+- API readiness：[http://127.0.0.1:8080/health/ready](http://127.0.0.1:8080/health/ready)
 - MinIO Console：[http://127.0.0.1:9001](http://127.0.0.1:9001)
 - Qdrant：[http://127.0.0.1:6333/dashboard](http://127.0.0.1:6333/dashboard)
 
@@ -129,7 +130,7 @@ try {
 }
 ```
 
-`/ready` 是受 `system:read` 保护的依赖详情，不是匿名 Kubernetes probe；容器健康检查使用 `/health`。
+`/health/live` 是匿名存活探针；`/health/ready` 是匿名但脱敏的依赖就绪探针。详细依赖错误、Worker 影响和构建版本只通过受 `system:read` 保护的 `/api/v1/system/status` 提供。旧 `/ready` 仅兼容保留。
 
 ## 8. OCR、图像质量与页面处理 Worker
 
@@ -225,6 +226,15 @@ MinIO 恢复可附加：
 -MinioBackupDirectory .\backups\edugrade-YYYYMMDD-HHMMSS\minio-YYYYMMDD-HHMMSS
 ```
 
+完整自动演练优先使用：
+
+```powershell
+.\scripts\verify-backup.ps1 -BackupDirectory .\backups\edugrade-YYYYMMDD-HHMMSS
+.\scripts\restore-drill.ps1 -BackupDirectory .\backups\edugrade-YYYYMMDD-HHMMSS
+```
+
+演练恢复到随机隔离数据库和 bucket，验证 migration、租户关系与对象数量后默认清理。建议预生产 RPO 不超过 24 小时、RTO 不超过 4 小时；正式考试窗口应缩短备份周期，并以演练实测值替代建议值。
+
 ## 12. 升级与回滚
 
 升级前：
@@ -246,7 +256,7 @@ MinIO 恢复可附加：
 - HTTP 到 HTTPS 重定向。
 - `X-Forwarded-Proto=https`。
 - session cookie 包含 Secure、HttpOnly 和适当 SameSite。
-- API 与 Web 同源，CORS 只允许真实域名。
+- API 与 Web 同源，CORS 只允许真实域名，并允许 Web 必需的 `X-EduGrade-CSRF` 请求头。
 - PostgreSQL、MinIO 和备份链路满足组织内部加密要求。
 
 真实证书与私钥不进入仓库。
@@ -287,3 +297,5 @@ docker compose --env-file .env -f docker-compose.yml logs --tail 200 api-gateway
 - backup manifest/hash。
 - 隔离 restore 的 migration、tenant、user 数量验证。
 - 已知风险、未执行项和发布审批人。
+
+生产控制、能力降级、指标告警、供应链、错误模型和安全测试边界见 [生产安全与可靠性控制](../architecture/production-security-and-reliability.md)。

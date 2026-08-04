@@ -82,10 +82,29 @@ func (s *MemoryStore) ListTasks(_ context.Context, tenantID string, filter ListF
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Priority == out[j].Priority {
+			if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+				return out[i].ID < out[j].ID
+			}
 			return out[i].CreatedAt.Before(out[j].CreatedAt)
 		}
 		return out[i].Priority > out[j].Priority
 	})
+	if filter.CursorID != "" {
+		start := 0
+		for start < len(out) {
+			item := out[start]
+			if item.Priority < filter.CursorPriority ||
+				(item.Priority == filter.CursorPriority && item.CreatedAt.After(filter.CursorCreatedAt)) ||
+				(item.Priority == filter.CursorPriority && item.CreatedAt.Equal(filter.CursorCreatedAt) && item.ID > filter.CursorID) {
+				break
+			}
+			start++
+		}
+		out = out[start:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
 	return out, nil
 }
 
@@ -101,7 +120,7 @@ func (s *MemoryStore) GetTask(_ context.Context, tenantID string, id string) (Re
 
 func (s *MemoryStore) AssignTask(_ context.Context, tenantID string, id string, _ string, input AssignTaskInput) (ReviewTask, error) {
 	input.AssignedTo = strings.TrimSpace(input.AssignedTo)
-	if input.AssignedTo == "" {
+	if input.AssignedTo == "" || input.ExpectedRevision <= 0 {
 		return ReviewTask{}, ErrInvalidInput
 	}
 	s.mu.Lock()
@@ -113,9 +132,13 @@ func (s *MemoryStore) AssignTask(_ context.Context, tenantID string, id string, 
 	if task.Status == "submitted" || task.Status == "completed" {
 		return ReviewTask{}, ErrInvalidTransition
 	}
+	if task.Revision != input.ExpectedRevision {
+		return ReviewTask{}, ErrRevisionConflict
+	}
 	task.AssignedTo = input.AssignedTo
 	task.Status = "assigned"
 	task.ReturnReason = ""
+	task.Revision++
 	task.UpdatedAt = time.Now().UTC()
 	s.tasks[key(tenantID, id)] = task
 	return cloneTask(task), nil
@@ -123,7 +146,7 @@ func (s *MemoryStore) AssignTask(_ context.Context, tenantID string, id string, 
 
 func (s *MemoryStore) BatchAssignTasks(_ context.Context, tenantID string, _ string, input BatchAssignInput) ([]ReviewTask, error) {
 	input.AssignedTo = strings.TrimSpace(input.AssignedTo)
-	if input.AssignedTo == "" || len(input.TaskIDs) == 0 {
+	if input.AssignedTo == "" || len(input.TaskIDs) == 0 || len(input.ExpectedRevisions) != len(input.TaskIDs) {
 		return nil, ErrInvalidInput
 	}
 	s.mu.Lock()
@@ -136,6 +159,9 @@ func (s *MemoryStore) BatchAssignTasks(_ context.Context, tenantID string, _ str
 		if task.Status == "submitted" || task.Status == "completed" {
 			return nil, ErrInvalidTransition
 		}
+		if input.ExpectedRevisions[id] <= 0 || task.Revision != input.ExpectedRevisions[id] {
+			return nil, ErrRevisionConflict
+		}
 	}
 	now := time.Now().UTC()
 	out := make([]ReviewTask, 0, len(input.TaskIDs))
@@ -144,6 +170,7 @@ func (s *MemoryStore) BatchAssignTasks(_ context.Context, tenantID string, _ str
 		task.AssignedTo = input.AssignedTo
 		task.Status = "assigned"
 		task.ReturnReason = ""
+		task.Revision++
 		task.UpdatedAt = now
 		s.tasks[key(tenantID, id)] = task
 		out = append(out, cloneTask(task))
@@ -163,6 +190,9 @@ func (s *MemoryStore) SubmitGrade(_ context.Context, tenantID string, id string,
 	}
 	if !canSubmit(task.Status) {
 		return SubmitResult{}, ErrInvalidTransition
+	}
+	if input.ExpectedRevision <= 0 || task.Revision != input.ExpectedRevision {
+		return SubmitResult{}, ErrRevisionConflict
 	}
 	ctx, ok := s.contexts[key(tenantID, task.AnswerSegmentID)]
 	if !ok {
@@ -190,6 +220,7 @@ func (s *MemoryStore) SubmitGrade(_ context.Context, tenantID string, id string,
 		CreatedAt:        now,
 	}
 	task.Status = "submitted"
+	task.Revision++
 	task.UpdatedAt = now
 	s.tasks[key(tenantID, id)] = task
 	s.grades[key(tenantID, task.ID)] = append(s.grades[key(tenantID, task.ID)], grade)
@@ -211,7 +242,7 @@ func (s *MemoryStore) SubmitGrade(_ context.Context, tenantID string, id string,
 
 func (s *MemoryStore) ReturnTask(_ context.Context, tenantID string, id string, _ string, input ReturnTaskInput) (ReviewTask, error) {
 	input.Reason = strings.TrimSpace(input.Reason)
-	if input.Reason == "" {
+	if input.Reason == "" || input.ExpectedRevision <= 0 {
 		return ReviewTask{}, ErrInvalidInput
 	}
 	s.mu.Lock()
@@ -223,8 +254,12 @@ func (s *MemoryStore) ReturnTask(_ context.Context, tenantID string, id string, 
 	if !canReturnTask(task.Status) {
 		return ReviewTask{}, ErrInvalidTransition
 	}
+	if task.Revision != input.ExpectedRevision {
+		return ReviewTask{}, ErrRevisionConflict
+	}
 	task.Status = "returned"
 	task.ReturnReason = input.Reason
+	task.Revision++
 	task.UpdatedAt = time.Now().UTC()
 	s.tasks[key(tenantID, id)] = task
 	return cloneTask(task), nil
@@ -428,7 +463,10 @@ func (s *MemoryStore) ListArbitrationTasks(_ context.Context, tenantID string, f
 		if task.TenantID != tenantID {
 			continue
 		}
-		if filter.Status != "" && task.Status != filter.Status {
+		if filter.Status == "active" && task.Status != "pending" && task.Status != "assigned" {
+			continue
+		}
+		if filter.Status != "" && filter.Status != "active" && task.Status != filter.Status {
 			continue
 		}
 		if filter.AssignedTo != "" && task.AssignedTo != filter.AssignedTo {
@@ -440,8 +478,26 @@ func (s *MemoryStore) ListArbitrationTasks(_ context.Context, tenantID string, f
 		out = append(out, cloneArbitration(task))
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].CreatedAt.Before(out[j].CreatedAt)
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
+	if filter.CursorID != "" {
+		start := 0
+		for start < len(out) {
+			item := out[start]
+			if item.CreatedAt.Before(filter.CursorCreatedAt) ||
+				(item.CreatedAt.Equal(filter.CursorCreatedAt) && item.ID < filter.CursorID) {
+				break
+			}
+			start++
+		}
+		out = out[start:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
 	return out, nil
 }
 
@@ -457,7 +513,7 @@ func (s *MemoryStore) GetArbitrationTask(_ context.Context, tenantID string, id 
 
 func (s *MemoryStore) AssignArbitrationTask(_ context.Context, tenantID string, id string, _ string, input AssignArbitrationTaskInput) (ArbitrationTask, error) {
 	input.AssignedTo = strings.TrimSpace(input.AssignedTo)
-	if input.AssignedTo == "" {
+	if input.AssignedTo == "" || input.ExpectedRevision <= 0 {
 		return ArbitrationTask{}, ErrInvalidInput
 	}
 	s.mu.Lock()
@@ -469,11 +525,15 @@ func (s *MemoryStore) AssignArbitrationTask(_ context.Context, tenantID string, 
 	if task.Status == "submitted" {
 		return ArbitrationTask{}, ErrInvalidTransition
 	}
+	if task.Revision != input.ExpectedRevision {
+		return ArbitrationTask{}, ErrRevisionConflict
+	}
 	if !arbitratorAllowed(task, input.AssignedTo) {
 		return ArbitrationTask{}, ErrForbidden
 	}
 	task.AssignedTo = input.AssignedTo
 	task.Status = "assigned"
+	task.Revision++
 	task.UpdatedAt = time.Now().UTC()
 	s.arbitrations[key(tenantID, id)] = task
 	return cloneArbitration(task), nil
@@ -482,7 +542,7 @@ func (s *MemoryStore) AssignArbitrationTask(_ context.Context, tenantID string, 
 func (s *MemoryStore) SubmitArbitration(_ context.Context, tenantID string, id string, arbitratorID string, input SubmitArbitrationInput) (ArbitrationTask, FinalGrade, error) {
 	input.Reason = strings.TrimSpace(input.Reason)
 	input.StudentFeedback = strings.TrimSpace(input.StudentFeedback)
-	if input.Reason == "" {
+	if input.Reason == "" || input.ExpectedRevision <= 0 {
 		return ArbitrationTask{}, FinalGrade{}, ErrInvalidInput
 	}
 	s.mu.Lock()
@@ -493,6 +553,9 @@ func (s *MemoryStore) SubmitArbitration(_ context.Context, tenantID string, id s
 	}
 	if task.Status == "submitted" {
 		return ArbitrationTask{}, FinalGrade{}, ErrInvalidTransition
+	}
+	if task.Revision != input.ExpectedRevision {
+		return ArbitrationTask{}, FinalGrade{}, ErrRevisionConflict
 	}
 	if task.AssignedTo == "" || task.AssignedTo != arbitratorID {
 		return ArbitrationTask{}, FinalGrade{}, ErrForbidden
@@ -518,6 +581,7 @@ func (s *MemoryStore) SubmitArbitration(_ context.Context, tenantID string, id s
 	task.FinalScore = floatPtr(input.FinalScore)
 	task.Reason = input.Reason
 	task.StudentFeedback = input.StudentFeedback
+	task.Revision++
 	task.UpdatedAt = now
 	s.arbitrations[key(tenantID, task.ID)] = task
 	session.Status = "arbitrated"
@@ -549,6 +613,7 @@ func (s *MemoryStore) createTaskLocked(tenantID string, actorID string, input Cr
 		Priority:        input.Priority,
 		AssignedTo:      strings.TrimSpace(input.AssignedTo),
 		GradeRound:      normalizeGradeRound(input.GradeRound),
+		Revision:        1,
 		DueAt:           cloneTime(input.DueAt),
 		CreatedBy:       actorID,
 		CreatedAt:       now,
@@ -682,6 +747,7 @@ func (s *MemoryStore) createArbitrationTaskLocked(tenantID string, actorID strin
 		AssignedTo:          assignedTo,
 		AllowSameArbitrator: allowSame,
 		Context:             contextForArbitration(ctx),
+		Revision:            1,
 		CreatedBy:           actorID,
 		CreatedAt:           now,
 		UpdatedAt:           now,

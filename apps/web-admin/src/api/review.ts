@@ -17,6 +17,7 @@ export interface ReviewTask {
   return_reason?: string;
   grade_round: string;
   due_at?: string;
+  revision: number;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -28,6 +29,7 @@ export interface RubricSelection {
 }
 
 export interface SubmitHumanGradePayload {
+  expected_revision: number;
   score: number;
   rubric_selections: RubricSelection[];
   comments: string;
@@ -64,6 +66,7 @@ export interface ReviewDraft {
   student_feedback: string;
   viewer_state: Record<string, unknown>;
   revision: number;
+  client_updated_at?: string;
   updated_at: string;
 }
 
@@ -75,6 +78,7 @@ export interface SaveReviewDraftPayload {
   student_feedback: string;
   viewer_state: Record<string, unknown>;
   expected_revision: number;
+  client_updated_at: string;
 }
 
 export interface ReviewWorkspace {
@@ -235,6 +239,8 @@ export interface ReviewTaskFilter {
   status?: string;
   assigned_to?: string;
   exam_id?: string;
+  limit?: number;
+  cursor?: string;
 }
 
 export interface ScoringRun {
@@ -360,6 +366,7 @@ export interface ArbitrationTask {
   student_feedback?: string;
   allow_same_arbitrator: boolean;
   context: ArbitrationContext;
+  revision: number;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -369,16 +376,20 @@ export interface ArbitrationTaskFilter {
   status?: string;
   assigned_to?: string;
   exam_id?: string;
+  limit?: number;
+  cursor?: string;
 }
 
 export interface AssignArbitrationPayload {
   assigned_to: string;
+  expected_revision: number;
 }
 
 export interface SubmitArbitrationPayload {
   final_score: number;
   reason: string;
   student_feedback: string;
+  expected_revision: number;
 }
 
 export interface SubmitArbitrationResult {
@@ -386,7 +397,7 @@ export interface SubmitArbitrationResult {
   final_grade: FinalGrade;
 }
 
-function queryString(filter: { status?: string; assigned_to?: string; exam_id?: string }) {
+function queryString(filter: ReviewTaskFilter) {
   const params = new URLSearchParams();
   if (filter.status) {
     params.set("status", filter.status);
@@ -397,12 +408,18 @@ function queryString(filter: { status?: string; assigned_to?: string; exam_id?: 
   if (filter.exam_id) {
     params.set("exam_id", filter.exam_id);
   }
+  if (filter.limit) {
+    params.set("limit", String(filter.limit));
+  }
+  if (filter.cursor) {
+    params.set("cursor", filter.cursor);
+  }
   const query = params.toString();
   return query ? `?${query}` : "";
 }
 
 export async function listReviewTasks(filter: ReviewTaskFilter = {}) {
-  return apiClient.request<{ tasks: ReviewTask[] }>(`/api/v1/review-tasks${queryString(filter)}`);
+  return apiClient.request<{ tasks: ReviewTask[]; next_cursor: string; has_more: boolean }>(`/api/v1/review-tasks${queryString(filter)}`);
 }
 
 export async function getReviewTask(id: string) {
@@ -413,17 +430,21 @@ export async function getReviewWorkspace(id: string) {
   return apiClient.request<{ workspace: ReviewWorkspace }>(`/api/v1/review-tasks/${encodeURIComponent(id)}/workspace`);
 }
 
-export async function assignReviewTask(id: string, assignedTo: string) {
+export async function assignReviewTask(id: string, assignedTo: string, expectedRevision: number) {
   return apiClient.request<{ task: ReviewTask }>(`/api/v1/review-tasks/${encodeURIComponent(id)}/assign`, {
     method: "POST",
-    body: JSON.stringify({ assigned_to: assignedTo })
+    body: JSON.stringify({ assigned_to: assignedTo, expected_revision: expectedRevision })
   });
 }
 
-export async function batchAssignReviewTasks(taskIds: string[], assignedTo: string) {
+export async function batchAssignReviewTasks(tasks: Array<Pick<ReviewTask, "id" | "revision">>, assignedTo: string) {
   return apiClient.request<{ tasks: ReviewTask[] }>("/api/v1/review-tasks/batch-assign", {
     method: "POST",
-    body: JSON.stringify({ task_ids: taskIds, assigned_to: assignedTo })
+    body: JSON.stringify({
+      task_ids: tasks.map((task) => task.id),
+      assigned_to: assignedTo,
+      expected_revisions: Object.fromEntries(tasks.map((task) => [task.id, task.revision]))
+    })
   });
 }
 
@@ -453,10 +474,10 @@ export async function submitHumanGrade(taskId: string, payload: SubmitHumanGrade
   });
 }
 
-export async function returnReviewTask(taskId: string, reason: string) {
+export async function returnReviewTask(taskId: string, reason: string, expectedRevision: number) {
   return apiClient.request<{ task: ReviewTask }>(`/api/v1/review-tasks/${encodeURIComponent(taskId)}/return`, {
     method: "POST",
-    body: JSON.stringify({ reason })
+    body: JSON.stringify({ reason, expected_revision: expectedRevision })
   });
 }
 
@@ -472,7 +493,7 @@ export async function saveReviewDraft(taskId: string, payload: SaveReviewDraftPa
 }
 
 export async function listArbitrationTasks(filter: ArbitrationTaskFilter = {}) {
-  return apiClient.request<{ arbitration_tasks: ArbitrationTask[] }>(`/api/v1/arbitration-tasks${queryString(filter)}`);
+  return apiClient.request<{ arbitration_tasks: ArbitrationTask[]; next_cursor: string; has_more: boolean }>(`/api/v1/arbitration-tasks${queryString(filter)}`);
 }
 
 export async function getArbitrationTask(id: string) {

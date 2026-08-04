@@ -12,6 +12,7 @@ var (
 	ErrForbidden         = errors.New("appeal action forbidden")
 	ErrInvalidTransition = errors.New("invalid appeal transition")
 	ErrUnpublishedGrade  = errors.New("grade is not published")
+	ErrRevisionConflict  = errors.New("appeal revision conflict")
 )
 
 type Appeal struct {
@@ -44,6 +45,7 @@ type Appeal struct {
 	ClosedBy             string            `json:"closed_by,omitempty"`
 	ClosedAt             *time.Time        `json:"closed_at,omitempty"`
 	CreatedBy            string            `json:"created_by,omitempty"`
+	Revision             int64             `json:"revision"`
 	CreatedAt            time.Time         `json:"created_at"`
 	UpdatedAt            time.Time         `json:"updated_at"`
 	Evidence             *AppealEvidence   `json:"evidence,omitempty"`
@@ -88,32 +90,39 @@ type CreateAppealInput struct {
 }
 
 type ReviewAppealInput struct {
-	Status        string   `json:"status"`
-	Reason        string   `json:"reason"`
-	AssignedTo    string   `json:"assigned_to"`
-	FinalGradeID  string   `json:"final_grade_id"`
-	AdjustedScore *float64 `json:"adjusted_score"`
+	Status           string   `json:"status"`
+	Reason           string   `json:"reason"`
+	AssignedTo       string   `json:"assigned_to"`
+	FinalGradeID     string   `json:"final_grade_id"`
+	AdjustedScore    *float64 `json:"adjusted_score"`
+	ExpectedRevision int64    `json:"expected_revision"`
 }
 
 type AssignAppealInput struct {
-	AssignedTo string `json:"assigned_to"`
+	AssignedTo       string `json:"assigned_to"`
+	ExpectedRevision int64  `json:"expected_revision"`
 }
 
 type SubmitRecommendationInput struct {
 	Recommendation   string   `json:"recommendation"`
 	Reason           string   `json:"reason"`
 	RecommendedScore *float64 `json:"recommended_score"`
+	ExpectedRevision int64    `json:"expected_revision"`
 }
 
 type CloseAppealInput struct {
-	Reason string `json:"reason"`
+	Reason           string `json:"reason"`
+	ExpectedRevision int64  `json:"expected_revision"`
 }
 
 type ListFilter struct {
-	ExamID     string
-	StudentID  string
-	Status     string
-	AssignedTo string
+	ExamID          string
+	StudentID       string
+	Status          string
+	AssignedTo      string
+	Limit           int
+	CursorCreatedAt time.Time
+	CursorID        string
 }
 
 type StatisticsFilter struct {

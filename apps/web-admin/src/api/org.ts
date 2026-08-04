@@ -71,8 +71,13 @@ export async function createSchool(payload: Pick<School, "name" | "code">) {
   });
 }
 
-export async function listTenants() {
-  return apiClient.request<{ tenants: Tenant[] }>("/api/v1/tenants");
+export async function listTenants(filter: { q?: string; limit?: number; cursor?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filter.q) params.set("q", filter.q);
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.cursor) params.set("cursor", filter.cursor);
+  const query = params.toString();
+  return apiClient.request<{ tenants: Tenant[]; next_cursor: string; has_more: boolean }>(`/api/v1/tenants${query ? `?${query}` : ""}`);
 }
 
 export async function createTenant(payload: CreateTenantPayload) {
@@ -117,9 +122,15 @@ export async function createClass(payload: Pick<SchoolClass, "school_id" | "grad
   });
 }
 
-export async function listStudents(classId?: string) {
-  const query = classId ? `?class_id=${encodeURIComponent(classId)}` : "";
-  return apiClient.request<{ students: Student[] }>(`/api/v1/students${query}`);
+export async function listStudents(filter: { classId?: string; ids?: string[]; q?: string; limit?: number; cursor?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filter.classId) params.set("class_id", filter.classId);
+  if (filter.ids?.length) params.set("ids", filter.ids.join(","));
+  if (filter.q) params.set("q", filter.q);
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.cursor) params.set("cursor", filter.cursor);
+  const query = params.toString();
+  return apiClient.request<{ students: Student[]; next_cursor: string; has_more: boolean }>(`/api/v1/students${query ? `?${query}` : ""}`);
 }
 
 export async function importStudentsCSV(csv: string) {

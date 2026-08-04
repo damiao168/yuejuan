@@ -1,10 +1,17 @@
 package auth
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"time"
 )
+
+type LoginLimiter interface {
+	IsBlocked(ctx context.Context, key string, now time.Time) (time.Duration, bool)
+	RegisterFailure(ctx context.Context, key string, now time.Time) (int, time.Duration, bool)
+	Clear(ctx context.Context, key string)
+}
 
 type LoginFailureLimiter struct {
 	mu      sync.Mutex
@@ -34,7 +41,7 @@ func LoginFailureKey(tenantCode string, username string, ipAddress string) strin
 	return strings.ToLower(strings.TrimSpace(tenantCode)) + "|" + strings.ToLower(strings.TrimSpace(username)) + "|" + strings.TrimSpace(ipAddress)
 }
 
-func (l *LoginFailureLimiter) IsBlocked(key string, now time.Time) (time.Duration, bool) {
+func (l *LoginFailureLimiter) IsBlocked(_ context.Context, key string, now time.Time) (time.Duration, bool) {
 	if l == nil || l.limit <= 0 {
 		return 0, false
 	}
@@ -53,7 +60,7 @@ func (l *LoginFailureLimiter) IsBlocked(key string, now time.Time) (time.Duratio
 	return 0, false
 }
 
-func (l *LoginFailureLimiter) RegisterFailure(key string, now time.Time) (int, time.Duration, bool) {
+func (l *LoginFailureLimiter) RegisterFailure(_ context.Context, key string, now time.Time) (int, time.Duration, bool) {
 	if l == nil || l.limit <= 0 {
 		return 0, 0, false
 	}
@@ -74,7 +81,7 @@ func (l *LoginFailureLimiter) RegisterFailure(key string, now time.Time) (int, t
 	return entry.Count, retryAfter, blocked
 }
 
-func (l *LoginFailureLimiter) Clear(key string) {
+func (l *LoginFailureLimiter) Clear(_ context.Context, key string) {
 	if l == nil {
 		return
 	}

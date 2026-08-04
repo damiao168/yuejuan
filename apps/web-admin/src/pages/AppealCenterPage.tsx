@@ -169,12 +169,12 @@ function finalScore(appeal: Appeal | null, key: string) {
   return appeal?.evidence?.final_grade ? mapNumber(appeal.evidence.final_grade[key]) : undefined;
 }
 
-async function loadIdentities(canReadIdentities: boolean, canReadExams: boolean): Promise<IdentityMaps> {
+async function loadIdentities(canReadIdentities: boolean, canReadExams: boolean, studentIDs: string[] = []): Promise<IdentityMaps> {
   const output: IdentityMaps = { students: {}, classes: {}, exams: {} };
   const [studentsResult, classesResult, examsResult] = await Promise.allSettled([
-    canReadIdentities ? listStudents() : Promise.resolve({ students: [] }),
+    canReadIdentities && studentIDs.length > 0 ? listStudents({ ids: studentIDs, limit: 200 }) : Promise.resolve({ students: [] }),
     canReadIdentities ? listClasses() : Promise.resolve({ classes: [] }),
-    canReadExams ? listExams() : Promise.resolve({ exams: [] })
+    canReadExams ? listExams({ limit: 200 }) : Promise.resolve({ exams: [] })
   ]);
   if (studentsResult.status === "fulfilled") {
     output.students = Object.fromEntries(studentsResult.value.students.map((item) => [item.id, item]));
@@ -316,6 +316,9 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
   const [recommendation, setRecommendation] = useState<SubmitAppealRecommendationPayload["recommendation"]>("accept");
   const [recommendedScore, setRecommendedScore] = useState<number | null>(null);
   const [loadingList, setLoadingList] = useState(true);
+  const [loadingMoreAppeals, setLoadingMoreAppeals] = useState(false);
+  const [nextAppealCursor, setNextAppealCursor] = useState("");
+  const [hasMoreAppeals, setHasMoreAppeals] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [actioning, setActioning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -437,25 +440,25 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
     setLoadingList(true);
     setError(null);
     try {
-      const [identityResult, appealResult, statsResult, workersResult] = await Promise.allSettled([
-        loadIdentities(canReadIdentities, canReadExams),
-        listAppeals({
-          exam_id: examFilter === "all" ? undefined : examFilter,
-          status: statusFilter === "all" ? undefined : statusFilter
-        }),
+      const appealResponse = await listAppeals({
+        exam_id: examFilter === "all" ? undefined : examFilter,
+        status: statusFilter === "all" ? undefined : statusFilter,
+        limit: 50
+      });
+      const studentIDs = Array.from(new Set(appealResponse.appeals.map((item) => item.student_id).filter(Boolean)));
+      const [identityResult, statsResult, workersResult] = await Promise.allSettled([
+        loadIdentities(canReadIdentities, canReadExams, studentIDs),
         canManage ? getAppealStatistics(examFilter === "all" ? undefined : examFilter) : Promise.resolve({ statistics: null as unknown as AppealStatistics }),
-        canManage ? listManagedUsers() : Promise.resolve({ users: [] as ManagedUser[] })
+        canManage ? listManagedUsers({ limit: 200 }) : Promise.resolve({ users: [] as ManagedUser[] })
       ]);
       if (requestId !== listRequestRef.current) return;
       if (identityResult.status === "fulfilled") {
         setIdentities(identityResult.value);
       }
-      if (appealResult.status === "fulfilled") {
-        setAppeals(appealResult.value.appeals);
-        setSelectedAppealId((current) => (appealResult.value.appeals.some((item) => item.id === current) ? current : appealResult.value.appeals[0]?.id ?? ""));
-      } else {
-        throw appealResult.reason;
-      }
+      setAppeals(appealResponse.appeals);
+      setNextAppealCursor(appealResponse.next_cursor ?? "");
+      setHasMoreAppeals(Boolean(appealResponse.has_more));
+      setSelectedAppealId((current) => (appealResponse.appeals.some((item) => item.id === current) ? current : appealResponse.appeals[0]?.id ?? ""));
       if (statsResult.status === "fulfilled") {
         setStatistics(statsResult.value.statistics);
       }
@@ -470,6 +473,8 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
     } catch (currentError) {
       if (requestId !== listRequestRef.current) return;
       setAppeals([]);
+      setNextAppealCursor("");
+      setHasMoreAppeals(false);
       setSelectedAppealId("");
       setStatistics(null);
       setError(formatError(currentError));
@@ -477,6 +482,43 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
       if (requestId === listRequestRef.current) setLoadingList(false);
     }
   }, [canManage, canReadExams, canReadIdentities, examFilter, message, statusFilter]);
+
+  const loadMoreAppeals = useCallback(async () => {
+    if (!hasMoreAppeals || !nextAppealCursor || loadingMoreAppeals) return;
+    const requestId = ++listRequestRef.current;
+    setLoadingMoreAppeals(true);
+    try {
+      const result = await listAppeals({
+        exam_id: examFilter === "all" ? undefined : examFilter,
+        status: statusFilter === "all" ? undefined : statusFilter,
+        limit: 50,
+        cursor: nextAppealCursor
+      });
+      if (requestId !== listRequestRef.current) return;
+      if (canReadIdentities) {
+        const studentIDs = Array.from(new Set(result.appeals.map((item) => item.student_id).filter(Boolean)));
+        if (studentIDs.length > 0) {
+          const studentResult = await listStudents({ ids: studentIDs, limit: 200 });
+          if (requestId !== listRequestRef.current) return;
+          setIdentities((current) => ({
+            ...current,
+            students: { ...current.students, ...Object.fromEntries(studentResult.students.map((item) => [item.id, item])) }
+          }));
+        }
+      }
+      setAppeals((current) => {
+        const byID = new Map(current.map((item) => [item.id, item]));
+        result.appeals.forEach((item) => byID.set(item.id, item));
+        return Array.from(byID.values());
+      });
+      setNextAppealCursor(result.next_cursor ?? "");
+      setHasMoreAppeals(Boolean(result.has_more));
+    } catch (currentError) {
+      if (requestId === listRequestRef.current) message.error(formatError(currentError));
+    } finally {
+      if (requestId === listRequestRef.current) setLoadingMoreAppeals(false);
+    }
+  }, [canReadIdentities, examFilter, hasMoreAppeals, loadingMoreAppeals, message, nextAppealCursor, statusFilter]);
 
   const loadAuditForAppeal = useCallback(
     async (appeal: Appeal) => {
@@ -578,7 +620,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
     }
     setActioning("assign");
     try {
-      const result = await assignAppeal(selectedAppeal.id, assignedTo);
+      const result = await assignAppeal(selectedAppeal.id, assignedTo, selectedAppeal.revision);
       setSelectedAppeal(result.appeal);
       message.success(`已分派给 ${workerNames[assignedTo] ?? "处理教师"}`);
       await loadList();
@@ -601,7 +643,8 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
     }
     const payload: SubmitAppealRecommendationPayload = {
       recommendation,
-      reason: reviewReason.trim()
+      reason: reviewReason.trim(),
+      expected_revision: selectedAppeal.revision
     };
     if (recommendation === "adjust_score") {
       if (recommendedScore === null || recommendedScore === undefined) {
@@ -637,7 +680,8 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
       status: reviewStatus,
       reason: reviewReason.trim(),
       assigned_to: selectedAppeal.assigned_to,
-      final_grade_id: selectedAppeal.final_grade_id
+      final_grade_id: selectedAppeal.final_grade_id,
+      expected_revision: selectedAppeal.revision
     };
     if (reviewStatus === "score_adjusted") {
       if (adjustedScore === null || adjustedScore === undefined) {
@@ -673,7 +717,7 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
       onOk: async () => {
         setActioning("close");
         try {
-          const result = await closeAppeal(selectedAppeal.id, reviewReason.trim());
+          const result = await closeAppeal(selectedAppeal.id, reviewReason.trim(), selectedAppeal.revision);
           setSelectedAppeal(result.appeal);
           message.success("申诉已关闭");
           await loadList();
@@ -920,16 +964,23 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
           {loadingList ? (
             <LoadingState label="正在读取申诉列表" />
           ) : (
-            <ResponsiveTable
-              rowKey="id"
-              size="small"
-              columns={columns}
-              dataSource={filteredAppeals}
-              pagination={{ pageSize: 8 }}
-              onRow={(record) => ({ onClick: () => setSelectedAppealId(record.id) })}
-              rowClassName={(record) => (record.id === selectedAppealId ? "selected-table-row" : "")}
-              locale={{ emptyText: <EmptyState title={mode === "teacher" ? "暂无分配给你的申诉" : "暂无申诉"} description={mode === "teacher" ? "管理员分派新的申诉后会显示在这里。" : "当前筛选条件下没有申诉记录。"} /> }}
-            />
+            <>
+              <ResponsiveTable
+                rowKey="id"
+                size="small"
+                columns={columns}
+                dataSource={filteredAppeals}
+                pagination={{ pageSize: 8 }}
+                onRow={(record) => ({ onClick: () => setSelectedAppealId(record.id) })}
+                rowClassName={(record) => (record.id === selectedAppealId ? "selected-table-row" : "")}
+                locale={{ emptyText: <EmptyState title={mode === "teacher" ? "暂无分配给你的申诉" : "暂无申诉"} description={mode === "teacher" ? "管理员分派新的申诉后会显示在这里。" : "当前筛选条件下没有申诉记录。"} /> }}
+              />
+              {hasMoreAppeals ? (
+                <Button block loading={loadingMoreAppeals} onClick={() => void loadMoreAppeals()}>
+                  加载更多申诉
+                </Button>
+              ) : null}
+            </>
           )}
         </aside>
 

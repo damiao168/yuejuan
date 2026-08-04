@@ -21,7 +21,8 @@ function Assert-HttpOk([string]$Name, [string]$Url, $Session = $null) {
   return $response
 }
 
-Assert-HttpOk "API health" "$($ApiUrl.TrimEnd('/'))/health" | Out-Null
+Assert-HttpOk "API liveness" "$($ApiUrl.TrimEnd('/'))/health/live" | Out-Null
+Assert-HttpOk "API readiness" "$($ApiUrl.TrimEnd('/'))/health/ready" | Out-Null
 
 if (-not $SkipPublic) {
   Assert-HttpOk "Nginx health" "$($PublicUrl.TrimEnd('/'))/health" | Out-Null
@@ -38,7 +39,7 @@ if ($credentialsProvided) {
   $cookie = $session.Cookies.GetCookies($ApiUrl) | Where-Object { $_.Name -eq $SessionCookieName }
   if (-not $cookie -or -not $cookie.HttpOnly) { throw "Login did not return the expected HttpOnly session cookie." }
   Assert-HttpOk "Authenticated /auth/me" "$($ApiUrl.TrimEnd('/'))/api/v1/auth/me" $session | Out-Null
-  Assert-HttpOk "Authenticated readiness" "$($ApiUrl.TrimEnd('/'))/ready" $session | Out-Null
+  Assert-HttpOk "Authenticated system status" "$($ApiUrl.TrimEnd('/'))/api/v1/system/status" $session | Out-Null
 } elseif ($TenantCode -or $Username -or $Password) {
   throw "Authenticated smoke test requires tenant, username, and password together."
 } else {

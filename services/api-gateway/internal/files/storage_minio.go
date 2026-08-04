@@ -2,6 +2,7 @@ package files
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"edugrade-enterprise/services/api-gateway/internal/config"
@@ -52,4 +53,36 @@ func (s *MinIOObjectStorage) Get(ctx context.Context, bucket string, key string)
 
 func (s *MinIOObjectStorage) Remove(ctx context.Context, bucket string, key string) error {
 	return s.client.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
+}
+
+func (s *MinIOObjectStorage) Stat(ctx context.Context, bucket string, key string) (ObjectInfo, error) {
+	info, err := s.client.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		response := minio.ToErrorResponse(err)
+		if response.Code == "NoSuchKey" || response.Code == "NoSuchObject" || response.Code == "NotFound" {
+			return ObjectInfo{}, ErrObjectNotFound
+		}
+		return ObjectInfo{}, err
+	}
+	return ObjectInfo{Bucket: bucket, Key: key, SizeBytes: info.Size, LastModified: info.LastModified}, nil
+}
+
+func (s *MinIOObjectStorage) List(ctx context.Context, bucket string, prefix string, limit int) ([]ObjectInfo, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 1000
+	}
+	objects := make([]ObjectInfo, 0, limit)
+	for item := range s.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if item.Err != nil {
+			if errors.Is(item.Err, context.Canceled) {
+				return nil, item.Err
+			}
+			return nil, item.Err
+		}
+		objects = append(objects, ObjectInfo{Bucket: bucket, Key: item.Key, SizeBytes: item.Size, LastModified: item.LastModified})
+		if len(objects) >= limit {
+			break
+		}
+	}
+	return objects, nil
 }

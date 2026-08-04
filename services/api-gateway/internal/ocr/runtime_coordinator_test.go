@@ -26,7 +26,7 @@ func TestMemoryRuntimeCoordinatorRollsBackCreateAndRetriesIdempotently(t *testin
 	if _, err := coordinator.CreateTask(ctx, "tenant-1", "submission-1", "actor-1", input); !errors.Is(err, injected) {
 		t.Fatalf("create should return injected failure, got %v", err)
 	}
-	if tasks, _ := source.ListBySubmission(ctx, "tenant-1", "submission-1"); len(tasks) != 0 {
+	if tasks, _ := source.ListBySubmission(ctx, "tenant-1", "submission-1", TaskListFilter{}); len(tasks) != 0 {
 		t.Fatalf("source task leaked after rollback: %#v", tasks)
 	}
 	if _, err := runtime.GetBySource(ctx, "tenant-1", "ocr_task", "ocr-task-1"); !errors.Is(err, workerruntime.ErrNotFound) {
@@ -42,7 +42,7 @@ func TestMemoryRuntimeCoordinatorRollsBackCreateAndRetriesIdempotently(t *testin
 	if err != nil || second.ID != first.ID {
 		t.Fatalf("idempotent retry returned %#v, %v; first=%#v", second, err, first)
 	}
-	if tasks, _ := source.ListBySubmission(ctx, "tenant-1", "submission-1"); len(tasks) != 1 {
+	if tasks, _ := source.ListBySubmission(ctx, "tenant-1", "submission-1", TaskListFilter{}); len(tasks) != 1 {
 		t.Fatalf("idempotent retry created %d source tasks", len(tasks))
 	}
 	runtimeTask, err := runtime.GetBySource(ctx, "tenant-1", "ocr_task", first.ID)

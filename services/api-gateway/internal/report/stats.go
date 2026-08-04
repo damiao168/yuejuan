@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"edugrade-enterprise/services/api-gateway/internal/csvsafe"
 )
 
 func buildStudentReport(data dataset, studentID string) StudentReport {
@@ -401,7 +403,7 @@ func buildExportCSV(tenantID string, examID string, actorID string, overview Ove
 	rows := 0
 	_ = writer.Write([]string{"section", "key", "value", "watermark"})
 	write := func(section string, key string, value string) {
-		_ = writer.Write([]string{section, key, value, watermark})
+		_ = writer.Write(csvsafe.Row([]string{section, key, value, watermark}))
 		rows++
 	}
 	write("overview", "student_count", fmt.Sprintf("%d", overview.StudentCount))

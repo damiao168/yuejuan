@@ -61,18 +61,64 @@ func (s *PostgresStore) PrepareRegistrationRetry(ctx context.Context, tenantID, 
 	return out, tx.Commit()
 }
 func (s *PostgresStore) GetProcessingSummary(ctx context.Context, tenantID, submissionID string) (ProcessingSummary, error) {
-	out := ProcessingSummary{SubmissionID: submissionID, Blockers: []ProcessingBlocker{}}
-	rows, err := s.db.QueryContext(ctx, `SELECT cp.id::text,cp.assigned_page_no,cp.status,sp.quality_status,COALESCE(pr.id::text,''),COALESCE(pr.processing_status,''),COALESCE(pr.match_status,''),(SELECT count(*) FROM answer_segment a WHERE a.registration_run_id=pr.id AND a.processing_status='completed') FROM capture_page cp JOIN submission_page sp ON sp.tenant_id=cp.tenant_id AND sp.id=cp.submission_page_id LEFT JOIN LATERAL(SELECT * FROM page_registration_run r WHERE r.tenant_id=cp.tenant_id AND r.capture_page_id=cp.id AND r.processing_status<>'invalidated' AND r.deleted_at IS NULL ORDER BY r.created_at DESC LIMIT 1)pr ON true WHERE cp.tenant_id=$1 AND cp.submission_id=$2::uuid AND cp.status<>'deleted' AND cp.deleted_at IS NULL ORDER BY cp.sequence_no`, tenantID, submissionID)
+	items, err := s.queryProcessingSummaries(ctx, tenantID, "cp.submission_id=$2::uuid", submissionID)
 	if err != nil {
-		return out, err
+		return ProcessingSummary{}, err
+	}
+	if len(items) == 0 {
+		return ProcessingSummary{}, ErrNotFound
+	}
+	return items[0], nil
+}
+
+func (s *PostgresStore) ListProcessingSummaries(ctx context.Context, tenantID, batchID string) ([]ProcessingSummary, error) {
+	return s.queryProcessingSummaries(ctx, tenantID, "cp.capture_batch_id=$2::uuid", batchID)
+}
+
+func (s *PostgresStore) queryProcessingSummaries(ctx context.Context, tenantID, predicate, resourceID string) ([]ProcessingSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+WITH latest_registration AS (
+  SELECT DISTINCT ON (r.capture_page_id)
+    r.capture_page_id, r.id, r.processing_status, r.match_status
+  FROM page_registration_run r
+  WHERE r.tenant_id=$1 AND r.processing_status<>'invalidated' AND r.deleted_at IS NULL
+  ORDER BY r.capture_page_id, r.created_at DESC, r.id DESC
+), completed_segments AS (
+  SELECT a.registration_run_id, count(*) AS segment_count
+  FROM answer_segment a
+  WHERE a.tenant_id=$1 AND a.processing_status='completed' AND a.deleted_at IS NULL
+  GROUP BY a.registration_run_id
+)
+SELECT cp.submission_id::text, cp.id::text, cp.assigned_page_no, cp.status,
+       COALESCE(sp.quality_status,''), COALESCE(pr.id::text,''),
+       COALESCE(pr.processing_status,''), COALESCE(pr.match_status,''),
+       COALESCE(seg.segment_count,0)
+FROM capture_page cp
+LEFT JOIN submission_page sp ON sp.tenant_id=cp.tenant_id AND sp.id=cp.submission_page_id AND sp.deleted_at IS NULL
+LEFT JOIN latest_registration pr ON pr.capture_page_id=cp.id
+LEFT JOIN completed_segments seg ON seg.registration_run_id=pr.id
+WHERE cp.tenant_id=$1 AND `+predicate+` AND cp.submission_id IS NOT NULL
+  AND cp.status<>'deleted' AND cp.deleted_at IS NULL
+ORDER BY cp.submission_id, cp.sequence_no, cp.id`, tenantID, resourceID)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
+	items := make([]ProcessingSummary, 0)
+	index := make(map[string]int)
 	for rows.Next() {
-		var id, status, quality, runID, processing, match string
+		var submissionID, id, status, quality, runID, processing, match string
 		var pageNo, segments int
-		if err = rows.Scan(&id, &pageNo, &status, &quality, &runID, &processing, &match, &segments); err != nil {
-			return out, err
+		if err = rows.Scan(&submissionID, &id, &pageNo, &status, &quality, &runID, &processing, &match, &segments); err != nil {
+			return nil, err
 		}
+		position, ok := index[submissionID]
+		if !ok {
+			position = len(items)
+			index[submissionID] = position
+			items = append(items, ProcessingSummary{SubmissionID: submissionID, Blockers: []ProcessingBlocker{}})
+		}
+		out := &items[position]
 		out.TotalPages++
 		if status == "ready" {
 			out.ReadyPages++
@@ -109,11 +155,10 @@ func (s *PostgresStore) GetProcessingSummary(ctx context.Context, tenantID, subm
 		out.Blockers = append(out.Blockers, b)
 	}
 	if err = rows.Err(); err != nil {
-		return out, err
+		return nil, err
 	}
-	if out.TotalPages == 0 {
-		return out, ErrNotFound
+	for i := range items {
+		items[i].CanComplete = items[i].ReadyPages == items[i].TotalPages
 	}
-	out.CanComplete = out.ReadyPages == out.TotalPages
-	return out, nil
+	return items, nil
 }

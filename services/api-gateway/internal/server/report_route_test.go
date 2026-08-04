@@ -166,7 +166,7 @@ func reportAuthStoreWithPermissions(t *testing.T, permissions []string, dataScop
 func reportLogin(t *testing.T, router http.Handler, username string) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"tenant_code": "demo", "username": username, "password": "ChangeMe123!"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

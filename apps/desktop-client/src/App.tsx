@@ -675,7 +675,7 @@ function App() {
         </section>
 
         <section className="panel">
-          <SectionHead icon={<LogIn size={20} />} title="登录" description="调用真实 POST /api/v1/auth/login；token 仅保存在内存中。" />
+          <SectionHead icon={<LogIn size={20} />} title="登录" description="调用桌面客户端专用 POST /api/v1/auth/token；token 仅保存在内存中。" />
           <Form layout="vertical">
             <Form.Item label="租户代码">
               <Input value={tenantCode} onChange={(event) => setTenantCode(event.target.value)} />

@@ -25,20 +25,37 @@ class Client:
     username: str
     password: str
     token: str | None = None
+    worker_instance_id: str | None = None
+    current_task: dict[str, str] | None = None
 
     def login(self) -> None:
-        payload = self._json("POST", "/api/v1/auth/login", {"tenant_code": self.tenant_code, "username": self.username, "password": self.password}, auth=False)
+        payload = self._json("POST", "/api/v1/auth/token", {"tenant_code": self.tenant_code, "username": self.username, "password": self.password, "client_type": "service", "device_name": "Page Processing Worker"}, auth=False)
         token = payload.get("access_token")
         if not isinstance(token, str) or not token:
             raise APIError("login_missing_access_token")
         self.token = token
 
     def claim(self, worker_id: str, limit: int, lease_seconds: int) -> list[dict[str, Any]]:
+        self.worker_instance_id = worker_id
         payload = self._json("POST", "/api/v1/internal/worker/tasks/claim", {"queue_name": "page-processing", "worker_service": "page-processing", "worker_instance_id": worker_id, "limit": limit, "lease_seconds": lease_seconds})
         tasks = payload.get("tasks", [])
         return tasks if isinstance(tasks, list) else []
 
+    def activate_task(self, task: dict[str, Any], worker_id: str | None = None) -> None:
+        task_id = str(task.get("id") or "").strip()
+        lease_token = str(task.get("lease_token") or "").strip()
+        worker_instance_id = str(worker_id or self.worker_instance_id or "").strip()
+        if not task_id or not lease_token or not worker_instance_id:
+            raise APIError("page processing task is missing its task capability")
+        self.current_task = {
+            "task_id": task_id,
+            "lease_token": lease_token,
+            "worker_service": "page-processing",
+            "worker_instance_id": worker_instance_id,
+        }
+
     def heartbeat(self, task: dict[str, Any], worker_id: str, lease_seconds: int, timeout: float | None = None) -> None:
+        self.activate_task(task, worker_id)
         self._json("POST", f"/api/v1/internal/worker/tasks/{task['id']}/heartbeat", {"lease_token": task["lease_token"], "worker_service": "page-processing", "worker_instance_id": worker_id, "state": "running", "progress": {"phase": "processing"}, "lease_seconds": lease_seconds}, timeout=timeout)
 
     def download(self, path: str) -> bytes:
@@ -132,7 +149,18 @@ class Client:
         headers = {"Accept": "application/json"}
         if auth and self.token:
             headers["Authorization"] = "Bearer " + self.token
+            if self.current_task:
+                headers.update(_task_capability_headers(self.current_task))
         return request.Request(url, data=body, headers=headers, method=method)
+
+
+def _task_capability_headers(task: dict[str, str]) -> dict[str, str]:
+    return {
+        "X-EduGrade-Worker-Task-ID": task["task_id"],
+        "X-EduGrade-Worker-Lease-Token": task["lease_token"],
+        "X-EduGrade-Worker-Service": task["worker_service"],
+        "X-EduGrade-Worker-Instance-ID": task["worker_instance_id"],
+    }
 
 
 def _multipart(boundary: str, fields: dict[str, str], filename: str, data: bytes) -> bytes:

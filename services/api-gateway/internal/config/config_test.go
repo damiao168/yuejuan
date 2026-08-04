@@ -1,9 +1,28 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestGetEnvOrFileReadsSecretAndRejectsAmbiguousSources(t *testing.T) {
+	key := "EDUGRADE_TEST_SECRET_SOURCE"
+	path := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(path, []byte("from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(key+"_FILE", path)
+	value, err := getEnvOrFile(key, "fallback")
+	if err != nil || value != "from-file" {
+		t.Fatalf("unexpected file secret: %q %v", value, err)
+	}
+	t.Setenv(key, "from-env")
+	if _, err := getEnvOrFile(key, "fallback"); err == nil {
+		t.Fatal("direct and file secret sources must not be accepted together")
+	}
+}
 
 func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("EDUGRADE_HTTP_PORT", "")
@@ -44,6 +63,7 @@ func TestLoadReadsEnvironment(t *testing.T) {
 }
 
 func TestLoadReadsGovernedAIServiceConfiguration(t *testing.T) {
+	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
 	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "test-service-token-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_AI_SERVICE_TIMEOUT", "240s")
@@ -77,6 +97,7 @@ func TestLoadReadsGovernedAIServiceConfiguration(t *testing.T) {
 }
 
 func TestLoadRejectsIncompleteAIServiceIdentity(t *testing.T) {
+	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
 	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "test-service-token-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_AI_PROVIDER_KEY", "contains whitespace")
@@ -86,6 +107,7 @@ func TestLoadRejectsIncompleteAIServiceIdentity(t *testing.T) {
 }
 
 func TestLoadRejectsAIServiceWithoutStrongServiceToken(t *testing.T) {
+	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
 	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "short")
 	if _, err := Load(""); err == nil {
@@ -94,6 +116,7 @@ func TestLoadRejectsAIServiceWithoutStrongServiceToken(t *testing.T) {
 }
 
 func TestLoadRejectsHTTPWriteTimeoutShorterThanAIRequest(t *testing.T) {
+	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
 	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "test-service-token-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_AI_SERVICE_TIMEOUT", "250s")
@@ -153,12 +176,52 @@ func TestLoadRejectsDevelopmentCredentialsInProduction(t *testing.T) {
 
 func TestLoadRejectsMissingAIServiceInProduction(t *testing.T) {
 	t.Setenv("EDUGRADE_ENV", "production")
+	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
 	t.Setenv("EDUGRADE_SESSION_COOKIE_SECURE", "true")
 	setSecureProductionEnvironment(t)
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "")
 
 	if _, err := Load(""); err == nil {
-		t.Fatal("production-like environments must not silently use the mock grading adapter")
+		t.Fatal("enabled production AI grading must require a real service")
+	}
+}
+
+func TestLoadAllowsProductionWithAIGradingDisabled(t *testing.T) {
+	t.Setenv("EDUGRADE_ENV", "production")
+	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "false")
+	t.Setenv("EDUGRADE_ALLOW_MOCK_AI", "false")
+	setSecureProductionEnvironment(t)
+	t.Setenv("EDUGRADE_AI_SERVICE_URL", "")
+	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("disabled production AI grading should start safely: %v", err)
+	}
+	if cfg.AIService.Enabled {
+		t.Fatal("AI grading must remain disabled")
+	}
+}
+
+func TestLoadRejectsProductionMockAI(t *testing.T) {
+	t.Setenv("EDUGRADE_ENV", "production")
+	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "false")
+	t.Setenv("EDUGRADE_ALLOW_MOCK_AI", "true")
+	setSecureProductionEnvironment(t)
+
+	if _, err := Load(""); err == nil {
+		t.Fatal("production must reject mock AI even while grading is disabled")
+	}
+}
+
+func TestLoadRequiresExplicitDemoMock(t *testing.T) {
+	t.Setenv("EDUGRADE_ENV", "demo")
+	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
+	t.Setenv("EDUGRADE_ALLOW_MOCK_AI", "false")
+	t.Setenv("EDUGRADE_AI_SERVICE_URL", "")
+
+	if _, err := Load(""); err == nil {
+		t.Fatal("demo mock AI must be explicitly enabled")
 	}
 }
 

@@ -27,7 +27,9 @@ export function hasAnyPermission(user: SessionUser | null, permissions: string[]
 export function productIdentityLabel(user: SessionUser): string {
   if (user.roles.includes("platform_admin")) return "平台管理";
   if (user.roles.some((role) => ["tenant_admin", "school_admin"].includes(role))) return "学校管理";
-  if (user.roles.some((role) => ["teacher", "grader", "arbitrator"].includes(role))) return "阅卷端";
+  if (user.roles.includes("teacher")) return "教师工作台";
+  if (user.roles.includes("grader")) return "阅卷工作台";
+  if (user.roles.includes("arbitrator")) return "仲裁工作台";
   if (user.roles.includes("student")) return "学生端";
   return "工作台";
 }

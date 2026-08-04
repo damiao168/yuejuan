@@ -64,6 +64,8 @@ export function uploadFileWithProgress(file: File, metadata: FileUploadMetadata,
     xhr.open("POST", apiClient.url("/api/v1/files"));
     xhr.withCredentials = true;
     xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("X-EduGrade-CSRF", "1");
+    xhr.setRequestHeader("Idempotency-Key", crypto.randomUUID());
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
         onProgress(Math.round((event.loaded / event.total) * 100));

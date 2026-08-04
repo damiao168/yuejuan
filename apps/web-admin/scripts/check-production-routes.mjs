@@ -46,12 +46,12 @@ assert(
 );
 
 assert(
-  /listExams/.test(dashboard) && /listReviewTasks/.test(dashboard) && /listSubmissions/.test(dashboard),
-  "DashboardPage must read business work from exams, review tasks, and submissions APIs."
+  /getDashboardSummary/.test(dashboard) && /pending_review_question_count/.test(dashboard) && /active_exam_count/.test(dashboard),
+  "DashboardPage must read trusted, unit-aware business work from the dashboard summary API."
 );
 
 assert(
-  /user\.roles\.includes\("platform_admin"\)[\s\S]*getSystemStatus/.test(dashboard) || /isOperations[\s\S]*getSystemStatus/.test(dashboard),
+  /function PlatformDashboard/.test(dashboard) && /setStatus\(await getSystemStatus\(\)\)/.test(dashboard) && /if \(isPlatform\) return <PlatformDashboard/.test(dashboard),
   "System status must be restricted to the operations home variant."
 );
 

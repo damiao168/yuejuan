@@ -16,13 +16,23 @@ export interface LoginRequest {
   tenant_code: string;
   username: string;
   password: string;
+  remember_device?: boolean;
+  device_name?: string;
 }
 
 export interface LoginResponse {
-  token_type: "Bearer";
-  access_token: string;
   expires_at: string;
   user: AuthUser;
+}
+
+export interface DeviceSession {
+  id: string;
+  session_type: "standard" | "remembered_device" | "desktop_device" | "service";
+  device_name: string;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  current: boolean;
 }
 
 export async function login(input: LoginRequest) {
@@ -39,5 +49,28 @@ export async function getCurrentUser() {
 export async function logout() {
   return apiClient.request<{ status: string }>("/api/v1/auth/logout", {
     method: "POST"
+  });
+}
+
+export function listSessions() {
+  return apiClient.request<{ sessions: DeviceSession[] }>("/api/v1/auth/sessions");
+}
+
+export function revokeSession(id: string) {
+  return apiClient.request<{ status: string }>(`/api/v1/auth/sessions/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
+export function logoutAll() {
+  return apiClient.request<{ status: string; revoked_count: number }>("/api/v1/auth/logout-all", {
+    method: "POST"
+  });
+}
+
+export function changePassword(input: { current_password: string; new_password: string }) {
+  return apiClient.request<{ status: string; revoked_count: number }>("/api/v1/auth/password", {
+    method: "POST",
+    body: JSON.stringify(input)
   });
 }

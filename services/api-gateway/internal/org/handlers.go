@@ -10,6 +10,9 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/pagination"
+
+	"github.com/google/uuid"
 )
 
 type Handler struct {
@@ -70,12 +73,39 @@ func (h *Handler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListTenants(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	canListAll := user.TenantID == auth.PlatformTenantID && hasPermission(user, "tenant:manage")
-	out, err := h.store.ListTenants(r.Context(), user.TenantID, canListAll)
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 50, 200)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 200")
+		return
+	}
+	cursor, err := pagination.DecodeParts(r.URL.Query().Get("cursor"), 2)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
+	filter := TenantListFilter{Query: strings.TrimSpace(r.URL.Query().Get("q")), Limit: limit + 1}
+	if len(filter.Query) > 100 {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_filter", "q must not exceed 100 bytes")
+		return
+	}
+	if len(cursor) == 2 {
+		filter.CursorCode, filter.CursorID = cursor[0], cursor[1]
+	}
+	out, err := h.store.ListTenants(r.Context(), user.TenantID, canListAll, filter)
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "tenant_list_failed", "failed to list tenants")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"tenants": out})
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(out) > 0 {
+		last := out[len(out)-1]
+		nextCursor = pagination.EncodeParts(last.Code, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"tenants": out, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) UpdateTenant(w http.ResponseWriter, r *http.Request) {
@@ -215,12 +245,50 @@ func (h *Handler) CreateStudent(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListStudents(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	out, err := h.store.ListStudents(r.Context(), user.TenantID, r.URL.Query().Get("class_id"))
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 100, 200)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 200")
+		return
+	}
+	parts, err := pagination.DecodeParts(r.URL.Query().Get("cursor"), 2)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
+	studentIDs := []string{}
+	for _, id := range strings.Split(r.URL.Query().Get("ids"), ",") {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, parseErr := uuid.Parse(id); parseErr != nil || len(studentIDs) >= 200 {
+			httpx.Error(w, r, http.StatusBadRequest, "invalid_student_filter", "student ids are invalid")
+			return
+		}
+		studentIDs = append(studentIDs, id)
+	}
+	filter := StudentListFilter{
+		ClassID: r.URL.Query().Get("class_id"), StudentIDs: studentIDs,
+		Query: strings.TrimSpace(r.URL.Query().Get("q")), Limit: limit + 1,
+	}
+	if len(parts) == 2 {
+		filter.CursorStudentNo, filter.CursorID = parts[0], parts[1]
+	}
+	out, err := h.store.ListStudents(r.Context(), user.TenantID, filter)
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "student_list_failed", "failed to list students")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"students": out})
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(out) > 0 {
+		last := out[len(out)-1]
+		nextCursor = pagination.EncodeParts(last.StudentNo, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"students": out, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) UpdateStudent(w http.ResponseWriter, r *http.Request) {

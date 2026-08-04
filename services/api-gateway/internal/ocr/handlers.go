@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/pagination"
 	submissionpkg "edugrade-enterprise/services/api-gateway/internal/submission"
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
@@ -82,19 +82,41 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListBySubmission(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	out, err := h.store.ListBySubmission(r.Context(), user.TenantID, r.PathValue("id"))
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 20, 100)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 100")
+		return
+	}
+	cursor, err := pagination.Decode(r.URL.Query().Get("cursor"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
+	out, err := h.store.ListBySubmission(r.Context(), user.TenantID, r.PathValue("id"), TaskListFilter{
+		Limit: limit + 1, CursorCreatedAt: cursor.CreatedAt, CursorID: cursor.ID,
+	})
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"tasks": out})
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(out) > 0 {
+		last := out[len(out)-1]
+		nextCursor = pagination.Encode(last.CreatedAt, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"tasks": out, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) ListPending(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
-	if err != nil || limit <= 0 {
-		limit = 10
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 10, 100)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 100")
+		return
 	}
 	out, err := h.store.ListPending(r.Context(), user.TenantID, limit)
 	if err != nil {

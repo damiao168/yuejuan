@@ -43,13 +43,14 @@ func (s *MemoryStore) Create(_ context.Context, tenantID string, examID string, 
 		QualityStatus:     "unchecked",
 		QualityIssues:     []QualityIssue{},
 		CollectedBy:       actorID,
+		Revision:          1,
 		CreatedAt:         time.Now().UTC(),
 	}
 	s.submissions[item.ID] = item
 	return item, nil
 }
 
-func (s *MemoryStore) ListByExam(_ context.Context, tenantID string, examID string) ([]Submission, error) {
+func (s *MemoryStore) ListByExam(_ context.Context, tenantID string, examID string, filter ListFilter) ([]Submission, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []Submission{}
@@ -58,7 +59,39 @@ func (s *MemoryStore) ListByExam(_ context.Context, tenantID string, examID stri
 			out = append(out, item)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if filter.CursorID != "" {
+		start := 0
+		for start < len(out) {
+			item := out[start]
+			if item.CreatedAt.Before(filter.CursorCreatedAt) ||
+				(item.CreatedAt.Equal(filter.CursorCreatedAt) && item.ID < filter.CursorID) {
+				break
+			}
+			start++
+		}
+		out = out[start:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) ListByExams(ctx context.Context, tenantID string, examIDs []string) (map[string][]Submission, error) {
+	out := make(map[string][]Submission, len(examIDs))
+	for _, examID := range examIDs {
+		items, err := s.ListByExam(ctx, tenantID, examID, ListFilter{})
+		if err != nil {
+			return nil, err
+		}
+		out[examID] = items
+	}
 	return out, nil
 }
 
@@ -251,7 +284,7 @@ func (s *MemoryStore) RunQualityCheck(_ context.Context, tenantID string, submis
 	return QualityResult{Valid: len(issues) == 0, Issues: issues}, nil
 }
 
-func (s *MemoryStore) UpdateStatus(_ context.Context, tenantID string, submissionID string, _ string, status string) (Submission, error) {
+func (s *MemoryStore) UpdateStatus(_ context.Context, tenantID string, submissionID string, _ string, status string, expectedRevision int64) (Submission, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item, ok := s.submissions[submissionID]
@@ -261,7 +294,14 @@ func (s *MemoryStore) UpdateStatus(_ context.Context, tenantID string, submissio
 	if !CanTransition(item.Status, status, item.QualityStatus) {
 		return Submission{}, ErrInvalidTransition
 	}
+	if expectedRevision <= 0 {
+		return Submission{}, ErrInvalidInput
+	}
+	if item.Revision != expectedRevision {
+		return Submission{}, ErrRevisionConflict
+	}
 	item.Status = status
+	item.Revision++
 	s.submissions[submissionID] = item
 	return item, nil
 }

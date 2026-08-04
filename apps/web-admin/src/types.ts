@@ -18,6 +18,7 @@ export type ViewKey =
   | "audit"
   | "organization"
   | "platformSchools"
+  | "sessions"
   | "examWorkspace";
 
 export type StatusTone = "success" | "warning" | "danger" | "info" | "processing" | "neutral";

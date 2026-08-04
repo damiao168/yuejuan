@@ -1,8 +1,7 @@
 package auth
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"testing"
 )
 
@@ -20,41 +19,44 @@ func TestScopedStudentIDSupportsFlatAndRoleKeyedScopes(t *testing.T) {
 	}
 }
 
-func TestPlatformWorkerTenantScope(t *testing.T) {
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, _ := UserFromContext(r.Context())
-		if user.TenantID != "00000000-0000-0000-0000-000000000002" || user.ID != "" {
-			t.Fatalf("unexpected scoped worker: %#v", user)
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set(WorkerTenantHeader, "00000000-0000-0000-0000-000000000002")
-	req = req.WithContext(WithUser(req.Context(), User{
-		ID: PlatformTenantID, TenantID: PlatformTenantID, Roles: []string{"page_processing_worker"},
-	}))
-	rec := httptest.NewRecorder()
-
-	PlatformWorkerTenantScope(next).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected scoped request, got %d %s", rec.Code, rec.Body.String())
+func TestResolveDeclaredAccessScopeCombinesRoleKeyedScopes(t *testing.T) {
+	user := User{
+		ID: "teacher-1", TenantID: "tenant-1", Roles: []string{"teacher", "grader"},
+		DataScope: map[string]any{
+			"teacher": map[string]any{"scope": "school", "school_id": "school-1", "class_ids": []any{"class-2", "class-1"}},
+			"grader":  map[string]any{"scope": "exam_task", "review_task_id": "task-1"},
+		},
+	}
+	scope, err := ResolveDeclaredAccessScope(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope.TenantWide || !scope.AssignedOnly || !scope.AllowsSchool("school-1") ||
+		!scope.AllowsClass("class-1") || !scope.AllowsReviewTask("task-1") {
+		t.Fatalf("unexpected combined access scope: %#v", scope)
 	}
 }
 
-func TestPlatformWorkerTenantScopeRejectsProductUser(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set(WorkerTenantHeader, "00000000-0000-0000-0000-000000000002")
-	req = req.WithContext(WithUser(req.Context(), User{
-		ID: PlatformTenantID, TenantID: PlatformTenantID, Roles: []string{"platform_admin"},
-	}))
-	rec := httptest.NewRecorder()
+func TestResolveDeclaredAccessScopeDefaultsToDeny(t *testing.T) {
+	tests := []User{
+		{ID: "u-1", TenantID: "t-1", Roles: []string{"teacher"}, DataScope: map[string]any{}},
+		{ID: "u-1", TenantID: "t-1", Roles: []string{"teacher"}, DataScope: map[string]any{"teacher": map[string]any{"scope": "school", "unexpected": true}}},
+		{ID: "u-1", TenantID: "t-1", Roles: []string{"teacher"}, DataScope: map[string]any{"other_role": map[string]any{"scope": "tenant"}}},
+		{ID: "u-1", TenantID: "t-1", Roles: []string{"student"}, DataScope: map[string]any{"scope": "self"}},
+	}
+	for _, user := range tests {
+		if _, err := ResolveDeclaredAccessScope(user); !errors.Is(err, ErrAccessScopeMissing) && !errors.Is(err, ErrAccessScopeInvalid) {
+			t.Fatalf("expected missing/invalid scope for %#v, got %v", user.DataScope, err)
+		}
+	}
+}
 
-	PlatformWorkerTenantScope(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("forbidden scope reached handler")
-	})).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d %s", rec.Code, rec.Body.String())
+func TestResolveDeclaredAccessScopeRejectsForgedPlatformScope(t *testing.T) {
+	_, err := ResolveDeclaredAccessScope(User{
+		ID: "tenant-admin", TenantID: "tenant-1", Roles: []string{"tenant_admin"},
+		DataScope: map[string]any{"scope": "platform"},
+	})
+	if !errors.Is(err, ErrAccessScopeInvalid) {
+		t.Fatalf("expected invalid platform scope, got %v", err)
 	}
 }

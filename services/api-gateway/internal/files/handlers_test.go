@@ -2,7 +2,11 @@ package files_test
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -90,6 +94,66 @@ func TestDuplicateUploadRejected(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "duplicate_file") {
 		t.Fatalf("duplicate expected 409, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadFailureRemainsDurablyRetryable(t *testing.T) {
+	store := files.NewMemoryStore()
+	objects := &faultStorage{MemoryObjectStorage: files.NewMemoryObjectStorage(), failPut: true}
+	router := testRouter(authStoreWithPermissions(t, []string{"file:manage"}), store, objects)
+	token := login(t, router)
+	content := []byte("%PDF-1.4\nretryable\n")
+	fields := map[string]string{"owner_type": "exam", "owner_id": "00000000-0000-0000-0000-000000000101", "exam_id": "00000000-0000-0000-0000-000000000101"}
+
+	body, contentType := multipartUploadBody(t, "paper.pdf", "application/pdf", content, fields)
+	req := authedRequest(http.MethodPost, "/api/v1/files", body, token)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("failed object write expected 502, got %d %s", rec.Code, rec.Body.String())
+	}
+	hash := filesHash(content)
+	pending, ok, err := store.FindDuplicate(t.Context(), "00000000-0000-0000-0000-000000000002", "exam", fields["owner_id"], hash)
+	if err != nil || !ok || pending.Lifecycle != files.LifecycleUploadFailed {
+		t.Fatalf("upload failure must remain durable: err=%v ok=%t asset=%#v", err, ok, pending)
+	}
+
+	objects.failPut = false
+	asset := uploadFile(t, router, token, "paper.pdf", "application/pdf", content, fields)
+	if asset.ID != pending.ID || asset.Lifecycle != files.LifecycleActive {
+		t.Fatalf("retry should activate the same asset: pending=%#v active=%#v", pending, asset)
+	}
+}
+
+func TestDeleteFailureDoesNotClaimSuccessAndCanBeRetried(t *testing.T) {
+	store := files.NewMemoryStore()
+	objects := &faultStorage{MemoryObjectStorage: files.NewMemoryObjectStorage()}
+	router := testRouter(authStoreWithPermissions(t, []string{"file:manage"}), store, objects)
+	token := login(t, router)
+	asset := uploadFile(t, router, token, "paper.pdf", "application/pdf", []byte("%PDF-1.4\ndelete\n"), map[string]string{
+		"owner_type": "exam", "owner_id": "00000000-0000-0000-0000-000000000101", "exam_id": "00000000-0000-0000-0000-000000000101",
+	})
+
+	objects.failRemove = true
+	req := authedRequest(http.MethodDelete, "/api/v1/files/"+asset.ID, nil, token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "object_cleanup_pending") {
+		t.Fatalf("failed cleanup must be explicit, got %d %s", rec.Code, rec.Body.String())
+	}
+	scope := auth.AccessScope{TenantID: asset.TenantID, TenantWide: true}
+	pending, err := store.GetScoped(t.Context(), scope, asset.ID)
+	if err != nil || pending.Lifecycle != files.LifecycleDeleteFailed {
+		t.Fatalf("delete failure must remain retryable: %v %#v", err, pending)
+	}
+
+	objects.failRemove = false
+	req = authedRequest(http.MethodDelete, "/api/v1/files/"+asset.ID, nil, token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cleanup retry expected 200, got %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -226,7 +290,7 @@ func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemorySt
 			Status:      "active",
 			Roles:       []string{"teacher"},
 			Permissions: permissions,
-			DataScope:   map[string]any{"scope": "school"},
+			DataScope:   map[string]any{"scope": "tenant"},
 		},
 		PasswordHash: hash,
 	})
@@ -236,7 +300,7 @@ func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemorySt
 func login(t *testing.T, router http.Handler) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"tenant_code": "demo", "username": "file_admin", "password": "ChangeMe123!"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -313,4 +377,29 @@ func assertAuditAction(t *testing.T, store *auth.MemoryStore, action string) {
 		}
 	}
 	t.Fatalf("missing audit action %s in %#v", action, store.Audits())
+}
+
+type faultStorage struct {
+	*files.MemoryObjectStorage
+	failPut    bool
+	failRemove bool
+}
+
+func (s *faultStorage) Put(ctx context.Context, bucket, key string, body io.Reader, size int64, contentType string) error {
+	if s.failPut {
+		return errors.New("injected put failure")
+	}
+	return s.MemoryObjectStorage.Put(ctx, bucket, key, body, size, contentType)
+}
+
+func (s *faultStorage) Remove(ctx context.Context, bucket, key string) error {
+	if s.failRemove {
+		return errors.New("injected remove failure")
+	}
+	return s.MemoryObjectStorage.Remove(ctx, bucket, key)
+}
+
+func filesHash(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
 }

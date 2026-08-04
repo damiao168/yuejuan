@@ -11,6 +11,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/pagination"
 )
 
 type Handler struct {
@@ -47,12 +48,33 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListByExam(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	out, err := h.store.ListByExam(r.Context(), user.TenantID, r.PathValue("examId"))
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 50, 200)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 200")
+		return
+	}
+	cursor, err := pagination.Decode(r.URL.Query().Get("cursor"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
+	out, err := h.store.ListByExam(r.Context(), user.TenantID, r.PathValue("examId"), ListFilter{
+		Limit: limit + 1, CursorCreatedAt: cursor.CreatedAt, CursorID: cursor.ID,
+	})
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"submissions": out})
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(out) > 0 {
+		last := out[len(out)-1]
+		nextCursor = pagination.Encode(last.CreatedAt, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"submissions": out, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +184,7 @@ func (h *Handler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	out, err := h.store.UpdateStatus(r.Context(), user.TenantID, r.PathValue("id"), user.ID, strings.TrimSpace(input.Status))
+	out, err := h.store.UpdateStatus(r.Context(), user.TenantID, r.PathValue("id"), user.ID, strings.TrimSpace(input.Status), input.ExpectedRevision)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
@@ -191,6 +213,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, "invalid_submission_status_transition", "submission status transition is not allowed")
 	case errors.Is(err, ErrSubmissionLocked):
 		httpx.Error(w, r, http.StatusConflict, "submission_locked", "submission is locked")
+	case errors.Is(err, ErrRevisionConflict):
+		httpx.Error(w, r, http.StatusConflict, "resource_version_conflict", "submission was updated by another operation")
 	default:
 		httpx.Error(w, r, http.StatusInternalServerError, "submission_operation_failed", "submission operation failed")
 	}

@@ -12,6 +12,7 @@ var (
 	ErrDuplicatePage     = errors.New("submission page already exists")
 	ErrInvalidTransition = errors.New("invalid submission status transition")
 	ErrSubmissionLocked  = errors.New("submission is locked")
+	ErrRevisionConflict  = errors.New("submission revision conflict")
 )
 
 type Submission struct {
@@ -27,6 +28,7 @@ type Submission struct {
 	QualityStatus     string           `json:"quality_status"`
 	QualityIssues     []QualityIssue   `json:"quality_issues"`
 	CollectedBy       string           `json:"collected_by"`
+	Revision          int64            `json:"revision"`
 	CreatedAt         time.Time        `json:"created_at"`
 	Pages             []SubmissionPage `json:"pages,omitempty"`
 	Summary           map[string]any   `json:"summary,omitempty"`
@@ -65,7 +67,14 @@ type AddPageInput struct {
 }
 
 type UpdateStatusInput struct {
-	Status string `json:"status"`
+	Status           string `json:"status"`
+	ExpectedRevision int64  `json:"expected_revision"`
+}
+
+type ListFilter struct {
+	Limit           int
+	CursorCreatedAt time.Time
+	CursorID        string
 }
 
 type QualityResult struct {
@@ -88,7 +97,7 @@ type OverridePageQualityInput struct {
 
 type Store interface {
 	Create(ctx context.Context, tenantID string, examID string, actorID string, input CreateSubmissionInput) (Submission, error)
-	ListByExam(ctx context.Context, tenantID string, examID string) ([]Submission, error)
+	ListByExam(ctx context.Context, tenantID string, examID string, filter ListFilter) ([]Submission, error)
 	Get(ctx context.Context, tenantID string, id string) (Submission, error)
 	AddPage(ctx context.Context, tenantID string, submissionID string, actorID string, input AddPageInput) (SubmissionPage, error)
 	ReplacePage(ctx context.Context, tenantID string, submissionID string, actorID string, pageNo int, input AddPageInput) (SubmissionPage, error)
@@ -96,5 +105,11 @@ type Store interface {
 	ApplyPageQualityResult(ctx context.Context, tenantID string, input ApplyPageQualityInput) (SubmissionPage, error)
 	OverridePageQuality(ctx context.Context, tenantID string, pageID string, actorID string, input OverridePageQualityInput) (SubmissionPage, error)
 	RunQualityCheck(ctx context.Context, tenantID string, submissionID string, actorID string) (QualityResult, error)
-	UpdateStatus(ctx context.Context, tenantID string, submissionID string, actorID string, status string) (Submission, error)
+	UpdateStatus(ctx context.Context, tenantID string, submissionID string, actorID string, status string, expectedRevision int64) (Submission, error)
+}
+
+// ExamBatchLister avoids one submission query per exam on dashboards and
+// reporting summaries. Implementations must keep the tenant predicate in SQL.
+type ExamBatchLister interface {
+	ListByExams(ctx context.Context, tenantID string, examIDs []string) (map[string][]Submission, error)
 }

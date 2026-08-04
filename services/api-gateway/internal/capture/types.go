@@ -35,6 +35,12 @@ type Batch struct {
 	CreatedAt       time.Time  `json:"created_at"`
 }
 
+type BatchListFilter struct {
+	Limit           int
+	CursorCreatedAt time.Time
+	CursorID        string
+}
+
 type File struct {
 	ID             string    `json:"id"`
 	TenantID       string    `json:"tenant_id"`
@@ -484,9 +490,10 @@ type ProcessingBlocker struct {
 }
 
 type BatchDetail struct {
-	Batch Batch  `json:"batch"`
-	Files []File `json:"files"`
-	Pages []Page `json:"pages"`
+	Batch               Batch               `json:"batch"`
+	Files               []File              `json:"files"`
+	Pages               []Page              `json:"pages"`
+	ProcessingSummaries []ProcessingSummary `json:"processing_summaries"`
 }
 
 type Store interface {
@@ -497,7 +504,7 @@ type Store interface {
 	RevokeStudentSheet(ctx context.Context, tenantID, sheetSerial, actorID string, input StudentSheetLifecycleInput) (StudentSheet, error)
 	ReprintStudentSheet(ctx context.Context, tenantID, sheetSerial, actorID string, input ReprintStudentSheetInput) (IssuedStudentBarcodes, error)
 	CreateBatch(ctx context.Context, tenantID, examID, actorID string, input CreateBatchInput) (Batch, error)
-	ListBatches(ctx context.Context, tenantID, examID string) ([]Batch, error)
+	ListBatches(ctx context.Context, tenantID, examID string, filter BatchListFilter) ([]Batch, error)
 	GetBatch(ctx context.Context, tenantID, batchID string) (Batch, error)
 	RegisterFile(ctx context.Context, tenantID, batchID, actorID string, input RegisterFileInput, asset FileAssetSnapshot) (File, error)
 	GetFile(ctx context.Context, tenantID, fileID string) (File, error)
@@ -526,6 +533,7 @@ type Store interface {
 	ConfirmRegistration(ctx context.Context, tenantID, runID, actorID, reason string) (RegistrationRun, error)
 	PrepareRegistrationRetry(ctx context.Context, tenantID, runID string) (RegistrationRun, error)
 	GetProcessingSummary(ctx context.Context, tenantID, submissionID string) (ProcessingSummary, error)
+	ListProcessingSummaries(ctx context.Context, tenantID, batchID string) ([]ProcessingSummary, error)
 	CreateRegistrationCorrection(ctx context.Context, tenantID, runID, actorID string, input CreateRegistrationCorrectionInput) (RegistrationCorrection, error)
 	GetRegistrationCorrection(ctx context.Context, tenantID, correctionID string) (RegistrationCorrection, error)
 	QueueRegistrationCorrectionPreview(ctx context.Context, tenantID, correctionID, actorID string, revision int) (RegistrationCorrection, error)

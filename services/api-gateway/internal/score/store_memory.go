@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"edugrade-enterprise/services/api-gateway/internal/csvsafe"
 )
 
 type SegmentSeed struct {
@@ -242,20 +244,46 @@ func (s *MemoryStore) FinalizeExam(_ context.Context, tenantID string, examID st
 	}, nil
 }
 
-func (s *MemoryStore) ListExamGrades(_ context.Context, tenantID string, examID string) ([]SubmissionGrade, error) {
+func (s *MemoryStore) ListExamGrades(_ context.Context, tenantID string, examID string, filter GradeListFilter) (GradeListResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	grades := s.listSubmissionGradesLocked(examID, true)
-	if len(grades) == 0 {
-		return []SubmissionGrade{}, nil
-	}
+	result := GradeListResult{Grades: []SubmissionGrade{}, Total: len(grades), AllLocked: len(grades) > 0}
 	for i := range grades {
 		grades[i].TenantID = tenantID
 		for j := range grades[i].Items {
 			grades[i].Items[j].TenantID = tenantID
 		}
+		if !grades[i].Locked && grades[i].Status != "published" && grades[i].Status != "locked" {
+			result.AllLocked = false
+		}
 	}
-	return grades, nil
+	query := strings.ToLower(strings.TrimSpace(filter.Query))
+	filtered := make([]SubmissionGrade, 0, len(grades))
+	for _, grade := range grades {
+		if filter.Status != "" && grade.Status != filter.Status {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(grade.AnonymousCode), query) &&
+			!strings.Contains(strings.ToLower(grade.SubmissionID), query) {
+			continue
+		}
+		filtered = append(filtered, grade)
+	}
+	result.FilteredTotal = len(filtered)
+	if filter.CursorAnonymousCode != "" && filter.CursorID != "" {
+		start := 0
+		for start < len(filtered) && (filtered[start].AnonymousCode < filter.CursorAnonymousCode ||
+			(filtered[start].AnonymousCode == filter.CursorAnonymousCode && filtered[start].ID <= filter.CursorID)) {
+			start++
+		}
+		filtered = filtered[start:]
+	}
+	if filter.Limit > 0 && len(filtered) > filter.Limit {
+		filtered = filtered[:filter.Limit]
+	}
+	result.Grades = filtered
+	return result, nil
 }
 
 func (s *MemoryStore) CheckQuality(_ context.Context, _ string, examID string, requirePendingPublish bool) (QualityReport, error) {
@@ -309,6 +337,7 @@ func (s *MemoryStore) ConfirmGrades(_ context.Context, tenantID string, examID s
 			return nil, ErrInvalidTransition
 		}
 		grade.Status = "confirmed"
+		grade.Revision++
 		grade.ConfirmedBy = actorID
 		grade.ConfirmedAt = &now
 		grade.UpdatedAt = now
@@ -352,6 +381,7 @@ func (s *MemoryStore) PublishGrades(_ context.Context, tenantID string, examID s
 		}
 		grade.Status = "published"
 		grade.Locked = true
+		grade.Revision++
 		grade.PublishedBy = actorID
 		grade.PublishedAt = &now
 		grade.UpdatedAt = now
@@ -404,7 +434,7 @@ func (s *MemoryStore) ExportGradesCSV(_ context.Context, tenantID string, examID
 	watermark := fmt.Sprintf("EduGrade export tenant=%s exam=%s actor=%s at=%s", tenantID, examID, actorID, exportedAt)
 	_ = writer.Write([]string{"submission_id", "student_id", "anonymous_code", "total_score", "max_score", "status", "locked", "exported_by", "exported_at", "watermark"})
 	for _, grade := range grades {
-		_ = writer.Write([]string{
+		_ = writer.Write(csvsafe.Row([]string{
 			grade.SubmissionID,
 			grade.StudentID,
 			grade.AnonymousCode,
@@ -415,7 +445,7 @@ func (s *MemoryStore) ExportGradesCSV(_ context.Context, tenantID string, examID
 			actorID,
 			exportedAt,
 			watermark,
-		})
+		}))
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
@@ -459,6 +489,9 @@ func (s *MemoryStore) recalculateSubmissionGradesLocked(tenantID string, examID 
 			existing.ID = s.id("submission-grade")
 			existing.CreatedAt = now
 			existing.CreatedBy = actorID
+			existing.Revision = 1
+		} else {
+			existing.Revision++
 		}
 		existing.TenantID = tenantID
 		existing.ExamID = examID
@@ -663,6 +696,9 @@ func (s *MemoryStore) listSubmissionGradesLocked(examID string, withItems bool) 
 		out = append(out, item)
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].AnonymousCode == out[j].AnonymousCode {
+			return out[i].ID < out[j].ID
+		}
 		return out[i].AnonymousCode < out[j].AnonymousCode
 	})
 	return out

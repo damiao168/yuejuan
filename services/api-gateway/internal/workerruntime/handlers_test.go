@@ -99,11 +99,14 @@ func TestPlatformWorkerClaimsAndHeartbeatsSchoolTask(t *testing.T) {
 		`{"lease_token":"`+claimed.Tasks[0].LeaseToken+`","worker_service":"ocr-worker","worker_instance_id":"platform-ocr-1","state":"running"}`,
 	))
 	heartbeat.SetPathValue("taskId", task.ID)
-	heartbeat.Header.Set(auth.WorkerTenantHeader, runtimeTenantID)
+	heartbeat.Header.Set(workerruntime.TaskIDHeader, task.ID)
+	heartbeat.Header.Set(workerruntime.TaskLeaseHeader, claimed.Tasks[0].LeaseToken)
+	heartbeat.Header.Set(workerruntime.WorkerServiceHeader, "ocr-worker")
+	heartbeat.Header.Set(workerruntime.WorkerInstanceIDHeader, "platform-ocr-1")
 	heartbeat = heartbeat.WithContext(auth.WithUser(heartbeat.Context(), platformWorker))
 	heartbeatRec := httptest.NewRecorder()
 
-	auth.PlatformWorkerTenantScope(http.HandlerFunc(handler.Heartbeat)).ServeHTTP(heartbeatRec, heartbeat)
+	workerruntime.TaskScope(store)(http.HandlerFunc(handler.Heartbeat)).ServeHTTP(heartbeatRec, heartbeat)
 
 	if heartbeatRec.Code != http.StatusOK {
 		t.Fatalf("school task heartbeat expected 200, got %d %s", heartbeatRec.Code, heartbeatRec.Body.String())

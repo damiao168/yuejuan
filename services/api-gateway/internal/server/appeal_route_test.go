@@ -51,7 +51,7 @@ func TestAppealRoutesCreateReviewAdjustCloseAndStatistics(t *testing.T) {
 	}
 	appealID := decodeAppealID(t, rec.Body.Bytes())
 
-	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/review", `{"status":"score_adjusted","reason":"rubric evidence supports full credit","adjusted_score":5}`, adminToken)
+	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/review", `{"status":"score_adjusted","reason":"rubric evidence supports full credit","adjusted_score":5,"expected_revision":1}`, adminToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"score_adjustment"`) || !strings.Contains(rec.Body.String(), `"adjusted_score":5`) {
@@ -72,7 +72,7 @@ func TestAppealRoutesCreateReviewAdjustCloseAndStatistics(t *testing.T) {
 		t.Fatalf("statistics expected score adjusted count, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/close", `{"reason":"resolved"}`, adminToken)
+	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/close", `{"reason":"resolved","expected_revision":2}`, adminToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"closed"`) {
@@ -116,14 +116,14 @@ func TestAppealTeacherOnlyWorksAssignedAppealsAndCannotFinalize(t *testing.T) {
 		t.Fatalf("teacher should not read an unassigned appeal, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/assign", `{"assigned_to":"`+appealOriginalGraderUserID+`"}`, adminToken)
+	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/assign", `{"assigned_to":"`+appealOriginalGraderUserID+`","expected_revision":1}`, adminToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("original grader assignment should be forbidden, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/assign", `{"assigned_to":"`+appealTeacherUserID+`"}`, adminToken)
+	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/assign", `{"assigned_to":"`+appealTeacherUserID+`","expected_revision":1}`, adminToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"assigned_to":"`+appealTeacherUserID+`"`) {
@@ -144,21 +144,21 @@ func TestAppealTeacherOnlyWorksAssignedAppealsAndCannotFinalize(t *testing.T) {
 		t.Fatalf("teacher detail should redact student and original reviewer identities, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/review", `{"status":"score_adjusted","reason":"direct change","adjusted_score":5}`, teacherToken)
+	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/review", `{"status":"score_adjusted","reason":"direct change","adjusted_score":5,"expected_revision":2}`, teacherToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("teacher must not call final review endpoint, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/recommendation", `{"recommendation":"adjust_score","reason":"rubric supports full credit","recommended_score":5}`, teacherToken)
+	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/recommendation", `{"recommendation":"adjust_score","reason":"rubric supports full credit","recommended_score":5,"expected_revision":2}`, teacherToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"teacher_recommendation":"adjust_score"`) || !strings.Contains(rec.Body.String(), `"teacher_recommended_score":5`) || !strings.Contains(rec.Body.String(), `"score":4`) {
 		t.Fatalf("teacher recommendation should not mutate final score, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/close", `{"reason":"teacher cannot close"}`, teacherToken)
+	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/close", `{"reason":"teacher cannot close","expected_revision":3}`, teacherToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -281,7 +281,7 @@ func appealAuthStoreWithPermissions(t *testing.T, permissions []string, dataScop
 func appealLogin(t *testing.T, router http.Handler, username string) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"tenant_code": "demo", "username": username, "password": "ChangeMe123!"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/pagination"
 	"github.com/google/uuid"
 )
 
@@ -33,12 +35,58 @@ func (h *Handler) FinalizeExam(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListExamGrades(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	grades, err := h.store.ListExamGrades(r.Context(), user.TenantID, r.PathValue("examId"))
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 50, 200)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 200")
+		return
+	}
+	cursor, err := pagination.DecodeParts(r.URL.Query().Get("cursor"), 2)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	if status != "" && !isGradeStatus(status) {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_filter", "status is invalid")
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(query) > 100 {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_filter", "q must not exceed 100 bytes")
+		return
+	}
+	filter := GradeListFilter{Status: status, Query: query, Limit: limit + 1}
+	if len(cursor) == 2 {
+		filter.CursorAnonymousCode = cursor[0]
+		filter.CursorID = cursor[1]
+	}
+	result, err := h.store.ListExamGrades(r.Context(), user.TenantID, r.PathValue("examId"), filter)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"grades": grades})
+	hasMore := len(result.Grades) > limit
+	if hasMore {
+		result.Grades = result.Grades[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(result.Grades) > 0 {
+		last := result.Grades[len(result.Grades)-1]
+		nextCursor = pagination.EncodeParts(last.AnonymousCode, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"grades": result.Grades, "total": result.Total, "filtered_total": result.FilteredTotal,
+		"all_locked": result.AllLocked, "next_cursor": nextCursor, "has_more": hasMore,
+	})
+}
+
+func isGradeStatus(value string) bool {
+	for _, status := range Statuses() {
+		if value == status {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) CheckQuality(w http.ResponseWriter, r *http.Request) {

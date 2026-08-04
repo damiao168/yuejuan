@@ -48,6 +48,12 @@ function dependencyTone(status: DependencyStatus["status"]) {
   if (status === "not_configured") {
     return "warning";
   }
+  if (status === "disabled") {
+    return "default";
+  }
+  if (status === "mock") {
+    return "processing";
+  }
   return "error";
 }
 
@@ -58,10 +64,17 @@ function dependencyText(status: DependencyStatus["status"]) {
   if (status === "not_configured") {
     return "未配置/待接入";
   }
+  if (status === "disabled") {
+    return "已关闭";
+  }
+  if (status === "mock") {
+    return "演示模式";
+  }
   return "异常";
 }
 
 export function SystemStatusPage() {
+  const frontendRelease = import.meta.env.VITE_RELEASE_ID?.trim() || "local";
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +129,12 @@ export function SystemStatusPage() {
       width: 150,
       render: (value: DependencyStatus["status"]) => <Tag color={dependencyTone(value)}>{dependencyText(value)}</Tag>
     },
+    {
+      title: "用途",
+      dataIndex: "required",
+      width: 110,
+      render: (value: boolean) => value ? "核心依赖" : "可选能力"
+    },
     { title: "检查耗时", dataIndex: "duration_ms", width: 120, render: (value: number) => `${value} ms` },
     { title: "最近检查", dataIndex: "checked_at", width: 190, render: (value: string) => formatTime(value) },
     {
@@ -155,7 +174,7 @@ export function SystemStatusPage() {
             <div>
               <span>版本</span>
               <strong>{status.version}</strong>
-              <small>启动 {formatTime(status.started_at)}</small>
+              <small>发布 {status.release_id} · Schema {status.schema_version}</small>
             </div>
             <div>
               <span>运行时长</span>
@@ -163,6 +182,15 @@ export function SystemStatusPage() {
               <small>生成 {formatTime(status.generated_at)}</small>
             </div>
           </section>
+
+          {frontendRelease !== "local" && status.release_id !== "local" && frontendRelease !== status.release_id ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="前后端发布版本暂不一致"
+              description={`网页 ${frontendRelease} · API ${status.release_id}。滚动升级期间可继续使用；若长时间不一致，请联系平台运维。`}
+            />
+          ) : null}
 
           {ocrWorker ? (
             <section className={`system-worker-status ${ocrWorker.availability}`}>
@@ -176,8 +204,8 @@ export function SystemStatusPage() {
                     <p>负责自动识别答卷内容；超过 {ocrWorker.stale_after_sec} 秒没有心跳即判定为失联</p>
                   </Tooltip>
                 </div>
-                <Tag color={ocrWorker.automation_available ? "success" : ocrWorker.availability === "stale" ? "warning" : "error"}>
-                  {ocrWorker.automation_available ? "在线" : ocrWorker.availability === "stale" ? "心跳失联" : "不可用"}
+                <Tag color={ocrWorker.automation_available ? "success" : ocrWorker.availability === "not_configured" ? "default" : ocrWorker.availability === "stale" ? "warning" : "error"}>
+                  {ocrWorker.automation_available ? "在线" : ocrWorker.availability === "not_configured" ? "未启用" : ocrWorker.availability === "stale" ? "心跳失联" : "不可用"}
                 </Tag>
               </div>
               <div className="system-worker-metrics">
@@ -189,11 +217,11 @@ export function SystemStatusPage() {
                 <Tooltip title="重试多次仍失败、需人工介入的任务数"><span>多次失败已搁置<strong>{ocrWorker.dead_letter_tasks}</strong></span></Tooltip>
               </div>
               <Alert
-                type={ocrWorker.automation_available ? "success" : ocrWorker.availability === "stale" ? "warning" : "error"}
+                type={ocrWorker.automation_available ? "success" : ocrWorker.availability === "not_configured" ? "info" : ocrWorker.availability === "stale" ? "warning" : "error"}
                 showIcon
                 message={ocrWorker.impact}
                 description={`处理建议：${ocrWorker.action}${ocrWorker.last_seen_at ? ` 最近心跳：${formatTime(ocrWorker.last_seen_at)}` : ""}`}
-                action={!ocrWorker.automation_available ? <Button size="small" href="#/capture">进入答卷处理</Button> : undefined}
+                action={!ocrWorker.automation_available && ocrWorker.availability !== "not_configured" ? <Button size="small" href="#/capture">进入答卷处理</Button> : undefined}
               />
             </section>
           ) : (

@@ -13,7 +13,7 @@ var (
 	ErrInvalidInput      = errors.New("invalid review input")
 	ErrForbidden         = errors.New("review action forbidden")
 	ErrInvalidTransition = errors.New("invalid review task transition")
-	ErrRevisionConflict  = errors.New("review draft revision conflict")
+	ErrRevisionConflict  = errors.New("resource revision conflict")
 )
 
 type Context struct {
@@ -60,6 +60,7 @@ type ReviewTask struct {
 	ReturnReason    string     `json:"return_reason,omitempty"`
 	GradeRound      string     `json:"grade_round"`
 	DueAt           *time.Time `json:"due_at,omitempty"`
+	Revision        int64      `json:"revision"`
 	CreatedBy       string     `json:"created_by"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
@@ -98,12 +99,14 @@ type CreateTaskInput struct {
 }
 
 type AssignTaskInput struct {
-	AssignedTo string `json:"assigned_to"`
+	AssignedTo       string `json:"assigned_to"`
+	ExpectedRevision int64  `json:"expected_revision"`
 }
 
 type BatchAssignInput struct {
-	TaskIDs    []string `json:"task_ids"`
-	AssignedTo string   `json:"assigned_to"`
+	TaskIDs           []string         `json:"task_ids"`
+	AssignedTo        string           `json:"assigned_to"`
+	ExpectedRevisions map[string]int64 `json:"expected_revisions"`
 }
 
 type SubmitGradeInput struct {
@@ -113,10 +116,12 @@ type SubmitGradeInput struct {
 	PrivateNote      string            `json:"private_note"`
 	StudentFeedback  string            `json:"student_feedback"`
 	Reason           string            `json:"reason"`
+	ExpectedRevision int64             `json:"expected_revision"`
 }
 
 type ReturnTaskInput struct {
-	Reason string `json:"reason"`
+	Reason           string `json:"reason"`
+	ExpectedRevision int64  `json:"expected_revision"`
 }
 
 type ReviewDraft struct {
@@ -130,6 +135,7 @@ type ReviewDraft struct {
 	StudentFeedback  string            `json:"student_feedback"`
 	ViewerState      map[string]any    `json:"viewer_state"`
 	Revision         int               `json:"revision"`
+	ClientUpdatedAt  *time.Time        `json:"client_updated_at,omitempty"`
 	UpdatedAt        time.Time         `json:"updated_at"`
 }
 
@@ -141,6 +147,7 @@ type SaveDraftInput struct {
 	StudentFeedback  string            `json:"student_feedback"`
 	ViewerState      map[string]any    `json:"viewer_state"`
 	ExpectedRevision int               `json:"expected_revision"`
+	ClientUpdatedAt  *time.Time        `json:"client_updated_at"`
 }
 
 type DraftStore interface {
@@ -184,9 +191,13 @@ type SubmitResult struct {
 }
 
 type ListFilter struct {
-	Status     string
-	AssignedTo string
-	ExamID     string
+	Status          string
+	AssignedTo      string
+	ExamID          string
+	Limit           int
+	CursorPriority  int
+	CursorCreatedAt time.Time
+	CursorID        string
 }
 
 type DoubleMarkPolicy struct {
@@ -259,13 +270,15 @@ type CreateArbitrationTaskInput struct {
 }
 
 type AssignArbitrationTaskInput struct {
-	AssignedTo string `json:"assigned_to"`
+	AssignedTo       string `json:"assigned_to"`
+	ExpectedRevision int64  `json:"expected_revision"`
 }
 
 type SubmitArbitrationInput struct {
-	FinalScore      float64 `json:"final_score"`
-	Reason          string  `json:"reason"`
-	StudentFeedback string  `json:"student_feedback"`
+	FinalScore       float64 `json:"final_score"`
+	Reason           string  `json:"reason"`
+	StudentFeedback  string  `json:"student_feedback"`
+	ExpectedRevision int64   `json:"expected_revision"`
 }
 
 type ArbitrationTask struct {
@@ -291,6 +304,7 @@ type ArbitrationTask struct {
 	StudentFeedback     string        `json:"student_feedback,omitempty"`
 	AllowSameArbitrator bool          `json:"allow_same_arbitrator"`
 	Context             ReviewContext `json:"context"`
+	Revision            int64         `json:"revision"`
 	CreatedBy           string        `json:"created_by"`
 	CreatedAt           time.Time     `json:"created_at"`
 	UpdatedAt           time.Time     `json:"updated_at"`
@@ -303,9 +317,12 @@ type ReviewContext struct {
 }
 
 type ArbitrationFilter struct {
-	Status     string
-	AssignedTo string
-	ExamID     string
+	Status          string
+	AssignedTo      string
+	ExamID          string
+	Limit           int
+	CursorCreatedAt time.Time
+	CursorID        string
 }
 
 type FinalGrade struct {

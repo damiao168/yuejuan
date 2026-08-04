@@ -62,6 +62,22 @@ type Student struct {
 	Status    string `json:"status"`
 }
 
+type StudentListFilter struct {
+	ClassID         string
+	StudentIDs      []string
+	Query           string
+	Limit           int
+	CursorStudentNo string
+	CursorID        string
+}
+
+type TenantListFilter struct {
+	Query      string
+	Limit      int
+	CursorCode string
+	CursorID   string
+}
+
 type CSVImportError struct {
 	Row     int    `json:"row"`
 	Message string `json:"message"`
@@ -74,7 +90,7 @@ type CSVImportResult struct {
 
 type Store interface {
 	CreateTenant(ctx context.Context, input TenantProvision) (Tenant, error)
-	ListTenants(ctx context.Context, tenantID string, canListAll bool) ([]Tenant, error)
+	ListTenants(ctx context.Context, tenantID string, canListAll bool, filter TenantListFilter) ([]Tenant, error)
 	UpdateTenantStatus(ctx context.Context, id string, status string) (Tenant, error)
 	CreateSchool(ctx context.Context, tenantID string, input School) (School, error)
 	ListSchools(ctx context.Context, tenantID string) ([]School, error)
@@ -83,7 +99,7 @@ type Store interface {
 	CreateClass(ctx context.Context, tenantID string, input Class) (Class, error)
 	ListClasses(ctx context.Context, tenantID string, gradeID string) ([]Class, error)
 	CreateStudent(ctx context.Context, tenantID string, input Student) (Student, error)
-	ListStudents(ctx context.Context, tenantID string, classID string) ([]Student, error)
+	ListStudents(ctx context.Context, tenantID string, filter StudentListFilter) ([]Student, error)
 	UpdateStudentStatus(ctx context.Context, tenantID string, id string, status string) (Student, error)
 	BindTeacherClass(ctx context.Context, tenantID string, teacherID string, classID string) error
 }

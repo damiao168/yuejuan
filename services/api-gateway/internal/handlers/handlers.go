@@ -3,9 +3,11 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
+	"edugrade-enterprise/services/api-gateway/internal/buildinfo"
 	"edugrade-enterprise/services/api-gateway/internal/config"
 	"edugrade-enterprise/services/api-gateway/internal/deps"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
@@ -64,14 +66,20 @@ func (h *Handlers) Ready(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusServiceUnavailable
 		overall = "not_ready"
 	}
-	httpx.JSON(w, status, map[string]any{
-		"status":       overall,
-		"dependencies": results,
-	})
+	type publicDependency struct {
+		Name     string `json:"name"`
+		Status   string `json:"status"`
+		Required bool   `json:"required"`
+	}
+	publicResults := make([]publicDependency, 0, len(results))
+	for _, result := range results {
+		publicResults = append(publicResults, publicDependency{Name: result.Name, Status: result.Status, Required: result.Required})
+	}
+	httpx.JSON(w, status, map[string]any{"status": overall, "dependencies": publicResults})
 }
 
 func (h *Handlers) SystemStatus(w http.ResponseWriter, r *http.Request) {
-	results, ok := deps.CheckAll(r.Context(), h.cfg.Service.ReadinessTimeout, h.checkers)
+	results, ready := deps.CheckAll(r.Context(), h.cfg.Service.ReadinessTimeout, h.checkers)
 	now := time.Now().UTC()
 	workerServices := make([]WorkerServiceStatus, 0, 1)
 	workerCheckStartedAt := time.Now()
@@ -80,28 +88,32 @@ func (h *Handlers) SystemStatus(w http.ResponseWriter, r *http.Request) {
 	workerDependency := deps.CheckResult{
 		Name:       workerStatus.Name,
 		Status:     workerStatus.Status,
+		Required:   false,
 		Detail:     workerStatusDetail(workerStatus, workerErr),
 		DurationMS: time.Since(workerCheckStartedAt).Milliseconds(),
 		CheckedAt:  now.Format(time.RFC3339),
 	}
 	results = append(results, workerDependency)
-	if workerStatus.Status != "ok" {
-		ok = false
-	}
 	overall := "healthy"
-	if !ok {
+	if !ready || hasDependencyError(results) {
 		overall = "degraded"
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{
+	status := map[string]any{
 		"status":          overall,
 		"service":         h.cfg.Service.Name,
 		"environment":     h.cfg.Service.Environment,
-		"version":         "0.1.0",
+		"version":         buildinfo.Version,
+		"git_sha":         buildinfo.GitSHA,
+		"build_time":      buildinfo.BuildTime,
+		"image_digest":    buildinfo.ImageDigest,
+		"release_id":      buildinfo.ReleaseID,
+		"schema_version":  buildinfo.SchemaVersion,
 		"started_at":      h.startedAt.Format(time.RFC3339),
 		"generated_at":    now.Format(time.RFC3339),
 		"uptime_sec":      int64(now.Sub(h.startedAt).Seconds()),
 		"dependencies":    results,
 		"worker_services": workerServices,
+		"ai_grading":      aiGradingStatus(h.cfg),
 		"observability": map[string]any{
 			"log_format":                "json",
 			"system_log_stream":         "stdout",
@@ -109,10 +121,21 @@ func (h *Handlers) SystemStatus(w http.ResponseWriter, r *http.Request) {
 			"request_id_header":         "X-Request-ID",
 			"trace_id_header":           "X-Trace-ID",
 			"slow_request_threshold_ms": h.cfg.Observability.SlowRequestThreshold.Milliseconds(),
-			"slow_query_log":            "placeholder_not_implemented",
+			"slow_query_log":            "enabled_without_sql_text_or_parameters",
+			"metrics_endpoint":          "/metrics",
 			"sensitive_log_policy":      "普通系统日志脱敏 answer、student、score、token、secret 等字段；审计日志记录业务动作但不替代答卷内容存储。",
 		},
-	})
+	}
+	httpx.JSON(w, http.StatusOK, status)
+}
+
+func hasDependencyError(results []deps.CheckResult) bool {
+	for _, result := range results {
+		if result.Status == "error" {
+			return true
+		}
+	}
+	return false
 }
 
 // OCRAvailability exposes only the tenant-scoped OCR automation state needed by
@@ -133,17 +156,17 @@ func (h *Handlers) ocrWorkerStatus(r *http.Request, now time.Time) (WorkerServic
 		staleAfter = 30 * time.Second
 	}
 	if h.runtime == nil {
-		return buildWorkerServiceStatus(workerruntime.Metrics{}, "ocr_worker", "ocr-worker", "ocr", now, staleAfter), fmt.Errorf("worker runtime store is unavailable")
+		return unavailableWorkerServiceStatus("ocr_worker", "ocr-worker", "ocr", now, staleAfter), fmt.Errorf("worker runtime store is unavailable")
 	}
 	user, _ := auth.UserFromContext(r.Context())
 	metrics, err := h.runtime.MetricsAcrossTenants(r.Context(), auth.PlatformTenantID)
 	if err != nil {
-		return buildWorkerServiceStatus(workerruntime.Metrics{}, "ocr_worker", "ocr-worker", "ocr", now, staleAfter), err
+		return unavailableWorkerServiceStatus("ocr_worker", "ocr-worker", "ocr", now, staleAfter), err
 	}
 	if user.TenantID != auth.PlatformTenantID {
 		scoped, scopedErr := h.runtime.Metrics(r.Context(), user.TenantID)
 		if scopedErr != nil {
-			return buildWorkerServiceStatus(workerruntime.Metrics{}, "ocr_worker", "ocr-worker", "ocr", now, staleAfter), scopedErr
+			return unavailableWorkerServiceStatus("ocr_worker", "ocr-worker", "ocr", now, staleAfter), scopedErr
 		}
 		scoped.Workers = metrics.Workers
 		metrics = scoped
@@ -154,10 +177,10 @@ func (h *Handlers) ocrWorkerStatus(r *http.Request, now time.Time) (WorkerServic
 func buildWorkerServiceStatus(metrics workerruntime.Metrics, name string, workerService string, queueName string, now time.Time, staleAfter time.Duration) WorkerServiceStatus {
 	status := WorkerServiceStatus{
 		Name: name, WorkerService: workerService, QueueName: queueName,
-		Status: "error", Availability: "unavailable", StaleAfterSec: int64(staleAfter.Seconds()),
-		ImpactCode: "ocr_automation_unavailable",
-		Impact:     "新 OCR 任务不会被自动处理；选择题 OMR 不受影响，依赖 OCR 的填空题自动批阅暂停，任务会保留在队列并可转人工处理。",
-		Action:     "启动或恢复 OCR Worker，检查服务账号与 API 连通性；恢复后队列会自动继续处理。",
+		Status: "not_configured", Availability: "not_configured", StaleAfterSec: int64(staleAfter.Seconds()),
+		ImpactCode: "ocr_automation_not_configured",
+		Impact:     "当前未启用文字识别自动化；答卷上传、选择题规则评分和人工阅卷仍可正常使用。",
+		Action:     "需要自动识别填空题或主观题文字时，再由平台运维部署 OCR Worker。",
 	}
 	var latest time.Time
 	for _, worker := range metrics.Workers {
@@ -192,9 +215,26 @@ func buildWorkerServiceStatus(metrics workerruntime.Metrics, name string, worker
 		status.ImpactCode = "ocr_automation_available"
 		status.Impact = "OCR 图像识别可处理新任务；自动判分仍受置信度阈值与评分规则控制，低置信度结果继续进入人工复核。"
 		status.Action = "无需处理。"
-	} else if status.StaleInstances > 0 {
+	} else if status.StaleInstances > 0 || status.QueuedTasks > 0 || status.InFlightTasks > 0 {
+		status.Status = "error"
 		status.Availability = "stale"
+		if status.StaleInstances == 0 {
+			status.Availability = "unavailable"
+		}
+		status.ImpactCode = "ocr_automation_unavailable"
+		status.Impact = "新 OCR 任务不会被自动处理；选择题 OMR 不受影响，依赖 OCR 的自动批阅暂停，任务会保留在队列并可转人工处理。"
+		status.Action = "启动或恢复 OCR Worker，检查服务账号与 API 连通性；恢复后队列会自动继续处理。"
 	}
+	return status
+}
+
+func unavailableWorkerServiceStatus(name string, workerService string, queueName string, now time.Time, staleAfter time.Duration) WorkerServiceStatus {
+	status := buildWorkerServiceStatus(workerruntime.Metrics{}, name, workerService, queueName, now, staleAfter)
+	status.Status = "error"
+	status.Availability = "unavailable"
+	status.ImpactCode = "worker_status_unavailable"
+	status.Impact = "暂时无法读取文字识别运行状态；不影响答卷上传和人工阅卷。"
+	status.Action = "检查 API 与任务存储连接后重试。"
 	return status
 }
 
@@ -207,14 +247,17 @@ func workerStatusDetail(status WorkerServiceStatus, statusErr error) string {
 }
 
 func (h *Handlers) SystemInfo(w http.ResponseWriter, _ *http.Request) {
-	modelCapability := "mock_llm_grading_adapter"
+	aiStatus := aiGradingStatus(h.cfg)
+	modelCapability := "ai_grading_disabled"
 	notImplemented := []string{
 		"real_subjective_model_inference",
 		"semantic_evidence_verification",
 		"visual_evidence_verification",
 		"ai_grading",
 	}
-	if h.cfg.AIService.URL != "" {
+	if aiStatus["mode"] == "mock" {
+		modelCapability = "mock_llm_grading_adapter"
+	} else if aiStatus["mode"] == "real" {
 		modelCapability = "governed_shadow_grading_agent"
 		notImplemented = []string{
 			"calibrated_subjective_model_confidence",
@@ -224,10 +267,15 @@ func (h *Handlers) SystemInfo(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"service":     h.cfg.Service.Name,
-		"environment": h.cfg.Service.Environment,
-		"version":     "0.1.0",
-		"started_at":  h.startedAt.Format(time.RFC3339),
+		"service":        h.cfg.Service.Name,
+		"environment":    h.cfg.Service.Environment,
+		"version":        buildinfo.Version,
+		"git_sha":        buildinfo.GitSHA,
+		"build_time":     buildinfo.BuildTime,
+		"image_digest":   buildinfo.ImageDigest,
+		"release_id":     buildinfo.ReleaseID,
+		"schema_version": buildinfo.SchemaVersion,
+		"started_at":     h.startedAt.Format(time.RFC3339),
 		"capabilities": []string{
 			"health_check",
 			"readiness_check",
@@ -304,7 +352,41 @@ func (h *Handlers) SystemInfo(w http.ResponseWriter, _ *http.Request) {
 			"report_csv_export",
 		},
 		"not_implemented": notImplemented,
+		"ai_grading":      aiStatus,
 	})
+}
+
+func aiGradingStatus(cfg config.Config) map[string]any {
+	environment := strings.ToLower(strings.TrimSpace(cfg.Service.Environment))
+	status := map[string]any{
+		"enabled":        false,
+		"available":      false,
+		"mode":           "disabled",
+		"error_code":     "ai_grading_disabled",
+		"model_version":  cfg.AIService.ModelVersion,
+		"prompt_version": cfg.AIService.PromptVersion,
+	}
+	if strings.TrimSpace(cfg.AIService.URL) != "" && (cfg.AIService.Enabled || environment == "" || environment == "development" || environment == "dev" || environment == "test" || environment == "local") {
+		status["enabled"] = true
+		status["available"] = true
+		status["mode"] = "real"
+		status["error_code"] = ""
+		return status
+	}
+	if (environment == "" || environment == "development" || environment == "dev" || environment == "test" || environment == "local") && strings.TrimSpace(cfg.AIService.URL) == "" {
+		status["enabled"] = true
+		status["available"] = true
+		status["mode"] = "mock"
+		status["error_code"] = ""
+		return status
+	}
+	if environment == "demo" && cfg.AIService.Enabled && cfg.AIService.AllowMock {
+		status["enabled"] = true
+		status["available"] = true
+		status["mode"] = "mock"
+		status["error_code"] = ""
+	}
+	return status
 }
 
 func (h *Handlers) NotFound(w http.ResponseWriter, r *http.Request) {

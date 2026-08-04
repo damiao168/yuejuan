@@ -48,9 +48,12 @@ RETURNING `+batchColumns, tenantID, examID, input.Name, input.SourceType, actorI
 	return scanBatch(row)
 }
 
-func (s *PostgresStore) ListBatches(ctx context.Context, tenantID, examID string) ([]Batch, error) {
+func (s *PostgresStore) ListBatches(ctx context.Context, tenantID, examID string, filter BatchListFilter) ([]Batch, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+batchColumns+` FROM capture_batch
-WHERE tenant_id = $1 AND exam_id = $2::uuid AND deleted_at IS NULL ORDER BY created_at DESC`, tenantID, examID)
+WHERE tenant_id = $1 AND exam_id = $2::uuid AND deleted_at IS NULL
+  AND ($4 = '' OR created_at < $3 OR (created_at = $3 AND id::text < $4))
+ORDER BY created_at DESC, id::text DESC
+LIMIT NULLIF($5, 0)`, tenantID, examID, filter.CursorCreatedAt, filter.CursorID, filter.Limit)
 	if err != nil {
 		return nil, err
 	}

@@ -327,7 +327,7 @@ func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemorySt
 func login(t *testing.T, router http.Handler) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"tenant_code": "demo", "username": "ocr_admin", "password": "ChangeMe123!"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -356,7 +356,7 @@ func readySubmission(t *testing.T, store submission.Store) submission.Submission
 	if _, err := store.RunQualityCheck(ctx, tenantID, item.ID, userID); err != nil {
 		t.Fatalf("quality check: %v", err)
 	}
-	if _, err := store.UpdateStatus(ctx, tenantID, item.ID, userID, "ready_for_ocr"); err != nil {
+	if _, err := store.UpdateStatus(ctx, tenantID, item.ID, userID, "ready_for_ocr", item.Revision); err != nil {
 		t.Fatalf("ready status: %v", err)
 	}
 	return page

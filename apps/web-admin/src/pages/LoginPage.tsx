@@ -1,12 +1,12 @@
 import { Alert, Button, Checkbox, Form, Input } from "antd";
 import { LockKeyhole, LogIn, School } from "lucide-react";
-import { isWithinUtf8ByteLimit, LOGIN_FIELD_LIMITS } from "../auth/rememberedLogin";
+import { isWithinUtf8ByteLimit, LOGIN_FIELD_LIMITS } from "../auth/loginSecurity";
 
 export interface LoginFormValues {
   tenant_code: string;
   username: string;
   password: string;
-  remember_password: boolean;
+  remember_device: boolean;
 }
 
 function byteLimitRule(limit: number, message: string) {
@@ -21,14 +21,10 @@ function byteLimitRule(limit: number, message: string) {
 
 export function LoginPage({
   onLogin,
-  onForgetRemembered,
-  initialValues,
   loading = false,
   error
 }: {
   onLogin: (values: LoginFormValues) => void | Promise<void>;
-  onForgetRemembered?: () => void;
-  initialValues?: Partial<LoginFormValues>;
   loading?: boolean;
   error?: string;
 }) {
@@ -47,7 +43,7 @@ export function LoginPage({
           layout="vertical"
           onFinish={onLogin}
           className="login-form"
-          initialValues={{ remember_password: false, ...initialValues }}
+          initialValues={{ remember_device: false }}
         >
           <Form.Item
             label="学校代码"
@@ -90,16 +86,12 @@ export function LoginPage({
             />
           </Form.Item>
           <div className="login-options">
-            <Form.Item name="remember_password" valuePropName="checked" noStyle>
-              <Checkbox onChange={(event) => {
-                if (!event.target.checked) {
-                  onForgetRemembered?.();
-                }
-              }}>
-                保存密码，下次自动登录
+            <Form.Item name="remember_device" valuePropName="checked" noStyle>
+              <Checkbox>
+                在此设备保持登录
               </Checkbox>
             </Form.Item>
-            <span>仅限个人设备</span>
+            <span>不会保存密码，仅限个人设备</span>
           </div>
           <Button type="primary" htmlType="submit" block icon={<LogIn size={17} />} loading={loading}>
             登录

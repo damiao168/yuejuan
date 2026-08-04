@@ -403,7 +403,7 @@ func (s *MemoryStore) RevokeSandboxApproval(
 	return item, nil
 }
 
-func (s *MemoryStore) ListEvaluationRuns(_ context.Context, tenantID string) ([]EvaluationRun, error) {
+func (s *MemoryStore) ListEvaluationRuns(_ context.Context, tenantID string, filter EvaluationListFilter) ([]EvaluationRun, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []EvaluationRun{}
@@ -416,10 +416,25 @@ func (s *MemoryStore) ListEvaluationRuns(_ context.Context, tenantID string) ([]
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].ID < out[j].ID
+			return out[i].ID > out[j].ID
 		}
 		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
+	if filter.CursorID != "" {
+		start := 0
+		for start < len(out) {
+			item := out[start]
+			if item.CreatedAt.Before(filter.CursorCreatedAt) ||
+				(item.CreatedAt.Equal(filter.CursorCreatedAt) && item.ID < filter.CursorID) {
+				break
+			}
+			start++
+		}
+		out = out[start:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
 	return out, nil
 }
 
@@ -694,6 +709,7 @@ func (s *MemoryStore) CreateModelApproval(
 		ManualReviewRate:      input.ManualReviewRate,
 		DecisionReference:     strings.TrimSpace(input.DecisionReference),
 		ExpiresAt:             input.ExpiresAt.UTC(),
+		Revision:              1,
 		CreatedAt:             now,
 	}
 	s.modelApprovals[item.ID] = item
@@ -705,9 +721,9 @@ func (s *MemoryStore) RevokeModelApproval(
 	tenantID string,
 	_ string,
 	id string,
-	reason string,
+	input ModelApprovalRevokeInput,
 ) (ModelApproval, error) {
-	if strings.TrimSpace(reason) == "" {
+	if strings.TrimSpace(input.Reason) == "" || input.ExpectedRevision < 1 {
 		return ModelApproval{}, ErrInvalidPromotion
 	}
 	s.mu.Lock()
@@ -716,11 +732,15 @@ func (s *MemoryStore) RevokeModelApproval(
 	if !ok || item.TenantID != tenantID {
 		return ModelApproval{}, ErrNotFound
 	}
+	if item.Revision != input.ExpectedRevision {
+		return ModelApproval{}, ErrRevisionConflict
+	}
 	if item.RevokedAt != nil {
 		return ModelApproval{}, ErrConflict
 	}
 	now := time.Now().UTC()
 	item.RevokedAt = &now
+	item.Revision++
 	s.modelApprovals[id] = item
 	return item, nil
 }

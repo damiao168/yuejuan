@@ -46,6 +46,14 @@ func TestCaptureBatchDecodeFlow(t *testing.T) {
 	if pages[0].Status != "normalized" {
 		t.Fatalf("passed page should expose normalized state, got %q", pages[0].Status)
 	}
+	summary, err := store.GetProcessingSummary(ctx, "tenant-1", pages[0].SubmissionID)
+	if err != nil || summary.TotalPages != 2 || summary.PendingPages != 2 || summary.CanComplete {
+		t.Fatalf("processing summary must reflect the stored page state: %#v, %v", summary, err)
+	}
+	summaries, err := store.ListProcessingSummaries(ctx, "tenant-1", batch.ID)
+	if err != nil || len(summaries) != 1 || summaries[0].SubmissionID != pages[0].SubmissionID {
+		t.Fatalf("batch processing summaries returned %#v, %v", summaries, err)
+	}
 }
 
 func TestCaptureRejectsStalePageRevisionAndCrossTenant(t *testing.T) {

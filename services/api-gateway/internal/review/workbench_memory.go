@@ -46,6 +46,7 @@ func (s *MemoryStore) ClaimNextTask(_ context.Context, tenantID, reviewerID stri
 		task.Status = "assigned"
 	}
 	task.AssignedTo = reviewerID
+	task.Revision++
 	task.UpdatedAt = time.Now().UTC()
 	s.tasks[key(tenantID, task.ID)] = task
 	return cloneTask(task), nil
@@ -96,6 +97,7 @@ func (s *MemoryStore) ReleaseTaskClaim(_ context.Context, tenantID, taskID, revi
 		return ReviewTask{}, ErrForbidden
 	}
 	task.UpdatedAt = time.Now().UTC()
+	task.Revision++
 	s.tasks[key(tenantID, taskID)] = task
 	return cloneTask(task), nil
 }

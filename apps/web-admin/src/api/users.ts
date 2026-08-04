@@ -23,8 +23,14 @@ export interface CreateManagedUserPayload {
   role_code: string;
 }
 
-export async function listManagedUsers() {
-  return apiClient.request<{ users: ManagedUser[] }>("/api/v1/users");
+export async function listManagedUsers(filter: { q?: string; role?: string; limit?: number; cursor?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filter.q) params.set("q", filter.q);
+  if (filter.role) params.set("role", filter.role);
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.cursor) params.set("cursor", filter.cursor);
+  const query = params.toString();
+  return apiClient.request<{ users: ManagedUser[]; next_cursor: string; has_more: boolean }>(`/api/v1/users${query ? `?${query}` : ""}`);
 }
 
 export async function listAssignableRoles() {

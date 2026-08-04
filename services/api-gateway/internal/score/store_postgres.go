@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"edugrade-enterprise/services/api-gateway/internal/csvsafe"
 )
 
 type PostgresStore struct {
@@ -69,8 +71,95 @@ func (s *PostgresStore) FinalizeExam(ctx context.Context, tenantID string, examI
 	}, nil
 }
 
-func (s *PostgresStore) ListExamGrades(ctx context.Context, tenantID string, examID string) ([]SubmissionGrade, error) {
-	return s.listGrades(ctx, tenantID, examID, true)
+func (s *PostgresStore) ListExamGrades(ctx context.Context, tenantID string, examID string, filter GradeListFilter) (GradeListResult, error) {
+	result := GradeListResult{Grades: []SubmissionGrade{}}
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*), COALESCE(BOOL_AND(locked OR status IN ('published', 'locked')), false)
+FROM submission_grade
+WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL
+`, tenantID, examID).Scan(&result.Total, &result.AllLocked); err != nil {
+		return GradeListResult{}, err
+	}
+
+	where := "sg.tenant_id = $1 AND sg.exam_id::text = $2 AND sg.deleted_at IS NULL"
+	args := []any{tenantID, examID}
+	if filter.Status != "" {
+		args = append(args, filter.Status)
+		where += fmt.Sprintf(" AND sg.status = $%d", len(args))
+	}
+	if query := strings.TrimSpace(filter.Query); query != "" {
+		args = append(args, "%"+query+"%")
+		placeholder := fmt.Sprintf("$%d", len(args))
+		where += " AND (sg.anonymous_code ILIKE " + placeholder +
+			" OR sg.submission_id::text ILIKE " + placeholder +
+			" OR COALESCE(st.name, '') ILIKE " + placeholder +
+			" OR COALESCE(st.student_no, '') ILIKE " + placeholder +
+			" OR COALESCE(cls.name, '') ILIKE " + placeholder + ")"
+	}
+	countQuery := `
+SELECT COUNT(*)
+FROM submission_grade sg
+LEFT JOIN student st ON st.tenant_id = sg.tenant_id AND st.id = sg.student_id AND st.deleted_at IS NULL
+LEFT JOIN school_class cls ON cls.tenant_id = st.tenant_id AND cls.id = st.class_id AND cls.deleted_at IS NULL
+WHERE ` + where
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&result.FilteredTotal); err != nil {
+		return GradeListResult{}, err
+	}
+
+	pageWhere := where
+	pageArgs := append([]any(nil), args...)
+	if filter.CursorAnonymousCode != "" && filter.CursorID != "" {
+		pageArgs = append(pageArgs, filter.CursorAnonymousCode, filter.CursorID)
+		codeArg, idArg := len(pageArgs)-1, len(pageArgs)
+		pageWhere += fmt.Sprintf(" AND (sg.anonymous_code > $%d OR (sg.anonymous_code = $%d AND sg.id::text > $%d))", codeArg, codeArg, idArg)
+	}
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 51
+	}
+	pageArgs = append(pageArgs, limit)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT sg.id::text, sg.tenant_id::text, sg.exam_id::text, sg.submission_id::text, COALESCE(sg.student_id::text, ''),
+  sg.anonymous_code, sg.total_score::float8, sg.max_score::float8, sg.status, sg.locked,
+  COALESCE(sg.confirmed_by::text, ''), sg.confirmed_at, COALESCE(sg.published_by::text, ''), sg.published_at,
+  sg.revision, sg.created_by::text, sg.created_at, sg.updated_at
+FROM submission_grade sg
+LEFT JOIN student st ON st.tenant_id = sg.tenant_id AND st.id = sg.student_id AND st.deleted_at IS NULL
+LEFT JOIN school_class cls ON cls.tenant_id = st.tenant_id AND cls.id = st.class_id AND cls.deleted_at IS NULL
+WHERE `+pageWhere+`
+ORDER BY sg.anonymous_code, sg.id
+LIMIT $`+fmt.Sprint(len(pageArgs)), pageArgs...)
+	if err != nil {
+		return GradeListResult{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		grade, scanErr := scanSubmissionGrade(rows)
+		if scanErr != nil {
+			return GradeListResult{}, scanErr
+		}
+		result.Grades = append(result.Grades, grade)
+	}
+	if err := rows.Err(); err != nil {
+		return GradeListResult{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return GradeListResult{}, err
+	}
+	if len(result.Grades) > 0 {
+		items, err := s.listFinalGradesForSubmissions(ctx, tenantID, result.Grades)
+		if err != nil {
+			return GradeListResult{}, err
+		}
+		bySubmission := make(map[string][]FinalGrade, len(result.Grades))
+		for _, item := range items {
+			bySubmission[item.SubmissionID] = append(bySubmission[item.SubmissionID], item)
+		}
+		for i := range result.Grades {
+			result.Grades[i].Items = bySubmission[result.Grades[i].SubmissionID]
+		}
+	}
+	return result, nil
 }
 
 func (s *PostgresStore) CheckQuality(ctx context.Context, tenantID string, examID string, requirePendingPublish bool) (QualityReport, error) {
@@ -215,7 +304,7 @@ func (s *PostgresStore) ConfirmGrades(ctx context.Context, tenantID string, exam
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE submission_grade
-SET status = 'confirmed', confirmed_by = $3::uuid, confirmed_at = now(), updated_at = now()
+SET status = 'confirmed', confirmed_by = $3::uuid, confirmed_at = now(), revision = revision + 1, updated_at = now()
 WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND locked = false AND status = 'pending_confirmation'
 `, tenantID, examID, actorID); err != nil {
 		return nil, err
@@ -261,7 +350,7 @@ func (s *PostgresStore) PublishGrades(ctx context.Context, tenantID string, exam
 	now := time.Now().UTC()
 	if _, err := tx.ExecContext(ctx, `
 UPDATE submission_grade
-SET status = 'published', locked = true, published_by = $3::uuid, published_at = now(), updated_at = now()
+SET status = 'published', locked = true, published_by = $3::uuid, published_at = now(), revision = revision + 1, updated_at = now()
 WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL
 `, tenantID, examID, actorID); err != nil {
 		return PublishResult{}, err
@@ -296,7 +385,7 @@ func (s *PostgresStore) GetStudentGrade(ctx context.Context, tenantID string, st
 SELECT id::text, tenant_id::text, exam_id::text, submission_id::text, COALESCE(student_id::text, ''),
   anonymous_code, total_score::float8, max_score::float8, status, locked,
   COALESCE(confirmed_by::text, ''), confirmed_at, COALESCE(published_by::text, ''), published_at,
-  created_by::text, created_at, updated_at
+  revision, created_by::text, created_at, updated_at
 FROM submission_grade
 WHERE tenant_id = $1 AND exam_id::text = $2 AND student_id::text = $3 AND status = 'published' AND locked = true AND deleted_at IS NULL
 `, tenantID, examID, studentID))
@@ -325,7 +414,7 @@ func (s *PostgresStore) ExportGradesCSV(ctx context.Context, tenantID string, ex
 	watermark := fmt.Sprintf("EduGrade export tenant=%s exam=%s actor=%s at=%s", tenantID, examID, actorID, exportedAt)
 	_ = writer.Write([]string{"submission_id", "student_id", "anonymous_code", "total_score", "max_score", "status", "locked", "exported_by", "exported_at", "watermark"})
 	for _, grade := range grades {
-		_ = writer.Write([]string{
+		_ = writer.Write(csvsafe.Row([]string{
 			grade.SubmissionID,
 			grade.StudentID,
 			grade.AnonymousCode,
@@ -336,7 +425,7 @@ func (s *PostgresStore) ExportGradesCSV(ctx context.Context, tenantID string, ex
 			actorID,
 			exportedAt,
 			watermark,
-		})
+		}))
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
@@ -455,6 +544,7 @@ SET total_score = EXCLUDED.total_score,
     anonymous_code = EXCLUDED.anonymous_code,
     student_id = EXCLUDED.student_id,
     status = CASE WHEN submission_grade.locked THEN submission_grade.status ELSE 'pending_confirmation' END,
+    revision = submission_grade.revision + 1,
     updated_at = now()
 `, tenantID, examID, actorID)
 	return err
@@ -762,7 +852,7 @@ func (s *PostgresStore) listGradesWithQueryer(ctx context.Context, q queryer, te
 SELECT id::text, tenant_id::text, exam_id::text, submission_id::text, COALESCE(student_id::text, ''),
   anonymous_code, total_score::float8, max_score::float8, status, locked,
   COALESCE(confirmed_by::text, ''), confirmed_at, COALESCE(published_by::text, ''), published_at,
-  created_by::text, created_at, updated_at
+  revision, created_by::text, created_at, updated_at
 FROM submission_grade
 WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL
 ORDER BY anonymous_code, created_at
@@ -785,13 +875,17 @@ ORDER BY anonymous_code, created_at
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if withItems {
+	if withItems && len(out) > 0 {
+		items, err := s.listFinalGradesForExamWithQueryer(ctx, q, tenantID, examID)
+		if err != nil {
+			return nil, err
+		}
+		bySubmission := make(map[string][]FinalGrade, len(out))
+		for _, item := range items {
+			bySubmission[item.SubmissionID] = append(bySubmission[item.SubmissionID], item)
+		}
 		for i := range out {
-			items, err := s.listFinalGradesWithQueryer(ctx, q, tenantID, out[i].SubmissionID)
-			if err != nil {
-				return nil, err
-			}
-			out[i].Items = items
+			out[i].Items = bySubmission[out[i].SubmissionID]
 		}
 	}
 	return out, nil
@@ -819,6 +913,69 @@ ORDER BY question_no, created_at DESC
 		grade, err := scanFinalGrade(rows)
 		if err != nil {
 			return nil, err
+		}
+		out = append(out, grade)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) listFinalGradesForExamWithQueryer(ctx context.Context, q queryer, tenantID string, examID string) ([]FinalGrade, error) {
+	rows, err := q.QueryContext(ctx, `
+SELECT id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
+  answer_segment_id::text, submission_id::text, anonymous_code, score::float8, max_score::float8,
+  source, status, locked, created_by::text, created_at, updated_at
+FROM final_grade
+WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL
+ORDER BY submission_id, question_no, created_at DESC
+`, tenantID, examID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]FinalGrade, 0)
+	for rows.Next() {
+		grade, scanErr := scanFinalGrade(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, grade)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) listFinalGradesForSubmissions(ctx context.Context, tenantID string, grades []SubmissionGrade) ([]FinalGrade, error) {
+	if len(grades) == 0 {
+		return []FinalGrade{}, nil
+	}
+	args := make([]any, 0, len(grades)+1)
+	args = append(args, tenantID)
+	placeholders := make([]string, 0, len(grades))
+	seen := make(map[string]struct{}, len(grades))
+	for _, grade := range grades {
+		if _, exists := seen[grade.SubmissionID]; exists {
+			continue
+		}
+		seen[grade.SubmissionID] = struct{}{}
+		args = append(args, grade.SubmissionID)
+		placeholders = append(placeholders, fmt.Sprintf("$%d::uuid", len(args)))
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
+  answer_segment_id::text, submission_id::text, anonymous_code, score::float8, max_score::float8,
+  source, status, locked, created_by::text, created_at, updated_at
+FROM final_grade
+WHERE tenant_id = $1 AND submission_id IN (`+strings.Join(placeholders, ",")+`) AND deleted_at IS NULL
+ORDER BY submission_id, question_no, created_at DESC
+`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]FinalGrade, 0)
+	for rows.Next() {
+		grade, scanErr := scanFinalGrade(rows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
 		out = append(out, grade)
 	}
@@ -946,6 +1103,7 @@ func scanSubmissionGrade(row submissionGradeScanner) (SubmissionGrade, error) {
 		&confirmedAt,
 		&out.PublishedBy,
 		&publishedAt,
+		&out.Revision,
 		&out.CreatedBy,
 		&out.CreatedAt,
 		&out.UpdatedAt,

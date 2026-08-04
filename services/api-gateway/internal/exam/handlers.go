@@ -8,6 +8,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/pagination"
 )
 
 type Handler struct {
@@ -21,6 +22,10 @@ func NewHandler(store Store, audit auth.Store) *Handler {
 
 func (h *Handler) CreateExam(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
+	scope, ok := mustAccessScope(w, r)
+	if !ok {
+		return
+	}
 	var input CreateInput
 	if !decodeJSON(w, r, &input) {
 		return
@@ -29,7 +34,7 @@ func (h *Handler) CreateExam(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_exam", err.Error())
 		return
 	}
-	out, err := h.store.CreateExam(r.Context(), user.TenantID, user.ID, input)
+	out, err := h.store.CreateExam(r.Context(), scope, user.ID, input)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
@@ -39,21 +44,49 @@ func (h *Handler) CreateExam(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListExams(w http.ResponseWriter, r *http.Request) {
-	user := mustUser(r)
-	out, err := h.store.ListExams(r.Context(), user.TenantID, ListFilter{
+	scope, ok := mustAccessScope(w, r)
+	if !ok {
+		return
+	}
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 50, 200)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "pagination limit is invalid")
+		return
+	}
+	cursor, err := pagination.Decode(r.URL.Query().Get("cursor"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "pagination cursor is invalid")
+		return
+	}
+	out, err := h.store.ListExams(r.Context(), scope, ListFilter{
 		Status:   r.URL.Query().Get("status"),
 		SchoolID: r.URL.Query().Get("school_id"),
+		Limit:    limit + 1,
+		CursorAt: cursor.CreatedAt,
+		CursorID: cursor.ID,
 	})
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "exam_list_failed", "failed to list exams")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"exams": out})
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(out) > 0 {
+		last := out[len(out)-1]
+		nextCursor = pagination.Encode(last.CreatedAt, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"exams": out, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) GetExam(w http.ResponseWriter, r *http.Request) {
-	user := mustUser(r)
-	out, err := h.store.GetExam(r.Context(), user.TenantID, r.PathValue("id"))
+	scope, ok := mustAccessScope(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.store.GetExam(r.Context(), scope, r.PathValue("id"))
 	if err != nil {
 		httpx.Error(w, r, http.StatusNotFound, "exam_not_found", "exam not found")
 		return
@@ -62,7 +95,10 @@ func (h *Handler) GetExam(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateExam(w http.ResponseWriter, r *http.Request) {
-	user := mustUser(r)
+	scope, ok := mustAccessScope(w, r)
+	if !ok {
+		return
+	}
 	var input UpdateInput
 	if !decodeJSON(w, r, &input) {
 		return
@@ -71,7 +107,7 @@ func (h *Handler) UpdateExam(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_exam", err.Error())
 		return
 	}
-	out, err := h.store.UpdateExam(r.Context(), user.TenantID, r.PathValue("id"), input)
+	out, err := h.store.UpdateExam(r.Context(), scope, r.PathValue("id"), input)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
@@ -81,9 +117,13 @@ func (h *Handler) UpdateExam(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
-	user := mustUser(r)
+	scope, ok := mustAccessScope(w, r)
+	if !ok {
+		return
+	}
 	var input struct {
-		Status string `json:"status"`
+		Status           string `json:"status"`
+		ExpectedRevision int64  `json:"expected_revision"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -92,7 +132,11 @@ func (h *Handler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_status", "unknown exam status")
 		return
 	}
-	out, err := h.store.UpdateStatus(r.Context(), user.TenantID, r.PathValue("id"), input.Status)
+	if input.ExpectedRevision <= 0 {
+		httpx.Error(w, r, http.StatusBadRequest, "expected_revision_required", "expected_revision is required")
+		return
+	}
+	out, err := h.store.UpdateStatus(r.Context(), scope, r.PathValue("id"), input.Status, input.ExpectedRevision)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
@@ -102,8 +146,21 @@ func (h *Handler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Archive(w http.ResponseWriter, r *http.Request) {
-	user := mustUser(r)
-	out, err := h.store.UpdateStatus(r.Context(), user.TenantID, r.PathValue("id"), "archived")
+	scope, ok := mustAccessScope(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		ExpectedRevision int64 `json:"expected_revision"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.ExpectedRevision <= 0 {
+		httpx.Error(w, r, http.StatusBadRequest, "expected_revision_required", "expected_revision is required")
+		return
+	}
+	out, err := h.store.UpdateStatus(r.Context(), scope, r.PathValue("id"), "archived", input.ExpectedRevision)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
@@ -129,6 +186,9 @@ func validateCreate(input CreateInput) error {
 }
 
 func validateUpdate(input UpdateInput) error {
+	if input.ExpectedRevision <= 0 {
+		return errors.New("expected_revision is required")
+	}
 	if input.TotalScore != nil && *input.TotalScore <= 0 {
 		return errors.New("total_score must be greater than 0")
 	}
@@ -148,6 +208,10 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, "exam_locked", "published or archived exam cannot be modified")
 	case errors.Is(err, ErrInvalidInput):
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_exam", "exam input is invalid")
+	case errors.Is(err, ErrRevisionConflict):
+		httpx.Error(w, r, http.StatusConflict, "resource_version_conflict", "exam was changed by another user; refresh and retry")
+	case errors.Is(err, ErrScopeForbidden):
+		httpx.Error(w, r, http.StatusForbidden, "access_scope_forbidden", "exam is outside the assigned data scope")
 	default:
 		httpx.Error(w, r, http.StatusInternalServerError, "exam_operation_failed", "exam operation failed")
 	}
@@ -164,6 +228,14 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 func mustUser(r *http.Request) auth.User {
 	user, _ := auth.UserFromContext(r.Context())
 	return user
+}
+
+func mustAccessScope(w http.ResponseWriter, r *http.Request) (auth.AccessScope, bool) {
+	scope, ok := auth.AccessScopeFromContext(r.Context())
+	if !ok {
+		httpx.Error(w, r, http.StatusForbidden, "access_scope_missing", "no valid data access scope is assigned")
+	}
+	return scope, ok
 }
 
 func (h *Handler) auditAction(r *http.Request, action string, targetType string, targetID string, reason string) {

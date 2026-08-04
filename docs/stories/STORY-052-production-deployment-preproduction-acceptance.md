@@ -218,7 +218,7 @@ preflight
 - `.env.example` 明确为 `EDUGRADE_ENV=local`，与 production-like 安全启动门禁保持一致。
 - Dockerfile 基础镜像支持通过 `EDUGRADE_*_IMAGE` 切换企业 mirror 或离线镜像。
 - 新增 migration tracking：记录 filename、SHA-256、applied_at；已应用文件校验后跳过，校验和变化拒绝部署。
-- 旧数据库没有 migration history 时默认拒绝自动 baseline，必须显式使用 `-BaselineExistingMigrations`。
+- 旧数据库没有 migration history 时默认拒绝自动 baseline；仅支持显式 `-MigrationBaselineVersion 000020`，且必须先通过 000020 Schema 指纹校验。
 - `init.ps1` 增加预检、健康等待、可重复 migration、bucket 初始化、可选 bootstrap、可选 worker profile 和 smoke。
 - `smoke-test.ps1` 验证 API、Nginx、backend proxy、Web、登录、HttpOnly Cookie、`/auth/me` 和受保护 readiness。
 - PostgreSQL backup 在容器内生成并用 `pg_restore --list` 校验，再以 `docker cp` 复制，避免文本管道损坏。

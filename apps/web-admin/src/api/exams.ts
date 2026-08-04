@@ -18,12 +18,15 @@ export interface Exam {
   publish_policy: string;
   created_by: string;
   class_ids: string[];
+  revision: number;
   created_at?: string;
 }
 
 export interface ExamListFilter {
   status?: string;
   school_id?: string;
+  limit?: number;
+  cursor?: string;
 }
 
 export interface ExamPayload {
@@ -46,12 +49,18 @@ function queryString(filter: ExamListFilter) {
   if (filter.school_id) {
     params.set("school_id", filter.school_id);
   }
+  if (filter.limit) {
+    params.set("limit", String(filter.limit));
+  }
+  if (filter.cursor) {
+    params.set("cursor", filter.cursor);
+  }
   const query = params.toString();
   return query ? `?${query}` : "";
 }
 
 export async function listExams(filter: ExamListFilter = {}) {
-  return apiClient.request<{ exams: Exam[] }>(`/api/v1/exams${queryString(filter)}`);
+  return apiClient.request<{ exams: Exam[]; next_cursor?: string; has_more?: boolean }>(`/api/v1/exams${queryString(filter)}`);
 }
 
 export async function getExam(id: string) {
@@ -65,22 +74,23 @@ export async function createExam(payload: ExamPayload) {
   });
 }
 
-export async function updateExam(id: string, payload: Partial<ExamPayload>) {
+export async function updateExam(id: string, payload: Partial<ExamPayload> & { expected_revision: number }) {
   return apiClient.request<{ exam: Exam }>(`/api/v1/exams/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify(payload)
   });
 }
 
-export async function updateExamStatus(id: string, status: string) {
+export async function updateExamStatus(id: string, status: string, expectedRevision: number) {
   return apiClient.request<{ exam: Exam }>(`/api/v1/exams/${encodeURIComponent(id)}/status`, {
     method: "POST",
-    body: JSON.stringify({ status })
+    body: JSON.stringify({ status, expected_revision: expectedRevision })
   });
 }
 
-export async function archiveExam(id: string) {
+export async function archiveExam(id: string, expectedRevision: number) {
   return apiClient.request<{ exam: Exam }>(`/api/v1/exams/${encodeURIComponent(id)}/archive`, {
-    method: "POST"
+    method: "POST",
+    body: JSON.stringify({ expected_revision: expectedRevision })
   });
 }

@@ -92,10 +92,16 @@ type FailTaskInput struct {
 	Retryable         bool   `json:"retryable"`
 }
 
+type TaskListFilter struct {
+	Limit           int
+	CursorCreatedAt time.Time
+	CursorID        string
+}
+
 type Store interface {
 	CreateTask(ctx context.Context, tenantID string, submissionID string, actorID string, input CreateTaskInput) (Task, error)
 	ListPending(ctx context.Context, tenantID string, limit int) ([]Task, error)
-	ListBySubmission(ctx context.Context, tenantID string, submissionID string) ([]Task, error)
+	ListBySubmission(ctx context.Context, tenantID string, submissionID string, filter TaskListFilter) ([]Task, error)
 	GetTask(ctx context.Context, tenantID string, id string) (Task, error)
 	StartTask(ctx context.Context, tenantID string, id string) (Task, error)
 	CompleteTask(ctx context.Context, tenantID string, id string, input CompleteTaskInput) (Task, error)

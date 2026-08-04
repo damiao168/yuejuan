@@ -16,14 +16,14 @@ type Store interface {
 	ListSandboxApprovals(ctx context.Context, tenantID string) ([]SandboxApproval, error)
 	CreateSandboxApproval(ctx context.Context, tenantID string, actorID string, input SandboxApprovalInput) (SandboxApproval, error)
 	RevokeSandboxApproval(ctx context.Context, tenantID string, actorID string, id string, reason string) (SandboxApproval, error)
-	ListEvaluationRuns(ctx context.Context, tenantID string) ([]EvaluationRun, error)
+	ListEvaluationRuns(ctx context.Context, tenantID string, filter EvaluationListFilter) ([]EvaluationRun, error)
 	CreateEvaluationRun(ctx context.Context, tenantID string, actorID string, input EvaluationRunInput) (EvaluationRun, error)
 	AddEvaluationCandidate(ctx context.Context, tenantID string, actorID string, runID string, input EvaluationCandidateInput) (EvaluationCandidate, error)
 	CompleteEvaluationRun(ctx context.Context, tenantID string, actorID string, runID string, reason string) (EvaluationRun, error)
 	InvalidateEvaluationRun(ctx context.Context, tenantID string, actorID string, runID string, reason string) (EvaluationRun, error)
 	ListModelApprovals(ctx context.Context, tenantID string) ([]ModelApproval, error)
 	CreateModelApproval(ctx context.Context, tenantID string, actorID string, input ModelApprovalInput) (ModelApproval, error)
-	RevokeModelApproval(ctx context.Context, tenantID string, actorID string, id string, reason string) (ModelApproval, error)
+	RevokeModelApproval(ctx context.Context, tenantID string, actorID string, id string, input ModelApprovalRevokeInput) (ModelApproval, error)
 }
 
 func ProviderFromInput(input ProviderInput) Provider {

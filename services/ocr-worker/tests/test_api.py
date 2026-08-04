@@ -42,7 +42,7 @@ class APITests(unittest.TestCase):
             client.download("https://attacker.invalid/collect")
 
     @patch("ocr_worker.api.request.urlopen", return_value=FakeResponse())
-    def test_target_tenant_header_is_sent_for_claimed_task_requests(self, urlopen):
+    def test_claimed_task_capability_is_sent_without_caller_selected_tenant(self, urlopen):
         client = EduGradeClient(
             base_url="http://api-gateway:8080",
             tenant_code="platform",
@@ -51,10 +51,15 @@ class APITests(unittest.TestCase):
             token="worker-token",
         )
 
+        client.activate_task({"id": "runtime-1", "lease_token": "lease-1"}, "worker-1")
         client.start_task("task-1", "tenant-1")
 
         req = urlopen.call_args.args[0]
-        self.assertEqual(req.headers["X-edugrade-tenant-id"], "tenant-1")
+        self.assertEqual(req.headers["X-edugrade-worker-task-id"], "runtime-1")
+        self.assertEqual(req.headers["X-edugrade-worker-lease-token"], "lease-1")
+        self.assertEqual(req.headers["X-edugrade-worker-service"], "ocr-worker")
+        self.assertEqual(req.headers["X-edugrade-worker-instance-id"], "worker-1")
+        self.assertNotIn("X-edugrade-tenant-id", req.headers)
 
 
 if __name__ == "__main__":

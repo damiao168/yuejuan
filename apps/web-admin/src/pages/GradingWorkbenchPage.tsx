@@ -483,6 +483,9 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
   const [tasks, setTasks] = useState<ReviewTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [loadingTasks, setLoadingTasks] = useState(true);
+  const [loadingMoreTasks, setLoadingMoreTasks] = useState(false);
+  const [nextTaskCursor, setNextTaskCursor] = useState("");
+  const [hasMoreTasks, setHasMoreTasks] = useState(false);
   const [taskError, setTaskError] = useState<string | null>(null);
   const [graders, setGraders] = useState<ManagedUser[]>([]);
   const [gradersError, setGradersError] = useState<string | null>(null);
@@ -679,23 +682,51 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     try {
       const result = await listReviewTasks({
         ...(personalScope ? { assigned_to: currentUserId } : {}),
-        ...(initialExamId ? { exam_id: initialExamId } : {})
+        ...(initialExamId ? { exam_id: initialExamId } : {}),
+        limit: 50
       });
       if (requestId !== taskListRequestRef.current) return;
       const scopedTasks = initialExamId ? result.tasks.filter((task) => task.exam_id === initialExamId) : result.tasks;
       setTasks(scopedTasks);
+      setNextTaskCursor(result.next_cursor ?? "");
+      setHasMoreTasks(Boolean(result.has_more));
       setSelectedTaskId((current) => scopedTasks.some((task) => task.id === current)
         ? current
         : scopedTasks.find((task) => ["assigned", "in_progress", "returned"].includes(task.status))?.id || "");
     } catch (currentError) {
       if (requestId !== taskListRequestRef.current) return;
       setTasks([]);
+      setNextTaskCursor("");
+      setHasMoreTasks(false);
       setSelectedTaskId("");
       setTaskError(formatError(currentError));
     } finally {
       if (requestId === taskListRequestRef.current) setLoadingTasks(false);
     }
   }, [currentUserId, initialExamId, personalScope]);
+
+  const loadMoreTasks = useCallback(async () => {
+    if (!hasMoreTasks || !nextTaskCursor || loadingMoreTasks) return;
+    setLoadingMoreTasks(true);
+    try {
+      const result = await listReviewTasks({
+        ...(personalScope ? { assigned_to: currentUserId } : {}),
+        ...(initialExamId ? { exam_id: initialExamId } : {}),
+        limit: 50,
+        cursor: nextTaskCursor
+      });
+      setTasks((current) => {
+        const known = new Set(current.map((task) => task.id));
+        return [...current, ...result.tasks.filter((task) => !known.has(task.id))];
+      });
+      setNextTaskCursor(result.next_cursor ?? "");
+      setHasMoreTasks(Boolean(result.has_more));
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setLoadingMoreTasks(false);
+    }
+  }, [currentUserId, hasMoreTasks, initialExamId, loadingMoreTasks, message, nextTaskCursor, personalScope]);
 
   const loadGraders = useCallback(async () => {
     if (!canManageTasks) {
@@ -704,7 +735,7 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
       return;
     }
     try {
-      const result = await listManagedUsers();
+      const result = await listManagedUsers({ limit: 200 });
       const available = result.users.filter((user) => user.status === "active" && user.roles.includes("grader"));
       setGraders(available);
       setGradersError(available.length ? null : "当前没有可分配的有效阅卷员账号");
@@ -1008,7 +1039,8 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
           private_note: draft.privateNote,
           student_feedback: draft.studentFeedback,
           viewer_state: { mode: viewerMode, scale, rotation, offset, fit: autoFit },
-          expected_revision: draftRevision
+          expected_revision: draftRevision,
+          client_updated_at: new Date().toISOString()
         });
         setDraftRevision(result.draft.revision);
         lastSavedDraft.current = snapshot;
@@ -1031,6 +1063,8 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     prefetchedTaskRef.current.clear();
     prefetchedPreviewRef.current.clear();
     setTasks([]);
+    setNextTaskCursor("");
+    setHasMoreTasks(false);
     setSelectedTaskId("");
     setAssignmentTaskIds([]);
     setCtx(null);
@@ -1230,6 +1264,7 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
   const assignSelectedTasks = async () => {
     const available = new Set(assignableTasks.map((task) => task.id));
     const taskIds = assignmentTaskIds.filter((taskId) => available.has(taskId));
+    const selectedTasks = assignableTasks.filter((task) => taskIds.includes(task.id));
     if (!assignmentUserId || taskIds.length === 0) {
       message.warning("请选择阅卷员和需要分配的任务");
       return;
@@ -1237,8 +1272,8 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     setActioning("assign-tasks");
     try {
       const updated = taskIds.length === 1
-        ? [(await assignReviewTask(taskIds[0], assignmentUserId)).task]
-        : (await batchAssignReviewTasks(taskIds, assignmentUserId)).tasks;
+        ? [(await assignReviewTask(selectedTasks[0].id, assignmentUserId, selectedTasks[0].revision)).task]
+        : (await batchAssignReviewTasks(selectedTasks, assignmentUserId)).tasks;
       const updatedById = new Map(updated.map((task) => [task.id, task]));
       setTasks((current) => current.map((task) => updatedById.get(task.id) ?? task));
       setCtx((current) => current && updatedById.has(current.task.id)
@@ -1297,6 +1332,7 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
           .filter(([, value]) => Number(value) > 0)
           .map(([point_id, value]) => ({ point_id, score: Number(value) }));
         await submitHumanGrade(submittedTaskId, {
+          expected_revision: ctx.task.revision,
           score,
           rubric_selections: selections,
           comments: draft.comments,
@@ -1333,7 +1369,7 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
     await runAction(
       "return",
       async () => {
-        await returnReviewTask(ctx.task.id, reason);
+        await returnReviewTask(ctx.task.id, reason, ctx.task.revision);
         await refreshCurrent();
       },
       "已标记争议并退回重评"
@@ -1939,6 +1975,11 @@ export function GradingWorkbenchPage({ canWork, canManageTasks, canViewOriginalI
             ) : (
               <List
                 dataSource={filteredTasks}
+                loadMore={hasMoreTasks ? (
+                  <div className="grading-task-load-more">
+                    <Button loading={loadingMoreTasks} onClick={() => void loadMoreTasks()}>加载更多</Button>
+                  </div>
+                ) : null}
                 renderItem={(task) => (
                   <List.Item
                     className={task.id === selectedTaskId ? "grading-task-item active" : "grading-task-item"}

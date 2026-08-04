@@ -3,8 +3,12 @@ package exam
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+
+	"edugrade-enterprise/services/api-gateway/internal/auth"
 )
 
 type PostgresStore struct {
@@ -15,7 +19,11 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 	return &PostgresStore{db: db}
 }
 
-func (s *PostgresStore) CreateExam(ctx context.Context, tenantID string, createdBy string, input CreateInput) (Exam, error) {
+func (s *PostgresStore) CreateExam(ctx context.Context, scope auth.AccessScope, createdBy string, input CreateInput) (Exam, error) {
+	if !scopeAllowsRequestedClasses(scope, input.SchoolID, input.ClassIDs) {
+		return Exam{}, ErrScopeForbidden
+	}
+	tenantID := scope.TenantID
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Exam{}, err
@@ -31,7 +39,7 @@ INSERT INTO exam (tenant_id, school_id, name, subject, exam_type, total_score, s
 SELECT $1, school.id, $3, $4, $5, $6, 'draft', $7, $8, $9, $10
 FROM school
 WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
-RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text, created_at, updated_at
+RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text, revision, created_at, updated_at
 `, tenantID, input.SchoolID, input.Name, input.Subject, input.ExamType, input.TotalScore, input.GradingMode, appealEnabled, input.PublishPolicy, createdBy)
 	var out Exam
 	if err := scanExam(row, &out); err != nil {
@@ -40,7 +48,7 @@ RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, 
 		}
 		return Exam{}, err
 	}
-	if err := s.replaceClasses(ctx, tx, tenantID, out.ID, input.ClassIDs); err != nil {
+	if err := s.replaceClasses(ctx, tx, scope, out.ID, input.ClassIDs); err != nil {
 		return Exam{}, err
 	}
 	out.ClassIDs = cloneStrings(input.ClassIDs)
@@ -50,21 +58,34 @@ RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, 
 	return out, nil
 }
 
-func (s *PostgresStore) ListExams(ctx context.Context, tenantID string, filter ListFilter) ([]Exam, error) {
+func (s *PostgresStore) ListExams(ctx context.Context, scope auth.AccessScope, filter ListFilter) ([]Exam, error) {
 	query := `
-SELECT id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text, created_at, updated_at
-FROM exam
-WHERE tenant_id = $1 AND deleted_at IS NULL`
-	args := []any{tenantID}
+SELECT e.id::text, e.tenant_id::text, e.school_id::text, e.name, e.subject, e.exam_type,
+       e.total_score::float8, e.status, e.grading_mode, e.appeal_enabled, e.publish_policy,
+       e.created_by::text, e.revision, e.created_at, e.updated_at,
+       COALESCE(array_agg(DISTINCT ec.class_id::text) FILTER (WHERE ec.class_id IS NOT NULL), '{}')
+FROM exam e
+LEFT JOIN exam_class ec ON ec.tenant_id=e.tenant_id AND ec.exam_id=e.id AND ec.deleted_at IS NULL
+WHERE e.tenant_id = $1 AND e.deleted_at IS NULL
+  AND (` + examScopePredicate("e", "ec") + `)`
+	args := scopeQueryArgs(scope)
 	if filter.Status != "" {
-		query += ` AND status = $2`
+		query += fmt.Sprintf(` AND e.status = $%d`, len(args)+1)
 		args = append(args, filter.Status)
 	}
 	if filter.SchoolID != "" {
-		query += fmt.Sprintf(` AND school_id = $%d`, len(args)+1)
+		query += fmt.Sprintf(` AND e.school_id::text = $%d`, len(args)+1)
 		args = append(args, filter.SchoolID)
 	}
-	query += ` ORDER BY created_at DESC`
+	if !filter.CursorAt.IsZero() && filter.CursorID != "" {
+		query += fmt.Sprintf(` AND (e.created_at, e.id) < ($%d, $%d::uuid)`, len(args)+1, len(args)+2)
+		args = append(args, filter.CursorAt, filter.CursorID)
+	}
+	query += ` GROUP BY e.id ORDER BY e.created_at DESC, e.id DESC`
+	if filter.Limit > 0 {
+		query += fmt.Sprintf(` LIMIT $%d`, len(args)+1)
+		args = append(args, filter.Limit)
+	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -73,36 +94,52 @@ WHERE tenant_id = $1 AND deleted_at IS NULL`
 	out := []Exam{}
 	for rows.Next() {
 		var item Exam
-		if err := scanExam(rows, &item); err != nil {
+		if err := scanExamWithClasses(rows, &item); err != nil {
 			return nil, err
 		}
-		item.ClassIDs, _ = s.classIDs(ctx, tenantID, item.ID)
 		out = append(out, item)
 	}
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) GetExam(ctx context.Context, tenantID string, id string) (Exam, error) {
+func (s *PostgresStore) GetExam(ctx context.Context, scope auth.AccessScope, id string) (Exam, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text, created_at, updated_at
-FROM exam
-WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
-`, tenantID, id)
+SELECT e.id::text, e.tenant_id::text, e.school_id::text, e.name, e.subject, e.exam_type,
+       e.total_score::float8, e.status, e.grading_mode, e.appeal_enabled, e.publish_policy,
+       e.created_by::text, e.revision, e.created_at, e.updated_at,
+       COALESCE(array_agg(DISTINCT ec.class_id::text) FILTER (WHERE ec.class_id IS NOT NULL), '{}')
+FROM exam e
+LEFT JOIN exam_class ec ON ec.tenant_id=e.tenant_id AND ec.exam_id=e.id AND ec.deleted_at IS NULL
+WHERE e.tenant_id = $1 AND e.id::text = $6 AND e.deleted_at IS NULL
+  AND (`+examScopePredicate("e", "ec")+`)
+GROUP BY e.id
+`, append(scopeQueryArgs(scope), id)...)
 	var out Exam
-	if err := scanExam(row, &out); err != nil {
+	if err := scanExamWithClasses(row, &out); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Exam{}, ErrNotFound
 		}
 		return Exam{}, err
 	}
-	out.ClassIDs, _ = s.classIDs(ctx, tenantID, id)
 	return out, nil
 }
 
-func (s *PostgresStore) UpdateExam(ctx context.Context, tenantID string, id string, input UpdateInput) (Exam, error) {
-	current, err := s.GetExam(ctx, tenantID, id)
+func (s *PostgresStore) UpdateExam(ctx context.Context, scope auth.AccessScope, id string, input UpdateInput) (Exam, error) {
+	if input.ExpectedRevision <= 0 {
+		return Exam{}, ErrRevisionConflict
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Exam{}, err
+	}
+	defer tx.Rollback()
+
+	current, err := s.getExamForUpdate(ctx, tx, scope, id)
+	if err != nil {
+		return Exam{}, err
+	}
+	if current.Revision != input.ExpectedRevision {
+		return Exam{}, ErrRevisionConflict
 	}
 	if IsCoreLocked(current.Status) {
 		return Exam{}, ErrLocked
@@ -132,27 +169,35 @@ func (s *PostgresStore) UpdateExam(ctx context.Context, tenantID string, id stri
 	if input.PublishPolicy != nil {
 		merged.PublishPolicy = *input.PublishPolicy
 	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Exam{}, err
+	classIDs := current.ClassIDs
+	if input.ClassIDs != nil {
+		classIDs = *input.ClassIDs
 	}
-	defer tx.Rollback()
-	if err := s.requireSchoolInTenant(ctx, tx, tenantID, merged.SchoolID); err != nil {
+	if !scopeAllowsRequestedClasses(scope, merged.SchoolID, classIDs) {
+		return Exam{}, ErrScopeForbidden
+	}
+	if err := s.requireSchoolInTenant(ctx, tx, scope.TenantID, merged.SchoolID); err != nil {
 		return Exam{}, err
 	}
 	row := tx.QueryRowContext(ctx, `
 UPDATE exam
-SET school_id = $3, name = $4, subject = $5, exam_type = $6, total_score = $7, grading_mode = $8, appeal_enabled = $9, publish_policy = $10, updated_at = now()
-WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
-RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text, created_at, updated_at
-`, tenantID, id, merged.SchoolID, merged.Name, merged.Subject, merged.ExamType, merged.TotalScore, merged.GradingMode, merged.AppealEnabled, merged.PublishPolicy)
+SET school_id = $3, name = $4, subject = $5, exam_type = $6, total_score = $7,
+    grading_mode = $8, appeal_enabled = $9, publish_policy = $10,
+    revision = revision + 1, updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $11 AND deleted_at IS NULL
+RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type,
+          total_score::float8, status, grading_mode, appeal_enabled, publish_policy,
+          created_by::text, revision, created_at, updated_at
+`, scope.TenantID, id, merged.SchoolID, merged.Name, merged.Subject, merged.ExamType, merged.TotalScore, merged.GradingMode, merged.AppealEnabled, merged.PublishPolicy, input.ExpectedRevision)
 	var out Exam
 	if err := scanExam(row, &out); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Exam{}, ErrRevisionConflict
+		}
 		return Exam{}, err
 	}
 	if input.ClassIDs != nil {
-		if err := s.replaceClasses(ctx, tx, tenantID, id, *input.ClassIDs); err != nil {
+		if err := s.replaceClasses(ctx, tx, scope, id, *input.ClassIDs); err != nil {
 			return Exam{}, err
 		}
 		out.ClassIDs = cloneStrings(*input.ClassIDs)
@@ -165,34 +210,54 @@ RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, 
 	return out, nil
 }
 
-func (s *PostgresStore) UpdateStatus(ctx context.Context, tenantID string, id string, status string) (Exam, error) {
-	current, err := s.GetExam(ctx, tenantID, id)
+func (s *PostgresStore) UpdateStatus(ctx context.Context, scope auth.AccessScope, id string, status string, expectedRevision int64) (Exam, error) {
+	if expectedRevision <= 0 {
+		return Exam{}, ErrRevisionConflict
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Exam{}, err
+	}
+	defer tx.Rollback()
+	current, err := s.getExamForUpdate(ctx, tx, scope, id)
+	if err != nil {
+		return Exam{}, err
+	}
+	if current.Revision != expectedRevision {
+		return Exam{}, ErrRevisionConflict
 	}
 	if !CanTransition(current.Status, status) {
 		return Exam{}, ErrInvalidTransition
 	}
-	row := s.db.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, `
 UPDATE exam
-SET status = $3, updated_at = now()
-WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
-RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, total_score::float8, status, grading_mode, appeal_enabled, publish_policy, created_by::text, created_at, updated_at
-`, tenantID, id, status)
+SET status = $3, revision = revision + 1, updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $4 AND deleted_at IS NULL
+RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type,
+          total_score::float8, status, grading_mode, appeal_enabled, publish_policy,
+          created_by::text, revision, created_at, updated_at
+`, scope.TenantID, id, status, expectedRevision)
 	var out Exam
 	if err := scanExam(row, &out); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Exam{}, ErrRevisionConflict
+		}
 		return Exam{}, err
 	}
 	out.ClassIDs = current.ClassIDs
+	if err := tx.Commit(); err != nil {
+		return Exam{}, err
+	}
 	return out, nil
 }
 
-func (s *PostgresStore) replaceClasses(ctx context.Context, tx *sql.Tx, tenantID string, examID string, classIDs []string) error {
+func (s *PostgresStore) replaceClasses(ctx context.Context, tx *sql.Tx, scope auth.AccessScope, examID string, classIDs []string) error {
+	tenantID := scope.TenantID
 	if _, err := tx.ExecContext(ctx, `DELETE FROM exam_class WHERE tenant_id = $1 AND exam_id = $2`, tenantID, examID); err != nil {
 		return err
 	}
 	for _, classID := range classIDs {
-		if err := s.requireClassInTenant(ctx, tx, tenantID, classID); err != nil {
+		if err := s.requireClassInScope(ctx, tx, scope, classID); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO exam_class (tenant_id, exam_id, class_id) VALUES ($1, $2, $3) ON CONFLICT (tenant_id, exam_id, class_id) DO NOTHING`, tenantID, examID, classID); err != nil {
@@ -215,21 +280,27 @@ WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 	return err
 }
 
-func (s *PostgresStore) requireClassInTenant(ctx context.Context, tx *sql.Tx, tenantID string, classID string) error {
-	var id string
+func (s *PostgresStore) requireClassInScope(ctx context.Context, tx *sql.Tx, scope auth.AccessScope, classID string) error {
+	var id, schoolID string
 	err := tx.QueryRowContext(ctx, `
-SELECT id::text
+SELECT id::text, school_id::text
 FROM school_class
 WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
-`, tenantID, classID).Scan(&id)
+`, scope.TenantID, classID).Scan(&id, &schoolID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrInvalidInput
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if !scope.TenantWide && !scope.AllowsClass(id) && !scope.AllowsSchool(schoolID) {
+		return ErrScopeForbidden
+	}
+	return nil
 }
 
-func (s *PostgresStore) classIDs(ctx context.Context, tenantID string, examID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT class_id::text FROM exam_class WHERE tenant_id = $1 AND exam_id = $2 ORDER BY created_at`, tenantID, examID)
+func (s *PostgresStore) classIDsTx(ctx context.Context, tx *sql.Tx, tenantID string, examID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT class_id::text FROM exam_class WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL ORDER BY created_at`, tenantID, examID)
 	if err != nil {
 		return nil, err
 	}
@@ -245,10 +316,115 @@ func (s *PostgresStore) classIDs(ctx context.Context, tenantID string, examID st
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) getExamForUpdate(ctx context.Context, tx *sql.Tx, scope auth.AccessScope, id string) (Exam, error) {
+	row := tx.QueryRowContext(ctx, `
+SELECT e.id::text, e.tenant_id::text, e.school_id::text, e.name, e.subject, e.exam_type,
+       e.total_score::float8, e.status, e.grading_mode, e.appeal_enabled, e.publish_policy,
+       e.created_by::text, e.revision, e.created_at, e.updated_at
+FROM exam e
+WHERE e.tenant_id=$1 AND e.id::text=$6 AND e.deleted_at IS NULL
+  AND (
+    $2::boolean
+    OR e.school_id::text IN (SELECT jsonb_array_elements_text($3::jsonb))
+    OR e.id::text IN (SELECT jsonb_array_elements_text($4::jsonb))
+    OR EXISTS (
+      SELECT 1 FROM exam_class scoped_ec
+      WHERE scoped_ec.tenant_id=e.tenant_id AND scoped_ec.exam_id=e.id AND scoped_ec.deleted_at IS NULL
+        AND scoped_ec.class_id::text IN (SELECT jsonb_array_elements_text($5::jsonb))
+    )
+  )
+FOR UPDATE
+`, append(scopeQueryArgs(scope), id)...)
+	var out Exam
+	if err := scanExam(row, &out); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Exam{}, ErrNotFound
+		}
+		return Exam{}, err
+	}
+	classIDs, err := s.classIDsTx(ctx, tx, scope.TenantID, id)
+	out.ClassIDs = classIDs
+	return out, err
+}
+
+func examScopePredicate(examAlias, classAlias string) string {
+	return `$2::boolean
+    OR ` + examAlias + `.school_id::text IN (SELECT jsonb_array_elements_text($3::jsonb))
+    OR ` + examAlias + `.id::text IN (SELECT jsonb_array_elements_text($4::jsonb))
+    OR ` + classAlias + `.class_id::text IN (SELECT jsonb_array_elements_text($5::jsonb))`
+}
+
+func scopeQueryArgs(scope auth.AccessScope) []any {
+	return []any{
+		scope.TenantID,
+		scope.TenantWide,
+		scopeIDsJSON(scope.SchoolIDs),
+		scopeIDsJSON(scope.ExamIDs),
+		scopeIDsJSON(scope.ClassIDs),
+	}
+}
+
+func scopeIDsJSON(ids []string) string {
+	raw, _ := json.Marshal(ids)
+	return string(raw)
+}
+
+func scopeAllowsRequestedClasses(scope auth.AccessScope, schoolID string, classIDs []string) bool {
+	if scope.TenantWide || scope.AllowsSchool(schoolID) {
+		return true
+	}
+	if len(classIDs) == 0 {
+		return false
+	}
+	for _, classID := range classIDs {
+		if !scope.AllowsClass(classID) {
+			return false
+		}
+	}
+	return true
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
 
 func scanExam(row scanner, out *Exam) error {
-	return row.Scan(&out.ID, &out.TenantID, &out.SchoolID, &out.Name, &out.Subject, &out.ExamType, &out.TotalScore, &out.Status, &out.GradingMode, &out.AppealEnabled, &out.PublishPolicy, &out.CreatedBy, &out.CreatedAt, &out.UpdatedAt)
+	return row.Scan(&out.ID, &out.TenantID, &out.SchoolID, &out.Name, &out.Subject, &out.ExamType, &out.TotalScore, &out.Status, &out.GradingMode, &out.AppealEnabled, &out.PublishPolicy, &out.CreatedBy, &out.Revision, &out.CreatedAt, &out.UpdatedAt)
 }
+
+func scanExamWithClasses(row scanner, out *Exam) error {
+	return row.Scan(&out.ID, &out.TenantID, &out.SchoolID, &out.Name, &out.Subject, &out.ExamType, &out.TotalScore, &out.Status, &out.GradingMode, &out.AppealEnabled, &out.PublishPolicy, &out.CreatedBy, &out.Revision, &out.CreatedAt, &out.UpdatedAt, examTextArray(&out.ClassIDs))
+}
+
+func examTextArray(target *[]string) any {
+	return examScannerFunc(func(src any) error {
+		if src == nil {
+			*target = nil
+			return nil
+		}
+		var text string
+		switch value := src.(type) {
+		case string:
+			text = value
+		case []byte:
+			text = string(value)
+		default:
+			return fmt.Errorf("unsupported PostgreSQL array type %T", src)
+		}
+		text = strings.Trim(text, "{}")
+		if text == "" {
+			*target = []string{}
+			return nil
+		}
+		parts := strings.Split(text, ",")
+		for i := range parts {
+			parts[i] = strings.Trim(parts[i], `"`)
+		}
+		*target = parts
+		return nil
+	})
+}
+
+type examScannerFunc func(any) error
+
+func (f examScannerFunc) Scan(src any) error { return f(src) }

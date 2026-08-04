@@ -74,16 +74,33 @@ func (s *MemoryStore) ListPending(_ context.Context, tenantID string, limit int)
 	return out, nil
 }
 
-func (s *MemoryStore) ListBySubmission(_ context.Context, tenantID string, submissionID string) ([]Task, error) {
+func (s *MemoryStore) ListBySubmission(_ context.Context, tenantID string, submissionID string, filter TaskListFilter) ([]Task, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []Task{}
 	for _, task := range s.tasks {
 		if task.TenantID == tenantID && task.SubmissionID == submissionID {
-			out = append(out, task)
+			task.Results = cloneOCRResults(s.results[task.ID])
+			out = append(out, cloneOCRTask(task))
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if !filter.CursorCreatedAt.IsZero() && filter.CursorID != "" {
+		start := 0
+		for start < len(out) && (out[start].CreatedAt.After(filter.CursorCreatedAt) ||
+			(out[start].CreatedAt.Equal(filter.CursorCreatedAt) && out[start].ID >= filter.CursorID)) {
+			start++
+		}
+		out = out[start:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
 	return out, nil
 }
 

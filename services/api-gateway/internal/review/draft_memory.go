@@ -52,7 +52,7 @@ func (s *MemoryStore) SaveDraft(_ context.Context, tenantID, taskID, reviewerID 
 		ID: id, ReviewTaskID: taskID, ReviewerID: reviewerID, Score: cloneScore(input.Score),
 		RubricSelections: append([]RubricSelection(nil), input.RubricSelections...),
 		Comments:         input.Comments, PrivateNote: input.PrivateNote, StudentFeedback: input.StudentFeedback,
-		ViewerState: cloneMap(input.ViewerState), Revision: revision, UpdatedAt: now,
+		ViewerState: cloneMap(input.ViewerState), Revision: revision, ClientUpdatedAt: input.ClientUpdatedAt, UpdatedAt: now,
 	}
 	s.drafts[draftID] = draft
 	return cloneReviewDraft(draft), nil

@@ -34,6 +34,7 @@ export interface SubmissionGrade {
   confirmed_at?: string;
   published_by?: string;
   published_at?: string;
+  revision: number;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -123,8 +124,24 @@ export async function finalizeExamGrades(examId: string) {
   });
 }
 
-export async function listExamGrades(examId: string) {
-  return apiClient.request<{ grades: SubmissionGrade[] }>(`/api/v1/exams/${encodeURIComponent(examId)}/grades`);
+export async function listExamGrades(
+  examId: string,
+  filter: { status?: string; q?: string; limit?: number; cursor?: string } = {}
+) {
+  const params = new URLSearchParams();
+  if (filter.status) params.set("status", filter.status);
+  if (filter.q) params.set("q", filter.q);
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.cursor) params.set("cursor", filter.cursor);
+  const query = params.toString();
+  return apiClient.request<{
+    grades: SubmissionGrade[];
+    total: number;
+    filtered_total: number;
+    all_locked: boolean;
+    next_cursor: string;
+    has_more: boolean;
+  }>(`/api/v1/exams/${encodeURIComponent(examId)}/grades${query ? `?${query}` : ""}`);
 }
 
 export async function checkExamGradeQuality(examId: string, stage: "confirmation" | "publish" = "publish") {

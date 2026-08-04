@@ -502,8 +502,9 @@ RETURNING id::text
 }
 
 func (c *apiClient) login(ctx context.Context, tenantCode, username, password string) error {
-	response, err := c.json(ctx, http.MethodPost, "/api/v1/auth/login", map[string]any{
+	response, err := c.json(ctx, http.MethodPost, "/api/v1/auth/token", map[string]any{
 		"tenant_code": tenantCode, "username": username, "password": password,
+		"client_type": "desktop", "device_name": "STORY-056 validation",
 	}, http.StatusOK)
 	if err != nil {
 		return err
@@ -559,7 +560,7 @@ func (c *apiClient) json(ctx context.Context, method, path string, body any, wan
 			return nil, fmt.Errorf("decode %s %s response: %w", method, path, err)
 		}
 	}
-	if path == "/api/v1/auth/login" && method == http.MethodPost {
+	if path == "/api/v1/auth/token" && method == http.MethodPost {
 		c.loginResponse = result
 	}
 	return result, nil

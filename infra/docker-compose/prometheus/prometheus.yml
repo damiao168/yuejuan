@@ -7,4 +7,7 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # API metrics are planned for STORY-038. Do not scrape /health as metrics.
+  - job_name: edugrade-api-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api-gateway:8080"]

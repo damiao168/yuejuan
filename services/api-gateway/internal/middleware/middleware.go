@@ -15,6 +15,8 @@ import (
 
 type Middleware func(http.Handler) http.Handler
 
+const CSRFHeaderName = "X-EduGrade-CSRF"
+
 func Chain(handler http.Handler, middlewares ...Middleware) http.Handler {
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		handler = middlewares[i](handler)
@@ -57,7 +59,11 @@ func BodyLimit(maxBytes int64, skip func(*http.Request) bool) Middleware {
 func CORS(allowedOrigins []string, allowedMethods []string, allowedHeaders []string) Middleware {
 	origins := normalizedSet(allowedOrigins)
 	methods := strings.Join(nonEmptyOrDefault(allowedMethods, []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}), ", ")
-	headers := strings.Join(nonEmptyOrDefault(allowedHeaders, []string{"Authorization", "Content-Type", "X-Request-ID", "X-Trace-ID"}), ", ")
+	headerValues := nonEmptyOrDefault(allowedHeaders, []string{"Authorization", "Content-Type", "X-Request-ID", "X-Trace-ID", "Idempotency-Key", CSRFHeaderName})
+	if !containsFold(headerValues, CSRFHeaderName) {
+		headerValues = append(headerValues, CSRFHeaderName)
+	}
+	headers := strings.Join(headerValues, ", ")
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := strings.TrimSpace(r.Header.Get("Origin"))
@@ -77,11 +83,40 @@ func CORS(allowedOrigins []string, allowedMethods []string, allowedHeaders []str
 			h.Set("Access-Control-Allow-Origin", origin)
 			h.Set("Access-Control-Allow-Methods", methods)
 			h.Set("Access-Control-Allow-Headers", headers)
+			h.Set("Access-Control-Expose-Headers", "Idempotency-Replayed, ETag, Location, X-Request-ID, X-Trace-ID")
 			h.Set("Access-Control-Allow-Credentials", "true")
 			h.Set("Access-Control-Max-Age", "600")
 			h.Add("Vary", "Origin")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// BrowserCSRF requires a non-simple request header for browser-originated
+// mutations. Cross-origin pages cannot attach this header unless their CORS
+// preflight is explicitly allowed, while bearer-authenticated workers and
+// non-browser API clients remain unaffected.
+func BrowserCSRF(sessionCookieName string) Middleware {
+	sessionCookieName = strings.TrimSpace(sessionCookieName)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !requestMayHaveBody(r.Method) || r.URL.Path == "/api/v1/auth/token" || strings.TrimSpace(r.Header.Get("Authorization")) != "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			_, cookieErr := r.Cookie(sessionCookieName)
+			browserRequest := cookieErr == nil || strings.TrimSpace(r.Header.Get("Origin")) != "" || strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")) != ""
+			if !browserRequest {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if r.Header.Get(CSRFHeaderName) != "1" {
+				httpx.Error(w, r, http.StatusForbidden, "csrf_validation_failed", "browser mutation requires CSRF protection")
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -145,6 +180,15 @@ func nonEmptyOrDefault(values []string, fallback []string) []string {
 	return out
 }
 
+func containsFold(values []string, expected string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), expected) {
+			return true
+		}
+	}
+	return false
+}
+
 func AccessLog(logg *logger.Logger, slowThresholds ...time.Duration) Middleware {
 	var slowThreshold time.Duration
 	if len(slowThresholds) > 0 {
@@ -167,15 +211,13 @@ func AccessLog(logg *logger.Logger, slowThresholds ...time.Duration) Middleware 
 			})
 			if slowThreshold > 0 && duration >= slowThreshold {
 				logg.Warn(r.Context(), "slow request observed", map[string]any{
-					"event":                         "slow_request",
-					"log_stream":                    "system",
-					"method":                        r.Method,
-					"path":                          r.URL.Path,
-					"status":                        rec.status,
-					"duration_ms":                   duration.Milliseconds(),
-					"threshold_ms":                  slowThreshold.Milliseconds(),
-					"slow_query_log_placeholder":    true,
-					"database_query_capture_status": "not_implemented",
+					"event":        "slow_request",
+					"log_stream":   "system",
+					"method":       r.Method,
+					"path":         r.URL.Path,
+					"status":       rec.status,
+					"duration_ms":  duration.Milliseconds(),
+					"threshold_ms": slowThreshold.Milliseconds(),
 				})
 			}
 		})

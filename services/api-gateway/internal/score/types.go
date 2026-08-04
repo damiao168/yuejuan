@@ -49,10 +49,26 @@ type SubmissionGrade struct {
 	ConfirmedAt   *time.Time   `json:"confirmed_at,omitempty"`
 	PublishedBy   string       `json:"published_by,omitempty"`
 	PublishedAt   *time.Time   `json:"published_at,omitempty"`
+	Revision      int64        `json:"revision"`
 	CreatedBy     string       `json:"created_by"`
 	CreatedAt     time.Time    `json:"created_at"`
 	UpdatedAt     time.Time    `json:"updated_at"`
 	Items         []FinalGrade `json:"items,omitempty"`
+}
+
+type GradeListFilter struct {
+	Status              string
+	Query               string
+	Limit               int
+	CursorAnonymousCode string
+	CursorID            string
+}
+
+type GradeListResult struct {
+	Grades        []SubmissionGrade
+	Total         int
+	FilteredTotal int
+	AllLocked     bool
 }
 
 type QualityIssue struct {
@@ -149,7 +165,7 @@ type ExportResult struct {
 
 type Store interface {
 	FinalizeExam(ctx context.Context, tenantID string, examID string, actorID string) (FinalizeResult, error)
-	ListExamGrades(ctx context.Context, tenantID string, examID string) ([]SubmissionGrade, error)
+	ListExamGrades(ctx context.Context, tenantID string, examID string, filter GradeListFilter) (GradeListResult, error)
 	CheckQuality(ctx context.Context, tenantID string, examID string, requirePendingPublish bool) (QualityReport, error)
 	ConfirmGrades(ctx context.Context, tenantID string, examID string, actorID string, input ConfirmInput) ([]SubmissionGrade, error)
 	PublishGrades(ctx context.Context, tenantID string, examID string, actorID string, input PublishInput) (PublishResult, error)

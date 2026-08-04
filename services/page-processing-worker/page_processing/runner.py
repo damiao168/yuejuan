@@ -49,6 +49,9 @@ class Runner:
         }
         for task in tasks:
             try:
+                activate_task = getattr(self.client, "activate_task", None)
+                if callable(activate_task):
+                    activate_task(task, self.config.worker_id)
                 handler = handlers.get(str(task.get("task_type") or ""))
                 if handler is None:
                     self.client.fail_task(task, "unsupported_page_processing_task", {"task_type": task.get("task_type")})

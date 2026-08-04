@@ -26,6 +26,7 @@ export interface AuditLogFilter {
   created_from?: string;
   created_to?: string;
   limit?: number;
+  cursor?: string;
 }
 
 function queryString(filter: AuditLogFilter) {
@@ -57,12 +58,15 @@ function queryString(filter: AuditLogFilter) {
   if (filter.limit) {
     params.set("limit", String(filter.limit));
   }
+  if (filter.cursor) {
+    params.set("cursor", filter.cursor);
+  }
   const query = params.toString();
   return query ? `?${query}` : "";
 }
 
 export async function listAuditLogs(filter: AuditLogFilter = {}) {
-  return apiClient.request<{ audit_logs: AuditLog[] }>(`/api/v1/audit-logs${queryString(filter)}`);
+  return apiClient.request<{ audit_logs: AuditLog[]; next_cursor: string; has_more: boolean }>(`/api/v1/audit-logs${queryString(filter)}`);
 }
 
 export async function exportAuditLogs(filter: AuditLogFilter = {}) {

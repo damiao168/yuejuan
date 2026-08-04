@@ -11,6 +11,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/pagination"
 )
 
 type Handler struct {
@@ -388,12 +389,33 @@ func (h *Handler) ListEvaluationRuns(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := h.store.ListEvaluationRuns(r.Context(), tenantID)
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 30, 100)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 100")
+		return
+	}
+	cursor, err := pagination.Decode(r.URL.Query().Get("cursor"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
+	items, err := h.store.ListEvaluationRuns(r.Context(), tenantID, EvaluationListFilter{
+		Limit: limit + 1, CursorCreatedAt: cursor.CreatedAt, CursorID: cursor.ID,
+	})
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "model_evaluation_list_failed", "failed to list model evaluations")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"evaluation_runs": items})
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		nextCursor = pagination.Encode(last.CreatedAt, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"evaluation_runs": items, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) CreateEvaluationRun(w http.ResponseWriter, r *http.Request) {
@@ -580,8 +602,8 @@ func (h *Handler) RevokeModelApproval(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrictJSON(w, r, &input) {
 		return
 	}
-	if strings.TrimSpace(input.Reason) == "" {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_model_approval_revocation", "revocation reason is required")
+	if strings.TrimSpace(input.Reason) == "" || input.ExpectedRevision < 1 {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_model_approval_revocation", "revocation reason and expected_revision are required")
 		return
 	}
 	tenantID, ok := h.targetTenant(w, r, r.URL.Query().Get("tenant_id"))
@@ -594,7 +616,7 @@ func (h *Handler) RevokeModelApproval(w http.ResponseWriter, r *http.Request) {
 		actorID = ""
 	}
 	item, err := h.store.RevokeModelApproval(
-		r.Context(), tenantID, actorID, r.PathValue("id"), input.Reason,
+		r.Context(), tenantID, actorID, r.PathValue("id"), input,
 	)
 	if err != nil {
 		writeStoreError(w, r, err, "model_approval_revoke_failed", "failed to revoke model approval")
@@ -670,6 +692,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error, code str
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_model_governance_request", "invalid model governance request")
 	case errors.Is(err, ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, "model_governance_not_found", "model governance resource not found")
+	case errors.Is(err, ErrRevisionConflict):
+		httpx.Error(w, r, http.StatusConflict, "resource_version_conflict", "resource was updated in another session; refresh and retry")
 	case errors.Is(err, ErrConflict):
 		httpx.Error(w, r, http.StatusConflict, "model_governance_conflict", "model governance resource conflict")
 	default:

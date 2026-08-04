@@ -846,7 +846,7 @@ func importDataset(
 		if _, createErr = client.json(ctx, http.MethodPost, "/api/v1/submissions/"+submissionID+"/quality-check", map[string]any{}, http.StatusOK); createErr != nil {
 			return importResult{}, fmt.Errorf("quality-check %s: %w", candidate.CandidateNo, createErr)
 		}
-		if _, createErr = client.json(ctx, http.MethodPost, "/api/v1/submissions/"+submissionID+"/status", map[string]any{"status": "ready_for_ocr"}, http.StatusOK); createErr != nil {
+		if _, createErr = client.json(ctx, http.MethodPost, "/api/v1/submissions/"+submissionID+"/status", map[string]any{"status": "ready_for_ocr", "expected_revision": 1}, http.StatusOK); createErr != nil {
 			return importResult{}, fmt.Errorf("mark %s ready for OCR: %w", candidate.CandidateNo, createErr)
 		}
 		segmentResponse, segmentErr := client.json(ctx, http.MethodPost, "/api/v1/submissions/"+submissionID+"/segment-answers", map[string]any{}, http.StatusOK)
@@ -1496,10 +1496,12 @@ SELECT id::text FROM exam WHERE tenant_id=$1::uuid AND name=$2 AND deleted_at IS
 }
 
 func (c *apiClient) login(ctx context.Context, tenantCode, username, password string) error {
-	response, err := c.json(ctx, http.MethodPost, "/api/v1/auth/login", map[string]any{
+	response, err := c.json(ctx, http.MethodPost, "/api/v1/auth/token", map[string]any{
 		"tenant_code": tenantCode,
 		"username":    username,
 		"password":    password,
+		"client_type": "desktop",
+		"device_name": "Fujian simulation importer",
 	}, http.StatusOK)
 	if err != nil {
 		return err
@@ -1549,7 +1551,7 @@ func (c *apiClient) json(ctx context.Context, method, path string, body any, wan
 			return nil, fmt.Errorf("decode %s %s response: %w", method, path, err)
 		}
 	}
-	if path == "/api/v1/auth/login" && method == http.MethodPost {
+	if path == "/api/v1/auth/token" && method == http.MethodPost {
 		c.loginResponse = result
 	}
 	return result, nil

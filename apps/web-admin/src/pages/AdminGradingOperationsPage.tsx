@@ -4,6 +4,7 @@ import { ArrowRight, CircleAlert, RefreshCw, Search, ShieldCheck } from "lucide-
 import { ApiClientError } from "../api/client";
 import { listExams, type Exam } from "../api/exams";
 import { getScoringSummary, type ScoringSummary } from "../api/review";
+import { getAIGradingStatus, type AIGradingRuntimeStatus } from "../api/system";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
 import { examStatusLabels, examStatusTone, examSubjectLabel } from "../constants/examStatus";
@@ -45,6 +46,7 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
   const [error, setError] = useState<string>();
   const [warnings, setWarnings] = useState<string[]>([]);
   const [keyword, setKeyword] = useState("");
+  const [aiStatus, setAIStatus] = useState<AIGradingRuntimeStatus>();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -52,6 +54,8 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
     setWarnings([]);
     try {
       const examResult = await listExams();
+      const aiResult = await getAIGradingStatus().catch(() => undefined);
+      setAIStatus(aiResult?.ai_grading);
       const activeExams = examResult.exams.filter((exam) => !["archived", "published"].includes(exam.status));
       const summaries = await Promise.allSettled(activeExams.map((exam) => getScoringSummary(exam.id)));
       setOperations(activeExams.map((exam, index) => ({
@@ -103,6 +107,16 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
 
       {error ? <Alert type="error" showIcon message="部分数据刷新失败" description={error} /> : null}
       {warnings.map((warning) => <Alert key={warning} type="warning" showIcon message={warning} />)}
+      {aiStatus && (!aiStatus.available || aiStatus.mode === "mock") ? (
+        <Alert
+          type={aiStatus.mode === "mock" ? "warning" : "info"}
+          showIcon
+          message={aiStatus.mode === "mock" ? "当前为 Mock 演示模式" : "AI 阅卷未启用"}
+          description={aiStatus.mode === "mock"
+            ? "结果仅用于验证流程，不能作为正式评分结论；所有主观题仍需人工确认。"
+            : "主观题不会生成 AI 建议；客观题规则评分和人工阅卷不受影响。"}
+        />
+      ) : null}
 
       <section className="operations-metrics" aria-label="阅卷运营摘要">
         <div><span>阅卷中考试</span><strong>{metrics.active}</strong></div>

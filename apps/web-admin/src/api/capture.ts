@@ -55,6 +55,7 @@ export interface CaptureBatchDetail {
   batch: CaptureBatch;
   files: CaptureFile[];
   pages: CapturePage[];
+  processing_summaries: ProcessingSummary[];
 }
 
 export interface RegistrationRun {
@@ -93,8 +94,12 @@ export async function createCaptureBatch(examId: string, payload: { name: string
   return apiClient.request<{ batch: CaptureBatch }>(`/api/v1/exams/${encodeURIComponent(examId)}/capture-batches`, { method: "POST", body: JSON.stringify(payload) });
 }
 
-export async function listCaptureBatches(examId: string) {
-  return apiClient.request<{ batches: CaptureBatch[] }>(`/api/v1/exams/${encodeURIComponent(examId)}/capture-batches`);
+export async function listCaptureBatches(examId: string, filter: { limit?: number; cursor?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.cursor) params.set("cursor", filter.cursor);
+  const query = params.toString();
+  return apiClient.request<{ batches: CaptureBatch[]; next_cursor: string; has_more: boolean }>(`/api/v1/exams/${encodeURIComponent(examId)}/capture-batches${query ? `?${query}` : ""}`);
 }
 
 export async function getCaptureBatch(batchId: string) {

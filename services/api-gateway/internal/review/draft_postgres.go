@@ -10,7 +10,7 @@ import (
 func (s *PostgresStore) GetDraft(ctx context.Context, tenantID, taskID, reviewerID string) (ReviewDraft, error) {
 	return scanDraft(s.db.QueryRowContext(ctx, `
 SELECT d.id::text,d.review_task_id::text,d.reviewer_id::text,d.score::float8,
- d.rubric_selections,d.comments,d.private_note,d.student_feedback,d.viewer_state,d.revision,d.updated_at
+ d.rubric_selections,d.comments,d.private_note,d.student_feedback,d.viewer_state,d.revision,d.client_updated_at,d.updated_at
 FROM review_draft d JOIN review_task t ON t.tenant_id=d.tenant_id AND t.id=d.review_task_id
 WHERE d.tenant_id=$1::uuid AND d.review_task_id=$2::uuid AND d.reviewer_id=$3::uuid
  AND d.deleted_at IS NULL AND t.deleted_at IS NULL AND t.assigned_to=$3::uuid`, tenantID, taskID, reviewerID))
@@ -48,14 +48,14 @@ func (s *PostgresStore) SaveDraft(ctx context.Context, tenantID, taskID, reviewe
 		if input.ExpectedRevision != 0 {
 			return out, ErrRevisionConflict
 		}
-		out, err = scanDraft(tx.QueryRowContext(ctx, `INSERT INTO review_draft(tenant_id,review_task_id,reviewer_id,score,rubric_selections,comments,private_note,student_feedback,viewer_state) SELECT $1::uuid,t.id,$3::uuid,$4,$5::jsonb,$6,$7,$8,$9::jsonb FROM review_task t WHERE t.tenant_id=$1::uuid AND t.id=$2::uuid AND t.assigned_to=$3::uuid AND t.deleted_at IS NULL AND t.status IN ('pending','assigned','in_progress','returned') RETURNING id::text,review_task_id::text,reviewer_id::text,score::float8,rubric_selections,comments,private_note,student_feedback,viewer_state,revision,updated_at`, tenantID, taskID, reviewerID, input.Score, rubric, input.Comments, input.PrivateNote, input.StudentFeedback, viewer))
+		out, err = scanDraft(tx.QueryRowContext(ctx, `INSERT INTO review_draft(tenant_id,review_task_id,reviewer_id,score,rubric_selections,comments,private_note,student_feedback,viewer_state,client_updated_at) SELECT $1::uuid,t.id,$3::uuid,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10 FROM review_task t WHERE t.tenant_id=$1::uuid AND t.id=$2::uuid AND t.assigned_to=$3::uuid AND t.deleted_at IS NULL AND t.status IN ('pending','assigned','in_progress','returned') RETURNING id::text,review_task_id::text,reviewer_id::text,score::float8,rubric_selections,comments,private_note,student_feedback,viewer_state,revision,client_updated_at,updated_at`, tenantID, taskID, reviewerID, input.Score, rubric, input.Comments, input.PrivateNote, input.StudentFeedback, viewer, input.ClientUpdatedAt))
 	} else if err != nil {
 		return out, err
 	} else {
 		if current != input.ExpectedRevision {
 			return out, ErrRevisionConflict
 		}
-		out, err = scanDraft(tx.QueryRowContext(ctx, `UPDATE review_draft d SET score=$4,rubric_selections=$5::jsonb,comments=$6,private_note=$7,student_feedback=$8,viewer_state=$9::jsonb,revision=d.revision+1,updated_at=now() FROM review_task t WHERE d.tenant_id=$1::uuid AND d.review_task_id=$2::uuid AND d.reviewer_id=$3::uuid AND d.revision=$10 AND d.deleted_at IS NULL AND t.tenant_id=d.tenant_id AND t.id=d.review_task_id AND t.assigned_to=$3::uuid AND t.deleted_at IS NULL AND t.status IN ('pending','assigned','in_progress','returned') RETURNING d.id::text,d.review_task_id::text,d.reviewer_id::text,d.score::float8,d.rubric_selections,d.comments,d.private_note,d.student_feedback,d.viewer_state,d.revision,d.updated_at`, tenantID, taskID, reviewerID, input.Score, rubric, input.Comments, input.PrivateNote, input.StudentFeedback, viewer, input.ExpectedRevision))
+		out, err = scanDraft(tx.QueryRowContext(ctx, `UPDATE review_draft d SET score=$4,rubric_selections=$5::jsonb,comments=$6,private_note=$7,student_feedback=$8,viewer_state=$9::jsonb,client_updated_at=$11,revision=d.revision+1,updated_at=now() FROM review_task t WHERE d.tenant_id=$1::uuid AND d.review_task_id=$2::uuid AND d.reviewer_id=$3::uuid AND d.revision=$10 AND d.deleted_at IS NULL AND t.tenant_id=d.tenant_id AND t.id=d.review_task_id AND t.assigned_to=$3::uuid AND t.deleted_at IS NULL AND t.status IN ('pending','assigned','in_progress','returned') RETURNING d.id::text,d.review_task_id::text,d.reviewer_id::text,d.score::float8,d.rubric_selections,d.comments,d.private_note,d.student_feedback,d.viewer_state,d.revision,d.client_updated_at,d.updated_at`, tenantID, taskID, reviewerID, input.Score, rubric, input.Comments, input.PrivateNote, input.StudentFeedback, viewer, input.ExpectedRevision, input.ClientUpdatedAt))
 	}
 	if err != nil {
 		return out, err
@@ -69,7 +69,7 @@ func scanDraft(row draftScanner) (ReviewDraft, error) {
 	var out ReviewDraft
 	var score sql.NullFloat64
 	var rubric, viewer []byte
-	err := row.Scan(&out.ID, &out.ReviewTaskID, &out.ReviewerID, &score, &rubric, &out.Comments, &out.PrivateNote, &out.StudentFeedback, &viewer, &out.Revision, &out.UpdatedAt)
+	err := row.Scan(&out.ID, &out.ReviewTaskID, &out.ReviewerID, &score, &rubric, &out.Comments, &out.PrivateNote, &out.StudentFeedback, &viewer, &out.Revision, &out.ClientUpdatedAt, &out.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, ErrNotFound
 	}

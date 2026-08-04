@@ -314,6 +314,36 @@ func TestReadyUnhealthy(t *testing.T) {
 	}
 }
 
+func TestPublicHealthProbesAreAnonymousAndReadinessIsRedacted(t *testing.T) {
+	secret := "postgres://probe-user:probe-password@database.internal/edugrade"
+	router := NewRouter(testConfig(), logger.New(io.Discard, "error"), []deps.Checker{
+		deps.StaticChecker{CheckerName: "postgres", Err: errors.New(secret)},
+	}, testAuthStore(t), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
+
+	liveRequest := httptest.NewRequest(http.MethodGet, "/health/live", nil)
+	liveResponse := httptest.NewRecorder()
+	router.ServeHTTP(liveResponse, liveRequest)
+	if liveResponse.Code != http.StatusOK {
+		t.Fatalf("expected anonymous liveness status 200, got %d: %s", liveResponse.Code, liveResponse.Body.String())
+	}
+
+	readyRequest := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	readyResponse := httptest.NewRecorder()
+	router.ServeHTTP(readyResponse, readyRequest)
+	if readyResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected anonymous readiness status 503, got %d: %s", readyResponse.Code, readyResponse.Body.String())
+	}
+	body := readyResponse.Body.String()
+	if !strings.Contains(body, `"status":"not_ready"`) || !strings.Contains(body, `"name":"postgres"`) {
+		t.Fatalf("unexpected readiness body: %s", body)
+	}
+	for _, sensitive := range []string{secret, "probe-password", `"error":`, `"detail":`} {
+		if strings.Contains(body, sensitive) {
+			t.Fatalf("public readiness leaked sensitive dependency detail %q: %s", sensitive, body)
+		}
+	}
+}
+
 func TestSystemStatusIncludesDependencyAndObservabilityState(t *testing.T) {
 	router := NewRouter(testConfig(), logger.New(io.Discard, "error"), []deps.Checker{
 		deps.StaticChecker{CheckerName: "postgres"},
@@ -337,10 +367,10 @@ func TestSystemStatusIncludesDependencyAndObservabilityState(t *testing.T) {
 		`"status":"not_configured"`,
 		`"name":"ai_service"`,
 		`"name":"ocr_worker"`,
-		`"availability":"unavailable"`,
+		`"availability":"not_configured"`,
 		`"automation_available":false`,
-		`"impact_code":"ocr_automation_unavailable"`,
-		`"slow_query_log":"placeholder_not_implemented"`,
+		`"impact_code":"ocr_automation_not_configured"`,
+		`"slow_query_log":"enabled_without_sql_text_or_parameters"`,
 		`"request_id_header":"X-Request-ID"`,
 		`"trace_id_header":"X-Trace-ID"`,
 	} {
@@ -578,7 +608,7 @@ func TestNotFoundUsesUnifiedError(t *testing.T) {
 func serverLogin(t *testing.T, router http.Handler) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"tenant_code": "demo", "username": "teacher", "password": "secret123"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

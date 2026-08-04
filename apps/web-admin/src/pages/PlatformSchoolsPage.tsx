@@ -18,20 +18,46 @@ export function PlatformSchoolsPage() {
   const [form] = Form.useForm<CreateSchoolValues>();
   const [schools, setSchools] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState("");
+  const [hasMore, setHasMore] = useState(false);
   const [saving, setSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await listTenants();
+      const response = await listTenants({ limit: 50 });
       setSchools(response.tenants.filter((tenant) => tenant.code !== "platform"));
+      setNextCursor(response.next_cursor);
+      setHasMore(response.has_more);
     } catch {
       message.error("学校列表加载失败");
     } finally {
       setLoading(false);
     }
   }, [message]);
+
+  const loadMore = useCallback(async () => {
+    if (!hasMore || !nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const response = await listTenants({ limit: 50, cursor: nextCursor });
+      setSchools((current) => {
+        const byId = new Map(current.map((tenant) => [tenant.id, tenant]));
+        for (const tenant of response.tenants) {
+          if (tenant.code !== "platform") byId.set(tenant.id, tenant);
+        }
+        return [...byId.values()];
+      });
+      setNextCursor(response.next_cursor);
+      setHasMore(response.has_more);
+    } catch {
+      message.error("学校列表加载失败");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, loadingMore, message, nextCursor]);
 
   useEffect(() => {
     void load();
@@ -132,6 +158,11 @@ export function PlatformSchoolsPage() {
         pagination={false}
         locale={{ emptyText: "暂无学校" }}
       />
+      {hasMore ? (
+        <div className="load-more-row">
+          <Button loading={loadingMore} onClick={() => void loadMore()}>加载更多学校</Button>
+        </div>
+      ) : null}
 
       <Modal
         title={<Space><Building2 size={18} />新建学校</Space>}

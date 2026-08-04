@@ -28,7 +28,7 @@ idempotency_key, COALESCE(dedupe_key, ''), max_attempts, attempt_count,
 retry_backoff_seconds, not_before, COALESCE(lease_token, ''), lease_expires_at,
 COALESCE(leased_by, ''), COALESCE(worker_service, ''), COALESCE(worker_instance_id, ''),
 started_at, completed_at, cancelled_at, COALESCE(duration_ms, 0),
-COALESCE(error_code, ''), error_detail, COALESCE(created_by::text, ''), created_at, updated_at`
+COALESCE(error_code, ''), error_detail, COALESCE(created_by::text, ''), created_at, updated_at, revision`
 
 func (s *PostgresStore) CreateTask(ctx context.Context, tenantID string, actorID string, input CreateTaskInput) (Task, error) {
 	return createTask(ctx, s.db, tenantID, actorID, input)
@@ -98,7 +98,7 @@ func CreateSucceededTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, a
 UPDATE agent_worker_task
 SET status = 'succeeded', result = $3, result_schema_version = $4,
   result_payload_hash = $5, duration_ms = $6, completed_at = now(), updated_at = now(),
-  error_code = NULL, error_detail = '{}'
+  error_code = NULL, error_detail = '{}', revision = revision + 1
 WHERE tenant_id = $1 AND id = $2::uuid AND status = 'queued' AND attempt_count = 0
 RETURNING `+taskColumns, tenantID, task.ID, result, complete.ResultSchemaVersion, hash, complete.DurationMS)
 	return scanTask(row)
@@ -188,7 +188,7 @@ UPDATE agent_worker_task
 SET status = 'dead_letter', max_attempts = GREATEST(max_attempts, attempt_count),
   lease_token = NULL, lease_expires_at = NULL, leased_by = NULL,
   error_code = $3, error_detail = '{"reason":"max_attempts_exhausted"}'::jsonb,
-  completed_at = $4, updated_at = $4
+  completed_at = $4, updated_at = $4, revision = revision + 1
 WHERE tenant_id = $1 AND id = $2::uuid
 `, item.tenantID, item.id, errorCode, dbNow); err != nil {
 			return nil, err
@@ -253,7 +253,7 @@ WHERE tenant_id = $1 AND task_id = $2::uuid AND completed_at IS NULL
 UPDATE agent_worker_task
 SET status = 'leased', attempt_count = attempt_count + 1, not_before = NULL,
   lease_token = $3, lease_expires_at = $4, leased_by = $5,
-  worker_service = $6, worker_instance_id = $7, updated_at = $8
+  worker_service = $6, worker_instance_id = $7, updated_at = $8, revision = revision + 1
 WHERE tenant_id = $1 AND id = $2::uuid AND attempt_count < max_attempts
 RETURNING `+taskColumns,
 			item.tenantID, item.id, token, expires, input.WorkerService+":"+input.WorkerInstanceID,
@@ -312,7 +312,7 @@ func (s *PostgresStore) Heartbeat(ctx context.Context, tenantID string, taskID s
 	row := tx.QueryRowContext(ctx, `
 UPDATE agent_worker_task
 SET status = 'running', started_at = COALESCE(started_at, $3),
-  lease_expires_at = $4, updated_at = $3
+  lease_expires_at = $4, updated_at = $3, revision = revision + 1
 WHERE tenant_id = $1 AND id = $2::uuid
 RETURNING `+taskColumns, tenantID, taskID, dbNow, expires)
 	task, err = scanTask(row)
@@ -393,7 +393,7 @@ func CompleteTaskInTx(ctx context.Context, tx *sql.Tx, tenantID string, taskID s
 UPDATE agent_worker_task
 SET status = 'succeeded', result = $3, result_schema_version = $4,
   result_payload_hash = $5, duration_ms = $6, completed_at = $7, updated_at = $7
-  , error_code = NULL, error_detail = '{}'
+  , error_code = NULL, error_detail = '{}', revision = revision + 1
 WHERE tenant_id = $1 AND id = $2::uuid
 RETURNING `+taskColumns, tenantID, taskID, result, input.ResultSchemaVersion, hash, input.DurationMS, dbNow)
 	task, err = scanTask(row)
@@ -463,7 +463,7 @@ SET status = $3, not_before = $4, lease_token = CASE WHEN $3 = 'queued' THEN NUL
   leased_by = CASE WHEN $3 = 'queued' THEN NULL ELSE leased_by END,
   error_code = $5, error_detail = $6, duration_ms = $7,
   completed_at = CASE WHEN $3 IN ('failed', 'dead_letter') THEN $8::timestamptz ELSE NULL END,
-  updated_at = $8
+  updated_at = $8, revision = revision + 1
 WHERE tenant_id = $1 AND id = $2::uuid
 RETURNING `+taskColumns, tenantID, taskID, status, notBefore, input.ErrorCode, detail, input.DurationMS, dbNow)
 	task, err = scanTask(row)
@@ -502,7 +502,7 @@ func (s *PostgresStore) Requeue(ctx context.Context, tenantID string, taskID str
 UPDATE agent_worker_task
 SET status = 'queued', not_before = NULL, lease_token = NULL, lease_expires_at = NULL,
   leased_by = NULL, completed_at = NULL,
-  max_attempts = GREATEST(max_attempts, attempt_count + 1), updated_at = now()
+  max_attempts = GREATEST(max_attempts, attempt_count + 1), updated_at = now(), revision = revision + 1
 WHERE tenant_id = $1 AND id = $2::uuid
 RETURNING `+taskColumns, tenantID, taskID)
 	task, err = scanTask(row)
@@ -519,6 +519,28 @@ func (s *PostgresStore) Get(ctx context.Context, tenantID string, taskID string)
 		return Task{}, err
 	}
 	task.Attempts, err = s.listAttempts(ctx, tenantID, taskID)
+	return task, err
+}
+
+func (s *PostgresStore) AuthorizeLease(ctx context.Context, taskID string, leaseToken string, workerService string, workerInstanceID string, now time.Time) (Task, error) {
+	if taskID == "" || leaseToken == "" || workerService == "" || workerInstanceID == "" {
+		return Task{}, ErrInvalidInput
+	}
+	row := s.db.QueryRowContext(ctx, `
+SELECT `+taskColumns+`
+FROM agent_worker_task
+WHERE id=$1::uuid
+  AND tenant_id IN (SELECT id FROM tenant WHERE status='active' AND deleted_at IS NULL)
+  AND lease_token=$2
+  AND worker_service=$3
+  AND worker_instance_id=$4
+  AND status IN ('leased','running')
+  AND lease_expires_at>$5
+`, taskID, leaseToken, workerService, workerInstanceID, now)
+	task, err := scanTask(row)
+	if errors.Is(err, ErrNotFound) {
+		return Task{}, ErrLeaseMismatch
+	}
 	return task, err
 }
 
@@ -631,7 +653,7 @@ func (s *PostgresStore) setTerminalStatus(ctx context.Context, tenantID string, 
 	}
 	row := tx.QueryRowContext(ctx, `
 UPDATE agent_worker_task
-SET status = $3, cancelled_at = now(), completed_at = now(), updated_at = now()
+SET status = $3, cancelled_at = now(), completed_at = now(), updated_at = now(), revision = revision + 1
 WHERE tenant_id = $1 AND id = $2::uuid
 RETURNING `+taskColumns, tenantID, taskID, status)
 	task, err = scanTask(row)
@@ -718,7 +740,7 @@ func scanTask(row rowScanner) (Task, error) {
 		&task.MaxAttempts, &task.AttemptCount, &task.RetryBackoffSeconds, &notBefore,
 		&task.LeaseToken, &leaseExpires, &task.LeasedBy, &task.WorkerService, &task.WorkerInstanceID,
 		&started, &completed, &cancelled, &task.DurationMS, &task.ErrorCode, &errorDetail,
-		&task.CreatedBy, &task.CreatedAt, &task.UpdatedAt,
+		&task.CreatedBy, &task.CreatedAt, &task.UpdatedAt, &task.Revision,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

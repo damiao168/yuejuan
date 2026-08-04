@@ -22,15 +22,19 @@ class EduGradeClient:
     username: str
     password: str
     token: str | None = None
+    worker_instance_id: str | None = None
+    current_task: dict[str, str] | None = None
 
     def login(self) -> None:
         response = self._request(
             "POST",
-            "/api/v1/auth/login",
+            "/api/v1/auth/token",
             {
                 "tenant_code": self.tenant_code,
                 "username": self.username,
                 "password": self.password,
+                "client_type": "service",
+                "device_name": "OCR Worker",
             },
             require_auth=False,
         )
@@ -45,6 +49,7 @@ class EduGradeClient:
         return tasks if isinstance(tasks, list) else []
 
     def claim_tasks(self, worker_instance_id: str, limit: int, lease_seconds: int) -> list[dict[str, Any]]:
+        self.worker_instance_id = worker_instance_id
         response = self._request(
             "POST",
             "/api/v1/internal/worker/tasks/claim",
@@ -59,6 +64,19 @@ class EduGradeClient:
         tasks = response.get("tasks", [])
         return tasks if isinstance(tasks, list) else []
 
+    def activate_task(self, task: dict[str, Any], worker_instance_id: str | None = None) -> None:
+        task_id = str(task.get("id") or "").strip()
+        lease_token = str(task.get("lease_token") or "").strip()
+        instance_id = str(worker_instance_id or self.worker_instance_id or "").strip()
+        if not task_id or not lease_token or not instance_id:
+            raise APIError("OCR task is missing its task capability")
+        self.current_task = {
+            "task_id": task_id,
+            "lease_token": lease_token,
+            "worker_service": "ocr-worker",
+            "worker_instance_id": instance_id,
+        }
+
     def heartbeat_task(
         self,
         runtime_task_id: str,
@@ -68,6 +86,12 @@ class EduGradeClient:
         timeout_seconds: float,
         tenant_id: str | None = None,
     ) -> None:
+        self.current_task = {
+            "task_id": runtime_task_id,
+            "lease_token": lease_token,
+            "worker_service": "ocr-worker",
+            "worker_instance_id": worker_instance_id,
+        }
         self._request(
             "POST",
             f"/api/v1/internal/worker/tasks/{runtime_task_id}/heartbeat",
@@ -79,7 +103,6 @@ class EduGradeClient:
                 "lease_seconds": lease_seconds,
             },
             timeout=timeout_seconds,
-            tenant_id=tenant_id,
         )
 
     def start_task(self, task_id: str, tenant_id: str | None = None) -> None:
@@ -168,9 +191,18 @@ class EduGradeClient:
             headers["Content-Type"] = "application/json"
         if require_auth and self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        if tenant_id:
-            headers["X-EduGrade-Tenant-ID"] = tenant_id
+            if self.current_task:
+                headers.update(_task_capability_headers(self.current_task))
         return request.Request(url, data=body, headers=headers, method=method)
+
+
+def _task_capability_headers(task: dict[str, str]) -> dict[str, str]:
+    return {
+        "X-EduGrade-Worker-Task-ID": task["task_id"],
+        "X-EduGrade-Worker-Lease-Token": task["lease_token"],
+        "X-EduGrade-Worker-Service": task["worker_service"],
+        "X-EduGrade-Worker-Instance-ID": task["worker_instance_id"],
+    }
 
 
 def _trusted_service_url(base_url: str, path_or_url: str) -> str:

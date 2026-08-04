@@ -12,7 +12,9 @@ RUN npm ci --workspace apps/web-admin --include-workspace-root
 
 COPY apps/web-admin apps/web-admin
 ARG VITE_API_BASE_URL=
+ARG VITE_RELEASE_ID=local
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+ENV VITE_RELEASE_ID=${VITE_RELEASE_ID}
 RUN npm --workspace apps/web-admin run build
 
 FROM ${WEB_RUNTIME_IMAGE}

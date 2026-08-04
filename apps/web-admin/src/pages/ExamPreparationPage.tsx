@@ -47,7 +47,7 @@ export function ExamStudentScopePage({ examId, canManage, onExamChanged }: { exa
     if (!exam || !selected.length) { message.error("至少选择一个班级"); return; }
     setSaving(true);
     try {
-      const response = await updateExam(exam.id, { class_ids: selected });
+      const response = await updateExam(exam.id, { class_ids: selected, expected_revision: exam.revision });
       setExam(response.exam);
       onExamChanged?.();
       message.success("学生范围已保存；开考准备需要重新确认。");

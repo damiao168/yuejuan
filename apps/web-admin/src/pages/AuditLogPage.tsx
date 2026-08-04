@@ -250,9 +250,12 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
   const [keyword, setKeyword] = useState("");
   const [lastWatermark, setLastWatermark] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState("");
+  const [hasMore, setHasMore] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<AuditLogFilter>({ limit: 200 });
+  const [filter, setFilter] = useState<AuditLogFilter>({});
 
   const pendingFilter = useMemo<AuditLogFilter>(
     () => ({
@@ -260,8 +263,7 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
       actor_id: actorFilter.trim() || undefined,
       exam_id: examFilter || undefined,
       created_from: createdFrom || undefined,
-      created_to: createdTo || undefined,
-      limit: 200
+      created_to: createdTo || undefined
     }),
     [actionFilter, actorFilter, createdFrom, createdTo, examFilter]
   );
@@ -321,7 +323,7 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
 
   useEffect(() => {
     let active = true;
-    listManagedUsers()
+    listManagedUsers({ limit: 200 })
       .then((result) => {
         if (active) {
           setUsers(result.users);
@@ -342,9 +344,11 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
     setLoading(true);
     setError(null);
     try {
-      const [auditResult, examResult] = await Promise.allSettled([listAuditLogs(filter), listExams()]);
+      const [auditResult, examResult] = await Promise.allSettled([listAuditLogs({ ...filter, limit: 50 }), listExams()]);
       if (auditResult.status === "fulfilled") {
         setLogs(auditResult.value.audit_logs);
+        setNextCursor(auditResult.value.next_cursor ?? "");
+        setHasMore(Boolean(auditResult.value.has_more));
       } else {
         throw auditResult.reason;
       }
@@ -353,11 +357,32 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
       }
     } catch (currentError) {
       setLogs([]);
+      setNextCursor("");
+      setHasMore(false);
       setError(formatError(currentError));
     } finally {
       setLoading(false);
     }
   }, [filter]);
+
+  const loadMoreLogs = useCallback(async () => {
+    if (!hasMore || !nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const result = await listAuditLogs({ ...filter, limit: 50, cursor: nextCursor });
+      setLogs((current) => {
+        const byID = new Map(current.map((item) => [item.id, item]));
+        result.audit_logs.forEach((item) => byID.set(item.id, item));
+        return Array.from(byID.values());
+      });
+      setNextCursor(result.next_cursor ?? "");
+      setHasMore(Boolean(result.has_more));
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [filter, hasMore, loadingMore, message, nextCursor]);
 
   useEffect(() => {
     void loadLogs();
@@ -377,7 +402,7 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
       onOk: async () => {
         setExporting(true);
         try {
-          const result = await exportAuditLogs(filter);
+          const result = await exportAuditLogs({ ...filter, limit: 200 });
           setLastWatermark(result.watermark ?? "");
           saveBlob(result.blob, result.filename ?? "audit-logs.csv");
           message.success("操作记录已导出");
@@ -486,15 +511,22 @@ export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPagePro
         {loading ? (
           <LoadingState label="正在读取操作记录" />
         ) : (
-          <ResponsiveTable
-            rowKey="id"
-            size="small"
-            columns={columns}
-            dataSource={filteredLogs}
-            pagination={{ pageSize: 12 }}
-            onRow={(record) => ({ onClick: () => openDetail(record) })}
-            locale={{ emptyText: <EmptyState title="暂无操作记录" description="当前筛选条件下没有操作记录，可放宽时间范围后重试。" /> }}
-          />
+          <>
+            <ResponsiveTable
+              rowKey="id"
+              size="small"
+              columns={columns}
+              dataSource={filteredLogs}
+              pagination={{ pageSize: 12 }}
+              onRow={(record) => ({ onClick: () => openDetail(record) })}
+              locale={{ emptyText: <EmptyState title="暂无操作记录" description="当前筛选条件下没有操作记录，可放宽时间范围后重试。" /> }}
+            />
+            {hasMore ? (
+              <Button block loading={loadingMore} onClick={() => void loadMoreLogs()}>
+                加载更多操作记录
+              </Button>
+            ) : null}
+          </>
         )}
       </section>
 

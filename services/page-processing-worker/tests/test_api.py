@@ -21,7 +21,7 @@ def test_upload_page_reuses_authorized_duplicate_asset() -> None:
 def test_login_error_preserves_status_and_retry_after() -> None:
     response = io.BytesIO(b'{"error":{"code":"login_rate_limited"}}')
     limited = error.HTTPError(
-        "http://api/api/v1/auth/login",
+        "http://api/api/v1/auth/token",
         429,
         "Too Many Requests",
         {"Retry-After": "17"},

@@ -664,6 +664,10 @@ body {
   margin-bottom: 10px;
 }
 
+.account-password-form {
+  max-width: 460px;
+}
+
 .school-dashboard {
   gap: 16px;
 }
@@ -3342,7 +3346,7 @@ select {
 
 .capture-summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -6994,4 +6998,9 @@ select {
   .immersive-workspace .grading-taskbar .ant-input-affix-wrapper {
     width: 100%;
   }
+}
+.load-more-row {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 4px;
 }

@@ -31,7 +31,7 @@ const checks = [
   {
     name: "role home",
     file: "apps/web-admin/src/pages/DashboardPage.tsx",
-    includes: ["我的待办", "正在进行的考试", "user.roles.includes(\"platform_admin\")", "listReviewTasks"]
+    includes: ["我的待办", "进行中的考试", "user.roles.includes(\"platform_admin\")", "getDashboardSummary"]
   },
   {
     name: "organization activation",

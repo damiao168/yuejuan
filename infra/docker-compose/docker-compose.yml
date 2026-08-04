@@ -99,7 +99,7 @@ services:
     profiles: ["tools"]
     environment:
       EDUGRADE_POSTGRES_DSN: ${EDUGRADE_POSTGRES_DSN}
-      EDUGRADE_MIGRATION_BASELINE_EXISTING: ${EDUGRADE_MIGRATION_BASELINE_EXISTING:-false}
+      EDUGRADE_MIGRATION_BASELINE_VERSION: ${EDUGRADE_MIGRATION_BASELINE_VERSION:-}
     volumes:
       - ../../services/api-gateway/migrations:/migrations:ro
     depends_on:
@@ -108,6 +108,18 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
+        lock_log="$$(mktemp)"
+        psql "$${EDUGRADE_POSTGRES_DSN}" -Atc "SELECT pg_advisory_lock(19770428061); SELECT 'edugrade_migration_lock_acquired'; SELECT pg_sleep(86400)" >"$${lock_log}" 2>&1 &
+        lock_pid="$$!"
+        cleanup_lock() { kill "$${lock_pid}" 2>/dev/null || true; wait "$${lock_pid}" 2>/dev/null || true; rm -f "$${lock_log}"; }
+        trap cleanup_lock EXIT INT TERM
+        acquired=false
+        for attempt in $$(seq 1 120); do
+          if grep -q edugrade_migration_lock_acquired "$${lock_log}"; then acquired=true; break; fi
+          if ! kill -0 "$${lock_pid}" 2>/dev/null; then cat "$${lock_log}" >&2; exit 44; fi
+          sleep 1
+        done
+        if [ "$${acquired}" != "true" ]; then echo "timed out acquiring migration advisory lock" >&2; exit 44; fi
         psql "$${EDUGRADE_POSTGRES_DSN}" -v ON_ERROR_STOP=1 -c "
           CREATE TABLE IF NOT EXISTS schema_migration (
             filename TEXT PRIMARY KEY,
@@ -117,17 +129,24 @@ services:
         tracked_count="$$(psql "$${EDUGRADE_POSTGRES_DSN}" -Atc "SELECT count(*) FROM schema_migration")"
         legacy_schema="$$(psql "$${EDUGRADE_POSTGRES_DSN}" -Atc "SELECT CASE WHEN to_regclass('public.tenant') IS NULL THEN 0 ELSE 1 END")"
         if [ "$${tracked_count}" = "0" ] && [ "$${legacy_schema}" = "1" ]; then
-          if [ "$${EDUGRADE_MIGRATION_BASELINE_EXISTING}" != "true" ]; then
-            echo "existing schema has no migration history; rerun once with EDUGRADE_MIGRATION_BASELINE_EXISTING=true after verifying the schema" >&2
+          if [ -z "$${EDUGRADE_MIGRATION_BASELINE_VERSION}" ]; then
+            echo "existing schema has no migration history; set an explicit EDUGRADE_MIGRATION_BASELINE_VERSION after verifying the schema" >&2
             exit 42
           fi
+          if [ "$${EDUGRADE_MIGRATION_BASELINE_VERSION}" != "000020" ]; then
+            echo "unsupported baseline version; this release has a verified fingerprint only for 000020" >&2
+            exit 42
+          fi
+          psql "$${EDUGRADE_POSTGRES_DSN}" -v ON_ERROR_STOP=1 -f /migrations/baseline/000020_fingerprint.sql
+          found_baseline=false
           for file in /migrations/*.sql; do
             filename="$$(basename "$${file}")"
             checksum="$$(sha256sum "$${file}" | awk '{print $$1}')"
             psql "$${EDUGRADE_POSTGRES_DSN}" -v ON_ERROR_STOP=1 -c "INSERT INTO schema_migration (filename, checksum) VALUES ('$${filename}', '$${checksum}') ON CONFLICT (filename) DO NOTHING"
             echo "baselined $${filename}"
+            case "$${filename}" in "$${EDUGRADE_MIGRATION_BASELINE_VERSION}"_*) found_baseline=true; break;; esac
           done
-          exit 0
+          if [ "$${found_baseline}" != "true" ]; then echo "baseline migration file not found" >&2; exit 42; fi
         fi
         for file in /migrations/*.sql; do
           filename="$$(basename "$${file}")"
@@ -172,6 +191,12 @@ services:
       args:
         GO_BUILD_IMAGE: ${EDUGRADE_GO_BUILD_IMAGE:-golang:1.26.5-alpine}
         API_RUNTIME_IMAGE: ${EDUGRADE_API_RUNTIME_IMAGE:-alpine:3.22}
+        APP_VERSION: ${EDUGRADE_APP_VERSION:-dev}
+        GIT_SHA: ${EDUGRADE_GIT_SHA:-unknown}
+        BUILD_TIME: ${EDUGRADE_BUILD_TIME:-unknown}
+        IMAGE_DIGEST: ${EDUGRADE_IMAGE_DIGEST:-unknown}
+        RELEASE_ID: ${EDUGRADE_RELEASE_ID:-local}
+        SCHEMA_VERSION: ${EDUGRADE_SCHEMA_VERSION:-000074}
     image: edugrade/api-gateway:${EDUGRADE_IMAGE_TAG:-local}
     container_name: edugrade-api-gateway
     environment:
@@ -183,6 +208,7 @@ services:
       EDUGRADE_READINESS_TIMEOUT: ${EDUGRADE_READINESS_TIMEOUT}
       EDUGRADE_SHUTDOWN_TIMEOUT: ${EDUGRADE_SHUTDOWN_TIMEOUT}
       EDUGRADE_SESSION_TTL: ${EDUGRADE_SESSION_TTL}
+      EDUGRADE_REMEMBERED_SESSION_TTL: ${EDUGRADE_REMEMBERED_SESSION_TTL:-720h}
       EDUGRADE_LOGIN_FAILURE_LIMIT: ${EDUGRADE_LOGIN_FAILURE_LIMIT}
       EDUGRADE_LOGIN_FAILURE_WINDOW: ${EDUGRADE_LOGIN_FAILURE_WINDOW}
       EDUGRADE_SESSION_COOKIE_NAME: ${EDUGRADE_SESSION_COOKIE_NAME}
@@ -197,22 +223,35 @@ services:
       EDUGRADE_CORS_ALLOWED_METHODS: ${EDUGRADE_CORS_ALLOWED_METHODS}
       EDUGRADE_CORS_ALLOWED_HEADERS: ${EDUGRADE_CORS_ALLOWED_HEADERS}
       EDUGRADE_POSTGRES_DSN: ${EDUGRADE_POSTGRES_DSN}
+      EDUGRADE_POSTGRES_DSN_FILE: ${EDUGRADE_POSTGRES_DSN_FILE:-}
       EDUGRADE_REDIS_ADDR: redis:6379
       EDUGRADE_REDIS_PASSWORD: ${EDUGRADE_REDIS_PASSWORD}
+      EDUGRADE_REDIS_PASSWORD_FILE: ${EDUGRADE_REDIS_PASSWORD_FILE:-}
       EDUGRADE_REDIS_DB: ${EDUGRADE_REDIS_DB}
       EDUGRADE_MINIO_ENDPOINT: minio:9000
       EDUGRADE_MINIO_ACCESS_KEY: ${EDUGRADE_MINIO_ACCESS_KEY}
       EDUGRADE_MINIO_SECRET_KEY: ${EDUGRADE_MINIO_SECRET_KEY}
+      EDUGRADE_MINIO_ACCESS_KEY_FILE: ${EDUGRADE_MINIO_ACCESS_KEY_FILE:-}
+      EDUGRADE_MINIO_SECRET_KEY_FILE: ${EDUGRADE_MINIO_SECRET_KEY_FILE:-}
       EDUGRADE_MINIO_USE_SSL: "false"
       EDUGRADE_FILE_BUCKET: ${EDUGRADE_FILE_BUCKET}
       EDUGRADE_FILE_MAX_UPLOAD_BYTES: ${EDUGRADE_FILE_MAX_UPLOAD_BYTES}
       EDUGRADE_FILE_ALLOWED_EXTENSIONS: ${EDUGRADE_FILE_ALLOWED_EXTENSIONS}
+      EDUGRADE_FILE_RECONCILIATION_INTERVAL: ${EDUGRADE_FILE_RECONCILIATION_INTERVAL:-24h}
+      EDUGRADE_FILE_RECONCILIATION_STALE_AFTER: ${EDUGRADE_FILE_RECONCILIATION_STALE_AFTER:-1h}
+      EDUGRADE_FILE_RECONCILIATION_BATCH_SIZE: ${EDUGRADE_FILE_RECONCILIATION_BATCH_SIZE:-200}
+      EDUGRADE_FILE_RECONCILIATION_OBJECT_LIMIT: ${EDUGRADE_FILE_RECONCILIATION_OBJECT_LIMIT:-1000}
       EDUGRADE_BARCODE_ACTIVE_KEY_ID: ${EDUGRADE_BARCODE_ACTIVE_KEY_ID}
       EDUGRADE_BARCODE_HMAC_KEYS: ${EDUGRADE_BARCODE_HMAC_KEYS}
+      EDUGRADE_BARCODE_HMAC_KEYS_FILE: ${EDUGRADE_BARCODE_HMAC_KEYS_FILE:-}
       EDUGRADE_QDRANT_URL: ${EDUGRADE_QDRANT_URL}
       EDUGRADE_QDRANT_API_KEY: ${EDUGRADE_QDRANT_API_KEY}
+      EDUGRADE_QDRANT_API_KEY_FILE: ${EDUGRADE_QDRANT_API_KEY_FILE:-}
+      EDUGRADE_AI_GRADING_ENABLED: ${EDUGRADE_AI_GRADING_ENABLED:-false}
+      EDUGRADE_ALLOW_MOCK_AI: ${EDUGRADE_ALLOW_MOCK_AI:-false}
       EDUGRADE_AI_SERVICE_URL: ${EDUGRADE_AI_SERVICE_URL}
       EDUGRADE_AI_SERVICE_TOKEN: ${EDUGRADE_AI_SERVICE_TOKEN}
+      EDUGRADE_AI_SERVICE_TOKEN_FILE: ${EDUGRADE_AI_SERVICE_TOKEN_FILE:-}
       EDUGRADE_AI_SERVICE_TIMEOUT: ${EDUGRADE_AI_SERVICE_TIMEOUT:-750s}
       EDUGRADE_AI_SERVICE_MAX_RETRIES: ${EDUGRADE_AI_SERVICE_MAX_RETRIES:-0}
       EDUGRADE_AI_MODEL_VERSION: ${EDUGRADE_AI_MODEL_VERSION}
@@ -240,12 +279,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      grading-agent:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/health | grep -q healthy"]
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/health/ready | grep -q '\"status\":\"ready\"'"]
       interval: 10s
       timeout: 5s
       retries: 18
@@ -258,6 +293,7 @@ services:
       dockerfile: apps/web-admin/Dockerfile
       args:
         VITE_API_BASE_URL: ${EDUGRADE_WEB_API_BASE_URL:-}
+        VITE_RELEASE_ID: ${EDUGRADE_RELEASE_ID:-local}
         NODE_BUILD_IMAGE: ${EDUGRADE_NODE_BUILD_IMAGE:-node:24-alpine}
         WEB_RUNTIME_IMAGE: ${EDUGRADE_WEB_RUNTIME_IMAGE:-nginx:1.29-alpine}
     image: edugrade/web-admin:${EDUGRADE_IMAGE_TAG:-local}

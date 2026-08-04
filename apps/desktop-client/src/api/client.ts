@@ -81,6 +81,7 @@ export class DesktopApiClient {
     if (authorization) {
       headers.set("Authorization", authorization);
     }
+    addIdempotencyHeader(path, init.method, headers);
     const response = await fetch(this.url(path), { ...init, headers });
     if (!response.ok) {
       throw await toApiError(response);
@@ -105,6 +106,7 @@ export class DesktopApiClient {
     if (authorization) {
       headers.set("Authorization", authorization);
     }
+    addIdempotencyHeader(path, init.method, headers);
     const response = await fetch(this.url(path), { ...init, headers });
     if (!response.ok) {
       throw await toApiError(response);
@@ -117,6 +119,16 @@ export class DesktopApiClient {
   }
 }
 
+function addIdempotencyHeader(path: string, method: string | undefined, headers: Headers) {
+  const normalizedMethod = (method ?? "GET").toUpperCase();
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(normalizedMethod) || path.startsWith("/api/v1/auth/")) {
+    return;
+  }
+  if (!headers.has("Idempotency-Key")) {
+    headers.set("Idempotency-Key", crypto.randomUUID());
+  }
+}
+
 export function normalizeBaseUrl(value: string) {
   const trimmed = value.trim().replace(/\/+$/, "");
   return trimmed || "http://127.0.0.1:8080";
@@ -126,7 +138,8 @@ async function toApiError(response: Response): Promise<ApiClientError> {
   try {
     const payload = (await response.json()) as ApiErrorPayload;
     const code = payload.error?.code ?? payload.code ?? "request_failed";
-    const message = payload.error?.message ?? payload.message ?? response.statusText;
+    const rawMessage = payload.error?.message ?? payload.message ?? response.statusText;
+    const message = code === "operation_in_progress" ? "操作正在处理中，请稍后查看结果。" : code === "resource_version_conflict" ? "任务已被其他人更新，请刷新后重试。" : rawMessage;
     return new ApiClientError(response.status, code, message);
   } catch {
     return new ApiClientError(response.status, "request_failed", response.statusText);

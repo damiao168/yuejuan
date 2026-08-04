@@ -234,6 +234,8 @@ go test ./internal/subjective -run TestHTTPAdapterRealLocalAgent -count=1 -v
 - [平台接入与落库](docs/stories/STORY-059-platform-grading-agent-integration.md)
 - [私有化部署说明](infra/docker-compose/README.md)
 - [预生产部署 Runbook](docs/deployment/preproduction-runbook.md)
+- [生产安全与可靠性控制](docs/architecture/production-security-and-reliability.md)
+- [API 错误模型](docs/api/errors.md)
 - [Lab 使用说明](lab/README.md)
 - [Story 与验收文档](docs/stories)
 

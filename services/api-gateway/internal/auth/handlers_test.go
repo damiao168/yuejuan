@@ -367,6 +367,16 @@ func TestLoginSetsHttpOnlySessionCookieAndMeAcceptsCookie(t *testing.T) {
 	if cookie.Value == "" {
 		t.Fatal("session cookie must contain token value")
 	}
+	if cookie.Path != "/api/v1" {
+		t.Fatalf("session cookie must use the minimum API path, got %q", cookie.Path)
+	}
+	var browserResponse map[string]any
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &browserResponse); err != nil {
+		t.Fatal(err)
+	}
+	if _, leaked := browserResponse["access_token"]; leaked {
+		t.Fatalf("browser login response exposed an access token: %s", loginRec.Body.String())
+	}
 
 	meReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
 	meReq.AddCookie(cookie)
@@ -374,6 +384,41 @@ func TestLoginSetsHttpOnlySessionCookieAndMeAcceptsCookie(t *testing.T) {
 	router.ServeHTTP(meRec, meReq)
 	if meRec.Code != http.StatusOK {
 		t.Fatalf("me with cookie expected 200, got %d: %s", meRec.Code, meRec.Body.String())
+	}
+}
+
+func TestServiceAccountCannotCreateBrowserSession(t *testing.T) {
+	store := newTestStore(t)
+	hash, err := auth.HashPassword("WorkerStart123!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.AddUser(auth.UserWithPassword{
+		User: auth.User{
+			ID: "worker-1", TenantID: "t-1", TenantCode: "demo", Username: "page_worker",
+			DisplayName: "Page Worker", Status: "active", Roles: []string{"page_processing_worker"},
+			Permissions: []string{"ocr:manage"}, DataScope: map[string]any{"scope": "tenant"},
+		},
+		PasswordHash: hash,
+	})
+	router := newTestRouter(store)
+
+	browserReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(
+		`{"tenant_code":"demo","username":"page_worker","password":"WorkerStart123!"}`,
+	))
+	browserRec := httptest.NewRecorder()
+	router.ServeHTTP(browserRec, browserReq)
+	if browserRec.Code != http.StatusForbidden || !strings.Contains(browserRec.Body.String(), `"code":"client_type_forbidden"`) {
+		t.Fatalf("service browser login expected 403 client_type_forbidden, got %d: %s", browserRec.Code, browserRec.Body.String())
+	}
+
+	serviceReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", strings.NewReader(
+		`{"tenant_code":"demo","username":"page_worker","password":"WorkerStart123!","client_type":"service"}`,
+	))
+	serviceRec := httptest.NewRecorder()
+	router.ServeHTTP(serviceRec, serviceReq)
+	if serviceRec.Code != http.StatusOK || !strings.Contains(serviceRec.Body.String(), `"access_token"`) {
+		t.Fatalf("service token login expected 200 with token, got %d: %s", serviceRec.Code, serviceRec.Body.String())
 	}
 }
 
@@ -724,6 +769,35 @@ func TestListAuditsRequiresPermission(t *testing.T) {
 	}
 }
 
+func TestPasswordChangeRevokesEveryExistingSession(t *testing.T) {
+	store := newTestStore(t)
+	router := newTestRouter(store)
+	firstToken := login(t, router, "demo", "teacher", "ChangeMe123!")
+	secondToken := login(t, router, "demo", "teacher", "ChangeMe123!")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password", strings.NewReader(`{"current_password":"ChangeMe123!","new_password":"NewPassword456!"}`))
+	req.Header.Set("Authorization", "Bearer "+firstToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("password change expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	for _, token := range []string{firstToken, secondToken} {
+		me := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+		me.Header.Set("Authorization", "Bearer "+token)
+		meRec := httptest.NewRecorder()
+		router.ServeHTTP(meRec, me)
+		if meRec.Code != http.StatusUnauthorized {
+			t.Fatalf("password change must revoke existing token, got %d %s", meRec.Code, meRec.Body.String())
+		}
+	}
+	if old := loginResponseRaw(router, "demo", "teacher", "ChangeMe123!"); old.Code != http.StatusUnauthorized {
+		t.Fatalf("old password must fail, got %d %s", old.Code, old.Body.String())
+	}
+	_ = login(t, router, "demo", "teacher", "NewPassword456!")
+}
+
 func TestMeRequiresAuthentication(t *testing.T) {
 	router := newTestRouter(newTestStore(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
@@ -741,7 +815,11 @@ func TestPermissionMiddlewareRejectsMissingPermission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("token: %v", err)
 	}
-	if err := store.CreateSession(context.Background(), "t-1", "u-1", tokenHash, time.Now().Add(time.Hour)); err != nil {
+	if _, err := store.CreateSession(context.Background(), auth.CreateSessionInput{
+		TenantID: "t-1", UserID: "u-1", TokenHash: tokenHash,
+		SessionType: auth.SessionTypeStandard, DeviceID: "test-device",
+		DeviceName: "test", ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	handler := auth.AuthMiddleware(store)(auth.RequirePermission("audit:read")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -760,7 +838,14 @@ func TestPermissionMiddlewareRejectsMissingPermission(t *testing.T) {
 
 func login(t *testing.T, router http.Handler, tenant string, username string, password string) string {
 	t.Helper()
-	rec := loginResponse(t, router, tenant, username, password)
+	payload := map[string]string{"tenant_code": tenant, "username": username, "password": password, "client_type": "desktop"}
+	raw, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(raw))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("token login expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
 	var response struct {
 		AccessToken string `json:"access_token"`
 	}
@@ -783,6 +868,15 @@ func loginResponse(t *testing.T, router http.Handler, tenant string, username st
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
+	return rec
+}
+
+func loginResponseRaw(router http.Handler, tenant, username, password string) *httptest.ResponseRecorder {
+	payload := map[string]string{"tenant_code": tenant, "username": username, "password": password, "client_type": "desktop"}
+	raw, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(raw))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
 	return rec
 }
 

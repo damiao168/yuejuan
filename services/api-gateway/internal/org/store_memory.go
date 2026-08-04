@@ -3,6 +3,8 @@ package org
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 )
 
@@ -40,14 +42,33 @@ func (s *MemoryStore) CreateTenant(_ context.Context, input TenantProvision) (Te
 	return item, nil
 }
 
-func (s *MemoryStore) ListTenants(_ context.Context, tenantID string, canListAll bool) ([]Tenant, error) {
+func (s *MemoryStore) ListTenants(_ context.Context, tenantID string, canListAll bool, filter TenantListFilter) ([]Tenant, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []Tenant{}
 	for _, item := range s.tenants {
-		if canListAll || item.ID == tenantID {
+		if (canListAll || item.ID == tenantID) && (filter.Query == "" ||
+			strings.Contains(strings.ToLower(item.Name), strings.ToLower(filter.Query)) ||
+			strings.Contains(strings.ToLower(item.Code), strings.ToLower(filter.Query))) {
 			out = append(out, item)
 		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Code == out[j].Code {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Code < out[j].Code
+	})
+	if filter.CursorCode != "" && filter.CursorID != "" {
+		start := 0
+		for start < len(out) && (out[start].Code < filter.CursorCode ||
+			(out[start].Code == filter.CursorCode && out[start].ID <= filter.CursorID)) {
+			start++
+		}
+		out = out[start:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
 	}
 	return out, nil
 }
@@ -150,14 +171,48 @@ func (s *MemoryStore) CreateStudent(_ context.Context, tenantID string, input St
 	return input, nil
 }
 
-func (s *MemoryStore) ListStudents(_ context.Context, tenantID string, classID string) ([]Student, error) {
+func (s *MemoryStore) ListStudents(_ context.Context, tenantID string, filter StudentListFilter) ([]Student, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	ids := make(map[string]struct{}, len(filter.StudentIDs))
+	for _, id := range filter.StudentIDs {
+		ids[id] = struct{}{}
+	}
 	out := []Student{}
 	for _, item := range s.students {
-		if item.TenantID == tenantID && (classID == "" || item.ClassID == classID) {
-			out = append(out, item)
+		if item.TenantID != tenantID || (filter.ClassID != "" && item.ClassID != filter.ClassID) {
+			continue
 		}
+		if len(ids) > 0 {
+			if _, ok := ids[item.ID]; !ok {
+				continue
+			}
+		}
+		query := strings.ToLower(filter.Query)
+		if query != "" && !strings.Contains(strings.ToLower(item.StudentNo), query) && !strings.Contains(strings.ToLower(item.Name), query) {
+			continue
+		}
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].StudentNo == out[j].StudentNo {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].StudentNo < out[j].StudentNo
+	})
+	if filter.CursorID != "" {
+		start := 0
+		for start < len(out) {
+			item := out[start]
+			if item.StudentNo > filter.CursorStudentNo || (item.StudentNo == filter.CursorStudentNo && item.ID > filter.CursorID) {
+				break
+			}
+			start++
+		}
+		out = out[start:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
 	}
 	return out, nil
 }

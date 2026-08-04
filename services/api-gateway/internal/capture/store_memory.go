@@ -229,7 +229,89 @@ func (s *MemoryStore) PrepareRegistrationRetry(_ context.Context, tenantID, runI
 	return x, nil
 }
 func (s *MemoryStore) GetProcessingSummary(_ context.Context, tenantID, submissionID string) (ProcessingSummary, error) {
-	return ProcessingSummary{SubmissionID: submissionID, Blockers: []ProcessingBlocker{}}, nil
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.processingSummaryLocked(tenantID, submissionID)
+}
+
+func (s *MemoryStore) ListProcessingSummaries(_ context.Context, tenantID, batchID string) ([]ProcessingSummary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	batch, ok := s.batches[batchID]
+	if !ok || batch.TenantID != tenantID {
+		return nil, ErrNotFound
+	}
+	submissionIDs := map[string]struct{}{}
+	for _, page := range s.pages {
+		if page.TenantID == tenantID && page.CaptureBatchID == batchID && page.SubmissionID != "" && page.Status != "deleted" {
+			submissionIDs[page.SubmissionID] = struct{}{}
+		}
+	}
+	ids := make([]string, 0, len(submissionIDs))
+	for submissionID := range submissionIDs {
+		ids = append(ids, submissionID)
+	}
+	sort.Strings(ids)
+	out := make([]ProcessingSummary, 0, len(ids))
+	for _, submissionID := range ids {
+		summary, err := s.processingSummaryLocked(tenantID, submissionID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, summary)
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) processingSummaryLocked(tenantID, submissionID string) (ProcessingSummary, error) {
+	out := ProcessingSummary{SubmissionID: submissionID, Blockers: []ProcessingBlocker{}}
+	pages := make([]Page, 0)
+	for _, page := range s.pages {
+		if page.TenantID == tenantID && page.SubmissionID == submissionID && page.Status != "deleted" {
+			pages = append(pages, page)
+		}
+	}
+	if len(pages) == 0 {
+		return out, ErrNotFound
+	}
+	sort.Slice(pages, func(i, j int) bool { return pages[i].SequenceNo < pages[j].SequenceNo })
+	for _, page := range pages {
+		out.TotalPages++
+		if page.Status == "ready" {
+			out.ReadyPages++
+			continue
+		}
+		blocker := ProcessingBlocker{PageID: page.ID, PageNo: page.AssignedPageNo, Stage: "processing", Code: "pending", Action: "wait"}
+		var latest RegistrationRun
+		for _, run := range s.registrations {
+			if run.CapturePageID == page.ID && (latest.ID == "" || run.CreatedAt.After(latest.CreatedAt)) {
+				latest = run
+			}
+		}
+		blocker.RegistrationRunID = latest.ID
+		switch {
+		case page.Status == "quality_rejected" || page.Status == "needs_review":
+			blocker.Stage = "quality"
+			blocker.Code = "quality_review"
+			blocker.Action = "review_quality"
+			out.BlockedPages++
+		case latest.ProcessingStatus == "terminal_error":
+			blocker.Stage = "registration"
+			blocker.Code = "registration_failed"
+			blocker.Action = "retry_registration"
+			out.BlockedPages++
+		case latest.MatchStatus == "needs_review":
+			blocker.Stage = "registration"
+			blocker.Code = "low_confidence"
+			blocker.Action = "confirm_registration"
+			out.BlockedPages++
+		default:
+			out.PendingPages++
+		}
+		out.Blockers = append(out.Blockers, blocker)
+	}
+	out.CanComplete = out.ReadyPages == out.TotalPages
+	return out, nil
 }
 
 func (s *MemoryStore) QueueSubmissionPages(_ context.Context, tenantID, submissionID, actorID string) ([]RegistrationRun, error) {
@@ -311,7 +393,7 @@ func (s *MemoryStore) CreateBatch(_ context.Context, tenantID, examID, actorID s
 	return item, nil
 }
 
-func (s *MemoryStore) ListBatches(_ context.Context, tenantID, examID string) ([]Batch, error) {
+func (s *MemoryStore) ListBatches(_ context.Context, tenantID, examID string, filter BatchListFilter) ([]Batch, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []Batch{}
@@ -320,7 +402,27 @@ func (s *MemoryStore) ListBatches(_ context.Context, tenantID, examID string) ([
 			out = append(out, x)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if filter.CursorID != "" {
+		start := 0
+		for start < len(out) {
+			item := out[start]
+			if item.CreatedAt.Before(filter.CursorCreatedAt) ||
+				(item.CreatedAt.Equal(filter.CursorCreatedAt) && item.ID < filter.CursorID) {
+				break
+			}
+			start++
+		}
+		out = out[start:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
 	return out, nil
 }
 func (s *MemoryStore) GetBatch(_ context.Context, tenantID, batchID string) (Batch, error) {

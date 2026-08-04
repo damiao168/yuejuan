@@ -36,7 +36,6 @@ import {
   createOcrTask,
   createSubmission,
   generateAnswerSegments,
-  getOcrTask,
   getSubmission,
   listAnswerSegments,
   listOcrTasks,
@@ -56,6 +55,7 @@ import { OcrWorkerAlert } from "../components/OcrWorkerAlert";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
+import { hashQueryParam } from "../router/query";
 
 type UploadRequest = Parameters<NonNullable<UploadProps["customRequest"]>>[0];
 type QualityFilter = "all" | "blurry" | "missing_page" | "duplicate_page" | "ocr_failed" | "needs_manual_handling";
@@ -64,6 +64,8 @@ interface SubmissionView {
   submission: Submission;
   pages: SubmissionPage[];
   ocrTasks: OcrTask[];
+  ocrNextCursor: string;
+  ocrHasMore: boolean;
   segments: AnswerSegment[];
   detailError?: string;
 }
@@ -86,10 +88,11 @@ interface PreviewState {
 interface Filters {
   search: string;
   quality: QualityFilter;
+  issue: "all" | "failed" | "unmatched" | "quality";
 }
 
 const qualityFilterOptions: { label: string; value: QualityFilter }[] = [
-  { label: "全部质量状态", value: "all" },
+  { label: "全部问题类型", value: "all" },
   { label: "模糊", value: "blurry" },
   { label: "缺页", value: "missing_page" },
   { label: "重复页", value: "duplicate_page" },
@@ -176,16 +179,6 @@ function statusTone(status: string): StatusTone {
   return "processing";
 }
 
-function qualityTone(status: string): StatusTone {
-  if (status === "passed") {
-    return "success";
-  }
-  if (status === "failed") {
-    return "danger";
-  }
-  return "neutral";
-}
-
 function ocrTone(task?: OcrTask): StatusTone {
   if (!task) {
     return "neutral";
@@ -193,7 +186,10 @@ function ocrTone(task?: OcrTask): StatusTone {
   if (task.status === "completed" && !task.requires_human_review) {
     return "success";
   }
-  if (task.status === "failed" || task.requires_human_review) {
+  if (task.status === "failed") {
+    return "danger";
+  }
+  if (task.requires_human_review) {
     return "warning";
   }
   return "processing";
@@ -201,6 +197,38 @@ function ocrTone(task?: OcrTask): StatusTone {
 
 function latestTask(tasks: OcrTask[]) {
   return [...tasks].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+}
+
+function summaryString(row: SubmissionView, key: string) {
+  const value = row.submission.summary?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function summaryNumber(row: SubmissionView, key: string) {
+  const value = row.submission.summary?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function summaryBoolean(row: SubmissionView, key: string) {
+  return row.submission.summary?.[key] === true;
+}
+
+type SubmissionProcessingState = "pending" | "processing" | "completed" | "failed";
+
+function processingState(row: SubmissionView): SubmissionProcessingState {
+  const task = latestTask(row.ocrTasks);
+  const taskStatus = task?.status ?? summaryString(row, "latest_ocr_status");
+  const segmentCount = row.segments.length || summaryNumber(row, "segment_count");
+  if (row.submission.quality_status === "failed" || taskStatus === "failed") {
+    return "failed";
+  }
+  if (taskStatus === "completed" && segmentCount > 0) {
+    return "completed";
+  }
+  if (taskStatus === "queued" || taskStatus === "processing") {
+    return "processing";
+  }
+  return "pending";
 }
 
 function ocrLabel(tasks: OcrTask[]) {
@@ -220,10 +248,13 @@ function derivedIssues(row: SubmissionView): QualityIssue[] {
   if (row.ocrTasks.some((task) => task.status === "failed")) {
     issues.push({ code: "ocr_failed", message: "文字识别失败" });
   }
-  if (row.ocrTasks.some((task) => task.requires_human_review)) {
+  if (summaryNumber(row, "ocr_failed_count") > 0 && !issues.some((issue) => issue.code === "ocr_failed")) {
+    issues.push({ code: "ocr_failed", message: "文字识别失败" });
+  }
+  if (row.ocrTasks.some((task) => task.requires_human_review) || summaryBoolean(row, "latest_ocr_requires_human_review")) {
     issues.push({ code: "needs_manual_handling", message: "识别结果需要人工处理" });
   }
-  if (row.segments.some((segment) => segment.status === "needs_manual_review" || segment.status === "rejected")) {
+  if (row.segments.some((segment) => segment.status === "needs_manual_review" || segment.status === "rejected") || summaryNumber(row, "manual_segment_count") > 0) {
     issues.push({ code: "needs_manual_handling", message: "切分结果需要人工处理" });
   }
   return issues;
@@ -259,7 +290,7 @@ function issueTone(code: string): StatusTone {
 async function buildSubmissionView(submission: Submission): Promise<SubmissionView> {
   const [pagesResult, ocrResult, segmentResult] = await Promise.allSettled([
     listSubmissionPages(submission.id),
-    listOcrTasks(submission.id),
+    listOcrTasks(submission.id, { limit: 20 }),
     listAnswerSegments(submission.id)
   ]);
   const errors = [pagesResult, ocrResult, segmentResult]
@@ -269,9 +300,15 @@ async function buildSubmissionView(submission: Submission): Promise<SubmissionVi
     submission,
     pages: pagesResult.status === "fulfilled" ? pagesResult.value.pages : submission.pages ?? [],
     ocrTasks: ocrResult.status === "fulfilled" ? ocrResult.value.tasks : [],
+    ocrNextCursor: ocrResult.status === "fulfilled" ? ocrResult.value.next_cursor : "",
+    ocrHasMore: ocrResult.status === "fulfilled" && ocrResult.value.has_more,
     segments: segmentResult.status === "fulfilled" ? segmentResult.value.segments : [],
     detailError: errors.length > 0 ? errors.join("；") : undefined
   };
+}
+
+function compactSubmissionView(submission: Submission): SubmissionView {
+  return { submission, pages: submission.pages ?? [], ocrTasks: [], ocrNextCursor: "", ocrHasMore: false, segments: [] };
 }
 
 export function SubmissionCapturePage({
@@ -285,7 +322,10 @@ export function SubmissionCapturePage({
 }) {
   const { message } = App.useApp();
   const canWrite = canManage;
-  const [filters, setFilters] = useState<Filters>({ search: "", quality: "all" });
+  const [filters, setFilters] = useState<Filters>(() => {
+    const issue = hashQueryParam("issue");
+    return { search: "", quality: "all", issue: ["failed", "unmatched", "quality"].includes(issue) ? issue as Filters["issue"] : "all" };
+  });
   const [expectedPages, setExpectedPages] = useState(1);
   const [exams, setExams] = useState<Exam[]>([]);
   const [selectedExamId, setSelectedExamId] = useState(initialExamId);
@@ -294,6 +334,9 @@ export function SubmissionCapturePage({
   const [studentLookupError, setStudentLookupError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [captureLoading, setCaptureLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextSubmissionCursor, setNextSubmissionCursor] = useState("");
+  const [hasMoreSubmissions, setHasMoreSubmissions] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
@@ -301,7 +344,7 @@ export function SubmissionCapturePage({
   const [pageDrawer, setPageDrawer] = useState<SubmissionView | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [ocrDrawer, setOcrDrawer] = useState<{ row: SubmissionView; tasks: OcrTask[]; loading: boolean; error?: string } | null>(null);
+  const [ocrDrawer, setOcrDrawer] = useState<{ row: SubmissionView; tasks: OcrTask[]; loading: boolean; loadingMore?: boolean; error?: string } | null>(null);
   const captureRequestRef = useRef(0);
   const previewRequestRef = useRef(0);
 
@@ -330,6 +373,8 @@ export function SubmissionCapturePage({
       const requestId = ++captureRequestRef.current;
       if (!examId) {
         setRows([]);
+        setNextSubmissionCursor("");
+        setHasMoreSubmissions(false);
         setCaptureLoading(false);
         return;
       }
@@ -337,32 +382,65 @@ export function SubmissionCapturePage({
       setCaptureError(null);
       setStudentLookupError(null);
       try {
-        const [submissionResult, studentResult] = await Promise.allSettled([
-          listSubmissions(examId),
-          canReadStudentNames ? listStudents() : Promise.resolve({ students: [] })
-        ]);
+        const submissionResult = await listSubmissions(examId, { limit: 50 });
+        const studentIDs = Array.from(new Set(submissionResult.submissions.map((item) => item.student_id).filter((id): id is string => Boolean(id))));
+        const studentResult = await Promise.allSettled([
+          canReadStudentNames && studentIDs.length > 0 ? listStudents({ ids: studentIDs, limit: 200 }) : Promise.resolve({ students: [] })
+        ]).then(([result]) => result);
         if (requestId !== captureRequestRef.current) return;
-        if (submissionResult.status === "rejected") {
-          throw submissionResult.reason;
-        }
         if (studentResult.status === "fulfilled") {
           setStudents(studentResult.value.students);
         } else {
           setStudents([]);
           setStudentLookupError(formatError(studentResult.reason));
         }
-        const views = await Promise.all(submissionResult.value.submissions.map((submission) => buildSubmissionView(submission)));
-        if (requestId !== captureRequestRef.current) return;
-        setRows(views);
+        setRows(submissionResult.submissions.map(compactSubmissionView));
+        setNextSubmissionCursor(submissionResult.next_cursor ?? "");
+        setHasMoreSubmissions(Boolean(submissionResult.has_more));
       } catch (currentError) {
         if (requestId !== captureRequestRef.current) return;
         setCaptureError(formatError(currentError));
+        setNextSubmissionCursor("");
+        setHasMoreSubmissions(false);
       } finally {
         if (requestId === captureRequestRef.current) setCaptureLoading(false);
       }
     },
     [canReadStudentNames]
   );
+
+  const loadMoreSubmissions = useCallback(async () => {
+    if (!selectedExamId || !hasMoreSubmissions || !nextSubmissionCursor || loadingMore) return;
+    const requestId = ++captureRequestRef.current;
+    setLoadingMore(true);
+    try {
+      const result = await listSubmissions(selectedExamId, { limit: 50, cursor: nextSubmissionCursor });
+      if (requestId !== captureRequestRef.current) return;
+      if (canReadStudentNames) {
+        const studentIDs = Array.from(new Set(result.submissions.map((item) => item.student_id).filter((id): id is string => Boolean(id))));
+        if (studentIDs.length > 0) {
+          const studentResult = await listStudents({ ids: studentIDs, limit: 200 });
+          if (requestId !== captureRequestRef.current) return;
+          setStudents((current) => {
+            const byID = new Map(current.map((item) => [item.id, item]));
+            studentResult.students.forEach((item) => byID.set(item.id, item));
+            return Array.from(byID.values());
+          });
+        }
+      }
+      setRows((current) => {
+        const byID = new Map(current.map((item) => [item.submission.id, item]));
+        result.submissions.forEach((submission) => byID.set(submission.id, compactSubmissionView(submission)));
+        return Array.from(byID.values());
+      });
+      setNextSubmissionCursor(result.next_cursor ?? "");
+      setHasMoreSubmissions(Boolean(result.has_more));
+    } catch (currentError) {
+      if (requestId === captureRequestRef.current) message.error(formatError(currentError));
+    } finally {
+      if (requestId === captureRequestRef.current) setLoadingMore(false);
+    }
+  }, [canReadStudentNames, hasMoreSubmissions, loadingMore, message, nextSubmissionCursor, selectedExamId]);
 
   useEffect(() => {
     void loadExams();
@@ -399,8 +477,10 @@ export function SubmissionCapturePage({
   const uploadAnswerFile = async (request: UploadRequest) => {
     const file = request.file as File & { uid?: string };
     const uploadId = file.uid ?? `${Date.now()}-${file.name}`;
+    let submissionId = "";
+    let pageUploaded = false;
     setUploadQueue((current) => [
-      { id: uploadId, fileName: file.name, status: "processing", phase: "创建答卷记录", percent: 2 },
+      { id: uploadId, fileName: file.name, status: "processing", phase: "创建答题卡记录", percent: 2 },
       ...current
     ]);
     if (!selectedExam) {
@@ -415,27 +495,44 @@ export function SubmissionCapturePage({
         source_type: sourceTypeFor(file),
         expected_page_count: expectedPages
       });
+      submissionId = submissionResult.submission.id;
       patchUpload(uploadId, { phase: "上传文件", percent: 8 });
       const uploadResult = await uploadFileWithProgress(
         file,
         {
           owner_type: "submission",
-          owner_id: submissionResult.submission.id,
+          owner_id: submissionId,
           school_id: selectedExam.school_id,
           exam_id: selectedExam.id,
-          submission_id: submissionResult.submission.id
+          submission_id: submissionId
         },
         (percent) => patchUpload(uploadId, { percent: Math.min(92, Math.max(8, percent)) })
       );
       patchUpload(uploadId, { phase: "关联第 1 页", percent: 94 });
-      await addSubmissionPage(submissionResult.submission.id, uploadResult.file.id, 1);
-      patchUpload(uploadId, { status: "success", phase: "完成", percent: 100 });
+      await addSubmissionPage(submissionId, uploadResult.file.id, 1);
+      pageUploaded = true;
+      patchUpload(uploadId, { phase: "检查图片质量", percent: 96 });
+      const quality = await runQualityCheck(submissionId);
+      if (quality.result.valid) {
+        patchUpload(uploadId, { phase: "提交文字识别", percent: 98 });
+        await updateSubmissionStatus(submissionId, "ready_for_ocr", submissionResult.submission.revision);
+        await createOcrTask(submissionId);
+        patchUpload(uploadId, { status: "success", phase: "已进入识别队列", percent: 100 });
+      } else {
+        patchUpload(uploadId, { status: "success", phase: "已上传，图片需要处理", percent: 100 });
+      }
       request.onSuccess?.({ ok: true });
       await loadCaptureData(selectedExam.id);
     } catch (currentError) {
       const errorMessage = formatError(currentError);
-      patchUpload(uploadId, { status: "error", phase: "失败", error: errorMessage });
-      request.onError?.(currentError instanceof Error ? currentError : new Error(errorMessage));
+      if (pageUploaded) {
+        patchUpload(uploadId, { status: "success", phase: "答题卡已上传，自动处理未启动", error: errorMessage, percent: 100 });
+        request.onSuccess?.({ ok: true });
+        if (selectedExam) await loadCaptureData(selectedExam.id);
+      } else {
+        patchUpload(uploadId, { status: "error", phase: "上传失败", error: errorMessage });
+        request.onError?.(currentError instanceof Error ? currentError : new Error(errorMessage));
+      }
     }
   };
 
@@ -458,9 +555,14 @@ export function SubmissionCapturePage({
         (row.submission.candidate_no ?? "").toLowerCase().includes(keyword) ||
         (student?.name ?? "").toLowerCase().includes(keyword) ||
         (student?.student_no ?? "").toLowerCase().includes(keyword);
-      return keywordMatched && matchesQualityFilter(row, filters.quality);
+      const issueMatched =
+        filters.issue === "all"
+        || (filters.issue === "failed" && processingState(row) === "failed")
+        || (filters.issue === "unmatched" && !row.submission.student_id)
+        || (filters.issue === "quality" && derivedIssues(row).length > 0);
+      return keywordMatched && issueMatched && matchesQualityFilter(row, filters.quality);
     });
-  }, [filters.quality, filters.search, rows, studentById]);
+  }, [filters.issue, filters.quality, filters.search, rows, studentById]);
 
   const uploadPercent = useMemo(() => {
     if (uploadQueue.length === 0) {
@@ -470,11 +572,14 @@ export function SubmissionCapturePage({
   }, [uploadQueue]);
 
   const summary = useMemo(() => {
-    const issueCount = rows.filter((row) => derivedIssues(row).length > 0).length;
-    const readyCount = rows.filter((row) => row.submission.status === "ready_for_ocr").length;
-    const ocrDone = rows.filter((row) => row.ocrTasks.some((task) => task.status === "completed")).length;
-    const segmented = rows.filter((row) => row.segments.length > 0).length;
-    return { total: rows.length, issueCount, readyCount, ocrDone, segmented };
+    const states = rows.map(processingState);
+    return {
+      total: rows.length,
+      pending: states.filter((state) => state === "pending").length,
+      processing: states.filter((state) => state === "processing").length,
+      completed: states.filter((state) => state === "completed").length,
+      failed: states.filter((state) => state === "failed").length
+    };
   }, [rows]);
 
   const studentName = (submission: Submission) => {
@@ -499,10 +604,15 @@ export function SubmissionCapturePage({
     }
   };
 
-  const openPages = (row: SubmissionView) => {
+  const openPages = async (row: SubmissionView) => {
     previewRequestRef.current += 1;
     setPageDrawer(row);
     setPreview(null);
+    if (row.pages.length === 0 && row.submission.actual_page_count > 0) {
+      const detailed = await buildSubmissionView(row.submission);
+      setRows((current) => current.map((item) => item.submission.id === detailed.submission.id ? detailed : item));
+      setPageDrawer(detailed);
+    }
   };
 
   const previewPage = async (page: SubmissionPage) => {
@@ -526,7 +636,7 @@ export function SubmissionCapturePage({
 
   const replacePage = async (page: SubmissionPage, file: File) => {
     if (!pageDrawer || !selectedExam) {
-      message.error("请先选择答卷");
+      message.error("请先选择答题卡");
       return;
     }
     await runAction(
@@ -549,10 +659,32 @@ export function SubmissionCapturePage({
   const openOcrDrawer = async (row: SubmissionView) => {
     setOcrDrawer({ row, tasks: [], loading: true });
     try {
-      const tasks = await Promise.all(row.ocrTasks.map((task) => getOcrTask(task.id).then((result) => result.task)));
-      setOcrDrawer({ row, tasks, loading: false });
+      const detailed = row.ocrTasks.length > 0 ? row : await buildSubmissionView(row.submission);
+      setRows((current) => current.map((item) => item.submission.id === detailed.submission.id ? detailed : item));
+      setOcrDrawer({ row: detailed, tasks: detailed.ocrTasks, loading: false });
     } catch (currentError) {
       setOcrDrawer({ row, tasks: [], loading: false, error: formatError(currentError) });
+    }
+  };
+
+  const loadMoreOcrTasks = async () => {
+    const current = ocrDrawer;
+    if (!current || current.loading || current.loadingMore || !current.row.ocrHasMore || !current.row.ocrNextCursor) return;
+    setOcrDrawer({ ...current, loadingMore: true });
+    try {
+      const result = await listOcrTasks(current.row.submission.id, { limit: 20, cursor: current.row.ocrNextCursor });
+      const byId = new Map(current.tasks.map((task) => [task.id, task]));
+      for (const task of result.tasks) byId.set(task.id, task);
+      const tasks = [...byId.values()];
+      const row = { ...current.row, ocrTasks: tasks, ocrNextCursor: result.next_cursor, ocrHasMore: result.has_more };
+      setRows((rows) => rows.map((item) => item.submission.id === row.submission.id ? row : item));
+      setOcrDrawer((latest) => {
+        if (!latest || latest.row.submission.id !== current.row.submission.id) return latest;
+        return { ...latest, row, tasks, loadingMore: false };
+      });
+    } catch (currentError) {
+      message.error(formatError(currentError));
+      setOcrDrawer((latest) => latest ? { ...latest, loadingMore: false } : latest);
     }
   };
 
@@ -560,7 +692,7 @@ export function SubmissionCapturePage({
     {
       title: (
         <Tooltip title="上传时取自文件名，关联学生后显示准考证号">
-          <span>答卷编号</span>
+          <span>答题卡编号</span>
         </Tooltip>
       ),
       fixed: "left",
@@ -582,20 +714,13 @@ export function SubmissionCapturePage({
       width: 190,
       render: (_, row) => {
         const task = latestTask(row.ocrTasks);
-        if (row.submission.quality_status !== "passed") {
-          return (
-            <StatusTag tone={qualityTone(row.submission.quality_status)}>
-              {row.submission.quality_status === "failed" ? "图片质量未通过，需处理" : "等待检查图片质量"}
-            </StatusTag>
-          );
-        }
-        if (task?.status === "completed" && row.segments.length > 0) {
-          return <StatusTag tone="success">识别处理已完成</StatusTag>;
-        }
-        if (task) {
-          return <StatusTag tone={ocrTone(task)}>{ocrLabel(row.ocrTasks)}</StatusTag>;
-        }
-        return <StatusTag tone={statusTone(row.submission.status)}>{submissionStatusLabels[row.submission.status] ?? "等待自动处理"}</StatusTag>;
+        const taskStatus = task?.status ?? summaryString(row, "latest_ocr_status");
+        const state = processingState(row);
+        if (state === "failed") return <StatusTag tone="danger">{taskStatus === "failed" ? "文字识别失败" : "图片质量未通过"}</StatusTag>;
+        if (state === "completed") return <StatusTag tone="success">处理完成</StatusTag>;
+        if (state === "processing") return <StatusTag tone="processing">{taskStatus === "processing" ? "正在识别" : "识别排队中"}</StatusTag>;
+        if (taskStatus === "completed") return <StatusTag tone="warning">等待生成题目区域</StatusTag>;
+        return <StatusTag tone={statusTone(row.submission.status)}>等待自动处理</StatusTag>;
       }
     },
     {
@@ -624,10 +749,13 @@ export function SubmissionCapturePage({
       render: (_, row) => {
         const id = row.submission.id;
         const task = latestTask(row.ocrTasks);
+        const taskStatus = task?.status ?? summaryString(row, "latest_ocr_status");
+        const segmentCount = row.segments.length || summaryNumber(row, "segment_count");
         const qualityPending = row.submission.quality_status !== "passed";
         const needsReady = !qualityPending && row.submission.status !== "ready_for_ocr";
-        const needsOcr = !qualityPending && !needsReady && !task;
-        const needsSegments = task?.status === "completed" && row.segments.length === 0;
+        const ocrFailed = taskStatus === "failed";
+        const needsOcr = !qualityPending && !needsReady && (!taskStatus || ocrFailed);
+        const needsSegments = taskStatus === "completed" && segmentCount === 0;
 
         const runNext = () => {
           if (qualityPending) {
@@ -638,9 +766,9 @@ export function SubmissionCapturePage({
           }
           if (needsReady) {
             return runAction(`ready-${id}`, async () => {
-              await updateSubmissionStatus(id, "ready_for_ocr");
+              await updateSubmissionStatus(id, "ready_for_ocr", row.submission.revision);
               await refreshSingle(id);
-            }, "答卷已转入待识别，可点击『开始识别』继续");
+            }, "答题卡已转入待识别，可点击『开始识别』继续");
           }
           if (needsOcr) {
             return runAction(`ocr-${id}`, async () => {
@@ -654,7 +782,7 @@ export function SubmissionCapturePage({
               await refreshSingle(id);
             }, "题目区域已生成");
           }
-          openPages(row);
+          void openPages(row);
           return Promise.resolve();
         };
 
@@ -663,15 +791,15 @@ export function SubmissionCapturePage({
           : needsReady
             ? "转入待识别"
             : needsOcr
-              ? "开始识别"
+              ? ocrFailed ? "重试识别" : "开始识别"
               : needsSegments
                 ? "生成题目区域"
-                : "查看答卷";
+                : "查看答题卡";
         return (
           <Space className="table-actions" size={6}>
             <Button
               type="primary"
-              disabled={!canWrite && primaryLabel !== "查看答卷"}
+              disabled={!canWrite && primaryLabel !== "查看答题卡"}
               loading={Boolean(actioning?.endsWith(id))}
               onClick={() => void runNext()}
             >
@@ -758,14 +886,14 @@ export function SubmissionCapturePage({
       <section className="page-heading">
         <div>
           <Space>
-            <h1>答卷处理</h1>
+            <h1>答题卡导入</h1>
           </Space>
-          <p>上传后按行内按钮逐步推进质量检查、文字识别与题目切分；异常答卷会在『问题说明』列标出。</p>
+          <p>选择考试并上传扫描件，系统自动完成图片检查和文字识别；失败记录可在下方直接重试。</p>
         </div>
         <Space wrap>
-          <Tooltip title="上传时用于校验答卷页数是否齐全">
+          <Tooltip title="上传时用于校验答题卡页数是否齐全">
             <label className="inline-number-field capture-advanced-control">
-              <span>每份答卷页数</span>
+              <span>每份答题卡页数</span>
               <InputNumber min={1} max={200} precision={0} value={expectedPages} onChange={(value) => setExpectedPages(Number(value ?? 1))} />
             </label>
           </Tooltip>
@@ -774,7 +902,7 @@ export function SubmissionCapturePage({
           </Button>
           <Upload {...uploadProps}>
             <Button type="primary" icon={<FileUp size={16} />} disabled={!canWrite || !selectedExam}>
-              批量上传
+              上传答题卡
             </Button>
           </Upload>
         </Space>
@@ -782,15 +910,8 @@ export function SubmissionCapturePage({
 
       <OcrWorkerAlert enabled={canManage} />
 
-      <Alert
-        type="warning"
-        showIcon
-        message="当前页面是兼容模式"
-        description="旧版答卷直传与直接切题流程已废弃，不再作为生产采集入口。新考试请从考试工作区进入「答卷采集批次」，以保留拆页、质量检查、版面对齐和题目裁剪证据。"
-      />
-
       {studentLookupError ? (
-        <Alert type="info" showIcon message="学生姓名未完全加载" description="部分学生姓名暂时无法加载，不影响答卷采集，稍后刷新重试即可。" />
+        <Alert type="info" showIcon message="学生姓名未完全加载" description="部分学生姓名暂时无法加载，不影响答题卡导入，稍后刷新重试即可。" />
       ) : null}
 
       <section className="workspace-section filter-panel">
@@ -814,7 +935,7 @@ export function SubmissionCapturePage({
             className="toolbar-select"
             value={filters.quality}
             options={qualityFilterOptions}
-            onChange={(value) => setFilters((current) => ({ ...current, quality: value }))}
+            onChange={(value) => setFilters((current) => ({ ...current, quality: value, issue: "all" }))}
           />
         </div>
       </section>
@@ -846,24 +967,29 @@ export function SubmissionCapturePage({
 
       <section className="capture-summary-grid">
         <div className="metric-tile">
-          <span>已上传</span>
+          <span>答题卡总数</span>
           <strong>{summary.total}</strong>
-          <small>本场考试答卷</small>
+          <small>当前考试</small>
         </div>
         <div className="metric-tile">
-          <span>需要处理</span>
-          <strong>{summary.issueCount}</strong>
-          <small>处理后自动继续</small>
+          <span>待处理</span>
+          <strong>{summary.pending}</strong>
+          <small>等待检查或切题</small>
         </div>
         <div className="metric-tile">
-          <span>等待识别</span>
-          <strong>{summary.readyCount}</strong>
-          <small>系统正在排队</small>
+          <span>处理中</span>
+          <strong>{summary.processing}</strong>
+          <small>识别排队或执行中</small>
         </div>
         <div className="metric-tile">
-          <span>已完成识别</span>
-          <strong>{summary.ocrDone}</strong>
-          <small>已切分 {summary.segmented} 份</small>
+          <span>已完成</span>
+          <strong>{summary.completed}</strong>
+          <small>已识别并生成题目区域</small>
+        </div>
+        <div className="metric-tile">
+          <span>失败</span>
+          <strong>{summary.failed}</strong>
+          <small>可在列表直接重试</small>
         </div>
       </section>
 
@@ -879,7 +1005,7 @@ export function SubmissionCapturePage({
         </section>
       ) : captureLoading ? (
         <section className="workspace-section">
-          <LoadingState label="正在读取答卷采集记录" />
+          <LoadingState label="正在读取答题卡记录" />
         </section>
       ) : captureError ? (
         <ErrorState message={captureError} onRetry={() => void loadCaptureData(selectedExam.id)} />
@@ -887,10 +1013,10 @@ export function SubmissionCapturePage({
         <section className="workspace-section">
           <div className="section-head">
             <div>
-              <h2>学生答卷</h2>
+              <h2>答题卡处理</h2>
               <p>
-                {filteredRows.length} / {rows.length} 条记录，已完成识别 {summary.ocrDone} 份
-                {summary.issueCount > 0 ? `；其中 ${summary.issueCount} 份需要处理，可用质量状态下拉筛选查看` : ""}
+                {filteredRows.length} / {rows.length} 条记录，已完成 {summary.completed} 份
+                {summary.failed > 0 ? `；${summary.failed} 份处理失败，可直接重试` : ""}
               </p>
             </div>
           </div>
@@ -901,12 +1027,17 @@ export function SubmissionCapturePage({
             pagination={{ pageSize: 10, showSizeChanger: false }}
             size="small"
             rowClassName={(row) => (row.detailError ? "row-with-warning" : "")}
-            locale={{ emptyText: <EmptyState title="暂无答卷" description="当前考试还没有答卷。点击右上角『批量上传』导入扫描件。" /> }}
+            locale={{ emptyText: <EmptyState title="暂无答题卡" description="当前考试还没有答题卡。点击右上角『上传答题卡』导入扫描件。" /> }}
           />
+          {hasMoreSubmissions ? (
+            <Button block loading={loadingMore} onClick={() => void loadMoreSubmissions()}>
+              加载更多答题卡
+            </Button>
+          ) : null}
         </section>
       )}
 
-      <Drawer title="答卷页面" open={Boolean(pageDrawer)} width={860} onClose={() => {
+      <Drawer title="答题卡页面" open={Boolean(pageDrawer)} width={860} onClose={() => {
         previewRequestRef.current += 1;
         setPreviewLoading(false);
         setPageDrawer(null);
@@ -915,7 +1046,7 @@ export function SubmissionCapturePage({
         {pageDrawer ? (
           <div className="detail-stack">
             <Descriptions bordered size="small" column={2}>
-              <Descriptions.Item label="答卷编号">{pageDrawer.submission.candidate_no || "暂未生成"}</Descriptions.Item>
+              <Descriptions.Item label="答题卡编号">{pageDrawer.submission.candidate_no || "暂未生成"}</Descriptions.Item>
               <Descriptions.Item label="学生姓名">{studentName(pageDrawer.submission)}</Descriptions.Item>
               <Descriptions.Item label="采集状态">{submissionStatusLabels[pageDrawer.submission.status] ?? pageDrawer.submission.status}</Descriptions.Item>
               <Descriptions.Item label="质量状态">{qualityStatusLabels[pageDrawer.submission.quality_status] ?? pageDrawer.submission.quality_status}</Descriptions.Item>
@@ -926,7 +1057,7 @@ export function SubmissionCapturePage({
               columns={pageColumns}
               pagination={false}
               size="small"
-              locale={{ emptyText: <EmptyState title="暂无页面" description="该答卷还没有关联页面文件。" /> }}
+              locale={{ emptyText: <EmptyState title="暂无页面" description="该答题卡还没有关联页面文件。" /> }}
             />
             {preview ? (
               <div className="page-preview">
@@ -946,9 +1077,9 @@ export function SubmissionCapturePage({
                   </Button>
                 </div>
                 {preview.contentType.startsWith("image/") ? (
-                  <img src={preview.url} alt={preview.filename ?? "答卷页面"} />
+                  <img src={preview.url} alt={preview.filename ?? "答题卡页面"} />
                 ) : preview.contentType === "application/pdf" ? (
-                  <iframe title={preview.filename ?? "答卷 PDF"} src={preview.url} />
+                  <iframe title={preview.filename ?? "答题卡 PDF"} src={preview.url} />
                 ) : (
                   <Alert type="info" showIcon message="该文件类型不支持内嵌预览" description="可使用新窗口打开或浏览器下载查看。" />
                 )}
@@ -966,7 +1097,7 @@ export function SubmissionCapturePage({
         ) : ocrDrawer ? (
           <div className="detail-stack">
             <Descriptions bordered size="small" column={2}>
-              <Descriptions.Item label="答卷编号">{ocrDrawer.row.submission.candidate_no || "暂未生成"}</Descriptions.Item>
+              <Descriptions.Item label="答题卡编号">{ocrDrawer.row.submission.candidate_no || "暂未生成"}</Descriptions.Item>
               <Descriptions.Item label="识别状态">{ocrLabel(ocrDrawer.row.ocrTasks)}</Descriptions.Item>
             </Descriptions>
             <ResponsiveTable<OcrTask>
@@ -975,8 +1106,13 @@ export function SubmissionCapturePage({
               columns={ocrTaskColumns}
               pagination={false}
               size="small"
-              locale={{ emptyText: <EmptyState title="暂无识别任务" description="该答卷还没有文字识别任务。" /> }}
+              locale={{ emptyText: <EmptyState title="暂无识别任务" description="该答题卡还没有文字识别任务。" /> }}
             />
+            {ocrDrawer.row.ocrHasMore ? (
+              <div className="load-more-row">
+                <Button loading={ocrDrawer.loadingMore} onClick={() => void loadMoreOcrTasks()}>加载更早的识别任务</Button>
+              </div>
+            ) : null}
             {ocrDrawer.tasks.flatMap((task) => task.results ?? []).length > 0 ? (
               <div className="ocr-result-list">
                 {ocrDrawer.tasks.map((task, index) => (

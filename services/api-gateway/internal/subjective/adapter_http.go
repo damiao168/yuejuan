@@ -107,6 +107,22 @@ func (a *HTTPAdapter) Policy() ModelPolicy {
 	return a.policy
 }
 
+func (a *HTTPAdapter) RuntimeStatus() RuntimeStatus {
+	available := a.baseURL != "" && len(a.token) >= 32
+	errorCode := ""
+	if !available {
+		errorCode = "ai_service_not_configured"
+	}
+	return RuntimeStatus{
+		Enabled:       true,
+		Available:     available,
+		Mode:          "real",
+		ErrorCode:     errorCode,
+		ModelVersion:  a.policy.ModelVersion,
+		PromptVersion: a.policy.PromptVersion,
+	}
+}
+
 func (a *HTTPAdapter) Grade(ctx context.Context, input AdapterInput) (AdapterOutput, error) {
 	requestID := strings.TrimSpace(input.RequestID)
 	if requestID == "" {

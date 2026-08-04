@@ -114,7 +114,7 @@ func TestCoreWorkflowE2EWithSyntheticMemoryStores(t *testing.T) {
 	if qualityResp["valid"] != true {
 		t.Fatalf("submission quality should pass: %#v", qualityResp)
 	}
-	readyResp := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/status", adminToken, `{"status":"ready_for_ocr"}`, http.StatusOK)["submission"].(map[string]any)
+	readyResp := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/status", adminToken, `{"status":"ready_for_ocr","expected_revision":1}`, http.StatusOK)["submission"].(map[string]any)
 	if readyResp["status"] != "ready_for_ocr" {
 		t.Fatalf("submission should be ready_for_ocr: %#v", readyResp)
 	}
@@ -252,12 +252,12 @@ func TestCoreWorkflowE2EWithSyntheticMemoryStores(t *testing.T) {
 	}
 	fixture.assertUnfinishedReviewCannotPublish(t, adminToken)
 
-	assignedTask := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/assign", adminToken, `{"assigned_to":"`+e2eTeacherID+`"}`, http.StatusOK)["task"].(map[string]any)
+	assignedTask := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/assign", adminToken, `{"assigned_to":"`+e2eTeacherID+`","expected_revision":1}`, http.StatusOK)["task"].(map[string]any)
 	if assignedTask["status"] != "assigned" || assignedTask["assigned_to"] != e2eTeacherID {
 		t.Fatalf("review task should be assigned to teacher: %#v", assignedTask)
 	}
-	e2eExpectStatus(t, fixture.router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", teacherToken, `{"score":6,"rubric_selections":[{"point_id":"p1","score":6}],"comments":"synthetic over max"}`, http.StatusBadRequest)
-	submittedReview := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", teacherToken, `{"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"synthetic human review","reason":"manual review after mock AI"}`, http.StatusCreated)
+	e2eExpectStatus(t, fixture.router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", teacherToken, `{"expected_revision":2,"score":6,"rubric_selections":[{"point_id":"p1","score":6}],"comments":"synthetic over max"}`, http.StatusBadRequest)
+	submittedReview := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", teacherToken, `{"expected_revision":2,"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"synthetic human review","reason":"manual review after mock AI"}`, http.StatusCreated)
 	humanGrade := submittedReview["human_grade"].(map[string]any)
 	if humanGrade["score"] != float64(4) || submittedReview["task"].(map[string]any)["status"] != "submitted" {
 		t.Fatalf("human grade should be submitted with score 4: %#v", submittedReview)
@@ -325,7 +325,7 @@ func TestCoreWorkflowE2EWithSyntheticMemoryStores(t *testing.T) {
 	if appealResp["status"] != "submitted" {
 		t.Fatalf("appeal should be submitted: %#v", appealResp)
 	}
-	reviewedAppeal := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/appeals/"+appealID+"/review", teacherToken, `{"status":"score_adjusted","reason":"Synthetic teacher adjustment after appeal","adjusted_score":5}`, http.StatusOK)
+	reviewedAppeal := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/appeals/"+appealID+"/review", teacherToken, `{"status":"score_adjusted","reason":"Synthetic teacher adjustment after appeal","adjusted_score":5,"expected_revision":1}`, http.StatusOK)
 	if reviewedAppeal["appeal"].(map[string]any)["status"] != "score_adjusted" || reviewedAppeal["score_adjustment"] == nil {
 		t.Fatalf("teacher should process appeal with score adjustment: %#v", reviewedAppeal)
 	}
@@ -481,7 +481,7 @@ func e2eLogin(t *testing.T, router http.Handler, username string) string {
 func e2eLoginWithTenant(t *testing.T, router http.Handler, tenantCode string, username string, password string) string {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"tenant_code": tenantCode, "username": username, "password": password})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

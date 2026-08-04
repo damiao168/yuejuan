@@ -76,8 +76,11 @@ WHERE a.tenant_id = $1 AND a.deleted_at IS NULL
   AND ($3 = '' OR a.student_id::text = $3)
   AND ($4 = '' OR a.status = $4)
   AND ($5 = '' OR a.assigned_to::text = $5)
-ORDER BY a.created_at DESC
-`, tenantID, filter.ExamID, filter.StudentID, filter.Status, filter.AssignedTo)
+  AND ($7 = '' OR a.created_at < $6 OR (a.created_at = $6 AND a.id::text < $7))
+ORDER BY a.created_at DESC, a.id::text DESC
+LIMIT NULLIF($8, 0)
+`, tenantID, filter.ExamID, filter.StudentID, filter.Status, filter.AssignedTo,
+		filter.CursorCreatedAt, filter.CursorID, filter.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +110,7 @@ WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 
 func (s *PostgresStore) AssignAppeal(ctx context.Context, tenantID string, id string, _ string, input AssignAppealInput) (Appeal, error) {
 	input.AssignedTo = strings.TrimSpace(input.AssignedTo)
-	if input.AssignedTo == "" {
+	if input.AssignedTo == "" || input.ExpectedRevision <= 0 {
 		return Appeal{}, ErrInvalidInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -144,6 +147,9 @@ FOR UPDATE
 	if isTerminalStatus(item.Status) {
 		return Appeal{}, ErrInvalidTransition
 	}
+	if item.Revision != input.ExpectedRevision {
+		return Appeal{}, ErrRevisionConflict
+	}
 	if item.FinalGradeID != "" {
 		var participated bool
 		if err := tx.QueryRowContext(ctx, `
@@ -163,11 +169,14 @@ SELECT EXISTS (
 	}
 	item, err = scanAppeal(tx.QueryRowContext(ctx, `
 UPDATE appeal
-SET assigned_to = $3::uuid, status = 'under_review', updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+SET assigned_to = $3::uuid, status = 'under_review', revision = revision + 1, updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $4 AND deleted_at IS NULL
 RETURNING `+appealColumns()+`
-`, tenantID, id, input.AssignedTo))
+`, tenantID, id, input.AssignedTo, input.ExpectedRevision))
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Appeal{}, ErrRevisionConflict
+		}
 		return Appeal{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -201,6 +210,9 @@ FOR UPDATE
 	if isTerminalStatus(item.Status) {
 		return Appeal{}, ErrInvalidTransition
 	}
+	if input.ExpectedRevision <= 0 || item.Revision != input.ExpectedRevision {
+		return Appeal{}, ErrRevisionConflict
+	}
 	if input.RecommendedScore != nil {
 		if item.FinalGradeID == "" {
 			return Appeal{}, ErrInvalidInput
@@ -228,11 +240,15 @@ SET status = 'under_review',
     teacher_recommended_score = $5,
     teacher_recommendation_by = $6::uuid,
     teacher_recommendation_at = now(),
+    revision = revision + 1,
     updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $7 AND deleted_at IS NULL
 RETURNING `+appealColumns()+`
-`, tenantID, id, input.Recommendation, input.Reason, input.RecommendedScore, actorID))
+`, tenantID, id, input.Recommendation, input.Reason, input.RecommendedScore, actorID, input.ExpectedRevision))
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Appeal{}, ErrRevisionConflict
+		}
 		return Appeal{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -262,6 +278,9 @@ FOR UPDATE
 	}
 	if item.Status == "closed" {
 		return Appeal{}, nil, ErrInvalidTransition
+	}
+	if input.ExpectedRevision <= 0 || item.Revision != input.ExpectedRevision {
+		return Appeal{}, nil, ErrRevisionConflict
 	}
 	if !canReviewTransition(item.Status, input.Status) {
 		return Appeal{}, nil, ErrInvalidTransition
@@ -301,11 +320,15 @@ SET status = $3,
     final_grade_id = NULLIF($7, '')::uuid,
     question_id = NULLIF($8, '')::uuid,
     question_no = $9,
+    revision = revision + 1,
     updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $10
 RETURNING `+appealColumns()+`
-`, tenantID, id, input.Status, input.Reason, input.AssignedTo, actorID, item.FinalGradeID, item.QuestionID, item.QuestionNo))
+`, tenantID, id, input.Status, input.Reason, input.AssignedTo, actorID, item.FinalGradeID, item.QuestionID, item.QuestionNo, input.ExpectedRevision))
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Appeal{}, nil, ErrRevisionConflict
+		}
 		return Appeal{}, nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -317,30 +340,32 @@ RETURNING `+appealColumns()+`
 
 func (s *PostgresStore) CloseAppeal(ctx context.Context, tenantID string, id string, actorID string, input CloseAppealInput) (Appeal, error) {
 	input.Reason = strings.TrimSpace(input.Reason)
-	if input.Reason == "" {
+	if input.Reason == "" || input.ExpectedRevision <= 0 {
 		return Appeal{}, ErrInvalidInput
-	}
-	var currentStatus string
-	if err := s.db.QueryRowContext(ctx, `
-SELECT status
-FROM appeal
-WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
-`, tenantID, id).Scan(&currentStatus); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Appeal{}, ErrNotFound
-		}
-		return Appeal{}, err
-	}
-	if currentStatus == "closed" {
-		return Appeal{}, ErrInvalidTransition
 	}
 	item, err := scanAppeal(s.db.QueryRowContext(ctx, `
 UPDATE appeal
-SET status = 'closed', result_reason = $3, closed_by = $4::uuid, closed_at = now(), updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
+SET status = 'closed', result_reason = $3, closed_by = $4::uuid, closed_at = now(),
+    revision = revision + 1, updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $5 AND status <> 'closed' AND deleted_at IS NULL
 RETURNING `+appealColumns()+`
-`, tenantID, id, input.Reason, actorID))
+`, tenantID, id, input.Reason, actorID, input.ExpectedRevision))
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			var currentStatus string
+			var currentRevision int64
+			lookupErr := s.db.QueryRowContext(ctx, `SELECT status, revision FROM appeal WHERE tenant_id=$1 AND id::text=$2 AND deleted_at IS NULL`, tenantID, id).Scan(&currentStatus, &currentRevision)
+			if errors.Is(lookupErr, sql.ErrNoRows) {
+				return Appeal{}, ErrNotFound
+			}
+			if lookupErr != nil {
+				return Appeal{}, lookupErr
+			}
+			if currentRevision != input.ExpectedRevision {
+				return Appeal{}, ErrRevisionConflict
+			}
+			return Appeal{}, ErrInvalidTransition
+		}
 		return Appeal{}, err
 	}
 	return s.withDetails(ctx, item)
@@ -625,7 +650,7 @@ func appealColumns(aliases ...string) string {
   COALESCE(` + prefix + `assigned_to::text, ''), ` + prefix + `teacher_recommendation, ` + prefix + `teacher_recommendation_reason,
   ` + prefix + `teacher_recommended_score::float8, COALESCE(` + prefix + `teacher_recommendation_by::text, ''), ` + prefix + `teacher_recommendation_at,
   COALESCE(` + prefix + `reviewed_by::text, ''), ` + prefix + `reviewed_at,
-  COALESCE(` + prefix + `closed_by::text, ''), ` + prefix + `closed_at, ` + prefix + `created_by::text, ` + prefix + `created_at, ` + prefix + `updated_at`
+  COALESCE(` + prefix + `closed_by::text, ''), ` + prefix + `closed_at, ` + prefix + `revision, ` + prefix + `created_by::text, ` + prefix + `created_at, ` + prefix + `updated_at`
 }
 
 type scanner interface {
@@ -665,6 +690,7 @@ func scanAppeal(row scanner) (Appeal, error) {
 		&reviewedAt,
 		&out.ClosedBy,
 		&closedAt,
+		&out.Revision,
 		&out.CreatedBy,
 		&out.CreatedAt,
 		&out.UpdatedAt,
@@ -725,6 +751,7 @@ func scanAppealSummary(row scanner) (Appeal, error) {
 		&reviewedAt,
 		&out.ClosedBy,
 		&closedAt,
+		&out.Revision,
 		&out.CreatedBy,
 		&out.CreatedAt,
 		&out.UpdatedAt,

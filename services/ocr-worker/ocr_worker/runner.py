@@ -63,6 +63,9 @@ class OCRRunner:
         lease_token = str(runtime_task["lease_token"])
         task_id = str(runtime_task["source_id"])
         tenant_id = str(runtime_task["tenant_id"])
+        activate_task = getattr(self.api, "activate_task", None)
+        if callable(activate_task):
+            activate_task(runtime_task, self.config.worker_id)
         incompatibility = self._runtime_incompatibility(runtime_task)
         if incompatibility is not None:
             self.api.fail_task(task_id, incompatibility, runtime_task_id, lease_token, False, tenant_id)

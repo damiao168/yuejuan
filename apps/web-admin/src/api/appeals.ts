@@ -59,6 +59,7 @@ export interface Appeal {
   closed_by?: string;
   closed_at?: string;
   created_by: string;
+  revision: number;
   created_at: string;
   updated_at: string;
   evidence?: AppealEvidence;
@@ -69,6 +70,8 @@ export interface AppealListFilter {
   exam_id?: string;
   student_id?: string;
   status?: string;
+  limit?: number;
+  cursor?: string;
 }
 
 export interface ReviewAppealPayload {
@@ -77,12 +80,14 @@ export interface ReviewAppealPayload {
   assigned_to?: string;
   final_grade_id?: string;
   adjusted_score?: number;
+  expected_revision: number;
 }
 
 export interface SubmitAppealRecommendationPayload {
   recommendation: "accept" | "reject" | "adjust_score" | "need_more_info";
   reason: string;
   recommended_score?: number;
+  expected_revision: number;
 }
 
 export interface AppealStatistics {
@@ -103,22 +108,28 @@ function queryString(filter: AppealListFilter) {
   if (filter.status) {
     params.set("status", filter.status);
   }
+  if (filter.limit) {
+    params.set("limit", String(filter.limit));
+  }
+  if (filter.cursor) {
+    params.set("cursor", filter.cursor);
+  }
   const query = params.toString();
   return query ? `?${query}` : "";
 }
 
 export async function listAppeals(filter: AppealListFilter = {}) {
-  return apiClient.request<{ appeals: Appeal[] }>(`/api/v1/appeals${queryString(filter)}`);
+  return apiClient.request<{ appeals: Appeal[]; next_cursor: string; has_more: boolean }>(`/api/v1/appeals${queryString(filter)}`);
 }
 
 export async function getAppeal(id: string) {
   return apiClient.request<{ appeal: Appeal }>(`/api/v1/appeals/${encodeURIComponent(id)}`);
 }
 
-export async function assignAppeal(id: string, assignedTo: string) {
+export async function assignAppeal(id: string, assignedTo: string, expectedRevision: number) {
   return apiClient.request<{ appeal: Appeal }>(`/api/v1/appeals/${encodeURIComponent(id)}/assign`, {
     method: "POST",
-    body: JSON.stringify({ assigned_to: assignedTo })
+    body: JSON.stringify({ assigned_to: assignedTo, expected_revision: expectedRevision })
   });
 }
 
@@ -136,10 +147,10 @@ export async function reviewAppeal(id: string, payload: ReviewAppealPayload) {
   });
 }
 
-export async function closeAppeal(id: string, reason: string) {
+export async function closeAppeal(id: string, reason: string, expectedRevision: number) {
   return apiClient.request<{ appeal: Appeal }>(`/api/v1/appeals/${encodeURIComponent(id)}/close`, {
     method: "POST",
-    body: JSON.stringify({ reason })
+    body: JSON.stringify({ reason, expected_revision: expectedRevision })
   });
 }
 

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -64,28 +65,28 @@ func TestReviewTaskRoutesCreateAssignSubmitAndAudit(t *testing.T) {
 		t.Fatalf("get review task expected task detail, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/assign", `{"assigned_to":"`+reviewGraderID+`"}`, managerToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/assign", `{"assigned_to":"`+reviewGraderID+`","expected_revision":1}`, managerToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"assigned"`) {
 		t.Fatalf("assign review task expected assigned, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/return", `{"reason":"needs second look"}`, managerToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/return", `{"reason":"needs second look","expected_revision":2}`, managerToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"returned"`) || !strings.Contains(rec.Body.String(), `"return_reason":"needs second look"`) {
 		t.Fatalf("return before submission expected returned task, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/submit", `{"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"clear","reason":"manual review"}`, graderToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/submit", `{"expected_revision":3,"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"clear","reason":"manual review"}`, graderToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"status":"submitted"`) || !strings.Contains(rec.Body.String(), `"score":4`) {
 		t.Fatalf("submit human grade expected submitted grade, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/return", `{"reason":"must not invalidate committed grade"}`, managerToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/return", `{"reason":"must not invalidate committed grade","expected_revision":4}`, managerToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "invalid_review_transition") {
@@ -108,7 +109,7 @@ func TestReviewSubmitRejectsInconsistentRubric(t *testing.T) {
 	taskID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "manual_sample")
 	assignReviewTaskForRoute(t, router, managerToken, taskID, reviewGraderID)
 
-	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/submit", `{"score":4,"rubric_selections":[{"point_id":"p1","score":3}]}`, graderToken)
+	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/submit", `{"expected_revision":2,"score":4,"rubric_selections":[{"point_id":"p1","score":3}]}`, graderToken)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_review_input") {
@@ -289,7 +290,7 @@ func TestReviewWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 		t.Fatalf("non-admin evidence manager must not access the original image, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+firstID+"/submit", `{"score":4,"rubric_selections":[{"point_id":"p1","score":4}]}`, graderToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+firstID+"/submit", `{"expected_revision":2,"score":4,"rubric_selections":[{"point_id":"p1","score":4}]}`, graderToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -443,7 +444,7 @@ func TestReviewTaskBatchAssignRoute(t *testing.T) {
 	firstID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "manual_sample")
 	secondID := createReviewTaskForRoute(t, router, managerToken, "segment-2", "score_anomaly")
 
-	body := `{"task_ids":["` + firstID + `","` + secondID + `"],"assigned_to":"` + reviewGraderID + `"}`
+	body := `{"task_ids":["` + firstID + `","` + secondID + `"],"assigned_to":"` + reviewGraderID + `","expected_revisions":{"` + firstID + `":1,"` + secondID + `":1}}`
 	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/batch-assign", body, managerToken)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -466,7 +467,7 @@ func TestReviewTaskAssignmentRequiresActiveGrader(t *testing.T) {
 	taskID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "ocr_low_confidence")
 
 	for _, target := range []string{reviewManagerID, reviewArbitratorID, reviewOtherArbitratorID} {
-		req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/assign", `{"assigned_to":"`+target+`"}`, managerToken)
+		req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/assign", `{"assigned_to":"`+target+`","expected_revision":1}`, managerToken)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
@@ -474,7 +475,7 @@ func TestReviewTaskAssignmentRequiresActiveGrader(t *testing.T) {
 		}
 	}
 
-	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/assign", `{"assigned_to":"`+reviewGraderID+`"}`, managerToken)
+	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/assign", `{"assigned_to":"`+reviewGraderID+`","expected_revision":1}`, managerToken)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"assigned_to":"`+reviewGraderID+`"`) {
@@ -668,14 +669,14 @@ func TestArbitrationWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 	}
 	session := decodeDoubleMarkSession(t, rec.Body.Bytes())
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+session.FirstReviewTaskID+"/submit", `{"score":4,"rubric_selections":[{"point_id":"p1","score":4}]}`, firstToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+session.FirstReviewTaskID+"/submit", `{"expected_revision":1,"score":4,"rubric_selections":[{"point_id":"p1","score":4}]}`, firstToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("submit first mark expected 201, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+session.SecondReviewTaskID+"/submit", `{"score":1,"rubric_selections":[{"point_id":"p1","score":1}]}`, secondToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+session.SecondReviewTaskID+"/submit", `{"expected_revision":1,"score":1,"rubric_selections":[{"point_id":"p1","score":1}]}`, secondToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -697,7 +698,7 @@ func TestArbitrationWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 		t.Fatalf("non-matching exam filter should exclude arbitration task, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/submit", `{"final_score":3,"reason":"manager must assign an arbitrator first"}`, managerToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/submit", `{"final_score":3,"reason":"manager must assign an arbitrator first","expected_revision":1}`, managerToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -711,7 +712,7 @@ func TestArbitrationWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 		"cross tenant arbitrator": reviewCrossTenantUserID,
 	} {
 		t.Run("reject assignment to "+name, func(t *testing.T) {
-			req := reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+assigneeID+`"}`, managerToken)
+			req := reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+assigneeID+`","expected_revision":1}`, managerToken)
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
 			if rec.Code != http.StatusForbidden {
@@ -734,14 +735,14 @@ func TestArbitrationWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 		t.Fatalf("teacher with arbitration:manage must not read an unassigned arbitration task, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewArbitratorID+`"}`, teacherToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewArbitratorID+`","expected_revision":1}`, teacherToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("teacher with arbitration:manage must not assign arbitration tasks, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewArbitratorID+`"}`, managerToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewArbitratorID+`","expected_revision":1}`, managerToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -762,14 +763,14 @@ func TestArbitrationWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 		t.Fatalf("other arbitration worker should not get task, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/submit", `{"final_score":3,"reason":"not assigned","student_feedback":"Final score after arbitration."}`, otherArbitratorToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/submit", `{"final_score":3,"reason":"not assigned","student_feedback":"Final score after arbitration.","expected_revision":2}`, otherArbitratorToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("other arbitration worker should not submit task, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/submit", `{"final_score":3,"reason":"rubric evidence supports middle score","student_feedback":"Final score after arbitration."}`, arbitratorToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/submit", `{"final_score":3,"reason":"rubric evidence supports middle score","student_feedback":"Final score after arbitration.","expected_revision":2}`, arbitratorToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -803,7 +804,7 @@ func TestDoubleMarkAndArbitrationRoutes(t *testing.T) {
 	}
 	session := decodeDoubleMarkSession(t, rec.Body.Bytes())
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+session.FirstReviewTaskID+"/submit", `{"score":4,"rubric_selections":[{"point_id":"p1","score":4}]}`, firstToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+session.FirstReviewTaskID+"/submit", `{"expected_revision":1,"score":4,"rubric_selections":[{"point_id":"p1","score":4}]}`, firstToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated || strings.Contains(rec.Body.String(), `"second_score"`) {
@@ -817,7 +818,7 @@ func TestDoubleMarkAndArbitrationRoutes(t *testing.T) {
 		t.Fatalf("review task detail must remain blind, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+session.SecondReviewTaskID+"/submit", `{"score":1,"rubric_selections":[{"point_id":"p1","score":1}]}`, secondToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+session.SecondReviewTaskID+"/submit", `{"expected_revision":1,"score":1,"rubric_selections":[{"point_id":"p1","score":1}]}`, secondToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"arbitration_task"`) || strings.Contains(rec.Body.String(), `"final_grade"`) {
@@ -825,14 +826,14 @@ func TestDoubleMarkAndArbitrationRoutes(t *testing.T) {
 	}
 	arbitrationID := decodeArbitrationIDFromSubmit(t, rec.Body.Bytes())
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewGraderID+`"}`, managerToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewGraderID+`","expected_revision":1}`, managerToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("first reviewer should not be assignable as arbitrator by default, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewArbitratorID+`"}`, managerToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewArbitratorID+`","expected_revision":1}`, managerToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"assigned"`) {
@@ -846,7 +847,7 @@ func TestDoubleMarkAndArbitrationRoutes(t *testing.T) {
 		t.Fatalf("arbitration detail expected scores and context, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/submit", `{"final_score":3,"reason":"rubric evidence supports middle score","student_feedback":"Final score after arbitration."}`, arbitratorToken)
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/submit", `{"final_score":3,"reason":"rubric evidence supports middle score","student_feedback":"Final score after arbitration.","expected_revision":2}`, arbitratorToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"source":"arbitration"`) || !strings.Contains(rec.Body.String(), `"score":3`) {
@@ -965,6 +966,18 @@ func reviewAuthStoreByUser(t *testing.T, permissionsByUsername map[string][]stri
 
 func addReviewManagedUser(t *testing.T, store *auth.MemoryStore, user auth.User) {
 	t.Helper()
+	if len(user.DataScope) == 0 {
+		switch {
+		case slices.Contains(user.Roles, "tenant_admin"), slices.Contains(user.Roles, "platform_admin"):
+			user.DataScope = map[string]any{"scope": "tenant"}
+		case slices.Contains(user.Roles, "school_admin"), slices.Contains(user.Roles, "teacher"):
+			user.DataScope = map[string]any{"scope": "school", "school_id": "school-1"}
+		case slices.Contains(user.Roles, "grader"), slices.Contains(user.Roles, "arbitrator"):
+			user.DataScope = map[string]any{"scope": "assigned"}
+		default:
+			user.DataScope = map[string]any{"scope": "none"}
+		}
+	}
 	hash, err := auth.HashPassword("ChangeMe123!")
 	if err != nil {
 		t.Fatalf("hash: %v", err)
@@ -975,7 +988,7 @@ func addReviewManagedUser(t *testing.T, store *auth.MemoryStore, user auth.User)
 func reviewLogin(t *testing.T, router http.Handler, username string) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"tenant_code": "demo", "username": username, "password": "ChangeMe123!"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -1014,7 +1027,7 @@ func decodeReviewTaskID(t *testing.T, raw []byte) string {
 
 func assignReviewTaskForRoute(t *testing.T, router http.Handler, token string, taskID string, assignedTo string) {
 	t.Helper()
-	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/assign", `{"assigned_to":"`+assignedTo+`"}`, token)
+	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+taskID+"/assign", `{"assigned_to":"`+assignedTo+`","expected_revision":1}`, token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

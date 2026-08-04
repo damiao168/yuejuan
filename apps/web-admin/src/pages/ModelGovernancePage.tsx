@@ -30,6 +30,7 @@ import {
   TriangleAlert
 } from "lucide-react";
 import { ApiClientError } from "../api/client";
+import { getAIGradingStatus, type AIGradingRuntimeStatus } from "../api/system";
 import {
   createModelDeployment,
   createModelProvider,
@@ -114,6 +115,9 @@ export function ModelGovernancePage({
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [deployments, setDeployments] = useState<ModelDeployment[]>([]);
   const [evaluationRuns, setEvaluationRuns] = useState<EvaluationRun[]>([]);
+  const [nextEvaluationCursor, setNextEvaluationCursor] = useState("");
+  const [hasMoreEvaluations, setHasMoreEvaluations] = useState(false);
+  const [loadingMoreEvaluations, setLoadingMoreEvaluations] = useState(false);
   const [modelApprovals, setModelApprovals] = useState<ModelApproval[]>([]);
   const [policy, setPolicy] = useState<TenantModelPolicy | null>(null);
   const [activeView, setActiveView] = useState<GovernanceView>("providers");
@@ -125,6 +129,7 @@ export function ModelGovernancePage({
   const [secretModalOpen, setSecretModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [secretProbe, setSecretProbe] = useState<SecretProbe>();
+  const [aiStatus, setAIStatus] = useState<AIGradingRuntimeStatus>();
   const [providerForm] = Form.useForm<CreateProviderInput>();
   const [deploymentForm] = Form.useForm<CreateDeploymentInput & { meter: string; input_micros?: number; output_micros?: number }>();
   const [policyForm] = Form.useForm<UpdatePolicyInput>();
@@ -134,24 +139,47 @@ export function ModelGovernancePage({
     setLoading(true);
     setError(undefined);
     try {
-      const [providerResponse, deploymentResponse, policyResponse, evaluationResponse, approvalResponse] = await Promise.all([
+      const [providerResponse, deploymentResponse, policyResponse, evaluationResponse, approvalResponse, aiStatusResponse] = await Promise.all([
         listModelProviders(),
         listModelDeployments(),
         getModelPolicy(),
-        listModelEvaluationRuns(),
-        listModelApprovals()
+        listModelEvaluationRuns({ limit: 30 }),
+        listModelApprovals(),
+        getAIGradingStatus()
       ]);
       setProviders(providerResponse.providers);
       setDeployments(deploymentResponse.deployments);
       setPolicy(policyResponse.policy);
       setEvaluationRuns(evaluationResponse.evaluation_runs);
+      setNextEvaluationCursor(evaluationResponse.next_cursor ?? "");
+      setHasMoreEvaluations(Boolean(evaluationResponse.has_more));
       setModelApprovals(approvalResponse.model_approvals);
+      setAIStatus(aiStatusResponse.ai_grading);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const loadMoreEvaluations = useCallback(async () => {
+    if (!hasMoreEvaluations || !nextEvaluationCursor || loadingMoreEvaluations) return;
+    setLoadingMoreEvaluations(true);
+    try {
+      const response = await listModelEvaluationRuns({ limit: 30, cursor: nextEvaluationCursor });
+      setEvaluationRuns((current) => {
+        const byID = new Map(current.map((item) => [item.id, item]));
+        response.evaluation_runs.forEach((item) => byID.set(item.id, item));
+        return Array.from(byID.values());
+      });
+      setNextEvaluationCursor(response.next_cursor ?? "");
+      setHasMoreEvaluations(Boolean(response.has_more));
+    } catch (nextError) {
+      message.error(errorMessage(nextError));
+    } finally {
+      setLoadingMoreEvaluations(false);
+    }
+  }, [hasMoreEvaluations, loadingMoreEvaluations, message, nextEvaluationCursor]);
 
   useEffect(() => {
     void load();
@@ -420,6 +448,14 @@ export function ModelGovernancePage({
 
       {loading && providers.length === 0 ? <LoadingState label="读取模型治理配置" /> : null}
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+      {aiStatus ? (
+        <Alert
+          type={aiStatus.mode === "real" && aiStatus.available ? "success" : "warning"}
+          showIcon
+          message={aiStatus.mode === "real" && aiStatus.available ? "AI 阅卷服务已配置" : aiStatus.mode === "mock" ? "Mock 模式，仅用于开发或演示" : "AI 阅卷未启用"}
+          description={`运行模式：${aiStatus.mode}；模型：${aiStatus.model_version || "未配置"}；Prompt：${aiStatus.prompt_version || "未配置"}。治理页面可打开不代表模型已具备生产评分能力。`}
+        />
+      ) : null}
 
       {!error && policy ? (
         <>
@@ -505,13 +541,20 @@ export function ModelGovernancePage({
                   </div>
                 ) : null}
                 {activeView === "evaluations" ? (
-                  <ModelEvaluationWorkspace
-                    runs={evaluationRuns}
-                    deployments={deployments}
-                    loading={loading}
-                    canManage={canManageEvaluations}
-                    onRefresh={load}
-                  />
+                  <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                    <ModelEvaluationWorkspace
+                      runs={evaluationRuns}
+                      deployments={deployments}
+                      loading={loading}
+                      canManage={canManageEvaluations}
+                      onRefresh={load}
+                    />
+                    {hasMoreEvaluations ? (
+                      <Button block loading={loadingMoreEvaluations} onClick={() => void loadMoreEvaluations()}>
+                        加载更多评测记录
+                      </Button>
+                    ) : null}
+                  </Space>
                 ) : null}
                 {activeView === "approvals" ? (
                   <ModelApprovalWorkspace

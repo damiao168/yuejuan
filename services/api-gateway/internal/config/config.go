@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -46,11 +47,12 @@ type PostgresConfig struct {
 }
 
 type AuthConfig struct {
-	SessionTTL          time.Duration
-	LoginFailureLimit   int
-	LoginFailureWindow  time.Duration
-	SessionCookieName   string
-	SessionCookieSecure bool
+	SessionTTL           time.Duration
+	RememberedSessionTTL time.Duration
+	LoginFailureLimit    int
+	LoginFailureWindow   time.Duration
+	SessionCookieName    string
+	SessionCookieSecure  bool
 }
 
 type SecurityConfig struct {
@@ -59,6 +61,7 @@ type SecurityConfig struct {
 	CORSAllowedOrigins  []string
 	CORSAllowedMethods  []string
 	CORSAllowedHeaders  []string
+	TrustedProxyCIDRs   []string
 }
 
 type RedisConfig struct {
@@ -80,6 +83,8 @@ type QdrantConfig struct {
 }
 
 type AIServiceConfig struct {
+	Enabled           bool
+	AllowMock         bool
 	URL               string
 	Token             string
 	Timeout           time.Duration
@@ -95,9 +100,13 @@ type AIServiceConfig struct {
 }
 
 type FileConfig struct {
-	Bucket            string
-	MaxUploadBytes    int64
-	AllowedExtensions []string
+	Bucket                    string
+	MaxUploadBytes            int64
+	AllowedExtensions         []string
+	ReconciliationInterval    time.Duration
+	ReconciliationStaleAfter  time.Duration
+	ReconciliationBatchSize   int
+	ReconciliationObjectLimit int
 }
 
 type ObservabilityConfig struct {
@@ -118,6 +127,23 @@ func Load(envFile string) (Config, error) {
 	}
 
 	environment := getEnv("EDUGRADE_ENV", "development")
+	secretDefaults := map[string]string{
+		"EDUGRADE_POSTGRES_DSN":      "postgres://edugrade:edugrade_dev@127.0.0.1:5432/edugrade?sslmode=disable",
+		"EDUGRADE_REDIS_PASSWORD":    "",
+		"EDUGRADE_MINIO_ACCESS_KEY":  "edugrade",
+		"EDUGRADE_MINIO_SECRET_KEY":  "edugrade_dev_secret",
+		"EDUGRADE_QDRANT_API_KEY":    "",
+		"EDUGRADE_AI_SERVICE_TOKEN":  "",
+		"EDUGRADE_BARCODE_HMAC_KEYS": "",
+	}
+	secretValues := make(map[string]string, len(secretDefaults))
+	for key, fallback := range secretDefaults {
+		value, err := getEnvOrFile(key, fallback)
+		if err != nil {
+			return Config{}, err
+		}
+		secretValues[key] = value
+	}
 	sessionCookieSecure := defaultSessionCookieSecure(environment)
 	if raw, ok := os.LookupEnv("EDUGRADE_SESSION_COOKIE_SECURE"); ok && strings.TrimSpace(raw) != "" {
 		if parsed, err := strconv.ParseBool(raw); err == nil {
@@ -140,40 +166,44 @@ func Load(envFile string) (Config, error) {
 			IdleTimeout:       getEnvDuration("EDUGRADE_HTTP_IDLE_TIMEOUT", 60*time.Second),
 		},
 		Auth: AuthConfig{
-			SessionTTL:          getEnvDuration("EDUGRADE_SESSION_TTL", 8*time.Hour),
-			LoginFailureLimit:   getEnvInt("EDUGRADE_LOGIN_FAILURE_LIMIT", 5),
-			LoginFailureWindow:  getEnvDuration("EDUGRADE_LOGIN_FAILURE_WINDOW", 15*time.Minute),
-			SessionCookieName:   getEnv("EDUGRADE_SESSION_COOKIE_NAME", "edugrade_session"),
-			SessionCookieSecure: sessionCookieSecure,
+			SessionTTL:           getEnvDuration("EDUGRADE_SESSION_TTL", 8*time.Hour),
+			RememberedSessionTTL: getEnvDuration("EDUGRADE_REMEMBERED_SESSION_TTL", 30*24*time.Hour),
+			LoginFailureLimit:    getEnvInt("EDUGRADE_LOGIN_FAILURE_LIMIT", 5),
+			LoginFailureWindow:   getEnvDuration("EDUGRADE_LOGIN_FAILURE_WINDOW", 15*time.Minute),
+			SessionCookieName:    getEnv("EDUGRADE_SESSION_COOKIE_NAME", "edugrade_session"),
+			SessionCookieSecure:  sessionCookieSecure,
 		},
 		Security: SecurityConfig{
 			MaxHeaderBytes:      getEnvInt("EDUGRADE_HTTP_MAX_HEADER_BYTES", 1<<20),
 			MaxRequestBodyBytes: int64(getEnvInt("EDUGRADE_MAX_REQUEST_BODY_BYTES", 2*1024*1024)),
 			CORSAllowedOrigins:  splitCSV(getEnv("EDUGRADE_CORS_ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5180,http://localhost:5173,http://localhost:5174,http://localhost:5180")),
 			CORSAllowedMethods:  splitCSV(getEnv("EDUGRADE_CORS_ALLOWED_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")),
-			CORSAllowedHeaders:  splitCSV(getEnv("EDUGRADE_CORS_ALLOWED_HEADERS", "Authorization,Content-Type,X-Request-ID,X-Trace-ID")),
+			CORSAllowedHeaders:  splitCSV(getEnv("EDUGRADE_CORS_ALLOWED_HEADERS", "Authorization,Content-Type,X-Request-ID,X-Trace-ID,Idempotency-Key,X-EduGrade-CSRF")),
+			TrustedProxyCIDRs:   splitCSV(getEnv("EDUGRADE_TRUSTED_PROXY_CIDRS", "")),
 		},
 		Postgres: PostgresConfig{
-			DSN: getEnv("EDUGRADE_POSTGRES_DSN", "postgres://edugrade:edugrade_dev@127.0.0.1:5432/edugrade?sslmode=disable"),
+			DSN: secretValues["EDUGRADE_POSTGRES_DSN"],
 		},
 		Redis: RedisConfig{
 			Addr:     getEnv("EDUGRADE_REDIS_ADDR", "127.0.0.1:6379"),
-			Password: getEnv("EDUGRADE_REDIS_PASSWORD", ""),
+			Password: secretValues["EDUGRADE_REDIS_PASSWORD"],
 			DB:       getEnvInt("EDUGRADE_REDIS_DB", 0),
 		},
 		MinIO: MinIOConfig{
 			Endpoint:  getEnv("EDUGRADE_MINIO_ENDPOINT", "127.0.0.1:9000"),
-			AccessKey: getEnv("EDUGRADE_MINIO_ACCESS_KEY", "edugrade"),
-			SecretKey: getEnv("EDUGRADE_MINIO_SECRET_KEY", "edugrade_dev_secret"),
+			AccessKey: secretValues["EDUGRADE_MINIO_ACCESS_KEY"],
+			SecretKey: secretValues["EDUGRADE_MINIO_SECRET_KEY"],
 			UseSSL:    getEnvBool("EDUGRADE_MINIO_USE_SSL", false),
 		},
 		Qdrant: QdrantConfig{
 			URL:    getEnv("EDUGRADE_QDRANT_URL", ""),
-			APIKey: getEnv("EDUGRADE_QDRANT_API_KEY", ""),
+			APIKey: secretValues["EDUGRADE_QDRANT_API_KEY"],
 		},
 		AIService: AIServiceConfig{
+			Enabled:           getEnvBool("EDUGRADE_AI_GRADING_ENABLED", false),
+			AllowMock:         getEnvBool("EDUGRADE_ALLOW_MOCK_AI", false),
 			URL:               getEnv("EDUGRADE_AI_SERVICE_URL", ""),
-			Token:             getEnv("EDUGRADE_AI_SERVICE_TOKEN", ""),
+			Token:             secretValues["EDUGRADE_AI_SERVICE_TOKEN"],
 			Timeout:           getEnvDuration("EDUGRADE_AI_SERVICE_TIMEOUT", 750*time.Second),
 			MaxRetries:        getEnvInt("EDUGRADE_AI_SERVICE_MAX_RETRIES", 0),
 			ModelVersion:      getEnv("EDUGRADE_AI_MODEL_VERSION", "Qwen/Qwen3-4B-GGUF:Q4_K_M"),
@@ -186,9 +216,13 @@ func Load(envFile string) (Config, error) {
 			CapabilityProfile: getEnv("EDUGRADE_AI_CAPABILITY_PROFILE", "local-pilot-v1"),
 		},
 		Files: FileConfig{
-			Bucket:            getEnv("EDUGRADE_FILE_BUCKET", "edugrade-files"),
-			MaxUploadBytes:    int64(getEnvInt("EDUGRADE_FILE_MAX_UPLOAD_BYTES", 104857600)),
-			AllowedExtensions: splitCSV(getEnv("EDUGRADE_FILE_ALLOWED_EXTENSIONS", ".pdf,.png,.jpg,.jpeg,.csv,.docx")),
+			Bucket:                    getEnv("EDUGRADE_FILE_BUCKET", "edugrade-files"),
+			MaxUploadBytes:            int64(getEnvInt("EDUGRADE_FILE_MAX_UPLOAD_BYTES", 104857600)),
+			AllowedExtensions:         splitCSV(getEnv("EDUGRADE_FILE_ALLOWED_EXTENSIONS", ".pdf,.png,.jpg,.jpeg,.csv,.docx")),
+			ReconciliationInterval:    getEnvDuration("EDUGRADE_FILE_RECONCILIATION_INTERVAL", 24*time.Hour),
+			ReconciliationStaleAfter:  getEnvDuration("EDUGRADE_FILE_RECONCILIATION_STALE_AFTER", time.Hour),
+			ReconciliationBatchSize:   getEnvInt("EDUGRADE_FILE_RECONCILIATION_BATCH_SIZE", 200),
+			ReconciliationObjectLimit: getEnvInt("EDUGRADE_FILE_RECONCILIATION_OBJECT_LIMIT", 1000),
 		},
 		Observability: ObservabilityConfig{
 			SlowRequestThreshold:      getEnvDuration("EDUGRADE_SLOW_REQUEST_THRESHOLD", 2*time.Second),
@@ -196,7 +230,7 @@ func Load(envFile string) (Config, error) {
 		},
 		Barcode: BarcodeConfig{
 			ActiveKeyID: getEnv("EDUGRADE_BARCODE_ACTIVE_KEY_ID", "local-v1"),
-			HMACKeys:    parseBarcodeKeys(getEnv("EDUGRADE_BARCODE_HMAC_KEYS", "")),
+			HMACKeys:    parseBarcodeKeys(secretValues["EDUGRADE_BARCODE_HMAC_KEYS"]),
 		},
 	}
 	if err := validateProductionConfig(cfg); err != nil {
@@ -217,7 +251,12 @@ func parseBarcodeKeys(raw string) map[string][]byte {
 }
 
 func validateProductionConfig(cfg Config) error {
-	if strings.TrimSpace(cfg.AIService.URL) != "" {
+	for _, cidr := range cfg.Security.TrustedProxyCIDRs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("invalid EDUGRADE_TRUSTED_PROXY_CIDRS entry %q", cidr)
+		}
+	}
+	if cfg.AIService.Enabled && strings.TrimSpace(cfg.AIService.URL) != "" {
 		if len(cfg.AIService.Token) < 32 {
 			return fmt.Errorf("unsafe AI service configuration: EDUGRADE_AI_SERVICE_TOKEN must contain at least 32 characters")
 		}
@@ -240,12 +279,22 @@ func validateProductionConfig(cfg Config) error {
 			}
 		}
 	}
+	environment := strings.ToLower(strings.TrimSpace(cfg.Service.Environment))
+	if environment == "demo" {
+		if cfg.AIService.Enabled && strings.TrimSpace(cfg.AIService.URL) == "" && !cfg.AIService.AllowMock {
+			return fmt.Errorf("AI grading is enabled in demo but neither EDUGRADE_AI_SERVICE_URL nor EDUGRADE_ALLOW_MOCK_AI=true is configured")
+		}
+		return nil
+	}
 	if !isProductionLike(cfg.Service.Environment) {
 		return nil
 	}
 	var problems []string
-	if strings.TrimSpace(cfg.AIService.URL) == "" {
-		problems = append(problems, "EDUGRADE_AI_SERVICE_URL must be configured for production-like environments")
+	if cfg.AIService.AllowMock {
+		problems = append(problems, "EDUGRADE_ALLOW_MOCK_AI must be false in production-like environments")
+	}
+	if cfg.AIService.Enabled && strings.TrimSpace(cfg.AIService.URL) == "" {
+		problems = append(problems, "EDUGRADE_AI_SERVICE_URL must be configured when AI grading is enabled")
 	}
 	if !cfg.Auth.SessionCookieSecure {
 		problems = append(problems, "EDUGRADE_SESSION_COOKIE_SECURE must be true")
@@ -320,6 +369,31 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func getEnvOrFile(key, fallback string) (string, error) {
+	if value, ok := os.LookupEnv(key); ok {
+		if filePath := strings.TrimSpace(os.Getenv(key + "_FILE")); filePath != "" {
+			if strings.TrimSpace(value) != "" {
+				return "", fmt.Errorf("%s and %s_FILE cannot both be set", key, key)
+			}
+			content, err := os.ReadFile(filePath)
+			if err != nil {
+				return "", fmt.Errorf("read %s_FILE: %w", key, err)
+			}
+			return strings.TrimRight(string(content), "\r\n"), nil
+		}
+		return value, nil
+	}
+	filePath := strings.TrimSpace(os.Getenv(key + "_FILE"))
+	if filePath == "" {
+		return fallback, nil
+	}
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("read %s_FILE: %w", key, err)
+	}
+	return strings.TrimRight(string(content), "\r\n"), nil
 }
 
 func getEnvInt(key string, fallback int) int {

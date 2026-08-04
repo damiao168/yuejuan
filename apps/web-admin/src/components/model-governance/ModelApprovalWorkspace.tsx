@@ -130,7 +130,7 @@ export function ModelApprovalWorkspace({
     const { reason } = await revokeForm.validateFields();
     setSaving(true);
     try {
-      await revokeModelApproval(revokeTarget.id, reason);
+      await revokeModelApproval(revokeTarget.id, reason, revokeTarget.revision);
       setRevokeTarget(undefined);
       revokeForm.resetFields();
       message.success("模型批准已撤销，新任务必须停止使用该范围");

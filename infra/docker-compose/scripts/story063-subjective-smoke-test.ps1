@@ -62,10 +62,12 @@ if ([string]::IsNullOrWhiteSpace($AccessToken)) {
   if ([string]::IsNullOrWhiteSpace($TenantCode) -or [string]::IsNullOrWhiteSpace($Username) -or [string]::IsNullOrWhiteSpace($Password)) {
     throw "Provide EDUGRADE_SMOKE_ACCESS_TOKEN, or all of EDUGRADE_SMOKE_TENANT_CODE, EDUGRADE_SMOKE_USERNAME, and EDUGRADE_SMOKE_PASSWORD."
   }
-  $login = Invoke-SubjectiveApi -Method POST -Path "/api/v1/auth/login" -Body @{
+  $login = Invoke-SubjectiveApi -Method POST -Path "/api/v1/auth/token" -Body @{
     tenant_code = $TenantCode
     username = $Username
     password = $Password
+    client_type = "desktop"
+    device_name = "STORY-063 smoke test"
   }
   $AccessToken = [string]$login.access_token
   if ([string]::IsNullOrWhiteSpace($AccessToken)) {

@@ -16,14 +16,15 @@ function hasRole(user: SessionUser, roles: readonly string[]) {
 
 export function availableExperiences(user: SessionUser): ProductExperience[] {
   const experiences: ProductExperience[] = [];
-  if (hasRole(user, ADMIN_ROLES)) experiences.push("admin");
+  if (hasRole(user, ADMIN_ROLES) || user.permissions.includes("exam:manage")) experiences.push("admin");
   if (hasRole(user, TEACHER_ROLES)) experiences.push("teacher");
   return experiences;
 }
 
 export function defaultExperience(user: SessionUser): ProductExperience {
   const experiences = availableExperiences(user);
-  return experiences.includes("admin") ? "admin" : "teacher";
+  if (hasRole(user, ADMIN_ROLES)) return "admin";
+  return experiences.includes("teacher") ? "teacher" : "admin";
 }
 
 export function hasExperienceAccess(user: SessionUser, experience: ProductExperience): boolean {
@@ -47,7 +48,9 @@ export function canonicalPathFromPath(pathname: string): string {
 
 export function pathForExperience(pathname: string, experience: ProductExperience): string {
   const canonical = canonicalPathFromPath(pathname);
-  return `${experiencePrefixes[experience]}${canonical}`;
+  const queryIndex = pathname.indexOf("?");
+  const query = queryIndex >= 0 ? pathname.slice(queryIndex) : "";
+  return `${experiencePrefixes[experience]}${canonical}${query}`;
 }
 
 export function experienceLabel(experience: ProductExperience): string {

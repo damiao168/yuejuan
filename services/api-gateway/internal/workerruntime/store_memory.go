@@ -88,7 +88,7 @@ func (s *MemoryStore) createTaskLocked(tenantID string, actorID string, input Cr
 		Payload: cloneMap(input.Payload), PayloadSchemaVersion: input.PayloadSchemaVersion, Result: map[string]any{},
 		IdempotencyKey: input.IdempotencyKey, DedupeKey: input.DedupeKey, MaxAttempts: input.MaxAttempts,
 		RetryBackoffSeconds: input.RetryBackoffSeconds, ErrorDetail: map[string]any{}, CreatedBy: actorID,
-		CreatedAt: now, UpdatedAt: now, Attempts: []Attempt{},
+		Revision: 1, CreatedAt: now, UpdatedAt: now, Attempts: []Attempt{},
 	}
 	s.tasks[task.ID] = task
 	s.idempotent[key] = task.ID
@@ -160,6 +160,7 @@ func (s *MemoryStore) claim(heartbeatTenantID string, acrossTenants bool, input 
 			task.LeasedBy = ""
 			task.CompletedAt = &now
 			task.UpdatedAt = now
+			task.Revision++
 			s.tasks[task.ID] = task
 			continue
 		}
@@ -174,6 +175,7 @@ func (s *MemoryStore) claim(heartbeatTenantID string, acrossTenants bool, input 
 		task.WorkerInstanceID = input.WorkerInstanceID
 		task.NotBefore = nil
 		task.UpdatedAt = now
+		task.Revision++
 		task.Attempts = append(task.Attempts, Attempt{
 			ID: s.id("worker-attempt"), TenantID: task.TenantID, TaskID: task.ID, AttemptNo: task.AttemptCount,
 			WorkerService: input.WorkerService, WorkerInstanceID: input.WorkerInstanceID, LeaseToken: token,
@@ -209,6 +211,7 @@ func (s *MemoryStore) Heartbeat(_ context.Context, tenantID string, taskID strin
 		task.StartedAt = &now
 	}
 	task.UpdatedAt = now
+	task.Revision++
 	task.LeaseExpiresAt = &expires
 	if len(task.Attempts) > 0 {
 		attempt := &task.Attempts[len(task.Attempts)-1]
@@ -276,6 +279,7 @@ func (s *MemoryStore) completeLocked(tenantID string, taskID string, input Compl
 	task.ErrorDetail = map[string]any{}
 	task.CompletedAt = &now
 	task.UpdatedAt = now
+	task.Revision++
 	s.finishAttempt(&task, StatusSucceeded, input.DurationMS, "", map[string]any{})
 	s.tasks[taskID] = task
 	return cloneTask(task), nil
@@ -328,6 +332,7 @@ func (s *MemoryStore) failLocked(tenantID string, taskID string, input FailInput
 		task.CompletedAt = &now
 	}
 	task.UpdatedAt = now
+	task.Revision++
 	s.tasks[taskID] = task
 	return cloneTask(task), nil
 }
@@ -376,6 +381,7 @@ func (s *MemoryStore) createSucceededTaskLocked(tenantID string, actorID string,
 	task.ErrorDetail = map[string]any{}
 	task.CompletedAt = &now
 	task.UpdatedAt = now
+	task.Revision++
 	s.tasks[task.ID] = task
 	return cloneTask(task), nil
 }
@@ -398,6 +404,7 @@ func (s *MemoryStore) Cancel(_ context.Context, tenantID string, taskID string) 
 	task.CancelledAt = &now
 	task.CompletedAt = &now
 	task.UpdatedAt = now
+	task.Revision++
 	s.tasks[taskID] = task
 	return cloneTask(task), nil
 }
@@ -421,6 +428,7 @@ func (s *MemoryStore) Requeue(_ context.Context, tenantID string, taskID string)
 	task.LeaseExpiresAt = nil
 	task.CompletedAt = nil
 	task.UpdatedAt = time.Now().UTC()
+	task.Revision++
 	s.tasks[taskID] = task
 	return cloneTask(task), nil
 }
@@ -429,6 +437,19 @@ func (s *MemoryStore) Get(_ context.Context, tenantID string, taskID string) (Ta
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.getLocked(tenantID, taskID)
+}
+
+func (s *MemoryStore) AuthorizeLease(_ context.Context, taskID string, leaseToken string, workerService string, workerInstanceID string, now time.Time) (Task, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	task, ok := s.tasks[taskID]
+	if !ok || task.LeaseToken == "" || task.LeaseToken != leaseToken ||
+		task.WorkerService != workerService || task.WorkerInstanceID != workerInstanceID ||
+		(task.Status != StatusLeased && task.Status != StatusRunning) ||
+		task.LeaseExpiresAt == nil || !task.LeaseExpiresAt.After(now) {
+		return Task{}, ErrLeaseMismatch
+	}
+	return cloneTask(task), nil
 }
 
 func (tx *MemoryTx) Get(_ context.Context, tenantID string, taskID string) (Task, error) {

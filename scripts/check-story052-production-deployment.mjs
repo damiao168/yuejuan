@@ -6,12 +6,12 @@ const checks = [
   {
     name: 'compose deployment hardening',
     file: 'infra/docker-compose/docker-compose.yml',
-    includes: ['schema_migration', 'checksum mismatch for applied migration', "grep -qi ':18BD' /proc/net/tcp", 'EDUGRADE_MIGRATION_BASELINE_EXISTING'],
+    includes: ['schema_migration', 'checksum mismatch for applied migration', "grep -qi ':18BD' /proc/net/tcp", 'EDUGRADE_MIGRATION_BASELINE_VERSION', 'pg_advisory_lock'],
   },
   {
     name: 'local environment and image mirrors',
     file: 'infra/docker-compose/.env.example',
-    includes: ['EDUGRADE_ENV=local', 'EDUGRADE_GO_BUILD_IMAGE=', 'EDUGRADE_NODE_BUILD_IMAGE=', 'EDUGRADE_MIGRATION_BASELINE_EXISTING=false'],
+    includes: ['EDUGRADE_ENV=local', 'EDUGRADE_GO_BUILD_IMAGE=', 'EDUGRADE_NODE_BUILD_IMAGE=', 'EDUGRADE_MIGRATION_BASELINE_VERSION='],
   },
   {
     name: 'deployment preflight',
@@ -21,7 +21,7 @@ const checks = [
   {
     name: 'idempotent initialization',
     file: 'infra/docker-compose/scripts/init.ps1',
-    includes: ['BaselineExistingMigrations', 'Wait-ComposeService', 'smoke-test.ps1', 'BootstrapAdmin'],
+    includes: ['MigrationBaselineVersion', 'Wait-ComposeService', 'smoke-test.ps1', 'BootstrapAdmin'],
   },
   {
     name: 'authenticated smoke test',
@@ -60,6 +60,25 @@ for (const check of checks) {
   const source = fs.readFileSync(absolute, 'utf8');
   for (const expected of check.includes) {
     if (!source.includes(expected)) failures.push(`${check.name}: ${check.file} missing ${expected}`);
+  }
+}
+
+const migrationDir = path.join(root, 'services/api-gateway/migrations');
+const latestMigration = fs.readdirSync(migrationDir)
+  .map((name) => /^(\d{6})_.*\.sql$/.exec(name)?.[1])
+  .filter(Boolean)
+  .sort()
+  .at(-1);
+if (!latestMigration) {
+  failures.push('schema release metadata: no numbered migration found');
+} else {
+  const environmentExample = fs.readFileSync(path.join(root, 'infra/docker-compose/.env.example'), 'utf8');
+  const compose = fs.readFileSync(path.join(root, 'infra/docker-compose/docker-compose.yml'), 'utf8');
+  if (!environmentExample.includes(`EDUGRADE_SCHEMA_VERSION=${latestMigration}`)) {
+    failures.push(`schema release metadata: .env.example must declare latest migration ${latestMigration}`);
+  }
+  if (!compose.includes(`EDUGRADE_SCHEMA_VERSION:-${latestMigration}`)) {
+    failures.push(`schema release metadata: Compose default must match latest migration ${latestMigration}`);
   }
 }
 

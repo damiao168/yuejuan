@@ -220,6 +220,7 @@ export interface ModelApproval {
   decision_reference: string;
   expires_at: string;
   revoked_at?: string;
+  revision: number;
   created_at: string;
 }
 
@@ -272,8 +273,12 @@ export function probeModelSecret(credentialRef: string) {
   });
 }
 
-export function listModelEvaluationRuns() {
-  return apiClient.request<{ evaluation_runs: EvaluationRun[] }>("/api/v1/model-evaluation-runs");
+export function listModelEvaluationRuns(filter: { limit?: number; cursor?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.cursor) params.set("cursor", filter.cursor);
+  const query = params.toString();
+  return apiClient.request<{ evaluation_runs: EvaluationRun[]; next_cursor: string; has_more: boolean }>(`/api/v1/model-evaluation-runs${query ? `?${query}` : ""}`);
 }
 
 export function createModelEvaluationRun(input: CreateEvaluationRunInput) {
@@ -315,9 +320,9 @@ export function createModelApproval(input: CreateModelApprovalInput) {
   });
 }
 
-export function revokeModelApproval(approvalID: string, reason: string) {
+export function revokeModelApproval(approvalID: string, reason: string, expectedRevision: number) {
   return apiClient.request<{ model_approval: ModelApproval }>(`/api/v1/model-approvals/${approvalID}/revoke`, {
     method: "POST",
-    body: JSON.stringify({ reason })
+    body: JSON.stringify({ reason, expected_revision: expectedRevision })
   });
 }

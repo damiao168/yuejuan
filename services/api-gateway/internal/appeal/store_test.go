@@ -79,9 +79,10 @@ func TestReviewAppealAdjustsScoreAndStatistics(t *testing.T) {
 	}
 	newScore := 5.0
 	reviewed, adjustment, err := store.ReviewAppeal(context.Background(), tenantID, item.ID, "teacher-1", ReviewAppealInput{
-		Status:        "score_adjusted",
-		Reason:        "rubric evidence supports full credit",
-		AdjustedScore: &newScore,
+		Status:           "score_adjusted",
+		Reason:           "rubric evidence supports full credit",
+		AdjustedScore:    &newScore,
+		ExpectedRevision: item.Revision,
 	})
 	if err != nil {
 		t.Fatalf("review appeal: %v", err)
@@ -92,7 +93,7 @@ func TestReviewAppealAdjustsScoreAndStatistics(t *testing.T) {
 	if len(reviewed.Adjustments) != 1 || reviewed.Evidence.FinalGrade["score"].(float64) != 5 {
 		t.Fatalf("reviewed appeal should include updated history and final grade, got %#v", reviewed)
 	}
-	closed, err := store.CloseAppeal(context.Background(), tenantID, item.ID, "teacher-1", CloseAppealInput{Reason: "resolved"})
+	closed, err := store.CloseAppeal(context.Background(), tenantID, item.ID, "teacher-1", CloseAppealInput{Reason: "resolved", ExpectedRevision: reviewed.Revision})
 	if err != nil {
 		t.Fatalf("close appeal: %v", err)
 	}
@@ -121,18 +122,50 @@ func TestReviewAppealDoesNotReopenTerminalStatus(t *testing.T) {
 		t.Fatalf("create appeal: %v", err)
 	}
 	newScore := 5.0
-	if _, _, err := store.ReviewAppeal(context.Background(), tenantID, item.ID, "teacher-1", ReviewAppealInput{
-		Status:        "score_adjusted",
-		Reason:        "rubric evidence supports full credit",
-		AdjustedScore: &newScore,
-	}); err != nil {
+	terminal, _, err := store.ReviewAppeal(context.Background(), tenantID, item.ID, "teacher-1", ReviewAppealInput{
+		Status:           "score_adjusted",
+		Reason:           "rubric evidence supports full credit",
+		AdjustedScore:    &newScore,
+		ExpectedRevision: item.Revision,
+	})
+	if err != nil {
 		t.Fatalf("score adjust appeal: %v", err)
 	}
 	if _, _, err := store.ReviewAppeal(context.Background(), tenantID, item.ID, "teacher-1", ReviewAppealInput{
-		Status: "rejected",
-		Reason: "second decision should not overwrite terminal result",
+		Status:           "rejected",
+		Reason:           "second decision should not overwrite terminal result",
+		ExpectedRevision: terminal.Revision,
 	}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("terminal appeal should not be reopened, got %v", err)
+	}
+}
+
+func TestAppealRejectsStaleRevision(t *testing.T) {
+	store := seededAppealStore()
+	item, err := store.CreateAppeal(context.Background(), tenantID, "student-user-1", CreateAppealInput{
+		ExamID: "exam-1", StudentID: "student-1", TargetType: "question", FinalGradeID: "final-1", Reason: "review requested",
+	})
+	if err != nil {
+		t.Fatalf("create appeal: %v", err)
+	}
+	updated, err := store.AssignAppeal(context.Background(), tenantID, item.ID, "manager-1", AssignAppealInput{
+		AssignedTo: "teacher-2", ExpectedRevision: item.Revision,
+	})
+	if err != nil {
+		t.Fatalf("assign appeal: %v", err)
+	}
+	if updated.Revision != item.Revision+1 {
+		t.Fatalf("revision did not advance: before=%d after=%d", item.Revision, updated.Revision)
+	}
+	_, err = store.CloseAppeal(context.Background(), tenantID, item.ID, "manager-1", CloseAppealInput{
+		Reason: "stale close", ExpectedRevision: item.Revision,
+	})
+	if !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("stale revision must be rejected, got %v", err)
+	}
+	current, err := store.GetAppeal(context.Background(), tenantID, item.ID)
+	if err != nil || current.Status != "under_review" || current.Revision != updated.Revision {
+		t.Fatalf("stale update changed appeal: %#v err=%v", current, err)
 	}
 }
 

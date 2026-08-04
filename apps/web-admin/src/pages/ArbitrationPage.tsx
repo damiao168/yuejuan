@@ -3,7 +3,7 @@ import { Alert, App, Button, Collapse, Descriptions, Empty, Input, InputNumber, 
 import { CheckCircle2, ClipboardCheck, Gavel, RefreshCw, ScrollText, Search, UserCheck } from "lucide-react";
 import { ApiClientError } from "../api/client";
 import { listAuditLogs, type AuditLog } from "../api/audit";
-import { getExam } from "../api/exams";
+import { listExams } from "../api/exams";
 import { listQuestions, type Question, type RubricPoint } from "../api/papers";
 import {
   assignArbitrationTask,
@@ -18,6 +18,7 @@ import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
+import { hashQueryParam } from "../router/query";
 
 type ScopeFilter = "mine" | "all";
 type StatusFilter = "active" | "pending" | "assigned" | "submitted";
@@ -136,12 +137,18 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
   const { message } = App.useApp();
   const actorId = currentUser.id;
   const [scope, setScope] = useState<ScopeFilter>("mine");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
+    const status = hashQueryParam("status");
+    return statusOptions.some((option) => option.value === status) ? status as StatusFilter : "active";
+  });
   const [keyword, setKeyword] = useState("");
   const [tasks, setTasks] = useState<ArbitrationTask[]>([]);
   const [examNames, setExamNames] = useState<Record<string, string>>({});
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [loadingTasks, setLoadingTasks] = useState(true);
+  const [loadingMoreTasks, setLoadingMoreTasks] = useState(false);
+  const [nextTaskCursor, setNextTaskCursor] = useState("");
+  const [hasMoreTasks, setHasMoreTasks] = useState(false);
   const [taskError, setTaskError] = useState<string | null>(null);
   const [detail, setDetail] = useState<ArbitrationDetailState | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -190,10 +197,10 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
       setAuditLoading(true);
       setAuditError(null);
       try {
-        const targets = [
-          listAuditLogs({ target_type: "arbitration_task", target_id: task.id, limit: 20 }),
-          grade?.id ? listAuditLogs({ target_type: "final_grade", target_id: grade.id, limit: 20 }) : undefined
-        ].filter((item): item is Promise<{ audit_logs: AuditLog[] }> => Boolean(item));
+        const targets = [listAuditLogs({ target_type: "arbitration_task", target_id: task.id, limit: 20 })];
+        if (grade?.id) {
+          targets.push(listAuditLogs({ target_type: "final_grade", target_id: grade.id, limit: 20 }));
+        }
         const results = await Promise.all(targets);
         const merged = results
           .flatMap((result) => result.audit_logs)
@@ -222,14 +229,14 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
       setExamNames({});
       return;
     }
-    const results = await Promise.allSettled(ids.map((id) => getExam(id).then((result) => [id, result.exam.name] as const)));
-    const next: Record<string, string> = {};
-    for (const result of results) {
-      if (result.status === "fulfilled") {
-        next[result.value[0]] = result.value[1];
-      }
+    try {
+      const result = await listExams({ limit: 200 });
+      const wanted = new Set(ids);
+      const next = Object.fromEntries(result.exams.filter((exam) => wanted.has(exam.id)).map((exam) => [exam.id, exam.name]));
+      if (requestId === examNamesRequestRef.current) setExamNames(next);
+    } catch {
+      if (requestId === examNamesRequestRef.current) setExamNames({});
     }
-    if (requestId === examNamesRequestRef.current) setExamNames(next);
   }, [canReadExams]);
 
   const loadTasks = useCallback(async () => {
@@ -238,26 +245,58 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
     setTaskError(null);
     try {
       const result = await listArbitrationTasks({
-        status: statusFilter === "active" ? undefined : statusFilter,
+        status: statusFilter,
         assigned_to: personalScope ? currentUser.id : scope === "mine" ? actorId : undefined,
-        exam_id: initialExamId || undefined
+        exam_id: initialExamId || undefined,
+        limit: 50
       });
       if (requestId !== taskRequestRef.current) return;
       const scopedTasks = initialExamId
         ? result.arbitration_tasks.filter((task) => task.exam_id === initialExamId)
         : result.arbitration_tasks;
       setTasks(scopedTasks);
+      setNextTaskCursor(result.next_cursor ?? "");
+      setHasMoreTasks(Boolean(result.has_more));
       setSelectedTaskId((current) => (scopedTasks.some((task) => task.id === current) ? current : scopedTasks[0]?.id ?? ""));
       void loadExamNames(scopedTasks);
     } catch (error) {
       if (requestId !== taskRequestRef.current) return;
       setTaskError(formatError(error));
       setTasks([]);
+      setNextTaskCursor("");
+      setHasMoreTasks(false);
       setSelectedTaskId("");
     } finally {
       if (requestId === taskRequestRef.current) setLoadingTasks(false);
     }
   }, [actorId, currentUser.id, initialExamId, loadExamNames, personalScope, scope, statusFilter]);
+
+  const loadMoreTasks = useCallback(async () => {
+    if (!hasMoreTasks || !nextTaskCursor || loadingMoreTasks) return;
+    const requestId = ++taskRequestRef.current;
+    setLoadingMoreTasks(true);
+    try {
+      const result = await listArbitrationTasks({
+        status: statusFilter,
+        assigned_to: personalScope ? currentUser.id : scope === "mine" ? actorId : undefined,
+        exam_id: initialExamId || undefined,
+        limit: 50,
+        cursor: nextTaskCursor
+      });
+      if (requestId !== taskRequestRef.current) return;
+      const byID = new Map(tasks.map((task) => [task.id, task]));
+      result.arbitration_tasks.forEach((task) => byID.set(task.id, task));
+      const mergedTasks = Array.from(byID.values());
+      setTasks(mergedTasks);
+      setNextTaskCursor(result.next_cursor ?? "");
+      setHasMoreTasks(Boolean(result.has_more));
+      void loadExamNames(mergedTasks);
+    } catch (error) {
+      if (requestId === taskRequestRef.current) message.error(formatError(error));
+    } finally {
+      if (requestId === taskRequestRef.current) setLoadingMoreTasks(false);
+    }
+  }, [actorId, currentUser.id, hasMoreTasks, initialExamId, loadExamNames, loadingMoreTasks, message, nextTaskCursor, personalScope, scope, statusFilter, tasks]);
 
   const loadDetail = useCallback(
     async (taskId: string) => {
@@ -337,7 +376,10 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
     }
     setActioning("assign");
     try {
-      const result = await assignArbitrationTask(detail.task.id, { assigned_to: actorId });
+      const result = await assignArbitrationTask(detail.task.id, {
+        assigned_to: actorId,
+        expected_revision: detail.task.revision
+      });
       setDetail((current) => (current ? { ...current, task: result.arbitration_task } : current));
       setDraft(createInitialDraft(result.arbitration_task));
       await loadAudits(result.arbitration_task);
@@ -370,11 +412,12 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
     }
     setActioning("submit");
     try {
-      const result = await submitArbitration(detail.task.id, {
-        final_score: score,
-        reason: draft.reason.trim(),
-        student_feedback: draft.studentFeedback.trim()
-      });
+        const result = await submitArbitration(detail.task.id, {
+          final_score: score,
+          reason: draft.reason.trim(),
+          student_feedback: draft.studentFeedback.trim(),
+          expected_revision: detail.task.revision
+        });
       setDetail((current) => (current ? { ...current, task: result.arbitration_task } : current));
       setDraft(createInitialDraft(result.arbitration_task));
       setFinalGrade(result.final_grade);
@@ -570,18 +613,25 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
         ) : taskError ? (
           <ErrorState message={taskError} onRetry={() => void loadTasks()} />
         ) : (
-          <ResponsiveTable
-            rowKey="id"
-            size="small"
-            columns={columns}
-            dataSource={filteredTasks}
-            pagination={{ pageSize: 6, showSizeChanger: false }}
-            rowClassName={(record) => (record.id === selectedTaskId ? "arbitration-row-active" : "")}
-            locale={{ emptyText: <Empty description="当前没有需要仲裁的评分差异" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-            onRow={(record) => ({
-              onClick: () => setSelectedTaskId(record.id)
-            })}
-          />
+          <>
+            <ResponsiveTable
+              rowKey="id"
+              size="small"
+              columns={columns}
+              dataSource={filteredTasks}
+              pagination={{ pageSize: 6, showSizeChanger: false }}
+              rowClassName={(record) => (record.id === selectedTaskId ? "arbitration-row-active" : "")}
+              locale={{ emptyText: <Empty description="当前没有需要仲裁的评分差异" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+              onRow={(record) => ({
+                onClick: () => setSelectedTaskId(record.id)
+              })}
+            />
+            {hasMoreTasks ? (
+              <Button block loading={loadingMoreTasks} onClick={() => void loadMoreTasks()}>
+                加载更多仲裁任务
+              </Button>
+            ) : null}
+          </>
         )}
       </section>
 

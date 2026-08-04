@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -486,7 +487,7 @@ WHERE tenant_id = $1 AND id::text = $2
 	return item, nil
 }
 
-func (s *PostgresStore) ListEvaluationRuns(ctx context.Context, tenantID string) ([]EvaluationRun, error) {
+func (s *PostgresStore) ListEvaluationRuns(ctx context.Context, tenantID string, filter EvaluationListFilter) ([]EvaluationRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id::text, tenant_id::text, run_key, display_name,
        dataset_reference, dataset_sha256, authorization_reference, evidence_class,
@@ -495,8 +496,10 @@ SELECT id::text, tenant_id::text, run_key, display_name,
        completed_at, invalidated_at, created_at
 FROM model_evaluation_run
 WHERE tenant_id = $1
-ORDER BY created_at DESC, id
-`, tenantID)
+  AND ($3 = '' OR created_at < $2 OR (created_at = $2 AND id::text < $3))
+ORDER BY created_at DESC, id::text DESC
+LIMIT NULLIF($4, 0)
+`, tenantID, filter.CursorCreatedAt, filter.CursorID, filter.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -517,6 +520,16 @@ ORDER BY created_at DESC, id
 	}
 	rows.Close()
 
+	if len(runs) == 0 {
+		return runs, nil
+	}
+	placeholders := make([]string, len(runs))
+	args := make([]any, 0, len(runs)+1)
+	args = append(args, tenantID)
+	for index, run := range runs {
+		placeholders[index] = fmt.Sprintf("$%d::uuid", index+2)
+		args = append(args, run.ID)
+	}
 	candidateRows, err := s.db.QueryContext(ctx, `
 SELECT id::text, tenant_id::text, run_id::text, deployment_id::text,
        provider_key, deployment_key, model_version, prompt_version, rubric_version,
@@ -525,9 +538,9 @@ SELECT id::text, tenant_id::text, run_id::text, deployment_id::text,
        repeat_comparisons, stable_repeat_samples,
        p95_latency_ms, total_cost_micros, created_at
 FROM model_evaluation_candidate
-WHERE tenant_id = $1
+WHERE tenant_id = $1 AND run_id IN (`+strings.Join(placeholders, ",")+`)
 ORDER BY deployment_key, id
-`, tenantID)
+`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -770,16 +783,43 @@ func (s *PostgresStore) evaluationRunWithCandidates(
 	tenantID string,
 	runID string,
 ) (EvaluationRun, error) {
-	items, err := s.ListEvaluationRuns(ctx, tenantID)
+	item, err := s.evaluationRun(ctx, tenantID, runID)
 	if err != nil {
 		return EvaluationRun{}, err
 	}
-	for _, item := range items {
-		if item.ID == runID {
-			return item, nil
-		}
+	candidates, err := s.evaluationCandidates(ctx, tenantID, runID)
+	if err != nil {
+		return EvaluationRun{}, err
 	}
-	return EvaluationRun{}, ErrNotFound
+	item.Candidates = candidates
+	return item, nil
+}
+
+func (s *PostgresStore) evaluationCandidates(ctx context.Context, tenantID string, runID string) ([]EvaluationCandidate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id::text, tenant_id::text, run_id::text, deployment_id::text,
+       provider_key, deployment_key, model_version, prompt_version, rubric_version,
+       evaluated_samples, teacher_reviewed_samples, teacher_accepted_samples,
+       serious_error_samples, evidence_valid_samples,
+       repeat_comparisons, stable_repeat_samples,
+       p95_latency_ms, total_cost_micros, created_at
+FROM model_evaluation_candidate
+WHERE tenant_id = $1 AND run_id::text = $2
+ORDER BY deployment_key, id
+`, tenantID, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EvaluationCandidate{}
+	for rows.Next() {
+		item, scanErr := scanEvaluationCandidate(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (s *PostgresStore) evaluationTransitionError(ctx context.Context, tenantID string, runID string) error {
@@ -805,7 +845,7 @@ SELECT id::text, tenant_id::text, evaluation_run_id::text,
        provider_key, deployment_key, model_version, prompt_version, rubric_version,
        dataset_reference, dataset_sha256, authorization_reference,
        subject, grade, question_type, modality, manual_review_rate,
-       decision_reference, expires_at, revoked_at, created_at
+       decision_reference, expires_at, revoked_at, revision, created_at
 FROM model_approval
 WHERE tenant_id = $1
 ORDER BY created_at DESC, id
@@ -913,7 +953,7 @@ RETURNING id::text, tenant_id::text, evaluation_run_id::text,
           provider_key, deployment_key, model_version, prompt_version, rubric_version,
           dataset_reference, dataset_sha256, authorization_reference,
           subject, grade, question_type, modality, manual_review_rate,
-          decision_reference, expires_at, revoked_at, created_at
+          decision_reference, expires_at, revoked_at, revision, created_at
 `, tenantID, run.ID, candidate.ID, candidate.DeploymentID,
 		candidate.ProviderKey, candidate.DeploymentKey, candidate.ModelVersion,
 		candidate.PromptVersion, candidate.RubricVersion,
@@ -936,40 +976,49 @@ func (s *PostgresStore) RevokeModelApproval(
 	tenantID string,
 	actorID string,
 	id string,
-	reason string,
+	input ModelApprovalRevokeInput,
 ) (ModelApproval, error) {
-	if strings.TrimSpace(reason) == "" {
+	if strings.TrimSpace(input.Reason) == "" || input.ExpectedRevision < 1 {
 		return ModelApproval{}, ErrInvalidPromotion
 	}
 	row := s.db.QueryRowContext(ctx, `
 UPDATE model_approval
 SET revoked_at = now(),
     revoked_by = NULLIF($3, '')::uuid,
-    revocation_reason = $4
+    revocation_reason = $4,
+    revision = revision + 1
 WHERE tenant_id = $1
   AND id::text = $2
   AND revoked_at IS NULL
+  AND revision = $5
 RETURNING id::text, tenant_id::text, evaluation_run_id::text,
           evaluation_candidate_id::text, deployment_id::text,
           provider_key, deployment_key, model_version, prompt_version, rubric_version,
           dataset_reference, dataset_sha256, authorization_reference,
           subject, grade, question_type, modality, manual_review_rate,
-          decision_reference, expires_at, revoked_at, created_at
-`, tenantID, id, actorID, strings.TrimSpace(reason))
+          decision_reference, expires_at, revoked_at, revision, created_at
+`, tenantID, id, actorID, strings.TrimSpace(input.Reason), input.ExpectedRevision)
 	item, err := scanModelApproval(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		var exists bool
+		var currentRevision int64
+		var revokedAt sql.NullTime
 		checkErr := s.db.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM model_approval WHERE tenant_id = $1 AND id::text = $2)`,
+			`SELECT revision, revoked_at FROM model_approval WHERE tenant_id = $1 AND id::text = $2`,
 			tenantID, id,
-		).Scan(&exists)
+		).Scan(&currentRevision, &revokedAt)
+		if errors.Is(checkErr, sql.ErrNoRows) {
+			return ModelApproval{}, ErrNotFound
+		}
 		if checkErr != nil {
 			return ModelApproval{}, checkErr
 		}
-		if exists {
+		if currentRevision != input.ExpectedRevision {
+			return ModelApproval{}, ErrRevisionConflict
+		}
+		if revokedAt.Valid {
 			return ModelApproval{}, ErrConflict
 		}
-		return ModelApproval{}, ErrNotFound
+		return ModelApproval{}, ErrConflict
 	}
 	if err != nil {
 		return ModelApproval{}, mapModelApprovalStoreError(err)
@@ -1098,7 +1147,7 @@ func scanModelApproval(row rowScanner) (ModelApproval, error) {
 		&item.DatasetReference, &item.DatasetSHA256, &item.AuthorizationRef,
 		&item.Subject, &item.Grade, &item.QuestionType, &item.Modality,
 		&item.ManualReviewRate, &item.DecisionReference,
-		&item.ExpiresAt, &item.RevokedAt, &item.CreatedAt,
+		&item.ExpiresAt, &item.RevokedAt, &item.Revision, &item.CreatedAt,
 	); err != nil {
 		return ModelApproval{}, err
 	}

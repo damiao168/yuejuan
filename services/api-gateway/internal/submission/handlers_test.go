@@ -42,7 +42,7 @@ func TestSubmissionQualityGateFindsMissingPages(t *testing.T) {
 		t.Fatalf("expected quality issues, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/status", bytes.NewBufferString(`{"status":"ready_for_ocr"}`), token)
+	req = authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/status", bytes.NewBufferString(`{"status":"ready_for_ocr","expected_revision":1}`), token)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
@@ -66,7 +66,7 @@ func TestSubmissionCanBecomeReadyForOCRAfterQualityPass(t *testing.T) {
 		t.Fatalf("expected quality pass, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/status", bytes.NewBufferString(`{"status":"ready_for_ocr"}`), token)
+	req = authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/status", bytes.NewBufferString(`{"status":"ready_for_ocr","expected_revision":1}`), token)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ready_for_ocr") {
@@ -87,7 +87,7 @@ func TestCannotManuallyMarkQualityChecked(t *testing.T) {
 	item := createSubmission(t, router, token, "exam-1", 1)
 	addPage(t, router, token, item.ID, fileAsset.ID, 1)
 
-	req := authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/status", bytes.NewBufferString(`{"status":"quality_checked"}`), token)
+	req := authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/status", bytes.NewBufferString(`{"status":"quality_checked","expected_revision":1}`), token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
@@ -251,7 +251,7 @@ func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemorySt
 func login(t *testing.T, router http.Handler) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"tenant_code": "demo", "username": "submission_admin", "password": "ChangeMe123!"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

@@ -29,8 +29,10 @@ export interface Submission {
   quality_status: string;
   quality_issues: QualityIssue[];
   collected_by: string;
+  revision: number;
   created_at: string;
   pages?: SubmissionPage[];
+  summary?: Record<string, unknown>;
 }
 
 export interface CreateSubmissionPayload {
@@ -115,8 +117,12 @@ export async function createSubmission(examId: string, payload: CreateSubmission
   });
 }
 
-export async function listSubmissions(examId: string) {
-  return apiClient.request<{ submissions: Submission[] }>(`/api/v1/exams/${encodeURIComponent(examId)}/submissions`);
+export async function listSubmissions(examId: string, filter: { limit?: number; cursor?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.cursor) params.set("cursor", filter.cursor);
+  const query = params.toString();
+  return apiClient.request<{ submissions: Submission[]; next_cursor: string; has_more: boolean }>(`/api/v1/exams/${encodeURIComponent(examId)}/submissions${query ? `?${query}` : ""}`);
 }
 
 export async function getSubmission(submissionId: string) {
@@ -147,10 +153,10 @@ export async function runQualityCheck(submissionId: string) {
   });
 }
 
-export async function updateSubmissionStatus(submissionId: string, status: string) {
+export async function updateSubmissionStatus(submissionId: string, status: string, expectedRevision: number) {
   return apiClient.request<{ submission: Submission }>(`/api/v1/submissions/${encodeURIComponent(submissionId)}/status`, {
     method: "POST",
-    body: JSON.stringify({ status })
+    body: JSON.stringify({ status, expected_revision: expectedRevision })
   });
 }
 
@@ -161,8 +167,14 @@ export async function createOcrTask(submissionId: string) {
   });
 }
 
-export async function listOcrTasks(submissionId: string) {
-  return apiClient.request<{ tasks: OcrTask[] }>(`/api/v1/submissions/${encodeURIComponent(submissionId)}/ocr-tasks`);
+export async function listOcrTasks(submissionId: string, filter: { limit?: number; cursor?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.cursor) params.set("cursor", filter.cursor);
+  const query = params.toString();
+  return apiClient.request<{ tasks: OcrTask[]; next_cursor: string; has_more: boolean }>(
+    `/api/v1/submissions/${encodeURIComponent(submissionId)}/ocr-tasks${query ? `?${query}` : ""}`
+  );
 }
 
 export async function getOcrTask(taskId: string) {

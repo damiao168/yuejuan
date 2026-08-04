@@ -17,10 +17,29 @@ import (
 )
 
 type Handler struct {
-	store   Store
-	objects ObjectStorage
-	audit   auth.Store
-	cfg     config.FileConfig
+	store          Store
+	objects        ObjectStorage
+	audit          auth.Store
+	cfg            config.FileConfig
+	reconciliation ReconciliationReader
+}
+
+func (h *Handler) WithReconciliationReader(reader ReconciliationReader) *Handler {
+	h.reconciliation = reader
+	return h
+}
+
+func (h *Handler) ReconciliationStatus(w http.ResponseWriter, r *http.Request) {
+	if h.reconciliation == nil {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "file_reconciliation_not_configured", "file reconciliation is not configured")
+		return
+	}
+	run, findings, err := h.reconciliation.LatestReconciliation(r.Context())
+	if err != nil {
+		httpx.Error(w, r, http.StatusInternalServerError, "file_reconciliation_load_failed", "failed to load file reconciliation status")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"run": run, "findings": findings})
 }
 
 func NewHandler(store Store, objects ObjectStorage, audit auth.Store, cfg config.FileConfig) *Handler {
@@ -110,10 +129,36 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_owner_reference", "file owner metadata is inconsistent")
 		return
 	}
-	if existing, ok, err := h.store.FindDuplicate(r.Context(), user.TenantID, ownerType, ownerID, hashSHA256); err != nil {
+	storageKey, err := BuildStorageKey(user.TenantID, hashSHA256, originalName)
+	if err != nil {
+		httpx.Error(w, r, http.StatusInternalServerError, "storage_key_failed", "failed to create storage key")
+		return
+	}
+	input := CreateAssetInput{
+		TenantID: user.TenantID, SchoolID: schoolID, ExamID: examID, SubmissionID: submissionID,
+		OwnerType: ownerType, OwnerID: ownerID, OriginalName: originalName, ContentType: contentType,
+		SizeBytes: header.Size, HashSHA256: hashSHA256, StorageBucket: h.cfg.Bucket, StorageKey: storageKey,
+		Visibility: "private", UploadedBy: user.ID,
+	}
+	lifecycle, hasLifecycle := h.store.(LifecycleStore)
+	if hasLifecycle {
+		scope, ok := auth.AccessScopeFromContext(r.Context())
+		if !ok {
+			httpx.Error(w, r, http.StatusForbidden, "access_scope_missing", "no valid data access scope is assigned")
+			return
+		}
+		if err := lifecycle.ValidateCreateScope(r.Context(), scope, input); err != nil {
+			writeStoreError(w, r, err)
+			return
+		}
+	}
+
+	existing, duplicate, err := h.store.FindDuplicate(r.Context(), user.TenantID, ownerType, ownerID, hashSHA256)
+	if err != nil {
 		writeStoreError(w, r, err)
 		return
-	} else if ok {
+	}
+	if duplicate && (!hasLifecycle || existing.Lifecycle == LifecycleActive) {
 		httpx.JSON(w, http.StatusConflict, map[string]any{
 			"request_id": logger.RequestID(r.Context()),
 			"error": map[string]string{
@@ -124,37 +169,40 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-
-	storageKey, err := BuildStorageKey(user.TenantID, hashSHA256, originalName)
-	if err != nil {
-		httpx.Error(w, r, http.StatusInternalServerError, "storage_key_failed", "failed to create storage key")
-		return
+	var asset FileAsset
+	if hasLifecycle {
+		if duplicate && (existing.Lifecycle == LifecyclePendingUpload || existing.Lifecycle == LifecycleUploadFailed) {
+			asset = existing
+		} else {
+			asset, err = lifecycle.CreatePending(r.Context(), input)
+			if err != nil {
+				writeStoreError(w, r, err)
+				return
+			}
+		}
 	}
 	if err := h.objects.Put(r.Context(), h.cfg.Bucket, storageKey, file, header.Size, contentType); err != nil {
+		if hasLifecycle {
+			_, _ = lifecycle.MarkUploadFailed(r.Context(), user.TenantID, asset.ID, asset.Revision, "object_put_failed")
+		}
 		httpx.Error(w, r, http.StatusBadGateway, "object_storage_failed", "failed to write object storage")
 		return
 	}
-
-	asset, err := h.store.Create(r.Context(), CreateAssetInput{
-		TenantID:      user.TenantID,
-		SchoolID:      schoolID,
-		ExamID:        examID,
-		SubmissionID:  submissionID,
-		OwnerType:     ownerType,
-		OwnerID:       ownerID,
-		OriginalName:  originalName,
-		ContentType:   contentType,
-		SizeBytes:     header.Size,
-		HashSHA256:    hashSHA256,
-		StorageBucket: h.cfg.Bucket,
-		StorageKey:    storageKey,
-		Visibility:    "private",
-		UploadedBy:    user.ID,
-	})
-	if err != nil {
-		_ = h.objects.Remove(r.Context(), h.cfg.Bucket, storageKey)
-		writeStoreError(w, r, err)
-		return
+	if hasLifecycle {
+		asset, err = lifecycle.Activate(r.Context(), user.TenantID, asset.ID, asset.Revision)
+		if err != nil {
+			// Keep the object and pending metadata: a retry can safely reconcile
+			// the deterministic storage key instead of creating an orphan.
+			writeStoreError(w, r, err)
+			return
+		}
+	} else {
+		asset, err = h.store.Create(r.Context(), input)
+		if err != nil {
+			_ = h.objects.Remove(r.Context(), h.cfg.Bucket, storageKey)
+			writeStoreError(w, r, err)
+			return
+		}
 	}
 	h.auditAction(r, "file.uploaded", "file_asset", asset.ID, "upload private file")
 	httpx.JSON(w, http.StatusCreated, map[string]any{"file": asset.Response()})
@@ -162,7 +210,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	asset, err := h.store.Get(r.Context(), user.TenantID, r.PathValue("id"))
+	asset, err := h.getScoped(r, user, r.PathValue("id"))
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
@@ -172,9 +220,13 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	asset, err := h.store.Get(r.Context(), user.TenantID, r.PathValue("id"))
+	asset, err := h.getScoped(r, user, r.PathValue("id"))
 	if err != nil {
 		writeStoreError(w, r, err)
+		return
+	}
+	if asset.Lifecycle != "" && asset.Lifecycle != LifecycleActive {
+		httpx.Error(w, r, http.StatusConflict, "file_not_active", "file is not available for download")
 		return
 	}
 	body, err := h.objects.Get(r.Context(), asset.StorageBucket, asset.StorageKey)
@@ -208,17 +260,60 @@ func normalizeFileConfig(cfg config.FileConfig) config.FileConfig {
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	asset, err := h.store.Delete(r.Context(), user.TenantID, r.PathValue("id"))
+	lifecycle, hasLifecycle := h.store.(LifecycleStore)
+	if !hasLifecycle {
+		asset, err := h.store.Delete(r.Context(), user.TenantID, r.PathValue("id"))
+		if err != nil {
+			writeStoreError(w, r, err)
+			return
+		}
+		cleanup := "removed"
+		if err := h.objects.Remove(r.Context(), asset.StorageBucket, asset.StorageKey); err != nil {
+			cleanup = "pending"
+		}
+		h.auditAction(r, "file.deleted", "file_asset", asset.ID, "delete private file")
+		httpx.JSON(w, http.StatusOK, map[string]any{"status": "deleted", "object_cleanup": cleanup})
+		return
+	}
+	scope, ok := auth.AccessScopeFromContext(r.Context())
+	if !ok {
+		httpx.Error(w, r, http.StatusForbidden, "access_scope_missing", "no valid data access scope is assigned")
+		return
+	}
+	current, err := lifecycle.GetScoped(r.Context(), scope, r.PathValue("id"))
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
 	}
-	cleanup := "removed"
+	asset, err := lifecycle.BeginDelete(r.Context(), scope, current.ID, current.Revision)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
 	if err := h.objects.Remove(r.Context(), asset.StorageBucket, asset.StorageKey); err != nil {
-		cleanup = "pending"
+		_, _ = lifecycle.MarkDeleteFailed(r.Context(), user.TenantID, asset.ID, asset.Revision, "object_remove_failed")
+		h.auditAction(r, "file.delete_pending", "file_asset", asset.ID, "object cleanup requires retry")
+		httpx.Error(w, r, http.StatusServiceUnavailable, "object_cleanup_pending", "file deletion is pending storage cleanup; retry later")
+		return
+	}
+	asset, err = lifecycle.CompleteDelete(r.Context(), user.TenantID, asset.ID, asset.Revision)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
 	}
 	h.auditAction(r, "file.deleted", "file_asset", asset.ID, "delete private file")
-	httpx.JSON(w, http.StatusOK, map[string]any{"status": "deleted", "object_cleanup": cleanup})
+	httpx.JSON(w, http.StatusOK, map[string]any{"status": "deleted", "object_cleanup": "removed"})
+}
+
+func (h *Handler) getScoped(r *http.Request, user auth.User, id string) (FileAsset, error) {
+	if lifecycle, ok := h.store.(LifecycleStore); ok {
+		scope, exists := auth.AccessScopeFromContext(r.Context())
+		if !exists {
+			return FileAsset{}, ErrForbidden
+		}
+		return lifecycle.GetScoped(r.Context(), scope, id)
+	}
+	return h.store.Get(r.Context(), user.TenantID, id)
 }
 
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
@@ -227,6 +322,10 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusNotFound, "file_not_found", "file asset not found")
 	case errors.Is(err, ErrDuplicateFile):
 		httpx.Error(w, r, http.StatusConflict, "duplicate_file", "same file already exists for this owner")
+	case errors.Is(err, ErrForbidden):
+		httpx.Error(w, r, http.StatusForbidden, "file_access_forbidden", "file is outside the current data access scope")
+	case errors.Is(err, ErrConflict):
+		httpx.Error(w, r, http.StatusConflict, "resource_version_conflict", "file state changed; refresh and retry")
 	default:
 		httpx.Error(w, r, http.StatusInternalServerError, "file_operation_failed", "file operation failed")
 	}

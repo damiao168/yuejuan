@@ -13,6 +13,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/pagination"
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
 
@@ -31,7 +32,12 @@ func NewHandler(store Store, fileStore files.Store, examStore exam.Store, runtim
 func (h *Handler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	examID := r.PathValue("examId")
-	current, err := h.exams.GetExam(r.Context(), user.TenantID, examID)
+	scope, ok := auth.AccessScopeFromContext(r.Context())
+	if !ok {
+		httpx.Error(w, r, http.StatusForbidden, "access_scope_missing", "no valid data access scope is assigned")
+		return
+	}
+	current, err := h.exams.GetExam(r.Context(), scope, examID)
 	if err != nil {
 		httpx.Error(w, r, http.StatusNotFound, "exam_not_found", "exam not found")
 		return
@@ -320,12 +326,33 @@ func (h *Handler) FailRegistrationCorrection(w http.ResponseWriter, r *http.Requ
 
 func (h *Handler) ListBatches(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	items, err := h.store.ListBatches(r.Context(), user.TenantID, r.PathValue("examId"))
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 30, 100)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 100")
+		return
+	}
+	cursor, err := pagination.Decode(r.URL.Query().Get("cursor"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
+	items, err := h.store.ListBatches(r.Context(), user.TenantID, r.PathValue("examId"), BatchListFilter{
+		Limit: limit + 1, CursorCreatedAt: cursor.CreatedAt, CursorID: cursor.ID,
+	})
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"batches": items})
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		nextCursor = pagination.Encode(last.CreatedAt, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"batches": items, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) GetBatch(w http.ResponseWriter, r *http.Request) {
@@ -345,7 +372,12 @@ func (h *Handler) GetBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, BatchDetail{Batch: batch, Files: fileItems, Pages: pages})
+	summaries, err := h.store.ListProcessingSummaries(r.Context(), user.TenantID, batch.ID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, BatchDetail{Batch: batch, Files: fileItems, Pages: pages, ProcessingSummaries: summaries})
 }
 
 func (h *Handler) GetMatchingQueue(w http.ResponseWriter, r *http.Request) {

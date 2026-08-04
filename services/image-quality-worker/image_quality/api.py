@@ -23,12 +23,14 @@ class EduGradeImageQualityClient:
     username: str
     password: str
     token: str | None = None
+    worker_instance_id: str | None = None
+    current_task: dict[str, str] | None = None
 
     def login(self) -> None:
         response = self._request(
             "POST",
-            "/api/v1/auth/login",
-            {"tenant_code": self.tenant_code, "username": self.username, "password": self.password},
+            "/api/v1/auth/token",
+            {"tenant_code": self.tenant_code, "username": self.username, "password": self.password, "client_type": "service", "device_name": "Image Quality Worker"},
             require_auth=False,
         )
         token = response.get("access_token")
@@ -37,6 +39,7 @@ class EduGradeImageQualityClient:
         self.token = token
 
     def claim_jobs(self, worker_instance_id: str, limit: int, lease_seconds: int) -> list[dict[str, Any]]:
+        self.worker_instance_id = worker_instance_id
         response = self._request(
             "POST",
             "/api/v1/internal/image-quality/jobs/claim",
@@ -44,6 +47,19 @@ class EduGradeImageQualityClient:
         )
         jobs = response.get("jobs", [])
         return jobs if isinstance(jobs, list) else []
+
+    def activate_job(self, job: dict[str, Any]) -> None:
+        task_id = str(job.get("runtime_task_id") or "").strip()
+        lease_token = str(job.get("lease_token") or "").strip()
+        worker_instance_id = str(self.worker_instance_id or "").strip()
+        if not task_id or not lease_token or not worker_instance_id:
+            raise APIError("image quality job is missing its task capability")
+        self.current_task = {
+            "task_id": task_id,
+            "lease_token": lease_token,
+            "worker_service": "image-quality-worker",
+            "worker_instance_id": worker_instance_id,
+        }
 
     def download(self, url: str) -> bytes:
         req = self._build_request("GET", url, None)
@@ -117,7 +133,18 @@ class EduGradeImageQualityClient:
             headers["Content-Type"] = "application/json"
         if require_auth and self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+            if self.current_task:
+                headers.update(_task_capability_headers(self.current_task))
         return request.Request(url, data=body, headers=headers, method=method)
+
+
+def _task_capability_headers(task: dict[str, str]) -> dict[str, str]:
+    return {
+        "X-EduGrade-Worker-Task-ID": task["task_id"],
+        "X-EduGrade-Worker-Lease-Token": task["lease_token"],
+        "X-EduGrade-Worker-Service": task["worker_service"],
+        "X-EduGrade-Worker-Instance-ID": task["worker_instance_id"],
+    }
 
 
 def _multipart_body(boundary: str, fields: dict[str, str], file_field: str, filename: str, content_type: str, data: bytes) -> bytes:

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 )
 
 type PostgresStore struct {
@@ -104,7 +106,15 @@ LIMIT $2
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) ListBySubmission(ctx context.Context, tenantID string, submissionID string) ([]Task, error) {
+func (s *PostgresStore) ListBySubmission(ctx context.Context, tenantID string, submissionID string, filter TaskListFilter) ([]Task, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 101 {
+		limit = 21
+	}
+	var cursorCreatedAt any
+	if !filter.CursorCreatedAt.IsZero() {
+		cursorCreatedAt = filter.CursorCreatedAt
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id::text, tenant_id::text, submission_id::text, status, engine, engine_version,
   COALESCE(model_version, ''), COALESCE(config_hash, ''), COALESCE(input_hash, ''),
@@ -113,8 +123,10 @@ SELECT id::text, tenant_id::text, submission_id::text, status, engine, engine_ve
   requested_by::text, started_at, completed_at, created_at
 FROM ocr_task
 WHERE tenant_id = $1 AND submission_id = $2 AND deleted_at IS NULL
-ORDER BY created_at DESC
-`, tenantID, submissionID)
+  AND ($3::timestamptz IS NULL OR created_at < $3 OR (created_at = $3 AND id::text < $4))
+ORDER BY created_at DESC, id DESC
+LIMIT $5
+`, tenantID, submissionID, cursorCreatedAt, filter.CursorID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +139,49 @@ ORDER BY created_at DESC
 		}
 		out = append(out, task)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	args := []any{tenantID}
+	placeholders := make([]string, 0, len(out))
+	for _, task := range out {
+		args = append(args, task.ID)
+		placeholders = append(placeholders, fmt.Sprintf("$%d::uuid", len(args)))
+	}
+	resultRows, err := s.db.QueryContext(ctx, `
+SELECT id::text, tenant_id::text, ocr_task_id::text, submission_id::text, submission_page_id::text,
+  text, bbox, confidence::float8, ocr_engine, ocr_version,
+  COALESCE(model_version, ''), COALESCE(config_hash, ''), COALESCE(input_hash, ''),
+  COALESCE(preprocess_profile, ''), COALESCE(source_image_file_id::text, ''), created_at
+FROM ocr_result
+WHERE tenant_id = $1 AND ocr_task_id IN (`+strings.Join(placeholders, ",")+`) AND deleted_at IS NULL
+ORDER BY ocr_task_id, created_at, id
+`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer resultRows.Close()
+	byTask := make(map[string][]Result, len(out))
+	for resultRows.Next() {
+		var result Result
+		if err := scanResult(resultRows, &result); err != nil {
+			return nil, err
+		}
+		byTask[result.TaskID] = append(byTask[result.TaskID], result)
+	}
+	if err := resultRows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Results = byTask[out[i].ID]
+	}
+	return out, nil
 }
 
 func (s *PostgresStore) GetTask(ctx context.Context, tenantID string, id string) (Task, error) {

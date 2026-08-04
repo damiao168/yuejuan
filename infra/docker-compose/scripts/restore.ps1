@@ -4,8 +4,11 @@ param(
   [string]$ComposeFile = "..\docker-compose.yml",
   [string]$EnvFile = "..\.env",
   [string]$MinioBackupDirectory,
+  [string]$TargetBucket,
   [switch]$CreateTargetDatabase,
   [switch]$AllowPrimaryDatabase,
+  [switch]$AllowPrimaryBucket,
+  [switch]$AllowProductionRestore,
   [switch]$ConfirmRestore
 )
 
@@ -19,6 +22,10 @@ $dumpPath = (Resolve-Path -LiteralPath $PostgresDump).Path
 if (-not (Test-Path -LiteralPath $dumpPath -PathType Leaf)) { throw "PostgresDump must reference a dump file." }
 $composeDir = Split-Path -Parent $composePath
 
+$backupDirectory = Split-Path -Parent $dumpPath
+& (Join-Path $scriptRoot "verify-backup.ps1") -BackupDirectory $backupDirectory | Out-Null
+if (-not $?) { throw "Backup manifest verification failed." }
+
 if (-not $ConfirmRestore) { throw "Restore requires -ConfirmRestore." }
 $envValues = @{}
 Get-Content -LiteralPath $envPath -Encoding utf8 | ForEach-Object {
@@ -29,10 +36,21 @@ Get-Content -LiteralPath $envPath -Encoding utf8 | ForEach-Object {
   }
 }
 $primaryDatabase = $envValues["EDUGRADE_POSTGRES_DB"]
+$postgresUser = $envValues["EDUGRADE_POSTGRES_USER"]
+$targetEnvironment = $envValues["EDUGRADE_ENV"]
+if ($targetEnvironment -in @("production", "prod") -and -not $AllowProductionRestore) {
+  throw "Refusing to restore into a production environment without -AllowProductionRestore."
+}
 if ($TargetDatabase -eq $primaryDatabase -and -not $AllowPrimaryDatabase) {
   throw "Refusing to overwrite the primary database without -AllowPrimaryDatabase. Prefer an isolated verification database."
 }
 if ($TargetDatabase -notmatch '^[A-Za-z0-9_]+$') { throw "TargetDatabase contains unsupported characters." }
+$primaryBucket = $envValues["EDUGRADE_FILE_BUCKET"]
+if (-not $TargetBucket) { $TargetBucket = $primaryBucket }
+if ($TargetBucket -notmatch '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$') { throw "TargetBucket is not a valid S3 bucket name." }
+if ($MinioBackupDirectory -and $TargetBucket -eq $primaryBucket -and -not $AllowPrimaryBucket) {
+  throw "Refusing to overwrite the primary MinIO bucket without -AllowPrimaryBucket. Prefer an isolated verification bucket."
+}
 
 Push-Location $composeDir
 try {
@@ -69,10 +87,12 @@ try {
     $minioPath = (Resolve-Path -LiteralPath $MinioBackupDirectory).Path
     $backupMount = Split-Path -Parent $minioPath
     $backupName = Split-Path -Leaf $minioPath
-    $minioScript = 'mc alias set edugrade http://minio:9000 "$EDUGRADE_MINIO_ACCESS_KEY" "$EDUGRADE_MINIO_SECRET_KEY"; mc mirror --overwrite "/backup/{0}" "edugrade/$EDUGRADE_FILE_BUCKET"' -f $backupName
+    $minioScript = 'mc alias set edugrade http://minio:9000 "$EDUGRADE_MINIO_ACCESS_KEY" "$EDUGRADE_MINIO_SECRET_KEY"; mc mb --ignore-existing "edugrade/{1}"; mc mirror --overwrite "/backup/{0}" "edugrade/{1}"' -f $backupName, $TargetBucket
     & docker compose --env-file $envPath -f $composePath --profile tools run --rm -v "${backupMount}:/backup:ro" --entrypoint /bin/sh minio-init -ec $minioScript
     if ($LASTEXITCODE -ne 0) { throw "MinIO restore failed." }
   }
+  $schemaCount = docker compose --env-file $envPath -f $composePath exec -T postgres psql -U $postgresUser -d $TargetDatabase -Atc "SELECT count(*) FROM schema_migration"
+  if ($LASTEXITCODE -ne 0 -or [int]$schemaCount -le 0) { throw "Restored database schema history validation failed." }
   Write-Host "Restore completed into database '$TargetDatabase'."
 } finally {
   Pop-Location

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -55,7 +56,7 @@ func TestInvalidStatusTransitionRejected(t *testing.T) {
 	token := login(t, router)
 	created := createExam(t, router, token)
 
-	req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/status", bytes.NewBufferString(`{"status":"published"}`), token)
+	req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/status", bytes.NewBufferString(`{"status":"published","expected_revision":1}`), token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
@@ -73,13 +74,13 @@ func TestFinalizedExamCannotPublishThroughStatusRoute(t *testing.T) {
 		t.Fatalf("seed finalized exam: %v", err)
 	}
 
-	req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/status", bytes.NewBufferString(`{"status":"published"}`), token)
+	req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/status", bytes.NewBufferString(`{"status":"published","expected_revision":2}`), token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "invalid_status_transition") {
 		t.Fatalf("generic status route must not bypass score publication workflow, got %d %s", rec.Code, rec.Body.String())
 	}
-	unchanged, err := store.GetExam(t.Context(), "tenant-exam", created.ID)
+	unchanged, err := store.GetExam(t.Context(), tenantScope("tenant-exam", "u-exam"), created.ID)
 	if err != nil || unchanged.Status != "finalized" {
 		t.Fatalf("rejected publication must leave exam finalized, exam=%#v err=%v", unchanged, err)
 	}
@@ -96,7 +97,7 @@ func TestPublishedExamCannotBeModified(t *testing.T) {
 		t.Fatalf("seed published exam: %v", err)
 	}
 
-	req := authedRequest(http.MethodPatch, "/api/v1/exams/"+created.ID, bytes.NewBufferString(`{"name":"不应修改"}`), token)
+	req := authedRequest(http.MethodPatch, "/api/v1/exams/"+created.ID, bytes.NewBufferString(`{"name":"不应修改","expected_revision":2}`), token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
@@ -110,12 +111,16 @@ func TestCollectionCannotBypassReadinessGate(t *testing.T) {
 	token := login(t, router)
 	created := createExam(t, router, token)
 
+	revision := int64(1)
 	for _, status := range []string{"configured", "collecting"} {
-		req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/status", bytes.NewBufferString(`{"status":"`+status+`"}`), token)
+		req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/status", bytes.NewBufferString(fmt.Sprintf(`{"status":%q,"expected_revision":%d}`, status, revision)), token)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 		if status == "configured" && rec.Code != http.StatusOK {
 			t.Fatalf("draft to configured expected 200, got %d %s", rec.Code, rec.Body.String())
+		}
+		if rec.Code == http.StatusOK {
+			revision++
 		}
 		if status == "collecting" && rec.Code != http.StatusConflict {
 			t.Fatalf("configured to collecting must require readiness gate, got %d %s", rec.Code, rec.Body.String())
@@ -129,7 +134,7 @@ func TestArchiveExam(t *testing.T) {
 	token := login(t, router)
 	created := createExam(t, router, token)
 
-	req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/archive", nil, token)
+	req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/archive", bytes.NewBufferString(`{"expected_revision":1}`), token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"archived"`) {
@@ -153,13 +158,13 @@ func TestExamPermissionDenied(t *testing.T) {
 func TestExamTenantIsolation(t *testing.T) {
 	store := exam.NewMemoryStore()
 	ctx := context.Background()
-	if _, err := store.CreateExam(ctx, "tenant-a", "user-a", exam.CreateInput{SchoolID: "school-a", Name: "A", Subject: "physics", ExamType: "formal_exam", TotalScore: 100, GradingMode: "ai_assisted", PublishPolicy: "after_admin_approval"}); err != nil {
+	if _, err := store.CreateExam(ctx, tenantScope("tenant-a", "user-a"), "user-a", exam.CreateInput{SchoolID: "school-a", Name: "A", Subject: "physics", ExamType: "formal_exam", TotalScore: 100, GradingMode: "ai_assisted", PublishPolicy: "after_admin_approval"}); err != nil {
 		t.Fatalf("create a: %v", err)
 	}
-	if _, err := store.CreateExam(ctx, "tenant-b", "user-b", exam.CreateInput{SchoolID: "school-b", Name: "B", Subject: "math", ExamType: "formal_exam", TotalScore: 100, GradingMode: "ai_assisted", PublishPolicy: "after_admin_approval"}); err != nil {
+	if _, err := store.CreateExam(ctx, tenantScope("tenant-b", "user-b"), "user-b", exam.CreateInput{SchoolID: "school-b", Name: "B", Subject: "math", ExamType: "formal_exam", TotalScore: 100, GradingMode: "ai_assisted", PublishPolicy: "after_admin_approval"}); err != nil {
 		t.Fatalf("create b: %v", err)
 	}
-	items, err := store.ListExams(ctx, "tenant-a", exam.ListFilter{})
+	items, err := store.ListExams(ctx, tenantScope("tenant-a", "user-a"), exam.ListFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -193,7 +198,7 @@ func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemorySt
 			Status:      "active",
 			Roles:       []string{"school_admin"},
 			Permissions: permissions,
-			DataScope:   map[string]any{"scope": "school"},
+			DataScope:   map[string]any{"scope": "school", "school_id": "school-1", "class_ids": []any{"class-1", "class-2"}},
 		},
 		PasswordHash: hash,
 	})
@@ -203,7 +208,7 @@ func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemorySt
 func login(t *testing.T, router http.Handler) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"tenant_code": "demo", "username": "school_admin", "password": "ChangeMe123!"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -247,4 +252,8 @@ func authedRequest(method string, path string, body *bytes.Buffer, token string)
 
 func validCreateExamJSON() string {
 	return `{"school_id":"school-1","name":"高二物理期末考试","subject":"physics","exam_type":"formal_exam","total_score":100,"grading_mode":"ai_assisted","appeal_enabled":true,"publish_policy":"after_admin_approval","class_ids":["class-1","class-2"]}`
+}
+
+func tenantScope(tenantID, actorID string) auth.AccessScope {
+	return auth.AccessScope{TenantID: tenantID, ActorID: actorID, TenantWide: true}
 }

@@ -6,6 +6,7 @@ import { hasAnyPermission, type SessionUser } from "../auth/session";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
+import { workspaceForExperience, workspaceRegistry } from "../workspaces/registry";
 
 interface TeacherHomeData {
   reviewTasks: ReviewTask[];
@@ -113,6 +114,9 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
   ], [activeArbitrations, activeReviews]);
 
   const primary = tasks[0];
+  const workspace = workspaceForExperience(user, "teacher");
+  const workspaceDefinition = workspaceRegistry[workspace];
+  const pageTitle = workspace === "arbitrator" ? "我的仲裁" : workspace === "grader" ? "我的阅卷" : "我的工作";
   if (!data && loading) return <LoadingState label="正在加载我的工作" />;
   if (!data && error) return <ErrorState message={error} onRetry={() => void load()} />;
 
@@ -120,9 +124,9 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
     <div className="page-stack teacher-dashboard">
       <section className="teacher-heading">
         <div>
-          <span className="dashboard-kicker">阅卷端</span>
-          <h1>我的阅卷</h1>
-          <p>{user.school} · 只显示分配给你的任务</p>
+          <span className="dashboard-kicker">{workspaceDefinition.label}</span>
+          <h1>{pageTitle}</h1>
+          <p>{user.school} · {workspaceDefinition.purpose}</p>
         </div>
         <Button icon={<RefreshCw size={16} />} loading={loading} onClick={() => void load()}>刷新</Button>
       </section>

@@ -25,6 +25,9 @@ class Runner:
         runtime_id = str(task.get("id", ""))
         lease = str(task.get("lease_token", ""))
         run_id = str(task.get("source_id", ""))
+        activate_task = getattr(self.api, "activate_task", None)
+        if callable(activate_task):
+            activate_task(task, self.settings.worker_id)
         if task.get("source_type") != "subjective_grading_run" or not runtime_id or not lease or not run_id:
             self.api.fail(run_id, runtime_id, lease, "invalid_subjective_runtime_payload", False, 0)
             return

@@ -3,7 +3,11 @@ package exam
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
+	"time"
+
+	"edugrade-enterprise/services/api-gateway/internal/auth"
 )
 
 type MemoryStore struct {
@@ -16,16 +20,19 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{next: 1, items: map[string]Exam{}}
 }
 
-func (s *MemoryStore) CreateExam(_ context.Context, tenantID string, createdBy string, input CreateInput) (Exam, error) {
+func (s *MemoryStore) CreateExam(_ context.Context, scope auth.AccessScope, createdBy string, input CreateInput) (Exam, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !scopeAllowsRequestedClasses(scope, input.SchoolID, input.ClassIDs) {
+		return Exam{}, ErrScopeForbidden
+	}
 	appealEnabled := true
 	if input.AppealEnabled != nil {
 		appealEnabled = *input.AppealEnabled
 	}
 	item := Exam{
 		ID:            s.id(),
-		TenantID:      tenantID,
+		TenantID:      scope.TenantID,
 		SchoolID:      input.SchoolID,
 		Name:          input.Name,
 		Subject:       input.Subject,
@@ -37,17 +44,20 @@ func (s *MemoryStore) CreateExam(_ context.Context, tenantID string, createdBy s
 		PublishPolicy: input.PublishPolicy,
 		CreatedBy:     createdBy,
 		ClassIDs:      cloneStrings(input.ClassIDs),
+		Revision:      1,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
 	}
 	s.items[item.ID] = item
 	return item, nil
 }
 
-func (s *MemoryStore) ListExams(_ context.Context, tenantID string, filter ListFilter) ([]Exam, error) {
+func (s *MemoryStore) ListExams(_ context.Context, scope auth.AccessScope, filter ListFilter) ([]Exam, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []Exam{}
 	for _, item := range s.items {
-		if item.TenantID != tenantID {
+		if item.TenantID != scope.TenantID || !scopeAllowsExam(scope, item) {
 			continue
 		}
 		if filter.Status != "" && item.Status != filter.Status {
@@ -56,27 +66,42 @@ func (s *MemoryStore) ListExams(_ context.Context, tenantID string, filter ListF
 		if filter.SchoolID != "" && item.SchoolID != filter.SchoolID {
 			continue
 		}
+		if !filter.CursorAt.IsZero() && filter.CursorID != "" && (item.CreatedAt.After(filter.CursorAt) || (item.CreatedAt.Equal(filter.CursorAt) && item.ID >= filter.CursorID)) {
+			continue
+		}
 		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
 	}
 	return out, nil
 }
 
-func (s *MemoryStore) GetExam(_ context.Context, tenantID string, id string) (Exam, error) {
+func (s *MemoryStore) GetExam(_ context.Context, scope auth.AccessScope, id string) (Exam, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	item, ok := s.items[id]
-	if !ok || item.TenantID != tenantID {
+	if !ok || item.TenantID != scope.TenantID || !scopeAllowsExam(scope, item) {
 		return Exam{}, ErrNotFound
 	}
 	return item, nil
 }
 
-func (s *MemoryStore) UpdateExam(_ context.Context, tenantID string, id string, input UpdateInput) (Exam, error) {
+func (s *MemoryStore) UpdateExam(_ context.Context, scope auth.AccessScope, id string, input UpdateInput) (Exam, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item, ok := s.items[id]
-	if !ok || item.TenantID != tenantID {
+	if !ok || item.TenantID != scope.TenantID || !scopeAllowsExam(scope, item) {
 		return Exam{}, ErrNotFound
+	}
+	if input.ExpectedRevision <= 0 || item.Revision != input.ExpectedRevision {
+		return Exam{}, ErrRevisionConflict
 	}
 	if IsCoreLocked(item.Status) {
 		return Exam{}, ErrLocked
@@ -108,21 +133,31 @@ func (s *MemoryStore) UpdateExam(_ context.Context, tenantID string, id string, 
 	if input.ClassIDs != nil {
 		item.ClassIDs = cloneStrings(*input.ClassIDs)
 	}
+	if !scopeAllowsRequestedClasses(scope, item.SchoolID, item.ClassIDs) {
+		return Exam{}, ErrScopeForbidden
+	}
+	item.Revision++
+	item.UpdatedAt = time.Now().UTC()
 	s.items[id] = item
 	return item, nil
 }
 
-func (s *MemoryStore) UpdateStatus(_ context.Context, tenantID string, id string, status string) (Exam, error) {
+func (s *MemoryStore) UpdateStatus(_ context.Context, scope auth.AccessScope, id string, status string, expectedRevision int64) (Exam, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item, ok := s.items[id]
-	if !ok || item.TenantID != tenantID {
+	if !ok || item.TenantID != scope.TenantID || !scopeAllowsExam(scope, item) {
 		return Exam{}, ErrNotFound
+	}
+	if expectedRevision <= 0 || item.Revision != expectedRevision {
+		return Exam{}, ErrRevisionConflict
 	}
 	if !CanTransition(item.Status, status) {
 		return Exam{}, ErrInvalidTransition
 	}
 	item.Status = status
+	item.Revision++
+	item.UpdatedAt = time.Now().UTC()
 	s.items[id] = item
 	return item, nil
 }
@@ -135,8 +170,22 @@ func (s *MemoryStore) SetStatusForTest(tenantID string, id string, status string
 		return ErrNotFound
 	}
 	item.Status = status
+	item.Revision++
+	item.UpdatedAt = time.Now().UTC()
 	s.items[id] = item
 	return nil
+}
+
+func scopeAllowsExam(scope auth.AccessScope, item Exam) bool {
+	if scope.TenantWide || scope.AllowsExam(item.ID) || scope.AllowsSchool(item.SchoolID) {
+		return true
+	}
+	for _, classID := range item.ClassIDs {
+		if scope.AllowsClass(classID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MemoryStore) id() string {

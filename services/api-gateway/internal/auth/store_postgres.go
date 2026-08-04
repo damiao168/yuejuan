@@ -64,12 +64,20 @@ GROUP BY u.id, t.code
 	return user, nil
 }
 
-func (s *PostgresStore) CreateSession(ctx context.Context, tenantID string, userID string, tokenHash string, expiresAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO auth_session (tenant_id, user_id, token_hash, expires_at)
-VALUES ($1, $2, $3, $4)
-`, tenantID, userID, tokenHash, expiresAt)
-	return err
+func (s *PostgresStore) CreateSession(ctx context.Context, input CreateSessionInput) (DeviceSession, error) {
+	var session DeviceSession
+	err := s.db.QueryRowContext(ctx, `
+INSERT INTO auth_session (
+  tenant_id, user_id, token_hash, session_type, device_id, device_name,
+  user_agent_hash, ip_prefix, expires_at, last_seen_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+RETURNING id::text, session_type, device_name, created_at, last_seen_at, expires_at
+`, input.TenantID, input.UserID, input.TokenHash, input.SessionType, input.DeviceID,
+		input.DeviceName, input.UserAgentHash, input.IPPrefix, input.ExpiresAt,
+	).Scan(&session.ID, &session.SessionType, &session.DeviceName, &session.CreatedAt, &session.LastSeenAt, &session.ExpiresAt)
+	session.Current = true
+	return session, err
 }
 
 func (s *PostgresStore) FindUserBySession(ctx context.Context, tokenHash string, now time.Time) (User, error) {
@@ -117,16 +125,194 @@ GROUP BY u.id, t.code
 	if user.Status != "active" {
 		return User{}, ErrUnauthenticated
 	}
+	_, _ = s.db.ExecContext(ctx, `
+UPDATE auth_session
+SET last_seen_at = $2, updated_at = $2
+WHERE token_hash = $1
+  AND last_seen_at < $2 - interval '5 minutes'
+`, tokenHash, now)
 	return user, nil
 }
 
-func (s *PostgresStore) DeleteSession(ctx context.Context, tokenHash string) error {
+func (s *PostgresStore) ResolveAccessScope(ctx context.Context, user User) (AccessScope, error) {
+	scope, err := ResolveDeclaredAccessScope(user)
+	if err != nil {
+		return AccessScope{}, err
+	}
+	if scope.IsPlatform || scope.TenantWide {
+		return scope, nil
+	}
+
+	var schoolIDs, gradeIDs, classIDs, examIDs, reviewTaskIDs, arbitrationTaskIDs, assignedExamIDs, submissionIDs []string
+	err = s.db.QueryRowContext(ctx, `
+SELECT
+  COALESCE(array_agg(DISTINCT scoped.school_id) FILTER (WHERE scoped.school_id <> ''), '{}'),
+  COALESCE(array_agg(DISTINCT scoped.grade_id) FILTER (WHERE scoped.grade_id <> ''), '{}'),
+  COALESCE(array_agg(DISTINCT scoped.class_id) FILTER (WHERE scoped.class_id <> ''), '{}'),
+  COALESCE(array_agg(DISTINCT scoped.exam_id) FILTER (WHERE scoped.exam_id <> ''), '{}'),
+  COALESCE((SELECT array_agg(rt.id::text ORDER BY rt.id::text)
+            FROM review_task rt
+            WHERE rt.tenant_id=$1::uuid AND rt.assigned_to=$2::uuid
+              AND rt.status IN ('assigned','in_progress','returned') AND rt.deleted_at IS NULL), '{}'),
+  COALESCE((SELECT array_agg(at.id::text ORDER BY at.id::text)
+            FROM arbitration_task at
+            WHERE at.tenant_id=$1::uuid AND at.assigned_to=$2::uuid
+              AND at.status IN ('assigned','in_progress') AND at.deleted_at IS NULL), '{}'),
+  COALESCE((SELECT array_agg(DISTINCT assigned.exam_id ORDER BY assigned.exam_id)
+            FROM (
+              SELECT rt.exam_id::text AS exam_id
+              FROM review_task rt
+              WHERE rt.tenant_id=$1::uuid AND rt.assigned_to=$2::uuid
+                AND rt.status IN ('assigned','in_progress','returned') AND rt.deleted_at IS NULL
+              UNION
+              SELECT at.exam_id::text
+              FROM arbitration_task at
+              WHERE at.tenant_id=$1::uuid AND at.assigned_to=$2::uuid
+                AND at.status IN ('assigned','in_progress') AND at.deleted_at IS NULL
+            ) assigned), '{}'),
+  COALESCE((SELECT array_agg(DISTINCT assigned.submission_id ORDER BY assigned.submission_id)
+            FROM (
+              SELECT rt.submission_id::text AS submission_id
+              FROM review_task rt
+              WHERE rt.tenant_id=$1::uuid AND rt.assigned_to=$2::uuid
+                AND rt.status IN ('assigned','in_progress','returned') AND rt.deleted_at IS NULL
+              UNION
+              SELECT at.submission_id::text
+              FROM arbitration_task at
+              WHERE at.tenant_id=$1::uuid AND at.assigned_to=$2::uuid
+                AND at.status IN ('assigned','in_progress') AND at.deleted_at IS NULL
+            ) assigned), '{}')
+FROM (
+  SELECT COALESCE(u.school_id::text, '') AS school_id, ''::text AS grade_id,
+         ''::text AS class_id, ''::text AS exam_id
+  FROM app_user u
+  WHERE u.tenant_id=$1::uuid AND u.id=$2::uuid AND u.deleted_at IS NULL
+  UNION ALL
+  SELECT sc.school_id::text, sc.grade_id::text, tc.class_id::text,
+         COALESCE(ec.exam_id::text, '')
+  FROM teacher_class tc
+  JOIN school_class sc ON sc.tenant_id=tc.tenant_id AND sc.id=tc.class_id AND sc.deleted_at IS NULL
+  LEFT JOIN exam_class ec ON ec.tenant_id=tc.tenant_id AND ec.class_id=tc.class_id AND ec.deleted_at IS NULL
+  WHERE tc.tenant_id=$1::uuid AND tc.teacher_id=$2::uuid AND tc.deleted_at IS NULL
+) scoped
+`, user.TenantID, user.ID).Scan(
+		pqArray(&schoolIDs), pqArray(&gradeIDs), pqArray(&classIDs), pqArray(&examIDs),
+		pqArray(&reviewTaskIDs), pqArray(&arbitrationTaskIDs), pqArray(&assignedExamIDs), pqArray(&submissionIDs),
+	)
+	if err != nil {
+		return AccessScope{}, err
+	}
+	scope.SchoolIDs = append(scope.SchoolIDs, schoolIDs...)
+	scope.GradeIDs = append(scope.GradeIDs, gradeIDs...)
+	scope.ClassIDs = append(scope.ClassIDs, classIDs...)
+	scope.ExamIDs = append(scope.ExamIDs, examIDs...)
+	scope.ExamIDs = append(scope.ExamIDs, assignedExamIDs...)
+	scope.SubmissionIDs = append(scope.SubmissionIDs, submissionIDs...)
+	scope.ReviewTaskIDs = append(scope.ReviewTaskIDs, reviewTaskIDs...)
+	scope.ArbitrationTaskIDs = append(scope.ArbitrationTaskIDs, arbitrationTaskIDs...)
+	return scope.normalized(), nil
+}
+
+func (s *PostgresStore) DeleteSession(ctx context.Context, tokenHash string, reason string) error {
 	_, err := s.db.ExecContext(ctx, `
 UPDATE auth_session
-SET revoked_at = now(), updated_at = now()
+SET revoked_at = now(), revoke_reason = NULLIF($2, ''), updated_at = now()
 WHERE token_hash = $1 AND revoked_at IS NULL
-`, tokenHash)
+`, tokenHash, reason)
 	return err
+}
+
+func (s *PostgresStore) ListSessions(ctx context.Context, tenantID string, userID string, currentTokenHash string, now time.Time) ([]DeviceSession, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id::text, session_type, device_name, created_at, last_seen_at, expires_at,
+       token_hash = $4
+FROM auth_session
+WHERE tenant_id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+  AND expires_at > $3
+ORDER BY last_seen_at DESC, created_at DESC
+`, tenantID, userID, now, currentTokenHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DeviceSession{}
+	for rows.Next() {
+		var session DeviceSession
+		if err := rows.Scan(&session.ID, &session.SessionType, &session.DeviceName, &session.CreatedAt, &session.LastSeenAt, &session.ExpiresAt, &session.Current); err != nil {
+			return nil, err
+		}
+		out = append(out, session)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) RevokeSession(ctx context.Context, tenantID string, userID string, sessionID string, reason string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE auth_session
+SET revoked_at = now(), revoke_reason = NULLIF($4, ''), updated_at = now()
+WHERE tenant_id = $1
+  AND user_id = $2
+  AND id = $3
+  AND revoked_at IS NULL
+`, tenantID, userID, sessionID, reason)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func (s *PostgresStore) RevokeAllSessions(ctx context.Context, tenantID string, userID string, reason string) (int, error) {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE auth_session
+SET revoked_at = now(), revoke_reason = NULLIF($3, ''), updated_at = now()
+WHERE tenant_id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+`, tenantID, userID, reason)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	return int(affected), err
+}
+
+func (s *PostgresStore) UpdatePasswordAndRevokeSessions(ctx context.Context, tenantID, userID, expectedPasswordHash, newPasswordHash string) (bool, int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, 0, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+UPDATE app_user
+SET password_hash=$4, updated_at=now()
+WHERE tenant_id=$1 AND id=$2 AND password_hash=$3 AND status='active' AND deleted_at IS NULL
+`, tenantID, userID, expectedPasswordHash, newPasswordHash)
+	if err != nil {
+		return false, 0, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil || updated != 1 {
+		return false, 0, err
+	}
+	result, err = tx.ExecContext(ctx, `
+UPDATE auth_session
+SET revoked_at=now(), revoke_reason='password_changed', updated_at=now()
+WHERE tenant_id=$1 AND user_id=$2 AND revoked_at IS NULL
+`, tenantID, userID)
+	if err != nil {
+		return false, 0, err
+	}
+	revoked, err := result.RowsAffected()
+	if err != nil {
+		return false, 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, 0, err
+	}
+	return true, int(revoked), nil
 }
 
 func (s *PostgresStore) ActiveAdminExists(ctx context.Context, tenantCode string, roleCode string) (bool, error) {
@@ -258,9 +444,10 @@ WHERE tenant_id = $1
   AND ($7 = '' OR COALESCE(ip_address, '') = $7)
   AND ($8::timestamptz IS NULL OR created_at >= $8::timestamptz)
   AND ($9::timestamptz IS NULL OR created_at <= $9::timestamptz)
-ORDER BY created_at DESC
-LIMIT $10
-`, tenantID, stringsTrim(filter.Action), stringsTrim(filter.ActorID), stringsTrim(filter.TargetType), stringsTrim(filter.TargetID), stringsTrim(filter.ExamID), stringsTrim(filter.IPAddress), nullableTime(filter.CreatedFrom), nullableTime(filter.CreatedTo), normalizedAuditLimit(filter.Limit))
+  AND ($11 = '' OR created_at < $10 OR (created_at = $10 AND id::text < $11))
+ORDER BY created_at DESC, id::text DESC
+LIMIT $12
+`, tenantID, stringsTrim(filter.Action), stringsTrim(filter.ActorID), stringsTrim(filter.TargetType), stringsTrim(filter.TargetID), stringsTrim(filter.ExamID), stringsTrim(filter.IPAddress), nullableTime(filter.CreatedFrom), nullableTime(filter.CreatedTo), nullableTime(filter.CursorCreatedAt), stringsTrim(filter.CursorID), normalizedAuditLimit(filter.Limit))
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +481,7 @@ LIMIT $10
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) ListManagedUsers(ctx context.Context, tenantID string) ([]ManagedUser, error) {
+func (s *PostgresStore) ListManagedUsers(ctx context.Context, tenantID string, filter ManagedUserFilter) ([]ManagedUser, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT u.id::text, u.username, u.display_name, u.status,
        COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}'),
@@ -303,9 +490,17 @@ FROM app_user u
 LEFT JOIN user_role ur ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id AND ur.deleted_at IS NULL
 LEFT JOIN role r ON r.tenant_id = u.tenant_id AND r.id = ur.role_id AND r.deleted_at IS NULL
 WHERE u.tenant_id = $1::uuid AND u.deleted_at IS NULL
+  AND ($2 = '' OR u.id::text = $2)
+  AND ($3 = '' OR u.username ILIKE '%' || $3 || '%' OR u.display_name ILIKE '%' || $3 || '%')
+  AND ($4 = '' OR EXISTS (
+    SELECT 1 FROM user_role fur JOIN role fr ON fr.tenant_id=fur.tenant_id AND fr.id=fur.role_id AND fr.deleted_at IS NULL
+    WHERE fur.tenant_id=u.tenant_id AND fur.user_id=u.id AND fur.deleted_at IS NULL AND fr.code=$4
+  ))
+  AND ($6 = '' OR u.created_at < $5 OR (u.created_at = $5 AND u.id::text < $6))
 GROUP BY u.id
-ORDER BY u.created_at, u.username
-`, tenantID)
+ORDER BY u.created_at DESC, u.id::text DESC
+LIMIT NULLIF($7, 0)
+`, tenantID, filter.UserID, filter.Query, filter.Role, filter.CursorCreatedAt, filter.CursorID, filter.Limit)
 	if err != nil {
 		return nil, err
 	}

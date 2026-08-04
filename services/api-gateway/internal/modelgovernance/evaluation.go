@@ -42,6 +42,12 @@ type EvaluationRun struct {
 	CreatedAt        time.Time             `json:"created_at"`
 }
 
+type EvaluationListFilter struct {
+	Limit           int
+	CursorCreatedAt time.Time
+	CursorID        string
+}
+
 type EvaluationCandidate struct {
 	ID                     string            `json:"id"`
 	TenantID               string            `json:"tenant_id,omitempty"`

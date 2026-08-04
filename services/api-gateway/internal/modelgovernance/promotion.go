@@ -29,6 +29,7 @@ type ModelApproval struct {
 	DecisionReference     string     `json:"decision_reference"`
 	ExpiresAt             time.Time  `json:"expires_at"`
 	RevokedAt             *time.Time `json:"revoked_at,omitempty"`
+	Revision              int64      `json:"revision"`
 	CreatedAt             time.Time  `json:"created_at"`
 }
 
@@ -43,7 +44,8 @@ type ModelApprovalInput struct {
 }
 
 type ModelApprovalRevokeInput struct {
-	Reason string `json:"reason"`
+	Reason           string `json:"reason"`
+	ExpectedRevision int64  `json:"expected_revision"`
 }
 
 type ModelApprovalScope struct {

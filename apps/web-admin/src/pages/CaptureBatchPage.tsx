@@ -43,7 +43,6 @@ import {
   deleteCapturePage,
   getCaptureBatch,
   getMatchingQueue,
-  getProcessingSummary,
   listCaptureBatches,
   markStudentUnknown,
   mergeCaptureSubmissions,
@@ -359,6 +358,9 @@ export function CaptureBatchPage({
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<CaptureBatchDetail>();
   const [loading, setLoading] = useState(true);
+  const [loadingMoreBatches, setLoadingMoreBatches] = useState(false);
+  const [nextBatchCursor, setNextBatchCursor] = useState("");
+  const [hasMoreBatches, setHasMoreBatches] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [modalOpen, setModalOpen] = useState(false);
@@ -378,7 +380,6 @@ export function CaptureBatchPage({
   const batchesRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const matchingRequestRef = useRef(0);
-  const processingRequestRef = useRef(0);
   const previewRequestRef = useRef(0);
   const batchCanManage = canManage && !["completed", "cancelled"].includes(detail?.batch.status ?? "");
 
@@ -387,25 +388,51 @@ export function CaptureBatchPage({
     setLoading(true);
     setError(undefined);
     try {
-      const result = await listCaptureBatches(examId);
+      const result = await listCaptureBatches(examId, { limit: 30 });
       if (requestId !== batchesRequestRef.current) return;
       setBatches(result.batches);
+      setNextBatchCursor(result.next_cursor ?? "");
+      setHasMoreBatches(Boolean(result.has_more));
       setSelectedId((current) =>
         result.batches.some((batch) => batch.id === current) ? current : result.batches[0]?.id || ""
       );
     } catch (currentError) {
       if (requestId !== batchesRequestRef.current) return;
       setError(formatError(currentError));
+      setNextBatchCursor("");
+      setHasMoreBatches(false);
     } finally {
       if (requestId === batchesRequestRef.current) setLoading(false);
     }
   }, [examId]);
+
+  const loadMoreBatches = useCallback(async () => {
+    if (!hasMoreBatches || !nextBatchCursor || loadingMoreBatches) return;
+    const requestId = ++batchesRequestRef.current;
+    setLoadingMoreBatches(true);
+    try {
+      const result = await listCaptureBatches(examId, { limit: 30, cursor: nextBatchCursor });
+      if (requestId !== batchesRequestRef.current) return;
+      setBatches((current) => {
+        const byID = new Map(current.map((item) => [item.id, item]));
+        result.batches.forEach((item) => byID.set(item.id, item));
+        return Array.from(byID.values());
+      });
+      setNextBatchCursor(result.next_cursor ?? "");
+      setHasMoreBatches(Boolean(result.has_more));
+    } catch (currentError) {
+      if (requestId === batchesRequestRef.current) message.error(formatError(currentError));
+    } finally {
+      if (requestId === batchesRequestRef.current) setLoadingMoreBatches(false);
+    }
+  }, [examId, hasMoreBatches, loadingMoreBatches, message, nextBatchCursor]);
 
   const loadDetail = useCallback(
     async (batchId: string, quiet = false) => {
       const requestId = ++detailRequestRef.current;
       if (!batchId) {
         setDetail(undefined);
+		setProcessingSummaries({});
         setDetailLoading(false);
         return;
       }
@@ -414,6 +441,7 @@ export function CaptureBatchPage({
         const result = await getCaptureBatch(batchId);
         if (requestId !== detailRequestRef.current) return;
         setDetail(result);
+		setProcessingSummaries(Object.fromEntries(result.processing_summaries.map((item) => [item.submission_id, item])));
         setBatches((current) =>
           current.map((item) =>
             item.id === result.batch.id ? result.batch : item,
@@ -926,22 +954,7 @@ export function CaptureBatchPage({
         : [],
     [detail],
   );
-  useEffect(() => {
-    const requestId = ++processingRequestRef.current;
-    if (!submissions.length) {
-      setProcessingSummaries({});
-      return;
-    }
-    void Promise.allSettled(
-      submissions.map(async (id) => [id, await getProcessingSummary(id)] as const)
-    ).then((results) => {
-      if (requestId !== processingRequestRef.current) return;
-      const items = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
-      setProcessingSummaries(Object.fromEntries(items));
-    });
-  }, [submissions]);
-
-  async function resolveRegistration(runId: string, action: "confirm" | "retry") { setActioning(true); try { if (action === "confirm") await confirmRegistration(runId, "人工核对版面对齐边界与题目区域正确"); else await retryRegistration(runId); const items = await Promise.all(submissions.map(async (id) => [id, await getProcessingSummary(id)] as const)); setProcessingSummaries(Object.fromEntries(items)); await loadDetail(selectedId, true); message.success(action === "confirm" ? "版面对齐已确认" : "已重新排队对齐"); } catch (currentError) { message.error(formatError(currentError)); } finally { setActioning(false); } }
+  async function resolveRegistration(runId: string, action: "confirm" | "retry") { setActioning(true); try { if (action === "confirm") await confirmRegistration(runId, "人工核对版面对齐边界与题目区域正确"); else await retryRegistration(runId); await loadDetail(selectedId, true); message.success(action === "confirm" ? "版面对齐已确认" : "已重新排队对齐"); } catch (currentError) { message.error(formatError(currentError)); } finally { setActioning(false); } }
 
   if (loading) return <LoadingState label="正在加载采集批次" />;
   if (error)
@@ -1009,6 +1022,11 @@ export function CaptureBatchPage({
                 </StatusTag>
               </button>
             ))}
+            {hasMoreBatches ? (
+              <Button block loading={loadingMoreBatches} onClick={() => void loadMoreBatches()}>
+                加载更多批次
+              </Button>
+            ) : null}
           </aside>
           <main className="capture-batch-workspace">
             {detailLoading || !detail ? (

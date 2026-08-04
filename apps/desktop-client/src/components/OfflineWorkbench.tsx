@@ -4,7 +4,7 @@ import { BookOpenCheck, Download, KeyRound, RefreshCw, Save, Send, Trash2 } from
 import { downloadFileBlob } from "../api/files";
 import { listQuestions } from "../api/papers";
 import { getReviewTask, listAiGrades, listReviewTasks, submitHumanGrade } from "../api/review";
-import { getOcrTask, listAnswerSegments, listOcrTasks, listSubmissionPages } from "../api/submissions";
+import { listAnswerSegments, listOcrTasks, listSubmissionPages } from "../api/submissions";
 import type { DesktopApiClient } from "../api/client";
 import {
   loadOfflineDraft,
@@ -488,12 +488,7 @@ async function buildTaskPackage(client: DesktopApiClient, task: ReviewTask): Pro
     .map((item) => formatError(item.reason));
   const segments = segmentsResult.status === "fulfilled" ? segmentsResult.value.segments : [];
   const pages = pagesResult.status === "fulfilled" ? pagesResult.value.pages : [];
-  const taskList = ocrTaskResult.status === "fulfilled" ? ocrTaskResult.value.tasks : [];
-  const ocrTasks = (
-    await Promise.allSettled(taskList.map((item) => getOcrTask(client, item.id).then((result) => result.task)))
-  )
-    .filter((item): item is PromiseFulfilledResult<Awaited<ReturnType<typeof getOcrTask>>["task"]> => item.status === "fulfilled")
-    .map((item) => item.value);
+  const ocrTasks = ocrTaskResult.status === "fulfilled" ? ocrTaskResult.value.tasks : [];
   const questions = questionResult.status === "fulfilled" ? questionResult.value.questions : [];
   const aiGrades = gradeResult.status === "fulfilled" ? gradeResult.value.grades : [];
   const segment = segments.find((item) => item.id === task.answer_segment_id);

@@ -53,6 +53,8 @@ export class ApiClient {
     if (authorization) {
       headers.set("Authorization", authorization);
     }
+    addBrowserCSRFHeader(init.method, headers);
+    addIdempotencyHeader(path, init.method, headers);
     const response = await fetch(this.url(path), { ...init, headers, credentials: init.credentials ?? "include" });
     if (!response.ok) {
       throw await this.toError(response);
@@ -69,6 +71,8 @@ export class ApiClient {
     if (authorization) {
       headers.set("Authorization", authorization);
     }
+    addBrowserCSRFHeader(init.method, headers);
+    addIdempotencyHeader(path, init.method, headers);
     const response = await fetch(this.url(path), { ...init, headers, credentials: init.credentials ?? "include" });
     if (!response.ok) {
       throw await this.toError(response);
@@ -85,11 +89,40 @@ export class ApiClient {
     try {
       const payload = (await response.json()) as ApiErrorPayload;
       const code = payload.error?.code ?? payload.code ?? "request_failed";
-      const message = payload.error?.message ?? payload.message ?? response.statusText;
+      const message = friendlyErrorMessage(code, payload.error?.message ?? payload.message ?? response.statusText);
       return new ApiClientError(response.status, code, message);
     } catch {
       return new ApiClientError(response.status, "request_failed", response.statusText);
     }
+  }
+}
+
+function friendlyErrorMessage(code: string, fallback: string) {
+  const messages: Record<string, string> = {
+    resource_version_conflict: "任务已被其他人更新，请刷新页面后重试。",
+    idempotency_key_required: "本次操作缺少安全重试标识，请刷新页面后重试。",
+    idempotency_key_reused_with_different_request: "这次操作内容已变化，请重新发起。",
+    operation_in_progress: "操作正在处理中，请稍后查看结果。",
+    capability_unavailable: "自动处理暂时不可用，任务已保留，可稍后继续或转人工处理。",
+    csrf_validation_failed: "页面安全状态已失效，请刷新页面后重试。"
+  };
+  return messages[code] ?? fallback;
+}
+
+function addIdempotencyHeader(path: string, method: string | undefined, headers: Headers) {
+  const normalizedMethod = (method ?? "GET").toUpperCase();
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(normalizedMethod) || path.startsWith("/api/v1/auth/")) {
+    return;
+  }
+  if (!headers.has("Idempotency-Key")) {
+    headers.set("Idempotency-Key", crypto.randomUUID());
+  }
+}
+
+function addBrowserCSRFHeader(method: string | undefined, headers: Headers) {
+  const normalizedMethod = (method ?? "GET").toUpperCase();
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(normalizedMethod) && !headers.has("X-EduGrade-CSRF")) {
+    headers.set("X-EduGrade-CSRF", "1");
   }
 }
 

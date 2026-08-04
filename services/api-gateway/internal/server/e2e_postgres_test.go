@@ -62,7 +62,8 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	appealReviewerID := e2eLookupUserID(t, db, "demo", "arbitrator")
 	appealReviewerToken := e2eLoginWithTenant(t, router, "demo", "arbitrator", "ChangeMe123!")
 
-	tenant := e2ePostJSON(t, router, http.MethodPost, "/api/v1/tenants", platformToken, `{"name":"Story 041 Synthetic Tenant `+suffix+`","code":"story041-`+suffix+`"}`, http.StatusCreated)["tenant"].(map[string]any)
+	provisionedAdminUsername := "story041_admin_" + strings.ReplaceAll(suffix, ".", "_")
+	tenant := e2ePostJSON(t, router, http.MethodPost, "/api/v1/tenants", platformToken, `{"name":"Story 041 Synthetic Tenant `+suffix+`","code":"story041-`+suffix+`","admin_username":"`+provisionedAdminUsername+`","admin_display_name":"Story 041 School Admin","admin_password":"Story041Admin!"}`, http.StatusCreated)["tenant"].(map[string]any)
 	if tenant["status"] != "active" {
 		t.Fatalf("test database tenant should be active: %#v", tenant)
 	}
@@ -100,7 +101,7 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	pageResp := e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/pages", adminToken, `{"file_asset_id":"`+answerFileID+`","page_no":1}`, http.StatusCreated)["page"].(map[string]any)
 	pageID := e2eString(t, pageResp, "id")
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/quality-check", adminToken, `{}`, http.StatusOK)
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/status", adminToken, `{"status":"ready_for_ocr"}`, http.StatusOK)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/status", adminToken, `{"status":"ready_for_ocr","expected_revision":1}`, http.StatusOK)
 
 	ocrTask := e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/ocr-tasks", adminToken, `{"engine":"mock_ocr","engine_version":"story041-synthetic","min_confidence":0.8}`, http.StatusCreated)["task"].(map[string]any)
 	ocrTaskID := e2eString(t, ocrTask, "id")
@@ -141,8 +142,8 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	reviewTask := e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks", adminToken, `{"answer_segment_id":"`+segmentID+`","source":"evidence_verification_failed","priority":5}`, http.StatusCreated)["task"].(map[string]any)
 	reviewTaskID := e2eString(t, reviewTask, "id")
 	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/publish", adminToken, `{"reason":"too early"}`, http.StatusConflict)
-	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/assign", teacherToken, `{"assigned_to":"`+graderID+`"}`, http.StatusForbidden)
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/assign", adminToken, `{"assigned_to":"`+graderID+`"}`, http.StatusOK)
+	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/assign", teacherToken, `{"assigned_to":"`+graderID+`","expected_revision":1}`, http.StatusForbidden)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/assign", adminToken, `{"assigned_to":"`+graderID+`","expected_revision":1}`, http.StatusOK)
 	e2eExpectStatus(t, router, http.MethodGet, "/api/v1/review-tasks/"+reviewTaskID+"/original-image", teacherToken, "", http.StatusForbidden)
 	draftStore := review.NewPostgresStore(db)
 	draft, err := draftStore.SaveDraft(context.Background(), demoTenantID, reviewTaskID, graderID, review.SaveDraftInput{
@@ -170,8 +171,8 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	if _, err := db.Exec(`UPDATE review_task SET assigned_to=$3::uuid,updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`, demoTenantID, reviewTaskID, graderID); err != nil {
 		t.Fatalf("restore review task assignment: %v", err)
 	}
-	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", graderToken, `{"score":6,"rubric_selections":[{"point_id":"p1","score":6}],"comments":"over max"}`, http.StatusBadRequest)
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", graderToken, `{"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"story041 synthetic human grade","reason":"manual review after mock AI"}`, http.StatusCreated)
+	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", graderToken, `{"expected_revision":2,"score":6,"rubric_selections":[{"point_id":"p1","score":6}],"comments":"over max"}`, http.StatusBadRequest)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", graderToken, `{"expected_revision":2,"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"story041 synthetic human grade","reason":"manual review after mock AI"}`, http.StatusCreated)
 
 	finalized := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/finalize", adminToken, `{}`, http.StatusCreated)
 	if finalized["status"] != "pending_confirmation" || e2eFloat(t, finalized, "created_finals") != 1 {
@@ -197,9 +198,9 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	finalID := e2eString(t, studentGrade["items"].([]any)[0].(map[string]any), "id")
 	appealResp := e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals", studentToken, `{"exam_id":"`+examID+`","student_id":"`+studentID+`","target_type":"question","final_grade_id":"`+finalID+`","reason":"Story 041 synthetic appeal"}`, http.StatusCreated)["appeal"].(map[string]any)
 	appealID := e2eString(t, appealResp, "id")
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/assign", adminToken, `{"assigned_to":"`+appealReviewerID+`"}`, http.StatusOK)
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/recommendation", appealReviewerToken, `{"recommendation":"adjust_score","reason":"Story 041 synthetic independent appeal review","recommended_score":5}`, http.StatusOK)
-	appealReviewed := e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/review", adminToken, `{"status":"score_adjusted","reason":"Story 041 synthetic appeal adjustment","adjusted_score":5}`, http.StatusOK)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/assign", adminToken, `{"assigned_to":"`+appealReviewerID+`","expected_revision":1}`, http.StatusOK)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/recommendation", appealReviewerToken, `{"recommendation":"adjust_score","reason":"Story 041 synthetic independent appeal review","recommended_score":5,"expected_revision":2}`, http.StatusOK)
+	appealReviewed := e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/review", adminToken, `{"status":"score_adjusted","reason":"Story 041 synthetic appeal adjustment","adjusted_score":5,"expected_revision":3}`, http.StatusOK)
 	if appealReviewed["score_adjustment"] == nil {
 		t.Fatalf("PostgreSQL appeal review should create score adjustment: %#v", appealReviewed)
 	}

@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/appeal"
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/capture"
 	"edugrade-enterprise/services/api-gateway/internal/config"
+	"edugrade-enterprise/services/api-gateway/internal/dashboard"
 	"edugrade-enterprise/services/api-gateway/internal/db"
 	"edugrade-enterprise/services/api-gateway/internal/deps"
 	"edugrade-enterprise/services/api-gateway/internal/evidence"
@@ -16,13 +18,16 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/grading"
 	"edugrade-enterprise/services/api-gateway/internal/handlers"
+	"edugrade-enterprise/services/api-gateway/internal/idempotency"
 	"edugrade-enterprise/services/api-gateway/internal/imagequality"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
 	"edugrade-enterprise/services/api-gateway/internal/middleware"
 	"edugrade-enterprise/services/api-gateway/internal/modelgovernance"
+	"edugrade-enterprise/services/api-gateway/internal/observability"
 	ocrpkg "edugrade-enterprise/services/api-gateway/internal/ocr"
 	"edugrade-enterprise/services/api-gateway/internal/orchestrator"
 	"edugrade-enterprise/services/api-gateway/internal/org"
+	"edugrade-enterprise/services/api-gateway/internal/outbox"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
 	"edugrade-enterprise/services/api-gateway/internal/report"
 	"edugrade-enterprise/services/api-gateway/internal/review"
@@ -40,8 +45,18 @@ type Server struct {
 func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 	checkers := make([]deps.Checker, 0, 5)
 	cleanups := make([]func() error, 0, 2)
+	metricsRegistry := observability.NewRegistry()
 
-	postgresDB, closePostgres, err := db.OpenPostgres(cfg.Postgres)
+	postgresDB, closePostgres, err := db.OpenPostgres(cfg.Postgres, db.QueryObserver{
+		SlowThreshold: cfg.Observability.SlowRequestThreshold,
+		Observe:       metricsRegistry.ObserveDatabaseQuery,
+		LogSlow: func(ctx context.Context, operation string, duration time.Duration, queryErr error) {
+			logg.Warn(ctx, "slow database query observed", map[string]any{
+				"event": "slow_database_query", "operation": operation,
+				"duration_ms": duration.Milliseconds(), "failed": queryErr != nil,
+			})
+		},
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -66,11 +81,22 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 	reportStore := report.NewPostgresStore(postgresDB)
 	captureStore := capture.NewPostgresStoreWithBarcodeKeyring(postgresDB, capture.BarcodeKeyring{ActiveKeyID: cfg.Barcode.ActiveKeyID, Keys: cfg.Barcode.HMACKeys})
 	modelGovernanceStore := modelgovernance.NewPostgresStore(postgresDB)
+	idempotencyStore := idempotency.NewPostgresStore(postgresDB)
+	metricsRegistry.SetDatabaseStats(func() observability.DatabaseStats {
+		stats := postgresDB.Stats()
+		return observability.DatabaseStats{
+			OpenConnections: stats.OpenConnections,
+			InUse:           stats.InUse,
+			Idle:            stats.Idle,
+			WaitCount:       stats.WaitCount,
+			WaitDuration:    stats.WaitDuration,
+		}
+	})
 	if err := modelGovernanceStore.EnsureLocalBaseline(context.Background(), "", localModelBaseline(cfg)); err != nil {
 		_ = closePostgres()
 		return nil, nil, err
 	}
-	if strings.EqualFold(strings.TrimSpace(cfg.Service.Environment), "production") {
+	if strings.EqualFold(strings.TrimSpace(cfg.Service.Environment), "production") && cfg.AIService.Enabled {
 		if err := modelGovernanceStore.ValidateProductionReadiness(
 			context.Background(),
 			modelgovernance.NewEnvironmentSecretResolver(""),
@@ -93,16 +119,82 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 	}
 	checkers = append(checkers, minioChecker)
 	checkers = append(checkers, deps.NewQdrantChecker(cfg.Qdrant))
-	checkers = append(checkers, deps.NewAIServiceChecker(cfg.AIService))
+	checkers = append(checkers, deps.NewAIServiceChecker(cfg.AIService, cfg.Service.Environment))
 	objectStore, err := files.NewMinIOObjectStorage(cfg.MinIO)
 	if err != nil {
 		return nil, nil, err
 	}
+	fileReconciler := files.NewReconciler(postgresDB, objectStore)
+	if cfg.Files.ReconciliationInterval > 0 {
+		reconciliationContext, stopReconciliation := context.WithCancel(context.Background())
+		reconciliationDone := make(chan struct{})
+		go func() {
+			defer close(reconciliationDone)
+			ticker := time.NewTicker(cfg.Files.ReconciliationInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-reconciliationContext.Done():
+					return
+				case <-ticker.C:
+					run, reconcileErr := fileReconciler.Run(reconciliationContext, files.ReconciliationOptions{
+						Bucket: cfg.Files.Bucket, BatchSize: cfg.Files.ReconciliationBatchSize,
+						ObjectScanLimit: cfg.Files.ReconciliationObjectLimit,
+						StaleAfter:      cfg.Files.ReconciliationStaleAfter, Repair: false,
+					})
+					if reconcileErr != nil {
+						logg.Error(context.Background(), "file reconciliation report failed", map[string]any{
+							"event": "file_reconciliation_failed", "error": reconcileErr.Error(),
+						})
+					} else if run.FindingCount > 0 {
+						logg.Warn(context.Background(), "file reconciliation findings detected", map[string]any{
+							"event": "file_reconciliation_findings", "run_id": run.ID,
+							"finding_count": run.FindingCount, "scanned_assets": run.ScannedAssets,
+						})
+					}
+				}
+			}
+		}()
+		cleanups = append(cleanups, func() error {
+			stopReconciliation()
+			select {
+			case <-reconciliationDone:
+			case <-time.After(5 * time.Second):
+				return context.DeadlineExceeded
+			}
+			return nil
+		})
+	}
+	outboxDispatcher := outbox.NewDispatcher(
+		outbox.NewPostgresStore(postgresDB),
+		outbox.NewLogPublisher(logg),
+		outbox.Options{Owner: cfg.Service.Name + "-" + time.Now().UTC().Format("20060102T150405.000000000")},
+	)
+	outboxContext, stopOutbox := context.WithCancel(context.Background())
+	outboxDone := make(chan struct{})
+	go func() {
+		defer close(outboxDone)
+		outboxDispatcher.Run(outboxContext, func(dispatchErr error) {
+			logg.Error(context.Background(), "transactional outbox dispatch failed", map[string]any{
+				"event": "outbox_dispatch_failed", "error": dispatchErr.Error(),
+			})
+		})
+	}()
+	cleanups = append(cleanups, func() error {
+		stopOutbox()
+		select {
+		case <-outboxDone:
+		case <-time.After(5 * time.Second):
+			return context.DeadlineExceeded
+		}
+		return nil
+	})
 
-	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, scoreStore, appealStore, reportStore, captureStore, modelGovernanceStore)
+	loginLimiter := auth.NewRedisLoginFailureLimiter(redisChecker.Client(), cfg.Auth.LoginFailureLimit, cfg.Auth.LoginFailureWindow)
+	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, scoreStore, appealStore, reportStore, captureStore, modelGovernanceStore, idempotencyStore, fileReconciler, loginLimiter, metricsRegistry)
 	cleanup := func() {
-		for _, closeFn := range cleanups {
-			_ = closeFn()
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			_ = cleanups[i]()
 		}
 	}
 	return &Server{handler: router}, cleanup, nil
@@ -123,16 +215,36 @@ func NewRouterFull(cfg config.Config, logg *logger.Logger, checkers []deps.Check
 func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.Checker, authStore auth.Store, orgStore org.Store, examStore exam.Store, paperStore paper.Store, fileStore files.Store, objectStore files.ObjectStorage, submissionStore submission.Store, ocrStore ocrpkg.Store, ocrQueue ocrpkg.Queue, segmentStore segment.Store, optionalStores ...any) http.Handler {
 	mux := http.NewServeMux()
 	h := handlers.New(cfg, checkers)
+	var loginLimiter auth.LoginLimiter
+	var metricsRegistry *observability.Registry
+	var fileReconciliationReader files.ReconciliationReader
+	for _, optionalStore := range optionalStores {
+		if limiter, ok := optionalStore.(auth.LoginLimiter); ok && limiter != nil {
+			loginLimiter = limiter
+		}
+		if registry, ok := optionalStore.(*observability.Registry); ok && registry != nil {
+			metricsRegistry = registry
+		}
+		if reader, ok := optionalStore.(files.ReconciliationReader); ok && reader != nil {
+			fileReconciliationReader = reader
+		}
+	}
+	if metricsRegistry == nil {
+		metricsRegistry = observability.NewRegistry()
+	}
 	authHandler := auth.NewHandler(authStore, cfg.Auth.SessionTTL, auth.HandlerOptions{
-		LoginFailureLimit:  cfg.Auth.LoginFailureLimit,
-		LoginFailureWindow: cfg.Auth.LoginFailureWindow,
-		CookieName:         cfg.Auth.SessionCookieName,
-		CookieSecure:       cfg.Auth.SessionCookieSecure,
+		LoginFailureLimit:    cfg.Auth.LoginFailureLimit,
+		LoginFailureWindow:   cfg.Auth.LoginFailureWindow,
+		RememberedSessionTTL: cfg.Auth.RememberedSessionTTL,
+		CookieName:           cfg.Auth.SessionCookieName,
+		CookieSecure:         cfg.Auth.SessionCookieSecure,
+		LoginLimiter:         loginLimiter,
+		TrustedProxyCIDRs:    cfg.Security.TrustedProxyCIDRs,
 	})
 	orgHandler := org.NewHandler(orgStore, authStore)
 	examHandler := exam.NewHandler(examStore, authStore)
 	paperHandler := paper.NewHandler(paperStore, authStore)
-	fileHandler := files.NewHandler(fileStore, objectStore, authStore, cfg.Files)
+	fileHandler := files.NewHandler(fileStore, objectStore, authStore, cfg.Files).WithReconciliationReader(fileReconciliationReader)
 	submissionHandler := submission.NewHandler(submissionStore, fileStore, authStore)
 	segmentHandler := segment.NewHandler(segmentStore, paperStore, submissionStore, authStore, fileStore, objectStore)
 	var imageQualityStore imagequality.Store = imagequality.NewMemoryStore()
@@ -147,6 +259,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	var reportStore report.Store = report.NewMemoryStore()
 	var captureStore capture.Store = capture.NewMemoryStore()
 	var modelGovernanceStore modelgovernance.Store = modelgovernance.NewMemoryStore()
+	var idempotencyStore idempotency.Store = idempotency.NewMemoryStore()
 	for _, optionalStore := range optionalStores {
 		switch store := optionalStore.(type) {
 		case imagequality.Store:
@@ -197,6 +310,10 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 			if store != nil {
 				modelGovernanceStore = store
 			}
+		case idempotency.Store:
+			if store != nil {
+				idempotencyStore = store
+			}
 		}
 	}
 	h.WithWorkerRuntimeStore(workerRuntimeStore)
@@ -207,8 +324,8 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	captureHandler := capture.NewHandler(captureStore, fileStore, examStore, workerRuntimeStore, authStore)
 	gradingHandler := grading.NewHandler(gradingStore, grading.NewEngine(), authStore)
 	gradingHandler.SetProductionDependencies(workerRuntimeStore, fileStore)
-	var subjectiveAdapter subjective.LLMGradingAdapter = subjective.NewMockLLMAdapter()
-	if cfg.AIService.URL != "" {
+	var subjectiveAdapter subjective.LLMGradingAdapter
+	if useRealAIService(cfg) {
 		subjectiveAdapter = subjective.NewHTTPAdapter(subjective.HTTPAdapterConfig{
 			BaseURL:           cfg.AIService.URL,
 			Token:             cfg.AIService.Token,
@@ -223,6 +340,10 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 			DeploymentRegion:  cfg.AIService.DeploymentRegion,
 			CapabilityProfile: cfg.AIService.CapabilityProfile,
 		})
+	} else if allowMockAI(cfg) {
+		subjectiveAdapter = subjective.NewMockLLMAdapter()
+	} else {
+		subjectiveAdapter = subjective.NewDisabledAdapter("ai_grading_disabled", cfg.AIService.ModelVersion, cfg.AIService.PromptVersion)
 	}
 	subjectiveHandler := subjective.NewHandler(subjectiveStore, subjectiveAdapter, authStore).WithWorkerRuntimeStore(workerRuntimeStore)
 	evidenceHandler := evidence.NewHandler(evidenceStore, evidence.NewEngine(), authStore)
@@ -236,7 +357,18 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 		modelgovernance.NewEnvironmentSecretResolver(""),
 		localModelBaseline(cfg),
 	)
-	requireAuth := auth.AuthMiddleware(authStore, auth.HandlerOptions{CookieName: cfg.Auth.SessionCookieName})
+	dashboardHandler := dashboard.NewHandler(dashboard.Dependencies{
+		Exams:       examStore,
+		Submissions: submissionStore,
+		Reviews:     reviewStore,
+		Audits:      authStore,
+	})
+	authenticate := auth.AuthMiddleware(authStore, auth.HandlerOptions{CookieName: cfg.Auth.SessionCookieName})
+	environment := strings.ToLower(strings.TrimSpace(cfg.Service.Environment))
+	idempotent := idempotency.Middleware(idempotencyStore, idempotency.Options{Enforce: environment == "production" || environment == "staging"})
+	requireAuth := func(handler http.Handler) http.Handler {
+		return authenticate(idempotent(handler))
+	}
 	requireOrgManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("org:manage")(handler))
 	}
@@ -247,6 +379,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 		return requireAuth(auth.RequirePermission("student:import")(handler))
 	}
 	requireExamManage := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequirePermission("exam:manage")(handler))
+	}
+	requireDashboardRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("exam:manage")(handler))
 	}
 	requireFileManage := func(handler http.HandlerFunc) http.Handler {
@@ -362,18 +497,46 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	requireWorkerRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequireAnyPermission("ocr:manage", "orchestrator:manage", "system:read")(handler))
 	}
-	withPlatformWorkerTenantScope := func(handler http.HandlerFunc) http.HandlerFunc {
-		return auth.PlatformWorkerTenantScope(handler).ServeHTTP
+	withScopedExam := func(handler http.HandlerFunc) http.HandlerFunc {
+		return auth.RequireScopedResource("exam", "examId")(handler).ServeHTTP
+	}
+	withWorkerTaskScope := func(handler http.HandlerFunc) http.HandlerFunc {
+		return workerruntime.TaskScope(workerRuntimeStore)(handler).ServeHTTP
+	}
+	withWorkerTaskSource := func(sourceType string, pathParam string, handler http.HandlerFunc) http.HandlerFunc {
+		guarded := workerruntime.RequireTaskSource(sourceType, pathParam)(handler)
+		return workerruntime.TaskScope(workerRuntimeStore)(guarded).ServeHTTP
+	}
+	withWorkerTaskPayload := func(pathParam string, payloadKey string, handler http.HandlerFunc) http.HandlerFunc {
+		guarded := workerruntime.RequireTaskPayloadValue(pathParam, payloadKey)(handler)
+		return workerruntime.TaskScope(workerRuntimeStore)(guarded).ServeHTTP
+	}
+	withWorkerTaskFile := func(pathParam string, handler http.HandlerFunc) http.HandlerFunc {
+		guarded := workerruntime.RequireTaskFile(pathParam)(handler)
+		return workerruntime.TaskScope(workerRuntimeStore)(guarded).ServeHTTP
 	}
 
 	mux.HandleFunc("GET /health", h.Health)
+	mux.HandleFunc("GET /health/live", h.Health)
+	mux.HandleFunc("GET /health/ready", h.Ready)
+	mux.Handle("GET /metrics", metricsRegistry)
+	// /ready remains permission-protected for backward compatibility. New
+	// infrastructure probes must use the public, redacted /health/ready route.
 	mux.Handle("GET /ready", requireSystemRead(h.Ready))
 	mux.Handle("GET /api/v1/system/info", requireSystemRead(h.SystemInfo))
 	mux.Handle("GET /api/v1/system/status", requireSystemRead(h.SystemStatus))
 	mux.Handle("GET /api/v1/ocr/availability", requireOCRAvailabilityRead(h.OCRAvailability))
 	mux.HandleFunc("POST /api/v1/auth/login", authHandler.Login)
+	mux.HandleFunc("POST /api/v1/auth/token", authHandler.TokenLogin)
 	mux.Handle("POST /api/v1/auth/logout", requireAuth(http.HandlerFunc(authHandler.Logout)))
+	mux.Handle("POST /api/v1/auth/password", requireAuth(http.HandlerFunc(authHandler.ChangePassword)))
 	mux.Handle("GET /api/v1/auth/me", requireAuth(http.HandlerFunc(authHandler.Me)))
+	mux.Handle("GET /api/v1/auth/sessions", requireAuth(http.HandlerFunc(authHandler.ListSessions)))
+	mux.Handle("DELETE /api/v1/auth/sessions/{id}", requireAuth(http.HandlerFunc(authHandler.RevokeSession)))
+	mux.Handle("POST /api/v1/auth/logout-all", requireAuth(http.HandlerFunc(authHandler.LogoutAll)))
+	mux.Handle("DELETE /api/v1/users/{id}/sessions", requireAuth(auth.RequirePermission("session:revoke")(http.HandlerFunc(authHandler.AdminRevokeUserSessions))))
+	dashboard.RegisterRoutes(mux, dashboardHandler, requireDashboardRead)
+	mux.Handle("GET /api/v1/ai-grading/status", requireAuth(auth.RequireAnyPermission("grading:manage", "review:work", "review:manage", "model:read", "system:read")(http.HandlerFunc(subjectiveHandler.Availability))))
 	mux.Handle("GET /api/v1/users", requireOrgManage(authHandler.ListManagedUsers))
 	mux.Handle("POST /api/v1/users", requireOrgManage(authHandler.CreateManagedUser))
 	mux.Handle("GET /api/v1/roles", requireOrgManage(authHandler.ListAssignableRoles))
@@ -421,8 +584,8 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("PATCH /api/v1/exams/{id}", requireExamManage(examHandler.UpdateExam))
 	mux.Handle("POST /api/v1/exams/{id}/archive", requireExamManage(examHandler.Archive))
 	mux.Handle("POST /api/v1/exams/{id}/status", requireExamManage(examHandler.UpdateStatus))
-	mux.Handle("GET /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(paperHandler.ListTemplates))
-	mux.Handle("POST /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(paperHandler.CreateTemplate))
+	mux.Handle("GET /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(withScopedExam(paperHandler.ListTemplates)))
+	mux.Handle("POST /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(withScopedExam(paperHandler.CreateTemplate)))
 	mux.Handle("PATCH /api/v1/answer-sheet-templates/{id}", requireExamManage(paperHandler.UpdateTemplate))
 	mux.Handle("POST /api/v1/answer-sheet-templates/{id}/lock", requireExamManage(paperHandler.LockTemplate))
 	mux.Handle("POST /api/v1/answer-sheet-templates/{id}/clone", requireExamManage(paperHandler.CloneTemplate))
@@ -432,26 +595,27 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/answer-sheet-print-batches/{id}/package.pdf", requireExamManage(captureHandler.DownloadStudentPrintPackage))
 	mux.Handle("POST /api/v1/answer-sheet-print-sheets/{id}/revoke", requireExamManage(captureHandler.RevokeStudentSheet))
 	mux.Handle("POST /api/v1/answer-sheet-print-sheets/{id}/reprint", requireExamManage(captureHandler.ReprintStudentSheet))
-	mux.Handle("GET /api/v1/exams/{examId}/readiness", requireExamManage(paperHandler.GetReadiness))
-	mux.Handle("POST /api/v1/exams/{examId}/readiness/confirm", requireExamManage(paperHandler.ConfirmReadiness))
-	mux.Handle("POST /api/v1/exams/{examId}/start-collection", requireExamManage(paperHandler.StartCollection))
+	mux.Handle("GET /api/v1/exams/{examId}/readiness", requireExamManage(withScopedExam(paperHandler.GetReadiness)))
+	mux.Handle("POST /api/v1/exams/{examId}/readiness/confirm", requireExamManage(withScopedExam(paperHandler.ConfirmReadiness)))
+	mux.Handle("POST /api/v1/exams/{examId}/start-collection", requireExamManage(withScopedExam(paperHandler.StartCollection)))
 
-	mux.Handle("POST /api/v1/exams/{examId}/papers", requireExamManage(paperHandler.CreatePaper))
-	mux.Handle("GET /api/v1/exams/{examId}/papers", requireExamManage(paperHandler.ListPapers))
-	mux.Handle("POST /api/v1/exams/{examId}/questions", requireExamManage(paperHandler.CreateQuestion))
-	mux.Handle("GET /api/v1/exams/{examId}/questions", requireExamManage(paperHandler.ListQuestions))
+	mux.Handle("POST /api/v1/exams/{examId}/papers", requireExamManage(withScopedExam(paperHandler.CreatePaper)))
+	mux.Handle("GET /api/v1/exams/{examId}/papers", requireExamManage(withScopedExam(paperHandler.ListPapers)))
+	mux.Handle("POST /api/v1/exams/{examId}/questions", requireExamManage(withScopedExam(paperHandler.CreateQuestion)))
+	mux.Handle("GET /api/v1/exams/{examId}/questions", requireExamManage(withScopedExam(paperHandler.ListQuestions)))
 	mux.Handle("PATCH /api/v1/questions/{id}", requireExamManage(paperHandler.UpdateQuestion))
 	mux.Handle("DELETE /api/v1/questions/{id}", requireExamManage(paperHandler.DeleteQuestion))
 	mux.Handle("POST /api/v1/questions/{id}/rubric", requireExamManage(paperHandler.CreateRubric))
-	mux.Handle("POST /api/v1/exams/{examId}/validate-paper-config", requireExamManage(paperHandler.ValidatePaperConfig))
+	mux.Handle("POST /api/v1/exams/{examId}/validate-paper-config", requireExamManage(withScopedExam(paperHandler.ValidatePaperConfig)))
 
-	mux.Handle("POST /api/v1/files", requireFileManage(fileHandler.Upload))
+	mux.Handle("POST /api/v1/files", requireFileManage(withWorkerTaskScope(fileHandler.Upload)))
 	mux.Handle("GET /api/v1/files/{id}", requireFileManage(fileHandler.Get))
-	mux.Handle("GET /api/v1/files/{id}/download", requireFileManage(withPlatformWorkerTenantScope(fileHandler.Download)))
+	mux.Handle("GET /api/v1/files/{id}/download", requireFileManage(withWorkerTaskFile("id", fileHandler.Download)))
 	mux.Handle("DELETE /api/v1/files/{id}", requireFileManage(fileHandler.Delete))
+	mux.Handle("GET /api/v1/system/file-reconciliation", requireAuth(auth.RequireAnyRole("platform_admin")(http.HandlerFunc(fileHandler.ReconciliationStatus))))
 
-	mux.Handle("POST /api/v1/exams/{examId}/submissions", requireSubmissionManage(submissionHandler.Create))
-	mux.Handle("GET /api/v1/exams/{examId}/submissions", requireSubmissionManage(submissionHandler.ListByExam))
+	mux.Handle("POST /api/v1/exams/{examId}/submissions", requireSubmissionManage(withScopedExam(submissionHandler.Create)))
+	mux.Handle("GET /api/v1/exams/{examId}/submissions", requireSubmissionManage(withScopedExam(submissionHandler.ListByExam)))
 	mux.Handle("GET /api/v1/submissions/{id}", requireSubmissionManage(submissionHandler.Get))
 	mux.Handle("POST /api/v1/submissions/{id}/pages", requireSubmissionManage(submissionHandler.AddPage))
 	mux.Handle("PUT /api/v1/submissions/{id}/pages/{pageNo}", requireSubmissionManage(submissionHandler.ReplacePage))
@@ -460,8 +624,8 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/submissions/{id}/run-quality-check", requireSubmissionManage(imageQualityHandler.RunQualityCheck))
 	mux.Handle("POST /api/v1/submission-pages/{id}/quality-override", requireCaptureManage(imageQualityHandler.OverridePageQuality))
 	mux.Handle("POST /api/v1/submissions/{id}/status", requireSubmissionManage(submissionHandler.UpdateStatus))
-	mux.Handle("POST /api/v1/exams/{examId}/capture-batches", requireCaptureManage(captureHandler.CreateBatch))
-	mux.Handle("GET /api/v1/exams/{examId}/capture-batches", requireCaptureManage(captureHandler.ListBatches))
+	mux.Handle("POST /api/v1/exams/{examId}/capture-batches", requireCaptureManage(withScopedExam(captureHandler.CreateBatch)))
+	mux.Handle("GET /api/v1/exams/{examId}/capture-batches", requireCaptureManage(withScopedExam(captureHandler.ListBatches)))
 	mux.Handle("GET /api/v1/capture-batches/{id}", requireCaptureManage(captureHandler.GetBatch))
 	mux.Handle("GET /api/v1/capture-batches/{id}/matching-queue", requireCaptureManage(captureHandler.GetMatchingQueue))
 	mux.Handle("POST /api/v1/capture-batches/{id}/files", requireCaptureManage(captureHandler.RegisterFile))
@@ -491,38 +655,38 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/page-registration-corrections/{id}/undo", requireCaptureManage(captureHandler.UndoRegistrationCorrection))
 
 	mux.Handle("POST /api/v1/internal/image-quality/jobs/claim", requireOCRManage(imageQualityHandler.ClaimJobs))
-	mux.Handle("POST /api/v1/internal/image-quality/runs/{runId}/normalized-assets", requireOCRManage(imageQualityHandler.CreateNormalizedAssetSlot))
-	mux.Handle("POST /api/v1/internal/image-quality/runs/{runId}/result", requireOCRManage(imageQualityHandler.SubmitResult))
+	mux.Handle("POST /api/v1/internal/image-quality/runs/{runId}/normalized-assets", requireOCRManage(withWorkerTaskSource("image_quality_run", "runId", imageQualityHandler.CreateNormalizedAssetSlot)))
+	mux.Handle("POST /api/v1/internal/image-quality/runs/{runId}/result", requireOCRManage(withWorkerTaskSource("image_quality_run", "runId", imageQualityHandler.SubmitResult)))
 	mux.Handle("POST /api/v1/internal/worker/tasks", requireWorkerExecute(workerRuntimeHandler.CreateTask))
 	mux.Handle("POST /api/v1/internal/worker/tasks/claim", requireWorkerExecute(workerRuntimeHandler.Claim))
-	mux.Handle("GET /api/v1/internal/worker/tasks/{taskId}", requireWorkerRead(withPlatformWorkerTenantScope(workerRuntimeHandler.Get)))
-	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/heartbeat", requireWorkerExecute(withPlatformWorkerTenantScope(workerRuntimeHandler.Heartbeat)))
-	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/complete", requireWorkerExecute(withPlatformWorkerTenantScope(workerRuntimeHandler.Complete)))
-	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/fail", requireWorkerExecute(withPlatformWorkerTenantScope(workerRuntimeHandler.Fail)))
-	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/cancel", requireWorkerExecute(withPlatformWorkerTenantScope(workerRuntimeHandler.Cancel)))
-	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/requeue", requireWorkerExecute(withPlatformWorkerTenantScope(workerRuntimeHandler.Requeue)))
-	mux.Handle("POST /api/v1/internal/capture/files/{fileId}/result", requireWorkerExecute(captureHandler.CompleteFile))
-	mux.Handle("POST /api/v1/internal/capture/files/{fileId}/fail", requireWorkerExecute(captureHandler.FailFile))
-	mux.Handle("POST /api/v1/internal/page-registration-runs/{runId}/result", requireWorkerExecute(captureHandler.CompleteRegistration))
-	mux.Handle("POST /api/v1/internal/page-registration-runs/{runId}/fail", requireWorkerExecute(captureHandler.FailRegistration))
-	mux.Handle("POST /api/v1/internal/page-registration-corrections/{id}/result", requireWorkerExecute(captureHandler.CompleteRegistrationCorrection))
-	mux.Handle("POST /api/v1/internal/page-registration-corrections/{id}/failure", requireWorkerExecute(captureHandler.FailRegistrationCorrection))
-	mux.Handle("GET /api/v1/internal/answer-segments/{id}/image", requireWorkerExecute(segmentHandler.GetImage))
-	mux.Handle("POST /api/v1/internal/omr-runs/{runId}/result", requireWorkerExecute(gradingHandler.CompleteOMR))
-	mux.Handle("POST /api/v1/internal/omr-runs/{runId}/failure", requireWorkerExecute(gradingHandler.FailOMR))
-	mux.Handle("POST /api/v1/internal/subjective-grading/runs/{runId}/result", requireWorkerExecute(subjectiveHandler.CompleteWorker))
-	mux.Handle("POST /api/v1/internal/subjective-grading/runs/{runId}/failure", requireWorkerExecute(subjectiveHandler.FailWorker))
-	mux.Handle("POST /api/v1/internal/subjective-grading/runs/{runId}/execute", requireWorkerExecute(subjectiveHandler.ExecuteWorker))
+	mux.Handle("GET /api/v1/internal/worker/tasks/{taskId}", requireWorkerRead(withWorkerTaskScope(workerRuntimeHandler.Get)))
+	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/heartbeat", requireWorkerExecute(withWorkerTaskScope(workerRuntimeHandler.Heartbeat)))
+	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/complete", requireWorkerExecute(withWorkerTaskScope(workerRuntimeHandler.Complete)))
+	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/fail", requireWorkerExecute(withWorkerTaskScope(workerRuntimeHandler.Fail)))
+	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/cancel", requireWorkerExecute(withWorkerTaskScope(workerRuntimeHandler.Cancel)))
+	mux.Handle("POST /api/v1/internal/worker/tasks/{taskId}/requeue", requireWorkerExecute(withWorkerTaskScope(workerRuntimeHandler.Requeue)))
+	mux.Handle("POST /api/v1/internal/capture/files/{fileId}/result", requireWorkerExecute(withWorkerTaskSource("capture_file", "fileId", captureHandler.CompleteFile)))
+	mux.Handle("POST /api/v1/internal/capture/files/{fileId}/fail", requireWorkerExecute(withWorkerTaskSource("capture_file", "fileId", captureHandler.FailFile)))
+	mux.Handle("POST /api/v1/internal/page-registration-runs/{runId}/result", requireWorkerExecute(withWorkerTaskSource("page_registration_run", "runId", captureHandler.CompleteRegistration)))
+	mux.Handle("POST /api/v1/internal/page-registration-runs/{runId}/fail", requireWorkerExecute(withWorkerTaskSource("page_registration_run", "runId", captureHandler.FailRegistration)))
+	mux.Handle("POST /api/v1/internal/page-registration-corrections/{id}/result", requireWorkerExecute(withWorkerTaskSource("page_registration_correction", "id", captureHandler.CompleteRegistrationCorrection)))
+	mux.Handle("POST /api/v1/internal/page-registration-corrections/{id}/failure", requireWorkerExecute(withWorkerTaskSource("page_registration_correction", "id", captureHandler.FailRegistrationCorrection)))
+	mux.Handle("GET /api/v1/internal/answer-segments/{id}/image", requireWorkerExecute(withWorkerTaskPayload("id", "answer_segment_id", segmentHandler.GetImage)))
+	mux.Handle("POST /api/v1/internal/omr-runs/{runId}/result", requireWorkerExecute(withWorkerTaskSource("omr_run", "runId", gradingHandler.CompleteOMR)))
+	mux.Handle("POST /api/v1/internal/omr-runs/{runId}/failure", requireWorkerExecute(withWorkerTaskSource("omr_run", "runId", gradingHandler.FailOMR)))
+	mux.Handle("POST /api/v1/internal/subjective-grading/runs/{runId}/result", requireWorkerExecute(withWorkerTaskSource("subjective_grading_run", "runId", subjectiveHandler.CompleteWorker)))
+	mux.Handle("POST /api/v1/internal/subjective-grading/runs/{runId}/failure", requireWorkerExecute(withWorkerTaskSource("subjective_grading_run", "runId", subjectiveHandler.FailWorker)))
+	mux.Handle("POST /api/v1/internal/subjective-grading/runs/{runId}/execute", requireWorkerExecute(withWorkerTaskSource("subjective_grading_run", "runId", subjectiveHandler.ExecuteWorker)))
 	mux.Handle("GET /api/v1/internal/worker/metrics", requireWorkerRead(workerRuntimeHandler.Metrics))
 
 	mux.Handle("POST /api/v1/submissions/{id}/ocr-tasks", requireOCRManage(ocrHandler.CreateTask))
 	mux.Handle("GET /api/v1/submissions/{id}/ocr-tasks", requireOCRManage(ocrHandler.ListBySubmission))
 	mux.Handle("GET /api/v1/ocr-tasks/pending", requireOCRManage(ocrHandler.ListPending))
 	mux.Handle("GET /api/v1/ocr-tasks/{id}", requireOCRManage(ocrHandler.GetTask))
-	mux.Handle("GET /api/v1/ocr-tasks/{id}/input", requireOCRManage(withPlatformWorkerTenantScope(ocrHandler.GetTaskInput)))
-	mux.Handle("POST /api/v1/ocr-tasks/{id}/start", requireOCRManage(withPlatformWorkerTenantScope(ocrHandler.StartTask)))
-	mux.Handle("POST /api/v1/ocr-tasks/{id}/results", requireOCRManage(withPlatformWorkerTenantScope(ocrHandler.CompleteTask)))
-	mux.Handle("POST /api/v1/ocr-tasks/{id}/fail", requireOCRManage(withPlatformWorkerTenantScope(ocrHandler.FailTask)))
+	mux.Handle("GET /api/v1/ocr-tasks/{id}/input", requireOCRManage(withWorkerTaskSource("ocr_task", "id", ocrHandler.GetTaskInput)))
+	mux.Handle("POST /api/v1/ocr-tasks/{id}/start", requireOCRManage(withWorkerTaskSource("ocr_task", "id", ocrHandler.StartTask)))
+	mux.Handle("POST /api/v1/ocr-tasks/{id}/results", requireOCRManage(withWorkerTaskSource("ocr_task", "id", ocrHandler.CompleteTask)))
+	mux.Handle("POST /api/v1/ocr-tasks/{id}/fail", requireOCRManage(withWorkerTaskSource("ocr_task", "id", ocrHandler.FailTask)))
 
 	mux.Handle("POST /api/v1/submissions/{id}/segment-answers", requireSegmentManage(segmentHandler.Generate))
 	mux.Handle("GET /api/v1/submissions/{id}/answer-segments", requireSegmentManage(segmentHandler.ListBySubmission))
@@ -554,10 +718,10 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/omr-calibrations/{id}/approve", requireGradingManage(gradingHandler.ApproveOMRCalibration))
 	mux.Handle("POST /api/v1/omr-calibrations/{id}/revoke", requireGradingManage(gradingHandler.RevokeOMRCalibration))
 	mux.Handle("POST /api/v1/omr-calibrations/{id}/discard", requireGradingManage(gradingHandler.DiscardOMRCalibration))
-	mux.Handle("GET /api/v1/exams/{examId}/scoring-readiness", requireGradingManage(gradingHandler.GetScoringReadiness))
-	mux.Handle("POST /api/v1/exams/{examId}/scoring-runs", requireGradingManage(gradingHandler.StartScoringRun))
-	mux.Handle("GET /api/v1/exams/{examId}/scoring-summary", requireGradingManage(gradingHandler.GetScoringSummary))
-	mux.Handle("GET /api/v1/exams/{examId}/automation-results", requireGradingManage(gradingHandler.GetExamAutomationResults))
+	mux.Handle("GET /api/v1/exams/{examId}/scoring-readiness", requireGradingManage(withScopedExam(gradingHandler.GetScoringReadiness)))
+	mux.Handle("POST /api/v1/exams/{examId}/scoring-runs", requireGradingManage(withScopedExam(gradingHandler.StartScoringRun)))
+	mux.Handle("GET /api/v1/exams/{examId}/scoring-summary", requireGradingManage(withScopedExam(gradingHandler.GetScoringSummary)))
+	mux.Handle("GET /api/v1/exams/{examId}/automation-results", requireGradingManage(withScopedExam(gradingHandler.GetExamAutomationResults)))
 	mux.Handle("GET /api/v1/scoring-runs/{runId}", requireGradingManage(gradingHandler.GetScoringRun))
 	mux.Handle("POST /api/v1/scoring-runs/{runId}/cancel", requireGradingManage(gradingHandler.CancelScoringRun))
 	mux.Handle("POST /api/v1/scoring-runs/{runId}/retry-failed", requireGradingManage(gradingHandler.RetryFailedScoringRun))
@@ -567,7 +731,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/subjective-grading-batches/{batchId}", requireGradingManage(subjectiveHandler.GetBatch))
 	mux.Handle("POST /api/v1/subjective-grading-batches/{batchId}/enqueue", requireGradingManage(subjectiveHandler.EnqueueBatch))
 	mux.Handle("POST /api/v1/ai-grades/{id}/verify-evidence", requireEvidenceManage(evidenceHandler.Verify))
-	mux.Handle("PUT /api/v1/exams/{examId}/double-mark-policy", requireReviewManage(reviewHandler.SetExamDoubleMarkPolicy))
+	mux.Handle("PUT /api/v1/exams/{examId}/double-mark-policy", requireReviewManage(withScopedExam(reviewHandler.SetExamDoubleMarkPolicy)))
 	mux.Handle("PUT /api/v1/questions/{id}/double-mark-policy", requireReviewManage(reviewHandler.SetQuestionDoubleMarkPolicy))
 	mux.Handle("GET /api/v1/double-mark-policies", requireReviewManage(reviewHandler.ListDoubleMarkPolicies))
 	mux.Handle("POST /api/v1/double-mark-sessions", requireReviewManage(reviewHandler.CreateDoubleMarkSession))
@@ -578,15 +742,15 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/arbitration-tasks/{id}", requireArbitrationWork(reviewHandler.GetArbitrationTask))
 	mux.Handle("POST /api/v1/arbitration-tasks/{id}/assign", requireArbitrationManage(reviewHandler.AssignArbitrationTask))
 	mux.Handle("POST /api/v1/arbitration-tasks/{id}/submit", requireArbitrationWork(reviewHandler.SubmitArbitration))
-	mux.Handle("POST /api/v1/exams/{examId}/finalize", requireScoreManage(scoreHandler.FinalizeExam))
-	mux.Handle("GET /api/v1/exams/{examId}/grades", requireScoreManage(scoreHandler.ListExamGrades))
-	mux.Handle("GET /api/v1/exams/{examId}/grades/quality", requireScoreManage(scoreHandler.CheckQuality))
-	mux.Handle("GET /api/v1/exams/{examId}/roster", requireRosterManage(scoreHandler.ListRoster))
-	mux.Handle("PUT /api/v1/exams/{examId}/roster/{studentId}/attendance", requireRosterManage(scoreHandler.SetAttendance))
-	mux.Handle("POST /api/v1/exams/{examId}/confirm-grades", requireScoreManage(scoreHandler.ConfirmGrades))
-	mux.Handle("POST /api/v1/exams/{examId}/publish", requireScoreManage(scoreHandler.PublishGrades))
-	mux.Handle("GET /api/v1/exams/{examId}/grades/export", requireScoreManage(scoreHandler.ExportGrades))
-	mux.Handle("GET /api/v1/students/{studentId}/exams/{examId}/grade", requireStudentGradeAccess(scoreHandler.GetStudentGrade))
+	mux.Handle("POST /api/v1/exams/{examId}/finalize", requireScoreManage(withScopedExam(scoreHandler.FinalizeExam)))
+	mux.Handle("GET /api/v1/exams/{examId}/grades", requireScoreManage(withScopedExam(scoreHandler.ListExamGrades)))
+	mux.Handle("GET /api/v1/exams/{examId}/grades/quality", requireScoreManage(withScopedExam(scoreHandler.CheckQuality)))
+	mux.Handle("GET /api/v1/exams/{examId}/roster", requireRosterManage(withScopedExam(scoreHandler.ListRoster)))
+	mux.Handle("PUT /api/v1/exams/{examId}/roster/{studentId}/attendance", requireRosterManage(withScopedExam(scoreHandler.SetAttendance)))
+	mux.Handle("POST /api/v1/exams/{examId}/confirm-grades", requireScoreManage(withScopedExam(scoreHandler.ConfirmGrades)))
+	mux.Handle("POST /api/v1/exams/{examId}/publish", requireScoreManage(withScopedExam(scoreHandler.PublishGrades)))
+	mux.Handle("GET /api/v1/exams/{examId}/grades/export", requireScoreManage(withScopedExam(scoreHandler.ExportGrades)))
+	mux.Handle("GET /api/v1/students/{studentId}/exams/{examId}/grade", requireStudentGradeAccess(withScopedExam(scoreHandler.GetStudentGrade)))
 	mux.Handle("POST /api/v1/appeals", requireAppealCreate(appealHandler.CreateAppeal))
 	mux.Handle("GET /api/v1/appeals", requireAppealRead(appealHandler.ListAppeals))
 	mux.Handle("GET /api/v1/appeals/statistics", requireAppealManage(appealHandler.Statistics))
@@ -595,12 +759,12 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/appeals/{id}/recommendation", requireAppealWork(appealHandler.SubmitRecommendation))
 	mux.Handle("POST /api/v1/appeals/{id}/review", requireAppealManage(appealHandler.ReviewAppeal))
 	mux.Handle("POST /api/v1/appeals/{id}/close", requireAppealManage(appealHandler.CloseAppeal))
-	mux.Handle("GET /api/v1/exams/{examId}/reports/overview", requireReportRead(reportHandler.Overview))
-	mux.Handle("GET /api/v1/exams/{examId}/reports/classes", requireReportRead(reportHandler.Classes))
-	mux.Handle("GET /api/v1/exams/{examId}/reports/questions", requireReportRead(reportHandler.Questions))
-	mux.Handle("GET /api/v1/exams/{examId}/reports/grading-quality", requireReportRead(reportHandler.GradingQuality))
-	mux.Handle("GET /api/v1/students/{studentId}/reports/{examId}", requireAuth(http.HandlerFunc(reportHandler.StudentReport)))
-	mux.Handle("POST /api/v1/exams/{examId}/reports/export", requireReportExport(reportHandler.Export))
+	mux.Handle("GET /api/v1/exams/{examId}/reports/overview", requireReportRead(withScopedExam(reportHandler.Overview)))
+	mux.Handle("GET /api/v1/exams/{examId}/reports/classes", requireReportRead(withScopedExam(reportHandler.Classes)))
+	mux.Handle("GET /api/v1/exams/{examId}/reports/questions", requireReportRead(withScopedExam(reportHandler.Questions)))
+	mux.Handle("GET /api/v1/exams/{examId}/reports/grading-quality", requireReportRead(withScopedExam(reportHandler.GradingQuality)))
+	mux.Handle("GET /api/v1/students/{studentId}/reports/{examId}", requireAuth(auth.RequireScopedResource("exam", "examId")(http.HandlerFunc(reportHandler.StudentReport))))
+	mux.Handle("POST /api/v1/exams/{examId}/reports/export", requireReportExport(withScopedExam(reportHandler.Export)))
 	mux.Handle("POST /api/v1/review-tasks", requireReviewManage(reviewHandler.CreateTask))
 	mux.Handle("GET /api/v1/review-tasks", requireReviewWork(reviewHandler.ListTasks))
 	mux.Handle("POST /api/v1/review-tasks/next", requireReviewWork(reviewHandler.ClaimNextTask))
@@ -623,14 +787,39 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 		middleware.Recover(logg),
 		middleware.RequestID(),
 		middleware.AccessLog(logg, cfg.Observability.SlowRequestThreshold),
+		metricsRegistry.Middleware(),
 		middleware.SecurityHeaders(),
 		middleware.CORS(cfg.Security.CORSAllowedOrigins, cfg.Security.CORSAllowedMethods, cfg.Security.CORSAllowedHeaders),
+		middleware.BrowserCSRF(cfg.Auth.SessionCookieName),
 		middleware.BodyLimit(cfg.Security.MaxRequestBodyBytes, skipGlobalBodyLimit),
 	)
 }
 
 func (s *Server) Handler() http.Handler {
 	return s.handler
+}
+
+func useRealAIService(cfg config.Config) bool {
+	if strings.TrimSpace(cfg.AIService.URL) == "" {
+		return false
+	}
+	environment := strings.ToLower(strings.TrimSpace(cfg.Service.Environment))
+	if environment == "production" || environment == "demo" || environment == "staging" {
+		return cfg.AIService.Enabled
+	}
+	return true
+}
+
+func allowMockAI(cfg config.Config) bool {
+	environment := strings.ToLower(strings.TrimSpace(cfg.Service.Environment))
+	switch environment {
+	case "", "development", "dev", "test", "local":
+		return strings.TrimSpace(cfg.AIService.URL) == ""
+	case "demo":
+		return cfg.AIService.Enabled && cfg.AIService.AllowMock && strings.TrimSpace(cfg.AIService.URL) == ""
+	default:
+		return false
+	}
 }
 
 func localModelBaseline(cfg config.Config) modelgovernance.LocalBaseline {

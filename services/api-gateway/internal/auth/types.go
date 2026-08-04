@@ -42,6 +42,15 @@ type ManagedUser struct {
 	CreatedAt   time.Time `json:"created_at,omitempty"`
 }
 
+type ManagedUserFilter struct {
+	Query           string
+	Role            string
+	UserID          string
+	Limit           int
+	CursorCreatedAt time.Time
+	CursorID        string
+}
+
 type AssignableRole struct {
 	Code        string `json:"code"`
 	Name        string `json:"name"`
@@ -61,6 +70,35 @@ type Session struct {
 	TokenHash string    `json:"-"`
 	ExpiresAt time.Time `json:"expires_at"`
 	User      User      `json:"user"`
+}
+
+const (
+	SessionTypeStandard         = "standard"
+	SessionTypeRememberedDevice = "remembered_device"
+	SessionTypeDesktopDevice    = "desktop_device"
+	SessionTypeService          = "service"
+)
+
+type CreateSessionInput struct {
+	TenantID      string
+	UserID        string
+	TokenHash     string
+	SessionType   string
+	DeviceID      string
+	DeviceName    string
+	UserAgentHash string
+	IPPrefix      string
+	ExpiresAt     time.Time
+}
+
+type DeviceSession struct {
+	ID          string    `json:"id"`
+	SessionType string    `json:"session_type"`
+	DeviceName  string    `json:"device_name"`
+	CreatedAt   time.Time `json:"created_at"`
+	LastSeenAt  time.Time `json:"last_seen_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	Current     bool      `json:"current"`
 }
 
 type AuditEvent struct {
@@ -94,25 +132,32 @@ type AuditRecord struct {
 }
 
 type AuditFilter struct {
-	Action      string
-	ActorID     string
-	TargetType  string
-	TargetID    string
-	ExamID      string
-	IPAddress   string
-	CreatedFrom time.Time
-	CreatedTo   time.Time
-	Limit       int
+	Action          string
+	ActorID         string
+	TargetType      string
+	TargetID        string
+	ExamID          string
+	IPAddress       string
+	CreatedFrom     time.Time
+	CreatedTo       time.Time
+	Limit           int
+	CursorCreatedAt time.Time
+	CursorID        string
 }
 
 type Store interface {
 	FindUserByLogin(ctx context.Context, tenantCode string, username string) (UserWithPassword, error)
-	CreateSession(ctx context.Context, tenantID string, userID string, tokenHash string, expiresAt time.Time) error
+	CreateSession(ctx context.Context, input CreateSessionInput) (DeviceSession, error)
 	FindUserBySession(ctx context.Context, tokenHash string, now time.Time) (User, error)
-	DeleteSession(ctx context.Context, tokenHash string) error
+	ResolveAccessScope(ctx context.Context, user User) (AccessScope, error)
+	DeleteSession(ctx context.Context, tokenHash string, reason string) error
+	ListSessions(ctx context.Context, tenantID string, userID string, currentTokenHash string, now time.Time) ([]DeviceSession, error)
+	RevokeSession(ctx context.Context, tenantID string, userID string, sessionID string, reason string) (bool, error)
+	RevokeAllSessions(ctx context.Context, tenantID string, userID string, reason string) (int, error)
+	UpdatePasswordAndRevokeSessions(ctx context.Context, tenantID string, userID string, expectedPasswordHash string, newPasswordHash string) (bool, int, error)
 	Audit(ctx context.Context, event AuditEvent) error
 	ListAudits(ctx context.Context, tenantID string, filter AuditFilter) ([]AuditRecord, error)
-	ListManagedUsers(ctx context.Context, tenantID string) ([]ManagedUser, error)
+	ListManagedUsers(ctx context.Context, tenantID string, filter ManagedUserFilter) ([]ManagedUser, error)
 	ListAssignableRoles(ctx context.Context, tenantID string) ([]AssignableRole, error)
 	CreateManagedUser(ctx context.Context, tenantID string, tenantCode string, input CreateManagedUserInput, passwordHash string) (ManagedUser, error)
 }

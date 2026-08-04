@@ -29,7 +29,7 @@ func (s *PostgresStore) ClaimNextTask(ctx context.Context, tenantID, reviewerID 
 	if err != nil {
 		return ReviewTask{}, err
 	}
-	task, err := scanTask(tx.QueryRowContext(ctx, `SELECT id::text, tenant_id::text, exam_id::text, question_id::text, question_no,answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at FROM review_task WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, id))
+	task, err := scanTask(tx.QueryRowContext(ctx, `SELECT `+reviewTaskColumns+` FROM review_task WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, id))
 	if err != nil {
 		return task, err
 	}
@@ -87,9 +87,7 @@ UPDATE review_task
 SET claimed_at=NULL,claim_expires_at=NULL,last_opened_at=now(),revision=revision+1,updated_at=now()
 WHERE tenant_id=$1::uuid AND id=$2::uuid AND assigned_to=$3::uuid
   AND status IN ('assigned','in_progress','returned') AND deleted_at IS NULL
-RETURNING id::text,tenant_id::text,exam_id::text,question_id::text,question_no,
-  answer_segment_id::text,submission_id::text,anonymous_code,source,status,priority,
-  COALESCE(assigned_to::text,''),return_reason,grade_round,due_at,created_by::text,created_at,updated_at
+RETURNING `+reviewTaskColumns+`
 `, tenantID, taskID, reviewerID))
 	if errors.Is(err, ErrNotFound) {
 		return ReviewTask{}, ErrForbidden

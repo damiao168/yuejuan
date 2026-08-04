@@ -7,16 +7,39 @@ import (
 
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/pagination"
 )
 
 func (h *Handler) ListManagedUsers(w http.ResponseWriter, r *http.Request) {
 	actor, _ := UserFromContext(r.Context())
-	users, err := h.store.ListManagedUsers(r.Context(), actor.TenantID)
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 100, 200)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 200")
+		return
+	}
+	cursor, err := pagination.Decode(r.URL.Query().Get("cursor"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
+	users, err := h.store.ListManagedUsers(r.Context(), actor.TenantID, ManagedUserFilter{
+		Query: strings.TrimSpace(r.URL.Query().Get("q")), Role: strings.TrimSpace(r.URL.Query().Get("role")),
+		Limit: limit + 1, CursorCreatedAt: cursor.CreatedAt, CursorID: cursor.ID,
+	})
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "user_list_failed", "failed to list users")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"users": users})
+	hasMore := len(users) > limit
+	if hasMore {
+		users = users[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(users) > 0 {
+		last := users[len(users)-1]
+		nextCursor = pagination.Encode(last.CreatedAt, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"users": users, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) ListAssignableRoles(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +99,7 @@ func (h *Handler) CreateManagedUser(w http.ResponseWriter, r *http.Request) {
 		TenantID: actor.TenantID, ActorID: actor.ID, Action: "auth.user_created",
 		TargetType: "user", TargetID: created.ID,
 		AfterValue: map[string]any{"username": created.Username, "display_name": created.DisplayName, "role_code": input.RoleCode, "status": created.Status},
-		Reason:     "create organization user", IPAddress: remoteIP(r), UserAgent: r.UserAgent(), RequestID: logger.RequestID(r.Context()),
+		Reason:     "create organization user", IPAddress: h.remoteIP(r), UserAgent: r.UserAgent(), RequestID: logger.RequestID(r.Context()),
 	})
 	httpx.JSON(w, http.StatusCreated, map[string]any{"user": created})
 }

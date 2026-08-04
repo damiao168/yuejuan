@@ -95,7 +95,7 @@ export function OrganizationSetupPage({ onNavigate }: { onNavigate: (path: strin
         listGrades(),
         listClasses(),
         listStudents(),
-        listManagedUsers(),
+        listManagedUsers({ limit: 200 }),
         listAssignableRoles(),
         listExams()
       ]);

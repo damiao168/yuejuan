@@ -4,7 +4,7 @@ param(
   [switch]$SkipBuild,
   [switch]$SkipSmoke,
   [switch]$BootstrapAdmin,
-  [switch]$BaselineExistingMigrations,
+  [ValidatePattern('^000020$')][string]$MigrationBaselineVersion,
   [switch]$EnableOcr,
   [switch]$EnableQuality,
   [switch]$EnableProcessing,
@@ -76,7 +76,7 @@ try {
   foreach ($service in @("postgres", "redis", "minio", "qdrant")) { Wait-ComposeService $service }
 
   $migrationArgs = @("--profile", "tools", "run", "--rm")
-  if ($BaselineExistingMigrations) { $migrationArgs += @("-e", "EDUGRADE_MIGRATION_BASELINE_EXISTING=true") }
+  if ($MigrationBaselineVersion) { $migrationArgs += @("-e", "EDUGRADE_MIGRATION_BASELINE_VERSION=$MigrationBaselineVersion") }
   $migrationArgs += "db-migrate"
   Invoke-Compose -Arguments $migrationArgs
   Invoke-Compose -Arguments @("--profile", "tools", "run", "--rm", "minio-init")

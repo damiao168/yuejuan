@@ -33,6 +33,42 @@ func TestFinalizeAggregatesSubmissionGradesFromHumanAndRuleGrades(t *testing.T) 
 	}
 }
 
+func TestListExamGradesUsesStableCursorAndAccurateTotals(t *testing.T) {
+	store := NewMemoryStore()
+	for index, code := range []string{"ANON-001", "ANON-002", "ANON-003"} {
+		suffix := string(rune('1' + index))
+		store.AddSegment(SegmentSeed{
+			ExamID: "exam-page", SubmissionID: "submission-" + suffix, StudentID: "student-" + suffix,
+			AnonymousCode: code, AnswerSegmentID: "segment-" + suffix, QuestionID: "question-1", QuestionNo: "Q1", MaxScore: 5,
+		})
+		store.AddHumanGrade(GradeSeed{AnswerSegmentID: "segment-" + suffix, Score: 4, MaxScore: 5})
+	}
+	if _, err := store.FinalizeExam(context.Background(), tenantID, "exam-page", "manager-1"); err != nil {
+		t.Fatalf("finalize exam: %v", err)
+	}
+	first, err := store.ListExamGrades(context.Background(), tenantID, "exam-page", GradeListFilter{Limit: 2})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if first.Total != 3 || first.FilteredTotal != 3 || len(first.Grades) != 2 || first.AllLocked {
+		t.Fatalf("unexpected first page: %#v", first)
+	}
+	last := first.Grades[len(first.Grades)-1]
+	second, err := store.ListExamGrades(context.Background(), tenantID, "exam-page", GradeListFilter{
+		Limit: 2, CursorAnonymousCode: last.AnonymousCode, CursorID: last.ID,
+	})
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second.Grades) != 1 || second.Grades[0].AnonymousCode != "ANON-003" {
+		t.Fatalf("unexpected second page: %#v", second.Grades)
+	}
+	filtered, err := store.ListExamGrades(context.Background(), tenantID, "exam-page", GradeListFilter{Query: "003", Limit: 2})
+	if err != nil || filtered.Total != 3 || filtered.FilteredTotal != 1 || len(filtered.Grades) != 1 {
+		t.Fatalf("unexpected filtered page: %#v, err=%v", filtered, err)
+	}
+}
+
 func TestPublishBlocksUntilGradesConfirmedAndQualityPasses(t *testing.T) {
 	store := seededScoreStore()
 	store.AddReviewTask(TaskSeed{ExamID: "exam-1", Status: "assigned"})
@@ -196,10 +232,11 @@ func TestPublishRejectsInvalidExamStateWithoutLockingGrades(t *testing.T) {
 	if _, err := store.PublishGrades(context.Background(), tenantID, "exam-1", "admin-1", PublishInput{Reason: "release"}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("publish from archived exam must be rejected, got %v", err)
 	}
-	grades, err := store.ListExamGrades(context.Background(), tenantID, "exam-1")
+	result, err := store.ListExamGrades(context.Background(), tenantID, "exam-1", GradeListFilter{})
 	if err != nil {
 		t.Fatalf("list grades: %v", err)
 	}
+	grades := result.Grades
 	if len(grades) != 1 || grades[0].Status != "confirmed" || grades[0].Locked {
 		t.Fatalf("failed publish must preserve confirmed unlocked grades: %#v", grades)
 	}

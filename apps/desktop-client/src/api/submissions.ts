@@ -28,7 +28,9 @@ export async function listAnswerSegments(client: DesktopApiClient, submissionId:
 }
 
 export async function listOcrTasks(client: DesktopApiClient, submissionId: string) {
-  return client.request<{ tasks: OcrTask[] }>(`/api/v1/submissions/${encodeURIComponent(submissionId)}/ocr-tasks`);
+  return client.request<{ tasks: OcrTask[]; next_cursor: string; has_more: boolean }>(
+    `/api/v1/submissions/${encodeURIComponent(submissionId)}/ocr-tasks?limit=20`
+  );
 }
 
 export async function getOcrTask(client: DesktopApiClient, taskId: string) {

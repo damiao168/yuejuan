@@ -8,9 +8,9 @@ export interface LoginPayload {
 }
 
 export async function login(client: DesktopApiClient, payload: LoginPayload) {
-  return client.request<LoginResult>("/api/v1/auth/login", {
+  return client.request<LoginResult>("/api/v1/auth/token", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify({ ...payload, client_type: "desktop", device_name: "EduGrade Desktop" })
   });
 }
 

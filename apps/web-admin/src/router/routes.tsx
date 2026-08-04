@@ -24,6 +24,7 @@ import type { ViewKey } from "../types";
 import { hasAnyPermission, hasEveryPermission, type SessionUser } from "../auth/session";
 import type { ProductExperience } from "./experience";
 import { canonicalPathFromPath } from "./experience";
+import { workspacesForExperience, type Workspace } from "../workspaces/registry";
 
 interface RoutePresentation {
   title: string;
@@ -46,26 +47,34 @@ export interface AppRoute {
   replacementPath?: string;
   experiences: Partial<Record<ProductExperience, RoutePresentation>>;
   navigationExperiences?: ProductExperience[];
+  workspaces?: Workspace[];
 }
 
 export const routes: AppRoute[] = [
   {
     key: "dashboard", path: "/dashboard", title: "工作总览", group: "工作台", icon: <Home size={18} />, permissions: [], mock: false, productionReady: true,
+    workspaces: ["platform", "school_admin", "exam_owner", "teacher", "grader", "arbitrator"],
     experiences: { admin: { title: "工作台", group: "工作台" }, teacher: { title: "我的工作", group: "工作台" } }
   },
   {
+    key: "sessions", path: "/account/sessions", title: "账户安全", group: "账号", icon: <LockKeyhole size={18} />, permissions: [],
+    navigation: false, mock: false, productionReady: true,
+    workspaces: ["platform", "school_admin", "exam_owner", "teacher", "grader", "arbitrator"],
+    experiences: { admin: { title: "账户安全", group: "账号" }, teacher: { title: "账户安全", group: "账号" } }
+  },
+  {
     key: "platformSchools", path: "/platform/schools", title: "学校管理", group: "平台管理", icon: <Building2 size={18} />, permissions: ["tenant:manage"], allowedRoles: ["platform_admin"], mock: false, productionReady: true,
-    experiences: { admin: { title: "学校管理", group: "平台管理" } }
+    workspaces: ["platform"], experiences: { admin: { title: "学校管理", group: "平台管理" } }
   },
   {
     key: "exams", path: "/exams", title: "考试管理", group: "考试组织", icon: <ClipboardCheck size={18} />, permissions: ["exam:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    experiences: { admin: { title: "考试列表", group: "考试管理" } }
+    workspaces: ["school_admin", "exam_owner"], experiences: { admin: { title: "考试列表", group: "考试管理" } }
   },
   {
     key: "papers", path: "/papers", title: "试卷管理", group: "考试组织", icon: <FileText size={18} />, permissions: ["exam:manage", "file:manage"], navigation: false, mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    experiences: { admin: { title: "试卷管理", group: "考试管理" } }
+    workspaces: ["school_admin", "exam_owner"], experiences: { admin: { title: "试卷管理", group: "考试管理" } }
   },
   {
     key: "capture",
@@ -77,7 +86,7 @@ export const routes: AppRoute[] = [
     excludedRoles: ["platform_admin"],
     mock: false,
     productionReady: true,
-    experiences: { admin: { title: "答卷导入", group: "考试管理" } }
+    workspaces: ["school_admin", "exam_owner"], experiences: { admin: { title: "答题卡导入", group: "考试管理" } }
   },
   {
     key: "grading",
@@ -90,6 +99,7 @@ export const routes: AppRoute[] = [
     excludedRoles: ["platform_admin"],
     mock: false,
     productionReady: true,
+    workspaces: ["school_admin", "exam_owner", "teacher", "grader"],
     experiences: { admin: { title: "阅卷任务", group: "阅卷中心" }, teacher: { title: "我的阅卷", group: "阅卷工作" } }
   },
   {
@@ -108,17 +118,19 @@ export const routes: AppRoute[] = [
   {
     key: "arbitration", path: "/arbitration", title: "质量与仲裁", group: "阅卷与质量", icon: <Gavel size={18} />, permissions: [], anyPermissions: ["arbitration:manage", "arbitration:work"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
+    workspaces: ["school_admin", "exam_owner", "arbitrator"],
     experiences: { admin: { title: "复核与异常", group: "阅卷中心" }, teacher: { title: "我的仲裁", group: "阅卷工作" } }
   },
   {
     key: "scores", path: "/scores", title: "成绩发布", group: "结果管理", icon: <Gauge size={18} />, permissions: ["score:manage", "exam:manage", "submission:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    experiences: { admin: { title: "成绩发布", group: "成绩管理" } }
+    workspaces: ["school_admin", "exam_owner"], experiences: { admin: { title: "成绩发布", group: "成绩管理" } }
   },
   {
     key: "reports", path: "/reports", title: "统计报告", group: "结果管理", icon: <BarChart3 size={18} />, permissions: ["report:read"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    experiences: { admin: { title: "成绩分析", group: "成绩管理" } }
+    workspaces: ["school_admin", "exam_owner", "teacher"],
+    experiences: { admin: { title: "成绩分析", group: "成绩管理" }, teacher: { title: "班级成绩", group: "教学工作" } }
   },
   {
     key: "quality", path: "/quality", title: "质量控制", group: "阅卷与质量", icon: <Activity size={18} />, permissions: ["quality:read"], navigation: false, mock: true, productionReady: false,
@@ -127,12 +139,13 @@ export const routes: AppRoute[] = [
   {
     key: "appeals", path: "/appeals", title: "申诉管理", group: "结果管理", icon: <Inbox size={18} />, permissions: ["appeal:read"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    experiences: { admin: { title: "申诉处理", group: "成绩管理" } }
+    workspaces: ["school_admin", "exam_owner", "teacher"],
+    experiences: { admin: { title: "申诉处理", group: "成绩管理" }, teacher: { title: "学生反馈", group: "教学工作" } }
   },
   {
     key: "organization", path: "/organization/setup", title: "组织与用户", group: "系统管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    experiences: { admin: { title: "组织与账号", group: "学校管理" } }
+    workspaces: ["school_admin"], experiences: { admin: { title: "组织与账号", group: "学校管理" } }
   },
   {
     key: "permissions", path: "/permissions", title: "用户权限", group: "系统管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: true, productionReady: false,
@@ -145,7 +158,7 @@ export const routes: AppRoute[] = [
   {
     key: "modelGovernance", path: "/system/models", title: "模型治理", group: "系统管理", icon: <BrainCircuit size={18} />, permissions: ["model:read"], mock: false, productionReady: true,
     allowedRoles: ["platform_admin"],
-    experiences: { admin: { title: "模型治理", group: "系统管理" } }
+    workspaces: ["platform"], experiences: { admin: { title: "模型治理", group: "系统管理" } }
   },
   {
     key: "subjectiveGradingBatches", path: "/grading/subjective-batches", title: "主观题批次", group: "阅卷与质量", icon: <Sparkles size={18} />, permissions: ["grading:manage"], mock: false, productionReady: true,
@@ -155,11 +168,11 @@ export const routes: AppRoute[] = [
   },
   {
     key: "systemStatus", path: "/system/status", title: "系统运维", group: "系统管理", icon: <ServerCog size={18} />, permissions: ["system:read"], allowedRoles: ["platform_admin"], mock: false, productionReady: true,
-    experiences: { admin: { title: "系统运维", group: "系统管理" } }
+    workspaces: ["platform"], experiences: { admin: { title: "系统运维", group: "系统管理" } }
   },
   {
     key: "audit", path: "/audit", title: "操作审计", group: "系统管理", icon: <ScrollText size={18} />, permissions: ["audit:read"], mock: false, productionReady: true,
-    experiences: { admin: { title: "操作审计", group: "系统管理" } }
+    workspaces: ["platform", "school_admin"], experiences: { admin: { title: "操作审计", group: "系统管理" } }
   }
 ];
 
@@ -229,11 +242,13 @@ export function visibleRoutes(experience: ProductExperience): AppRoute[] {
 }
 
 export function hasRouteAccess(user: SessionUser | null, route: AppRoute, experience: ProductExperience): boolean {
+  const workspaces = user ? workspacesForExperience(user, experience) : [];
   return Boolean(route.experiences[experience])
     && hasEveryPermission(user, route.permissions)
     && (!route.anyPermissions || hasAnyPermission(user, route.anyPermissions))
     && (!route.allowedRoles || Boolean(user && route.allowedRoles.some((role) => user.roles.includes(role))))
-    && (!route.excludedRoles || !user || !route.excludedRoles.some((role) => user.roles.includes(role)));
+    && (!route.excludedRoles || !user || !route.excludedRoles.some((role) => user.roles.includes(role)))
+    && (!route.workspaces || workspaces.some((workspace) => route.workspaces?.includes(workspace)));
 }
 
 export function routeFromPath(pathname: string): AppRoute {

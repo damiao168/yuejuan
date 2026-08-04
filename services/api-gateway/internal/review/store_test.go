@@ -28,7 +28,7 @@ func TestReviewTaskWorkflowReturnsBeforeSubmissionAndRejectsSubmittedReturn(t *t
 		t.Fatalf("created task should be pending with anonymous code, got %#v", task)
 	}
 
-	task, err = store.AssignTask(context.Background(), tenantID, task.ID, "manager-1", AssignTaskInput{AssignedTo: "reviewer-1"})
+	task, err = store.AssignTask(context.Background(), tenantID, task.ID, "manager-1", AssignTaskInput{AssignedTo: "reviewer-1", ExpectedRevision: task.Revision})
 	if err != nil {
 		t.Fatalf("assign task: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestReviewTaskWorkflowReturnsBeforeSubmissionAndRejectsSubmittedReturn(t *t
 		t.Fatalf("assigned task mismatch: %#v", task)
 	}
 
-	returned, err := store.ReturnTask(context.Background(), tenantID, task.ID, "manager-1", ReturnTaskInput{Reason: "needs second look"})
+	returned, err := store.ReturnTask(context.Background(), tenantID, task.ID, "manager-1", ReturnTaskInput{Reason: "needs second look", ExpectedRevision: task.Revision})
 	if err != nil {
 		t.Fatalf("return task before submission: %v", err)
 	}
@@ -45,6 +45,7 @@ func TestReviewTaskWorkflowReturnsBeforeSubmissionAndRejectsSubmittedReturn(t *t
 	}
 
 	submission, err := store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{
+		ExpectedRevision: returned.Revision,
 		Score:            4,
 		RubricSelections: []RubricSelection{{PointID: "p1", Score: 4}},
 		Comments:         "clear answer",
@@ -67,7 +68,7 @@ func TestReviewTaskWorkflowReturnsBeforeSubmissionAndRejectsSubmittedReturn(t *t
 	submittedAt := submission.Task.UpdatedAt
 	submittedReason := submission.Task.ReturnReason
 
-	_, err = store.ReturnTask(context.Background(), tenantID, task.ID, "manager-1", ReturnTaskInput{Reason: "must not invalidate committed grade"})
+	_, err = store.ReturnTask(context.Background(), tenantID, task.ID, "manager-1", ReturnTaskInput{Reason: "must not invalidate committed grade", ExpectedRevision: submission.Task.Revision})
 	if !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("submitted task must not be returned, got %v", err)
 	}
@@ -101,6 +102,7 @@ func TestSubmitAndReturnAreLinearizable(t *testing.T) {
 		go func() {
 			<-start
 			_, submitErr := store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{
+				ExpectedRevision: task.Revision,
 				Score:            4,
 				RubricSelections: []RubricSelection{{PointID: "p1", Score: 4}},
 			})
@@ -108,23 +110,29 @@ func TestSubmitAndReturnAreLinearizable(t *testing.T) {
 		}()
 		go func() {
 			<-start
-			_, returnErr := store.ReturnTask(context.Background(), tenantID, task.ID, "manager-1", ReturnTaskInput{Reason: "concurrent return"})
+			_, returnErr := store.ReturnTask(context.Background(), tenantID, task.ID, "manager-1", ReturnTaskInput{Reason: "concurrent return", ExpectedRevision: task.Revision})
 			returnResult <- returnErr
 		}()
 		close(start)
 
-		if submitErr := <-submitResult; submitErr != nil {
-			t.Fatalf("iteration %d submit must succeed before or after a return: %v", iteration, submitErr)
+		submitErr := <-submitResult
+		returnErr := <-returnResult
+		if (submitErr == nil) == (returnErr == nil) {
+			t.Fatalf("iteration %d exactly one concurrent transition must succeed, submit=%v return=%v", iteration, submitErr, returnErr)
 		}
-		if returnErr := <-returnResult; returnErr != nil && !errors.Is(returnErr, ErrInvalidTransition) {
+		if submitErr != nil && !errors.Is(submitErr, ErrRevisionConflict) {
+			t.Fatalf("iteration %d submit has unexpected error: %v", iteration, submitErr)
+		}
+		if returnErr != nil && !errors.Is(returnErr, ErrInvalidTransition) && !errors.Is(returnErr, ErrRevisionConflict) {
 			t.Fatalf("iteration %d return has unexpected error: %v", iteration, returnErr)
 		}
 		stored, err := store.GetTask(context.Background(), tenantID, task.ID)
-		if err != nil || stored.Status != "submitted" {
-			t.Fatalf("iteration %d final task must be submitted, task=%#v err=%v", iteration, stored, err)
+		if err != nil || (stored.Status != "submitted" && stored.Status != "returned") {
+			t.Fatalf("iteration %d final task must reflect the winning transition, task=%#v err=%v", iteration, stored, err)
 		}
-		if grades := store.grades[key(tenantID, task.ID)]; len(grades) != 1 {
-			t.Fatalf("iteration %d concurrent return must not duplicate or remove grades: %#v", iteration, grades)
+		grades := store.grades[key(tenantID, task.ID)]
+		if (stored.Status == "submitted" && len(grades) != 1) || (stored.Status == "returned" && len(grades) != 0) {
+			t.Fatalf("iteration %d grade facts must match the winning transition: task=%#v grades=%#v", iteration, stored, grades)
 		}
 	}
 }
@@ -137,7 +145,7 @@ func TestReviewerCanOnlySubmitAssignedTask(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-2", SubmitGradeInput{Score: 3, RubricSelections: []RubricSelection{{PointID: "p1", Score: 3}}})
+	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-2", SubmitGradeInput{ExpectedRevision: task.Revision, Score: 3, RubricSelections: []RubricSelection{{PointID: "p1", Score: 3}}})
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected ErrForbidden for unassigned reviewer, got %v", err)
 	}
@@ -157,8 +165,9 @@ func TestBatchAssignTasks(t *testing.T) {
 	}
 
 	tasks, err := store.BatchAssignTasks(context.Background(), tenantID, "manager-1", BatchAssignInput{
-		TaskIDs:    []string{first.ID, second.ID},
-		AssignedTo: "reviewer-1",
+		TaskIDs:           []string{first.ID, second.ID},
+		AssignedTo:        "reviewer-1",
+		ExpectedRevisions: map[string]int64{first.ID: first.Revision, second.ID: second.Revision},
 	})
 	if err != nil {
 		t.Fatalf("batch assign: %v", err)
@@ -199,6 +208,32 @@ func TestListTasksFiltersByExam(t *testing.T) {
 	}
 	if len(tasks) != 1 || tasks[0].ID != second.ID || tasks[0].ID == first.ID {
 		t.Fatalf("exam filter should return only the matching task, got %#v", tasks)
+	}
+}
+
+func TestListTasksUsesStablePriorityCursor(t *testing.T) {
+	store := NewMemoryStore()
+	for index, segmentID := range []string{"segment-1", "segment-2", "segment-3"} {
+		ctx := reviewContext()
+		ctx.AnswerSegmentID = segmentID
+		ctx.SubmissionID = fmt.Sprintf("submission-%d", index+1)
+		store.AddContext(tenantID, segmentID, ctx)
+		if _, err := store.CreateTask(context.Background(), tenantID, "manager-1", CreateTaskInput{
+			AnswerSegmentID: segmentID, Source: "manual_sample", Priority: 3 - index,
+		}); err != nil {
+			t.Fatalf("create task %d: %v", index, err)
+		}
+	}
+	firstPage, err := store.ListTasks(context.Background(), tenantID, ListFilter{Limit: 2})
+	if err != nil || len(firstPage) != 2 {
+		t.Fatalf("first page: %#v %v", firstPage, err)
+	}
+	last := firstPage[len(firstPage)-1]
+	secondPage, err := store.ListTasks(context.Background(), tenantID, ListFilter{
+		Limit: 2, CursorPriority: last.Priority, CursorCreatedAt: last.CreatedAt, CursorID: last.ID,
+	})
+	if err != nil || len(secondPage) != 1 || secondPage[0].ID == firstPage[0].ID || secondPage[0].ID == firstPage[1].ID {
+		t.Fatalf("second page must contain only the remaining task: %#v %v", secondPage, err)
 	}
 }
 
@@ -309,27 +344,27 @@ func TestSubmitGradeValidatesScoreAndRubricSelections(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{Score: 6, RubricSelections: []RubricSelection{{PointID: "p1", Score: 5}}})
+	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{ExpectedRevision: task.Revision, Score: 6, RubricSelections: []RubricSelection{{PointID: "p1", Score: 5}}})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected invalid score, got %v", err)
 	}
 
-	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{Score: 4, RubricSelections: []RubricSelection{{PointID: "missing", Score: 4}}})
+	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{ExpectedRevision: task.Revision, Score: 4, RubricSelections: []RubricSelection{{PointID: "missing", Score: 4}}})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected invalid rubric selection, got %v", err)
 	}
 
-	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{Score: 5, RubricSelections: []RubricSelection{{PointID: "p1", Score: 6}}})
+	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{ExpectedRevision: task.Revision, Score: 5, RubricSelections: []RubricSelection{{PointID: "p1", Score: 6}}})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected rubric point score above its maximum to be rejected, got %v", err)
 	}
 
-	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{Score: 4, RubricSelections: []RubricSelection{{PointID: "p1", Score: 2}, {PointID: "p1", Score: 2}}})
+	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{ExpectedRevision: task.Revision, Score: 4, RubricSelections: []RubricSelection{{PointID: "p1", Score: 2}, {PointID: "p1", Score: 2}}})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected duplicate rubric point to be rejected, got %v", err)
 	}
 
-	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{Score: 4, RubricSelections: []RubricSelection{{PointID: "p1", Score: 3}}})
+	_, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{ExpectedRevision: task.Revision, Score: 4, RubricSelections: []RubricSelection{{PointID: "p1", Score: 3}}})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected final score inconsistent with rubric total to be rejected, got %v", err)
 	}
@@ -346,7 +381,7 @@ func TestSubmitGradeValidatesScoreAndRubricSelections(t *testing.T) {
 		t.Fatalf("final score above rubric max must be rejected, got %v", err)
 	}
 
-	result, err := store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{Score: 4.00005, RubricSelections: []RubricSelection{{PointID: "p1", Score: 4}}})
+	result, err := store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{ExpectedRevision: task.Revision, Score: 4.00005, RubricSelections: []RubricSelection{{PointID: "p1", Score: 4}}})
 	if err != nil || math.Abs(result.Grade.Score-4.00005) > 0.000001 {
 		t.Fatalf("small floating point difference should be accepted, result=%#v err=%v", result, err)
 	}
@@ -371,6 +406,7 @@ func TestRejectedReturnPreservesDoubleMarkProgress(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	first, err := store.SubmitGrade(context.Background(), tenantID, session.FirstReviewTaskID, "reviewer-1", SubmitGradeInput{
+		ExpectedRevision: 1,
 		Score:            4,
 		RubricSelections: []RubricSelection{{PointID: "p1", Score: 4}},
 	})
@@ -379,7 +415,7 @@ func TestRejectedReturnPreservesDoubleMarkProgress(t *testing.T) {
 	}
 	progressAt := first.DoubleMarkSession.UpdatedAt
 
-	if _, err := store.ReturnTask(context.Background(), tenantID, session.FirstReviewTaskID, "manager-1", ReturnTaskInput{Reason: "invalid after submit"}); !errors.Is(err, ErrInvalidTransition) {
+	if _, err := store.ReturnTask(context.Background(), tenantID, session.FirstReviewTaskID, "manager-1", ReturnTaskInput{Reason: "invalid after submit", ExpectedRevision: first.Task.Revision}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("submitted first mark must not be returned, got %v", err)
 	}
 	preserved, err := store.GetDoubleMarkSession(context.Background(), tenantID, session.ID)
@@ -401,7 +437,7 @@ func TestSubmitGradeAllowsDirectScoreWithoutRubric(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	result, err := store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{Score: 3.5})
+	result, err := store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{ExpectedRevision: task.Revision, Score: 3.5})
 	if err != nil || result.Grade.Score != 3.5 {
 		t.Fatalf("question without rubric should accept direct score, result=%#v err=%v", result, err)
 	}
@@ -421,6 +457,7 @@ func TestSubmitGradeRecordsAISuggestionLinkFromContext(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 	submission, err := store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{
+		ExpectedRevision: task.Revision,
 		Score:            4,
 		RubricSelections: []RubricSelection{{PointID: "p1", Score: 4}},
 	})
@@ -447,6 +484,7 @@ func TestSubmitGradeRecordsAISuggestionLinkFromContext(t *testing.T) {
 		t.Fatalf("create task without AI suggestion: %v", err)
 	}
 	submission, err = store.SubmitGrade(context.Background(), tenantID, task.ID, "reviewer-1", SubmitGradeInput{
+		ExpectedRevision: task.Revision,
 		Score:            4,
 		RubricSelections: []RubricSelection{{PointID: "p1", Score: 4}},
 	})
@@ -503,6 +541,7 @@ func TestDoubleMarkAutoFinalizesByResolutionStrategy(t *testing.T) {
 			}
 
 			first, err := store.SubmitGrade(context.Background(), tenantID, session.FirstReviewTaskID, "reviewer-1", SubmitGradeInput{
+				ExpectedRevision: 1,
 				Score:            4,
 				RubricSelections: []RubricSelection{{PointID: "p1", Score: 4}},
 			})
@@ -514,6 +553,7 @@ func TestDoubleMarkAutoFinalizesByResolutionStrategy(t *testing.T) {
 			}
 
 			second, err := store.SubmitGrade(context.Background(), tenantID, session.SecondReviewTaskID, "reviewer-2", SubmitGradeInput{
+				ExpectedRevision: 1,
 				Score:            5,
 				RubricSelections: []RubricSelection{{PointID: "p1", Score: 5}},
 			})
@@ -556,12 +596,14 @@ func TestDoubleMarkCreatesArbitrationAndBlocksSameArbitratorByDefault(t *testing
 		t.Fatalf("create session: %v", err)
 	}
 	if _, err := store.SubmitGrade(context.Background(), tenantID, session.FirstReviewTaskID, "reviewer-1", SubmitGradeInput{
+		ExpectedRevision: 1,
 		Score:            5,
 		RubricSelections: []RubricSelection{{PointID: "p1", Score: 5}},
 	}); err != nil {
 		t.Fatalf("submit first: %v", err)
 	}
 	result, err := store.SubmitGrade(context.Background(), tenantID, session.SecondReviewTaskID, "reviewer-2", SubmitGradeInput{
+		ExpectedRevision: 1,
 		Score:            2,
 		RubricSelections: []RubricSelection{{PointID: "p1", Score: 2}},
 	})
@@ -575,18 +617,19 @@ func TestDoubleMarkCreatesArbitrationAndBlocksSameArbitratorByDefault(t *testing
 		t.Fatalf("arbitration mismatch: %#v", result.ArbitrationTask)
 	}
 	_, _, err = store.SubmitArbitration(context.Background(), tenantID, result.ArbitrationTask.ID, "arbitrator-1", SubmitArbitrationInput{
-		FinalScore: 4,
-		Reason:     "must be explicitly assigned first",
+		FinalScore:       4,
+		Reason:           "must be explicitly assigned first",
+		ExpectedRevision: result.ArbitrationTask.Revision,
 	})
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("unassigned arbitration submission must be forbidden, got %v", err)
 	}
 
-	_, err = store.AssignArbitrationTask(context.Background(), tenantID, result.ArbitrationTask.ID, "manager-1", AssignArbitrationTaskInput{AssignedTo: "reviewer-1"})
+	_, err = store.AssignArbitrationTask(context.Background(), tenantID, result.ArbitrationTask.ID, "manager-1", AssignArbitrationTaskInput{AssignedTo: "reviewer-1", ExpectedRevision: result.ArbitrationTask.Revision})
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected first reviewer to be blocked as arbitrator, got %v", err)
 	}
-	assigned, err := store.AssignArbitrationTask(context.Background(), tenantID, result.ArbitrationTask.ID, "manager-1", AssignArbitrationTaskInput{AssignedTo: "arbitrator-1"})
+	assigned, err := store.AssignArbitrationTask(context.Background(), tenantID, result.ArbitrationTask.ID, "manager-1", AssignArbitrationTaskInput{AssignedTo: "arbitrator-1", ExpectedRevision: result.ArbitrationTask.Revision})
 	if err != nil {
 		t.Fatalf("assign arbitrator: %v", err)
 	}
@@ -594,9 +637,10 @@ func TestDoubleMarkCreatesArbitrationAndBlocksSameArbitratorByDefault(t *testing
 		t.Fatalf("assigned arbitration mismatch: %#v", assigned)
 	}
 	submitted, finalGrade, err := store.SubmitArbitration(context.Background(), tenantID, result.ArbitrationTask.ID, "arbitrator-1", SubmitArbitrationInput{
-		FinalScore:      4,
-		Reason:          "accepted stronger rubric evidence",
-		StudentFeedback: "Final score set after arbitration.",
+		FinalScore:       4,
+		Reason:           "accepted stronger rubric evidence",
+		StudentFeedback:  "Final score set after arbitration.",
+		ExpectedRevision: assigned.Revision,
 	})
 	if err != nil {
 		t.Fatalf("submit arbitration: %v", err)
@@ -674,19 +718,44 @@ func TestAllowSameArbitratorPolicyAllowsReviewerAsArbitrator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if _, err := store.SubmitGrade(context.Background(), tenantID, session.FirstReviewTaskID, "reviewer-1", SubmitGradeInput{Score: 5, RubricSelections: []RubricSelection{{PointID: "p1", Score: 5}}}); err != nil {
+	if _, err := store.SubmitGrade(context.Background(), tenantID, session.FirstReviewTaskID, "reviewer-1", SubmitGradeInput{ExpectedRevision: 1, Score: 5, RubricSelections: []RubricSelection{{PointID: "p1", Score: 5}}}); err != nil {
 		t.Fatalf("submit first: %v", err)
 	}
-	result, err := store.SubmitGrade(context.Background(), tenantID, session.SecondReviewTaskID, "reviewer-2", SubmitGradeInput{Score: 2, RubricSelections: []RubricSelection{{PointID: "p1", Score: 2}}})
+	result, err := store.SubmitGrade(context.Background(), tenantID, session.SecondReviewTaskID, "reviewer-2", SubmitGradeInput{ExpectedRevision: 1, Score: 2, RubricSelections: []RubricSelection{{PointID: "p1", Score: 2}}})
 	if err != nil {
 		t.Fatalf("submit second: %v", err)
 	}
-	assigned, err := store.AssignArbitrationTask(context.Background(), tenantID, result.ArbitrationTask.ID, "manager-1", AssignArbitrationTaskInput{AssignedTo: "reviewer-1"})
+	assigned, err := store.AssignArbitrationTask(context.Background(), tenantID, result.ArbitrationTask.ID, "manager-1", AssignArbitrationTaskInput{AssignedTo: "reviewer-1", ExpectedRevision: result.ArbitrationTask.Revision})
 	if err != nil {
 		t.Fatalf("same arbitrator should be allowed by policy: %v", err)
 	}
 	if !assigned.AllowSameArbitrator || assigned.AssignedTo != "reviewer-1" {
 		t.Fatalf("expected same-reviewer arbitrator assignment, got %#v", assigned)
+	}
+}
+
+func TestArbitrationRejectsStaleRevision(t *testing.T) {
+	store := NewMemoryStore()
+	task := ArbitrationTask{
+		ID: "arbitration-stale", TenantID: tenantID, Status: "pending", Revision: 1,
+		FirstReviewerID: "reviewer-1", SecondReviewerID: "reviewer-2", AllowSameArbitrator: true,
+	}
+	store.arbitrations[key(tenantID, task.ID)] = task
+	updated, err := store.AssignArbitrationTask(context.Background(), tenantID, task.ID, "manager-1", AssignArbitrationTaskInput{
+		AssignedTo: "arbitrator-1", ExpectedRevision: task.Revision,
+	})
+	if err != nil {
+		t.Fatalf("assign arbitration: %v", err)
+	}
+	_, err = store.AssignArbitrationTask(context.Background(), tenantID, task.ID, "manager-1", AssignArbitrationTaskInput{
+		AssignedTo: "arbitrator-2", ExpectedRevision: task.Revision,
+	})
+	if !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("stale revision must be rejected, got %v", err)
+	}
+	current, err := store.GetArbitrationTask(context.Background(), tenantID, task.ID)
+	if err != nil || current.AssignedTo != "arbitrator-1" || current.Revision != updated.Revision {
+		t.Fatalf("stale update changed arbitration: %#v err=%v", current, err)
 	}
 }
 

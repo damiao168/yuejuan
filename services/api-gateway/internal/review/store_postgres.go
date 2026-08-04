@@ -16,6 +16,10 @@ type PostgresStore struct {
 	db *sql.DB
 }
 
+const reviewTaskColumns = `id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
+  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
+  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, revision, created_by::text, created_at, updated_at`
+
 func NewPostgresStore(db *sql.DB) *PostgresStore {
 	return &PostgresStore{db: db}
 }
@@ -39,9 +43,7 @@ INSERT INTO review_task (
   anonymous_code, source, status, priority, assigned_to, grade_round, due_at, created_by
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')::uuid, $12, $13, $14)
-RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
-  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
-  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
+RETURNING `+reviewTaskColumns+`
 `, tenantID, taskContext.ExamID, taskContext.Question.ID, taskContext.Question.QuestionNo, input.AnswerSegmentID,
 		taskContext.SubmissionID, taskContext.AnonymousCode, input.Source, status, input.Priority,
 		input.AssignedTo, input.GradeRound, input.DueAt, actorID)
@@ -50,17 +52,18 @@ RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_
 
 func (s *PostgresStore) ListTasks(ctx context.Context, tenantID string, filter ListFilter) ([]ReviewTask, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
-  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
-  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
+SELECT `+reviewTaskColumns+`
 FROM review_task
 WHERE tenant_id = $1
   AND deleted_at IS NULL
   AND ($2 = '' OR status = $2)
   AND ($3 = '' OR assigned_to::text = $3)
   AND ($4 = '' OR exam_id::text = $4)
-ORDER BY priority DESC, created_at ASC
-`, tenantID, filter.Status, filter.AssignedTo, filter.ExamID)
+  AND ($7 = '' OR priority < $5 OR (priority = $5 AND (created_at > $6 OR (created_at = $6 AND id::text > $7))))
+ORDER BY priority DESC, created_at ASC, id::text ASC
+LIMIT NULLIF($8, 0)
+`, tenantID, filter.Status, filter.AssignedTo, filter.ExamID,
+		filter.CursorPriority, filter.CursorCreatedAt, filter.CursorID, filter.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -78,9 +81,7 @@ ORDER BY priority DESC, created_at ASC
 
 func (s *PostgresStore) GetTask(ctx context.Context, tenantID string, id string) (ReviewTask, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
-  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
-  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
+SELECT `+reviewTaskColumns+`
 FROM review_task
 WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 `, tenantID, id)
@@ -89,20 +90,21 @@ WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 
 func (s *PostgresStore) AssignTask(ctx context.Context, tenantID string, id string, _ string, input AssignTaskInput) (ReviewTask, error) {
 	input.AssignedTo = stringsTrim(input.AssignedTo)
-	if input.AssignedTo == "" {
+	if input.AssignedTo == "" || input.ExpectedRevision <= 0 {
 		return ReviewTask{}, ErrInvalidInput
 	}
 	row := s.db.QueryRowContext(ctx, `
 UPDATE review_task
-SET assigned_to = $3::uuid, status = 'assigned', return_reason = '', updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL AND status NOT IN ('submitted', 'completed')
-RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
-  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
-  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
-`, tenantID, id, input.AssignedTo)
+SET assigned_to = $3::uuid, status = 'assigned', return_reason = '', revision = revision + 1, updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $4 AND deleted_at IS NULL AND status NOT IN ('submitted', 'completed')
+RETURNING `+reviewTaskColumns+`
+`, tenantID, id, input.AssignedTo, input.ExpectedRevision)
 	task, err := scanTask(row)
 	if errors.Is(err, ErrNotFound) {
-		if _, getErr := s.GetTask(ctx, tenantID, id); getErr == nil {
+		if current, getErr := s.GetTask(ctx, tenantID, id); getErr == nil {
+			if current.Revision != input.ExpectedRevision {
+				return ReviewTask{}, ErrRevisionConflict
+			}
 			return ReviewTask{}, ErrInvalidTransition
 		}
 	}
@@ -111,7 +113,7 @@ RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_
 
 func (s *PostgresStore) BatchAssignTasks(ctx context.Context, tenantID string, _ string, input BatchAssignInput) ([]ReviewTask, error) {
 	input.AssignedTo = stringsTrim(input.AssignedTo)
-	if input.AssignedTo == "" || len(input.TaskIDs) == 0 {
+	if input.AssignedTo == "" || len(input.TaskIDs) == 0 || len(input.ExpectedRevisions) != len(input.TaskIDs) {
 		return nil, ErrInvalidInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -124,16 +126,21 @@ func (s *PostgresStore) BatchAssignTasks(ctx context.Context, tenantID string, _
 		if stringsTrim(id) == "" {
 			return nil, ErrInvalidInput
 		}
+		expected := input.ExpectedRevisions[id]
+		if expected <= 0 {
+			return nil, ErrRevisionConflict
+		}
 		task, err := scanTask(tx.QueryRowContext(ctx, `
 UPDATE review_task
-SET assigned_to = $3::uuid, status = 'assigned', return_reason = '', updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL AND status NOT IN ('submitted', 'completed')
-RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
-  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
-  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
-`, tenantID, id, input.AssignedTo))
+SET assigned_to = $3::uuid, status = 'assigned', return_reason = '', revision = revision + 1, updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $4 AND deleted_at IS NULL AND status NOT IN ('submitted', 'completed')
+RETURNING `+reviewTaskColumns+`
+`, tenantID, id, input.AssignedTo, expected))
 		if errors.Is(err, ErrNotFound) {
-			if _, getErr := s.GetTask(ctx, tenantID, id); getErr == nil {
+			if current, getErr := s.GetTask(ctx, tenantID, id); getErr == nil {
+				if current.Revision != expected {
+					return nil, ErrRevisionConflict
+				}
 				return nil, ErrInvalidTransition
 			}
 		}
@@ -155,9 +162,7 @@ func (s *PostgresStore) SubmitGrade(ctx context.Context, tenantID string, id str
 	}
 	defer func() { _ = tx.Rollback() }()
 	task, err := scanTask(tx.QueryRowContext(ctx, `
-SELECT id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
-  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
-  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
+	SELECT `+reviewTaskColumns+`
 FROM review_task
 WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 FOR UPDATE
@@ -170,6 +175,9 @@ FOR UPDATE
 	}
 	if !canSubmit(task.Status) {
 		return SubmitResult{}, ErrInvalidTransition
+	}
+	if input.ExpectedRevision <= 0 || task.Revision != input.ExpectedRevision {
+		return SubmitResult{}, ErrRevisionConflict
 	}
 	taskContext, err := s.loadContextTx(ctx, tx, tenantID, task.AnswerSegmentID)
 	if err != nil {
@@ -228,11 +236,9 @@ RETURNING id::text`, tenantID, task.ID, input.Score, taskContext.Question.Score,
 UPDATE review_task
 SET status = 'submitted', current_grade_id = NULLIF($3,'')::uuid,
   claim_expires_at = NULL, revision = revision + 1, updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2
-RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
-  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
-  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
-`, tenantID, id, questionGradeID))
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $4
+RETURNING `+reviewTaskColumns+`
+`, tenantID, id, questionGradeID, input.ExpectedRevision))
 	if err != nil {
 		return SubmitResult{}, err
 	}
@@ -269,7 +275,7 @@ FROM review_task rt WHERE rt.tenant_id=$1::uuid AND rt.id=$2::uuid AND rt.scorin
 
 func (s *PostgresStore) ReturnTask(ctx context.Context, tenantID string, id string, _ string, input ReturnTaskInput) (ReviewTask, error) {
 	input.Reason = stringsTrim(input.Reason)
-	if input.Reason == "" {
+	if input.Reason == "" || input.ExpectedRevision <= 0 {
 		return ReviewTask{}, ErrInvalidInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -278,9 +284,7 @@ func (s *PostgresStore) ReturnTask(ctx context.Context, tenantID string, id stri
 	}
 	defer func() { _ = tx.Rollback() }()
 	task, err := scanTask(tx.QueryRowContext(ctx, `
-SELECT id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
-  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
-  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
+	SELECT `+reviewTaskColumns+`
 FROM review_task
 WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 FOR UPDATE
@@ -291,14 +295,15 @@ FOR UPDATE
 	if !canReturnTask(task.Status) {
 		return ReviewTask{}, ErrInvalidTransition
 	}
+	if task.Revision != input.ExpectedRevision {
+		return ReviewTask{}, ErrRevisionConflict
+	}
 	task, err = scanTask(tx.QueryRowContext(ctx, `
 UPDATE review_task
-SET status = 'returned', return_reason = $3, updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
-RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
-  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
-  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
-`, tenantID, id, input.Reason))
+SET status = 'returned', return_reason = $3, revision = revision + 1, updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $4 AND deleted_at IS NULL
+RETURNING `+reviewTaskColumns+`
+`, tenantID, id, input.Reason, input.ExpectedRevision))
 	if err != nil {
 		return ReviewTask{}, err
 	}
@@ -570,11 +575,14 @@ WHERE tenant_id = $1 AND id::text = $2
 func (s *PostgresStore) ListArbitrationTasks(ctx context.Context, tenantID string, filter ArbitrationFilter) ([]ArbitrationTask, error) {
 	rows, err := s.db.QueryContext(ctx, arbitrationSelect()+`
 WHERE tenant_id = $1 AND deleted_at IS NULL
-  AND ($2 = '' OR status = $2)
+  AND ($2 = '' OR ($2 = 'active' AND status IN ('pending', 'assigned')) OR status = $2)
   AND ($3 = '' OR COALESCE(assigned_to::text, '') = $3)
   AND ($4 = '' OR exam_id::text = $4)
-ORDER BY created_at DESC
-`, tenantID, filter.Status, filter.AssignedTo, filter.ExamID)
+  AND ($6 = '' OR created_at < $5 OR (created_at = $5 AND id::text < $6))
+ORDER BY created_at DESC, id::text DESC
+LIMIT NULLIF($7, 0)
+`, tenantID, filter.Status, filter.AssignedTo, filter.ExamID,
+		filter.CursorCreatedAt, filter.CursorID, filter.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -598,7 +606,7 @@ WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 
 func (s *PostgresStore) AssignArbitrationTask(ctx context.Context, tenantID string, id string, _ string, input AssignArbitrationTaskInput) (ArbitrationTask, error) {
 	input.AssignedTo = stringsTrim(input.AssignedTo)
-	if input.AssignedTo == "" {
+	if input.AssignedTo == "" || input.ExpectedRevision <= 0 {
 		return ArbitrationTask{}, ErrInvalidInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -616,20 +624,26 @@ FOR UPDATE
 	if task.Status == "submitted" {
 		return ArbitrationTask{}, ErrInvalidTransition
 	}
+	if task.Revision != input.ExpectedRevision {
+		return ArbitrationTask{}, ErrRevisionConflict
+	}
 	if !arbitratorAllowed(task, input.AssignedTo) {
 		return ArbitrationTask{}, ErrForbidden
 	}
 	task, err = scanArbitration(tx.QueryRowContext(ctx, `
 UPDATE arbitration_task
-SET assigned_to = $3::uuid, status = 'assigned', updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2
+SET assigned_to = $3::uuid, status = 'assigned', revision = revision + 1, updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $4
 RETURNING id::text, tenant_id::text, double_mark_session_id::text, exam_id::text, question_id::text, question_no,
   answer_segment_id::text, submission_id::text, anonymous_code,
   first_reviewer_id::text, second_reviewer_id::text, first_score::float8, second_score::float8,
   score_difference::float8, difference_reason, status, COALESCE(assigned_to::text, ''),
-  final_score::float8, reason, student_feedback, allow_same_arbitrator, context, created_by::text, created_at, updated_at
-`, tenantID, id, input.AssignedTo))
+  final_score::float8, reason, student_feedback, allow_same_arbitrator, context, revision, created_by::text, created_at, updated_at
+`, tenantID, id, input.AssignedTo, input.ExpectedRevision))
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ArbitrationTask{}, ErrRevisionConflict
+		}
 		return ArbitrationTask{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -641,7 +655,7 @@ RETURNING id::text, tenant_id::text, double_mark_session_id::text, exam_id::text
 func (s *PostgresStore) SubmitArbitration(ctx context.Context, tenantID string, id string, arbitratorID string, input SubmitArbitrationInput) (ArbitrationTask, FinalGrade, error) {
 	input.Reason = stringsTrim(input.Reason)
 	input.StudentFeedback = stringsTrim(input.StudentFeedback)
-	if input.Reason == "" {
+	if input.Reason == "" || input.ExpectedRevision <= 0 {
 		return ArbitrationTask{}, FinalGrade{}, ErrInvalidInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -658,6 +672,9 @@ FOR UPDATE
 	}
 	if task.Status == "submitted" {
 		return ArbitrationTask{}, FinalGrade{}, ErrInvalidTransition
+	}
+	if task.Revision != input.ExpectedRevision {
+		return ArbitrationTask{}, FinalGrade{}, ErrRevisionConflict
 	}
 	if task.AssignedTo == "" || task.AssignedTo != arbitratorID {
 		return ArbitrationTask{}, FinalGrade{}, ErrForbidden
@@ -682,15 +699,19 @@ FOR UPDATE
 	}
 	task, err = scanArbitration(tx.QueryRowContext(ctx, `
 UPDATE arbitration_task
-SET assigned_to = $3::uuid, status = 'submitted', final_score = $4, reason = $5, student_feedback = $6, updated_at = now()
-WHERE tenant_id = $1 AND id::text = $2
+SET assigned_to = $3::uuid, status = 'submitted', final_score = $4, reason = $5, student_feedback = $6,
+    revision = revision + 1, updated_at = now()
+WHERE tenant_id = $1 AND id::text = $2 AND revision = $7
 RETURNING id::text, tenant_id::text, double_mark_session_id::text, exam_id::text, question_id::text, question_no,
   answer_segment_id::text, submission_id::text, anonymous_code,
   first_reviewer_id::text, second_reviewer_id::text, first_score::float8, second_score::float8,
   score_difference::float8, difference_reason, status, COALESCE(assigned_to::text, ''),
-  final_score::float8, reason, student_feedback, allow_same_arbitrator, context, created_by::text, created_at, updated_at
-`, tenantID, id, arbitratorID, input.FinalScore, input.Reason, input.StudentFeedback))
+  final_score::float8, reason, student_feedback, allow_same_arbitrator, context, revision, created_by::text, created_at, updated_at
+`, tenantID, id, arbitratorID, input.FinalScore, input.Reason, input.StudentFeedback, input.ExpectedRevision))
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ArbitrationTask{}, FinalGrade{}, ErrRevisionConflict
+		}
 		return ArbitrationTask{}, FinalGrade{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -967,6 +988,7 @@ func scanTask(row taskScanner) (ReviewTask, error) {
 		&out.ReturnReason,
 		&out.GradeRound,
 		&dueAt,
+		&out.Revision,
 		&out.CreatedBy,
 		&out.CreatedAt,
 		&out.UpdatedAt,
@@ -1022,9 +1044,7 @@ func scanGrade(row gradeScanner) (HumanGrade, error) {
 
 func (s *PostgresStore) getTaskTx(ctx context.Context, tx *sql.Tx, tenantID string, id string) (ReviewTask, error) {
 	return scanTask(tx.QueryRowContext(ctx, `
-SELECT id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
-  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
-  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
+	SELECT `+reviewTaskColumns+`
 FROM review_task
 WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 `, tenantID, id))
@@ -1045,9 +1065,7 @@ INSERT INTO review_task (
   anonymous_code, source, status, priority, assigned_to, grade_round, due_at, created_by
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')::uuid, $12, $13, $14)
-RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
-  answer_segment_id::text, submission_id::text, anonymous_code, source, status, priority,
-  COALESCE(assigned_to::text, ''), return_reason, grade_round, due_at, created_by::text, created_at, updated_at
+RETURNING `+reviewTaskColumns+`
 `, tenantID, taskContext.ExamID, taskContext.Question.ID, taskContext.Question.QuestionNo,
 		input.AnswerSegmentID, taskContext.SubmissionID, taskContext.AnonymousCode,
 		input.Source, status, input.Priority, input.AssignedTo, input.GradeRound, input.DueAt, actorID))
@@ -1256,7 +1274,7 @@ RETURNING id::text, tenant_id::text, double_mark_session_id::text, exam_id::text
   answer_segment_id::text, submission_id::text, anonymous_code,
   first_reviewer_id::text, second_reviewer_id::text, first_score::float8, second_score::float8,
   score_difference::float8, difference_reason, status, COALESCE(assigned_to::text, ''),
-  final_score::float8, reason, student_feedback, allow_same_arbitrator, context, created_by::text, created_at, updated_at
+  final_score::float8, reason, student_feedback, allow_same_arbitrator, context, revision, created_by::text, created_at, updated_at
 `, tenantID, session.ID, session.ExamID, session.QuestionID, session.QuestionNo,
 		session.AnswerSegmentID, session.SubmissionID, session.AnonymousCode,
 		session.FirstReviewerID, session.SecondReviewerID, first.Score, second.Score, diff,
@@ -1286,7 +1304,7 @@ RETURNING id::text, tenant_id::text, exam_id::text, question_id::text, question_
 func (s *PostgresStore) completeSessionReviewTasksTx(ctx context.Context, tx *sql.Tx, tenantID string, session DoubleMarkSession) error {
 	_, err := tx.ExecContext(ctx, `
 UPDATE review_task
-SET status = 'completed', updated_at = now()
+SET status = 'completed', revision = revision + 1, updated_at = now()
 WHERE tenant_id = $1 AND id::text IN ($2, $3)
 `, tenantID, session.FirstReviewTaskID, session.SecondReviewTaskID)
 	return err
@@ -1370,7 +1388,7 @@ SELECT id::text, tenant_id::text, double_mark_session_id::text, exam_id::text, q
   answer_segment_id::text, submission_id::text, anonymous_code,
   first_reviewer_id::text, second_reviewer_id::text, first_score::float8, second_score::float8,
   score_difference::float8, difference_reason, status, COALESCE(assigned_to::text, ''),
-  final_score::float8, reason, student_feedback, allow_same_arbitrator, context, created_by::text, created_at, updated_at
+  final_score::float8, reason, student_feedback, allow_same_arbitrator, context, revision, created_by::text, created_at, updated_at
 FROM arbitration_task
 `
 }
@@ -1406,6 +1424,7 @@ func scanArbitration(row arbitrationScanner) (ArbitrationTask, error) {
 		&out.StudentFeedback,
 		&out.AllowSameArbitrator,
 		&contextRaw,
+		&out.Revision,
 		&out.CreatedBy,
 		&out.CreatedAt,
 		&out.UpdatedAt,

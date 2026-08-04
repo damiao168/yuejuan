@@ -13,7 +13,7 @@ EduGrade Enterprise Windows EXE 客户端骨架。
 ## 当前能力
 
 - 服务端地址配置：当前只保存到本次会话，安全配置存储未配置/待接入。
-- 登录：调用真实 `POST /api/v1/auth/login`。
+- 登录：调用桌面客户端专用的 `POST /api/v1/auth/token`，令牌只保存在进程内存中。
 - Session 校验：调用真实 `GET /api/v1/auth/me`。
 - 任务列表：调用真实 `GET /api/v1/review-tasks`，无 token 或无权限时显示真实错误。
 - 扫描工作站：不实现假扫描仪；支持选择真实考试、批量选择 PDF/图片、上传前预览、本地质量检查、可恢复队列元数据、断网检测、联网后继续当前会话可上传项、失败重试、真实 `POST /api/v1/files`、submission page 关联和服务端质量门禁入口。

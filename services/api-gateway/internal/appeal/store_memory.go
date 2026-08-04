@@ -116,6 +116,7 @@ func (s *MemoryStore) CreateAppeal(_ context.Context, tenantID string, actorID s
 		Reason:            input.Reason,
 		Attachment:        cloneMap(input.Attachment),
 		Status:            "submitted",
+		Revision:          1,
 		CreatedBy:         actorID,
 		CreatedAt:         now,
 		UpdatedAt:         now,
@@ -147,14 +148,32 @@ func (s *MemoryStore) ListAppeals(_ context.Context, tenantID string, filter Lis
 		out = append(out, cloneAppeal(item))
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
 		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
+	if filter.CursorID != "" {
+		start := 0
+		for start < len(out) {
+			item := out[start]
+			if item.CreatedAt.Before(filter.CursorCreatedAt) ||
+				(item.CreatedAt.Equal(filter.CursorCreatedAt) && item.ID < filter.CursorID) {
+				break
+			}
+			start++
+		}
+		out = out[start:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
 	return out, nil
 }
 
 func (s *MemoryStore) AssignAppeal(_ context.Context, tenantID string, id string, _ string, input AssignAppealInput) (Appeal, error) {
 	input.AssignedTo = strings.TrimSpace(input.AssignedTo)
-	if input.AssignedTo == "" {
+	if input.AssignedTo == "" || input.ExpectedRevision <= 0 {
 		return Appeal{}, ErrInvalidInput
 	}
 	s.mu.Lock()
@@ -166,11 +185,15 @@ func (s *MemoryStore) AssignAppeal(_ context.Context, tenantID string, id string
 	if isTerminalStatus(item.Status) {
 		return Appeal{}, ErrInvalidTransition
 	}
+	if item.Revision != input.ExpectedRevision {
+		return Appeal{}, ErrRevisionConflict
+	}
 	if item.FinalGradeID != "" && reviewerParticipated(s.finals[item.FinalGradeID], input.AssignedTo) {
 		return Appeal{}, ErrForbidden
 	}
 	item.AssignedTo = input.AssignedTo
 	item.Status = "under_review"
+	item.Revision++
 	item.UpdatedAt = time.Now().UTC()
 	s.appeals[id] = item
 	return s.withDetailsLocked(item), nil
@@ -193,6 +216,9 @@ func (s *MemoryStore) SubmitRecommendation(_ context.Context, tenantID string, i
 	if isTerminalStatus(item.Status) {
 		return Appeal{}, ErrInvalidTransition
 	}
+	if input.ExpectedRevision <= 0 || item.Revision != input.ExpectedRevision {
+		return Appeal{}, ErrRevisionConflict
+	}
 	if input.RecommendedScore != nil {
 		final, ok := s.finals[item.FinalGradeID]
 		if !ok || *input.RecommendedScore > final.MaxScore {
@@ -206,6 +232,7 @@ func (s *MemoryStore) SubmitRecommendation(_ context.Context, tenantID string, i
 	item.RecommendedScore = cloneFloat(input.RecommendedScore)
 	item.RecommendationBy = actorID
 	item.RecommendationAt = &now
+	item.Revision++
 	item.UpdatedAt = now
 	s.appeals[id] = item
 	return s.withDetailsLocked(item), nil
@@ -235,6 +262,9 @@ func (s *MemoryStore) ReviewAppeal(_ context.Context, tenantID string, id string
 	if item.Status == "closed" {
 		return Appeal{}, nil, ErrInvalidTransition
 	}
+	if input.ExpectedRevision <= 0 || item.Revision != input.ExpectedRevision {
+		return Appeal{}, nil, ErrRevisionConflict
+	}
 	if !canReviewTransition(item.Status, input.Status) {
 		return Appeal{}, nil, ErrInvalidTransition
 	}
@@ -246,6 +276,7 @@ func (s *MemoryStore) ReviewAppeal(_ context.Context, tenantID string, id string
 	}
 	item.ReviewedBy = actorID
 	item.ReviewedAt = &now
+	item.Revision++
 	item.UpdatedAt = now
 	var adjustment *ScoreAdjustment
 	if input.Status == "score_adjusted" {
@@ -303,7 +334,7 @@ func (s *MemoryStore) ReviewAppeal(_ context.Context, tenantID string, id string
 
 func (s *MemoryStore) CloseAppeal(_ context.Context, tenantID string, id string, actorID string, input CloseAppealInput) (Appeal, error) {
 	input.Reason = strings.TrimSpace(input.Reason)
-	if input.Reason == "" {
+	if input.Reason == "" || input.ExpectedRevision <= 0 {
 		return Appeal{}, ErrInvalidInput
 	}
 	s.mu.Lock()
@@ -315,11 +346,15 @@ func (s *MemoryStore) CloseAppeal(_ context.Context, tenantID string, id string,
 	if item.Status == "closed" {
 		return Appeal{}, ErrInvalidTransition
 	}
+	if item.Revision != input.ExpectedRevision {
+		return Appeal{}, ErrRevisionConflict
+	}
 	now := time.Now().UTC()
 	item.Status = "closed"
 	item.ResultReason = input.Reason
 	item.ClosedBy = actorID
 	item.ClosedAt = &now
+	item.Revision++
 	item.UpdatedAt = now
 	s.appeals[id] = item
 	return s.withDetailsLocked(item), nil

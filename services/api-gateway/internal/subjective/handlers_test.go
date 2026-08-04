@@ -50,6 +50,22 @@ func TestMockSubjectiveGradeCreatesReviewGrade(t *testing.T) {
 	assertAuditAction(t, authStore, "subjective.ai_grade_created")
 }
 
+func TestDisabledSubjectiveAIIsFailClosedWithoutCreatingGrade(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"grading:manage"})
+	store := subjective.NewMemoryStore()
+	store.AddContext(tenantID, "segment-disabled", subjectiveContext("short_answer", 8, "synthetic answer", nil))
+	handler := subjective.NewHandler(
+		store,
+		subjective.NewDisabledAdapter("ai_grading_disabled", "model-disabled", "prompt-disabled"),
+		authStore,
+	)
+
+	rec := callSubjectiveRequest(t, handler, "segment-disabled", `{"model_policy":{"model_version":"model-disabled","prompt_version":"prompt-disabled","min_confidence":0.8}}`)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"code":"ai_grading_disabled"`) {
+		t.Fatalf("disabled AI must return stable 503, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestConfiguredRouterUsesGovernedGradingAgentAndOverridesCallerPolicy(t *testing.T) {
 	const serviceToken = "test-service-token-with-at-least-32-characters"
 	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -452,7 +468,7 @@ func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemorySt
 func login(t *testing.T, router http.Handler) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"tenant_code": "demo", "username": "subjective_admin", "password": "ChangeMe123!"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

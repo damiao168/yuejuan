@@ -5,6 +5,7 @@ import { productIdentityLabel, type SessionUser } from "../auth/session";
 import type { AppRoute } from "../router/routes";
 import { hasRouteAccess, routeGroups, routePresentation, visibleRoutes } from "../router/routes";
 import { experienceLabel, type ProductExperience } from "../router/experience";
+import { workspaceLabel } from "../workspaces/registry";
 import { MockBadge } from "./MockBadge";
 
 const { Header, Sider, Content } = Layout;
@@ -78,7 +79,7 @@ export function AppLayout({
             size="small"
             aria-label="切换管理端或教师端"
             value={experience}
-            options={availableExperiences.map((value) => ({ value, label: experienceLabel(value) }))}
+            options={availableExperiences.map((value) => ({ value, label: workspaceLabel(user, value) }))}
             onChange={(value) => { setNavigationOpen(false); onExperienceChange(value as ProductExperience); }}
           />
         </div>
@@ -144,12 +145,15 @@ export function AppLayout({
                         ? `${user.displayName}（${user.username}）· ${user.school}`
                         : `${user.username} · ${user.school}`
                     },
+                    { key: "sessions", label: "账户安全" },
                     { key: "logout", label: "退出登录" }
                   ],
                   onClick: ({ key }) => {
-                    if (key === "logout") {
-                      onLogout();
-                    }
+                      if (key === "logout") {
+                        onLogout();
+                      } else if (key === "sessions") {
+                        onNavigate("/account/sessions");
+                      }
                   }
                 }}
               >

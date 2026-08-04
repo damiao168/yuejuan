@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type PostgresStore struct {
@@ -25,7 +26,7 @@ func (s *PostgresStore) CreateTenant(ctx context.Context, input TenantProvision)
 	row := tx.QueryRowContext(ctx, `
 WITH new_id AS (SELECT gen_random_uuid() AS id)
 INSERT INTO tenant (id, tenant_id, name, code, status)
-SELECT id, id, $1, $2, COALESCE(NULLIF($3, ''), 'active') FROM new_id
+SELECT id, id, $1, $2, COALESCE(NULLIF($3::text, ''), 'active') FROM new_id
 RETURNING id::text, name, code, status
 `, input.Name, input.Code, input.Status)
 	var out Tenant
@@ -95,8 +96,8 @@ RETURNING id::text
 	}
 	roleResult, err := tx.ExecContext(ctx, `
 INSERT INTO user_role (tenant_id, user_id, role_id, data_scope)
-SELECT $1::uuid, $2::uuid, role.id,
-       jsonb_build_object('scope', 'school', 'school_id', $3, 'school_name', $4)
+  SELECT $1::uuid, $2::uuid, role.id,
+         jsonb_build_object('scope', 'school', 'school_id', $3::text, 'school_name', $4::text)
 FROM role
 WHERE tenant_id = $1::uuid AND code = 'school_admin' AND deleted_at IS NULL
 `, out.ID, userID, schoolID, input.Name)
@@ -113,13 +114,27 @@ WHERE tenant_id = $1::uuid AND code = 'school_admin' AND deleted_at IS NULL
 	return out, nil
 }
 
-func (s *PostgresStore) ListTenants(ctx context.Context, tenantID string, canListAll bool) ([]Tenant, error) {
+func (s *PostgresStore) ListTenants(ctx context.Context, tenantID string, canListAll bool, filter TenantListFilter) ([]Tenant, error) {
 	query := `SELECT id::text, name, code, status FROM tenant WHERE deleted_at IS NULL`
 	args := []any{}
 	if !canListAll {
-		query += ` AND id = $1`
 		args = append(args, tenantID)
+		query += fmt.Sprintf(` AND id = $%d::uuid`, len(args))
 	}
+	if filter.Query != "" {
+		args = append(args, "%"+filter.Query+"%")
+		query += fmt.Sprintf(` AND (name ILIKE $%d OR code ILIKE $%d)`, len(args), len(args))
+	}
+	if filter.CursorCode != "" && filter.CursorID != "" {
+		args = append(args, filter.CursorCode, filter.CursorID)
+		query += fmt.Sprintf(` AND (code > $%d OR (code = $%d AND id::text > $%d))`, len(args)-1, len(args)-1, len(args))
+	}
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 51
+	}
+	args = append(args, limit)
+	query += fmt.Sprintf(` ORDER BY code, id LIMIT $%d`, len(args))
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -283,13 +298,24 @@ RETURNING id::text, tenant_id::text, school_id::text, class_id::text, student_no
 	return out, nil
 }
 
-func (s *PostgresStore) ListStudents(ctx context.Context, tenantID string, classID string) ([]Student, error) {
-	query := `SELECT id::text, tenant_id::text, school_id::text, class_id::text, student_no, name, COALESCE(gender, ''), status FROM student WHERE tenant_id = $1 AND deleted_at IS NULL`
-	args := []any{tenantID}
-	if classID != "" {
-		query += ` AND class_id = $2`
-		args = append(args, classID)
+func (s *PostgresStore) ListStudents(ctx context.Context, tenantID string, filter StudentListFilter) ([]Student, error) {
+	query := `SELECT id::text, tenant_id::text, school_id::text, class_id::text, student_no, name, COALESCE(gender, ''), status
+FROM student
+WHERE tenant_id = $1 AND deleted_at IS NULL
+  AND ($2 = '' OR class_id::text = $2)
+  AND ($3 = '' OR student_no ILIKE '%' || $3 || '%' OR name ILIKE '%' || $3 || '%')
+  AND ($5 = '' OR student_no > $4 OR (student_no = $4 AND id::text > $5))`
+	args := []any{tenantID, filter.ClassID, filter.Query, filter.CursorStudentNo, filter.CursorID}
+	if len(filter.StudentIDs) > 0 {
+		placeholders := make([]string, len(filter.StudentIDs))
+		for index, id := range filter.StudentIDs {
+			placeholders[index] = fmt.Sprintf("$%d::uuid", len(args)+1)
+			args = append(args, id)
+		}
+		query += ` AND id IN (` + strings.Join(placeholders, ",") + `)`
 	}
+	args = append(args, filter.Limit)
+	query += fmt.Sprintf(" ORDER BY student_no ASC, id::text ASC LIMIT NULLIF($%d, 0)", len(args))
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

@@ -26,6 +26,7 @@ import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
+import { hashQueryParam } from "../router/query";
 import type { ProductExperience } from "../router/experience";
 
 interface IdentityMaps {
@@ -148,11 +149,11 @@ function issueCount(quality: QualityCheckResult | null, code: string) {
   return quality?.quality.issues.find((issue) => issue.code === code)?.count ?? 0;
 }
 
-function createSummary(submissions: Submission[], grades: SubmissionGrade[], quality: QualityCheckResult | null, roster: RosterReport | null): ScoreSummary {
+function createSummary(submissions: Submission[], completedGradeCount: number, quality: QualityCheckResult | null, roster: RosterReport | null): ScoreSummary {
   return {
     expectedStudents: roster?.summary.expected ?? submissions.length,
     receivedSubmissions: roster?.summary.received ?? submissions.length,
-    completedGrades: grades.length,
+    completedGrades: completedGradeCount,
     absentStudents: roster?.summary.absent ?? 0,
     unresolvedRoster: roster?.summary.unresolved ?? 0,
     unfinishedReviews: issueCount(quality, "unfinished_review_tasks"),
@@ -173,11 +174,12 @@ function saveBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-async function loadIdentities(canReadStudentNames: boolean): Promise<IdentityMaps> {
-  if (!canReadStudentNames) {
+async function loadIdentities(canReadStudentNames: boolean, studentIds: string[]): Promise<IdentityMaps> {
+  const ids = [...new Set(studentIds.filter(Boolean))];
+  if (!canReadStudentNames || ids.length === 0) {
     return { students: {}, classes: {} };
   }
-  const [studentsResult, classesResult] = await Promise.allSettled([listStudents(), listClasses()]);
+  const [studentsResult, classesResult] = await Promise.allSettled([listStudents({ ids, limit: 200 }), listClasses()]);
   const maps: IdentityMaps = { students: {}, classes: {} };
   if (studentsResult.status === "fulfilled") {
     for (const student of studentsResult.value.students) {
@@ -215,17 +217,24 @@ export function ScoreManagementPage({
   const [selectedExamId, setSelectedExamId] = useState(initialExamId);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [grades, setGrades] = useState<SubmissionGrade[]>([]);
+  const [gradeTotal, setGradeTotal] = useState(0);
+  const [filteredGradeTotal, setFilteredGradeTotal] = useState(0);
+  const [allGradesLocked, setAllGradesLocked] = useState(false);
+  const [gradeNextCursor, setGradeNextCursor] = useState("");
+  const [gradesHaveMore, setGradesHaveMore] = useState(false);
   const [quality, setQuality] = useState<QualityCheckResult | null>(null);
   const [roster, setRoster] = useState<RosterReport | null>(null);
   const [identities, setIdentities] = useState<IdentityMaps>({ students: {}, classes: {} });
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [lastWatermark, setLastWatermark] = useState("");
   const [keyword, setKeyword] = useState("");
+  const [appliedKeyword, setAppliedKeyword] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [confirmReason, setConfirmReason] = useState("");
   const [publishReason, setPublishReason] = useState("");
   const [loadingExams, setLoadingExams] = useState(true);
   const [loadingScores, setLoadingScores] = useState(false);
+  const [loadingMoreGrades, setLoadingMoreGrades] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actioning, setActioning] = useState<string | null>(null);
   const [attendanceEditor, setAttendanceEditor] = useState<{ entry: RosterEntry; status: "expected" | "absent" } | null>(null);
@@ -233,26 +242,10 @@ export function ScoreManagementPage({
   const scoreRequestRef = useRef(0);
 
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
-  const summary = useMemo(() => createSummary(submissions, grades, quality, roster), [grades, quality, roster, submissions]);
+  const summary = useMemo(() => createSummary(submissions, gradeTotal, quality, roster), [gradeTotal, quality, roster, submissions]);
   const scoreAuditLogs = useMemo(() => auditLogs.filter((item) => item.action.startsWith("score.")), [auditLogs]);
-  const publishedOrLocked = selectedExam?.status === "published" || (grades.length > 0 && grades.every((grade) => grade.locked || grade.status === "published" || grade.status === "locked"));
-
-  const filteredGrades = useMemo(() => {
-    const text = keyword.trim().toLowerCase();
-    return grades.filter((grade) => {
-      const student = grade.student_id ? identities.students[grade.student_id] : undefined;
-      const className = student ? identities.classes[student.class_id]?.name : "";
-      const statusMatched = statusFilter === "all" || grade.status === statusFilter;
-      const keywordMatched =
-        !text ||
-        grade.anonymous_code.toLowerCase().includes(text) ||
-        grade.submission_id.toLowerCase().includes(text) ||
-        (student?.name ?? "").toLowerCase().includes(text) ||
-        (student?.student_no ?? "").toLowerCase().includes(text) ||
-        className.toLowerCase().includes(text);
-      return statusMatched && keywordMatched;
-    });
-  }, [grades, identities.classes, identities.students, keyword, statusFilter]);
+  const publishedOrLocked = selectedExam?.status === "published" || allGradesLocked;
+  const filteredGrades = grades;
 
   const loadExamList = useCallback(async () => {
     setLoadingExams(true);
@@ -260,10 +253,13 @@ export function ScoreManagementPage({
     try {
       const result = await listExams();
       setExams(result.exams);
-      setSelectedExamId((current) => {
-        if (initialExamId && result.exams.some((exam) => exam.id === initialExamId)) return initialExamId;
-        return result.exams.some((exam) => exam.id === current) ? current : result.exams[0]?.id || "";
-      });
+        setSelectedExamId((current) => {
+          if (initialExamId && result.exams.some((exam) => exam.id === initialExamId)) return initialExamId;
+          const requestedStatus = hashQueryParam("status");
+          const requestedExam = requestedStatus ? result.exams.find((exam) => exam.status === requestedStatus) : undefined;
+          if (requestedExam) return requestedExam.id;
+          return result.exams.some((exam) => exam.id === current) ? current : result.exams[0]?.id || "";
+        });
     } catch (currentError) {
       setError(formatError(currentError));
     } finally {
@@ -277,6 +273,11 @@ export function ScoreManagementPage({
       if (!examId) {
         setSubmissions([]);
         setGrades([]);
+        setGradeTotal(0);
+        setFilteredGradeTotal(0);
+        setAllGradesLocked(false);
+        setGradeNextCursor("");
+        setGradesHaveMore(false);
         setQuality(null);
         setRoster(null);
         setAuditLogs([]);
@@ -286,12 +287,15 @@ export function ScoreManagementPage({
       setLoadingScores(true);
       setError(null);
       try {
-        const [submissionResult, gradeResult, qualityResult, rosterResult, identityResult, auditResult] = await Promise.allSettled([
-          listSubmissions(examId),
-          listExamGrades(examId),
+        const [submissionResult, gradeResult, qualityResult, rosterResult, auditResult] = await Promise.allSettled([
+          listSubmissions(examId, { limit: 50 }),
+          listExamGrades(examId, {
+            status: statusFilter === "all" ? undefined : statusFilter,
+            q: appliedKeyword || undefined,
+            limit: 50
+          }),
           checkExamGradeQuality(examId, "publish"),
           canManage ? listExamRoster(examId) : Promise.resolve({ roster: null }),
-          loadIdentities(canReadStudentNames),
           canReadAudit ? listAuditLogs({ target_type: "exam", target_id: examId, limit: 20 }) : Promise.resolve({ audit_logs: [] })
         ]);
         if (requestId !== scoreRequestRef.current) return;
@@ -302,6 +306,17 @@ export function ScoreManagementPage({
         }
         if (gradeResult.status === "fulfilled") {
           setGrades(gradeResult.value.grades);
+          setGradeTotal(gradeResult.value.total);
+          setFilteredGradeTotal(gradeResult.value.filtered_total);
+          setAllGradesLocked(gradeResult.value.all_locked);
+          setGradeNextCursor(gradeResult.value.next_cursor);
+          setGradesHaveMore(gradeResult.value.has_more);
+          const identityResult = await loadIdentities(
+            canReadStudentNames,
+            gradeResult.value.grades.flatMap((grade) => (grade.student_id ? [grade.student_id] : []))
+          );
+          if (requestId !== scoreRequestRef.current) return;
+          setIdentities(identityResult);
         } else {
           throw gradeResult.reason;
         }
@@ -315,9 +330,6 @@ export function ScoreManagementPage({
         } else {
           throw rosterResult.reason;
         }
-        if (identityResult.status === "fulfilled") {
-          setIdentities(identityResult.value);
-        }
         if (auditResult.status === "fulfilled") {
           setAuditLogs(auditResult.value.audit_logs);
         }
@@ -328,7 +340,7 @@ export function ScoreManagementPage({
         if (requestId === scoreRequestRef.current) setLoadingScores(false);
       }
     },
-    [canManage, canReadAudit, canReadStudentNames]
+    [appliedKeyword, canManage, canReadAudit, canReadStudentNames, statusFilter]
   );
 
   useEffect(() => {
@@ -347,6 +359,44 @@ export function ScoreManagementPage({
     await loadExamList();
     if (selectedExamId) {
       await loadScores(selectedExamId);
+    }
+  };
+
+  const loadMoreGrades = async () => {
+    if (!selectedExamId || !gradesHaveMore || !gradeNextCursor || loadingMoreGrades) return;
+    const requestId = scoreRequestRef.current;
+    setLoadingMoreGrades(true);
+    try {
+      const result = await listExamGrades(selectedExamId, {
+        status: statusFilter === "all" ? undefined : statusFilter,
+        q: appliedKeyword || undefined,
+        limit: 50,
+        cursor: gradeNextCursor
+      });
+      const identityResult = await loadIdentities(
+        canReadStudentNames,
+        result.grades.flatMap((grade) => (grade.student_id ? [grade.student_id] : []))
+      );
+      if (requestId !== scoreRequestRef.current) return;
+      setGrades((current) => {
+        const byId = new Map(current.map((grade) => [grade.id, grade]));
+        for (const grade of result.grades) byId.set(grade.id, grade);
+        return [...byId.values()];
+      });
+      setIdentities((current) => ({
+        students: { ...current.students, ...identityResult.students },
+        classes: { ...current.classes, ...identityResult.classes },
+        error: [current.error, identityResult.error].filter(Boolean).join("；") || undefined
+      }));
+      setGradeTotal(result.total);
+      setFilteredGradeTotal(result.filtered_total);
+      setAllGradesLocked(result.all_locked);
+      setGradeNextCursor(result.next_cursor);
+      setGradesHaveMore(result.has_more);
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setLoadingMoreGrades(false);
     }
   };
 
@@ -407,7 +457,7 @@ export function ScoreManagementPage({
     }
     modal.confirm({
       title: "确认发布成绩",
-      content: `将发布《${selectedExam?.name ?? "未选择考试"}》共 ${grades.length} 份成绩，发布后学生成绩即被锁定，如需修改须走成绩申诉流程。确定发布吗？`,
+      content: `将发布《${selectedExam?.name ?? "未选择考试"}》共 ${gradeTotal} 份成绩，发布后学生成绩即被锁定，如需修改须走成绩申诉流程。确定发布吗？`,
       okText: "发布",
       cancelText: "取消",
       onOk: () =>
@@ -743,10 +793,24 @@ export function ScoreManagementPage({
             <div className="panel-head">
               <div>
                 <h2>成绩列表</h2>
-                <p>{filteredGrades.length} / {grades.length} 条成绩</p>
+                <p>
+                  已加载 {filteredGrades.length} / {filteredGradeTotal} 条
+                  {filteredGradeTotal !== gradeTotal ? `（全场 ${gradeTotal} 条）` : ""}
+                </p>
               </div>
               <Space wrap>
-                <Input prefix={<Search size={16} />} placeholder="搜索匿名码、学生、班级" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
+                <Input.Search
+                  prefix={<Search size={16} />}
+                  placeholder="搜索匿名码、学生、班级"
+                  value={keyword}
+                  allowClear
+                  enterButton="搜索"
+                  onChange={(event) => {
+                    setKeyword(event.target.value);
+                    if (!event.target.value) setAppliedKeyword("");
+                  }}
+                  onSearch={(value) => setAppliedKeyword(value.trim())}
+                />
                 <Select className="toolbar-select" value={statusFilter} options={statusOptions} onChange={setStatusFilter} />
               </Space>
             </div>
@@ -762,6 +826,11 @@ export function ScoreManagementPage({
                 locale={{ emptyText: <Empty description={mode === "teacher" ? "该考试暂无成绩，请等待阅卷完成。" : "该考试暂无成绩。请先完成阅卷，再点击『汇总最终成绩』生成成绩。"} image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
               />
             )}
+            {!loadingScores && gradesHaveMore ? (
+              <div className="load-more-row">
+                <Button loading={loadingMoreGrades} onClick={() => void loadMoreGrades()}>加载更多成绩</Button>
+              </div>
+            ) : null}
           </section>
         </main>
 
@@ -789,7 +858,7 @@ export function ScoreManagementPage({
             <span className="score-step-title">第 2 步 · 确认成绩</span>
             <label className="score-step-label" htmlFor="score-confirm-reason">确认原因（必填）</label>
             <Input.TextArea id="score-confirm-reason" rows={3} value={confirmReason} placeholder="例如：已由学科组长复核，成绩无误" onChange={(event) => setConfirmReason(event.target.value)} />
-            <Button block icon={<CheckCircle2 size={16} />} disabled={!canWrite || grades.length === 0 || publishedOrLocked} loading={actioning === "confirm"} onClick={() => void confirmGrades()}>
+            <Button block icon={<CheckCircle2 size={16} />} disabled={!canWrite || gradeTotal === 0 || publishedOrLocked} loading={actioning === "confirm"} onClick={() => void confirmGrades()}>
               确认成绩
             </Button>
           </div>
@@ -807,7 +876,7 @@ export function ScoreManagementPage({
 
           <div className="score-step-group">
             <span className="score-step-title">导出</span>
-            <Button block icon={<Download size={16} />} disabled={!canWrite || grades.length === 0} loading={actioning === "export"} onClick={exportGrades}>
+            <Button block icon={<Download size={16} />} disabled={!canWrite || gradeTotal === 0} loading={actioning === "export"} onClick={exportGrades}>
               导出成绩
             </Button>
           </div>

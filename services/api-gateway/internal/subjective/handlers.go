@@ -31,6 +31,9 @@ func (h *Handler) WithWorkerRuntimeStore(runtime workerruntime.Store) *Handler {
 
 func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
+	if !h.requireAvailable(w, r) {
+		return
+	}
 	var input GradeRequest
 	if !decodeJSON(w, r, &input) {
 		return
@@ -107,6 +110,20 @@ func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 	output, err := h.adapter.Grade(r.Context(), adapterInput)
 	output.RequestID = requestID
 	if err != nil {
+		var agentErr *GradingAgentError
+		if errors.As(err, &agentErr) {
+			code := "ai_service_unavailable"
+			if agentErr.Code == "adapter_not_configured" {
+				code = "ai_service_not_configured"
+			}
+			if _, updateErr := h.store.UpdateRun(r.Context(), user.TenantID, runID, UpdateRunInput{Status: RunFailed, ErrorCode: code}); updateErr != nil {
+				writeStoreError(w, r, updateErr)
+				return
+			}
+			h.auditAction(r, "subjective.ai_service_unavailable", "subjective_grading_run", runID, code)
+			httpx.Error(w, r, http.StatusServiceUnavailable, code, "AI grading service is unavailable; use manual review")
+			return
+		}
 		ApplyPromptGuard(&output, promptGuard)
 		grade, createErr := h.store.CreateGrade(r.Context(), user.TenantID, user.ID, failedGrade(ctx, policy, runID, err.Error(), output))
 		if createErr != nil {
@@ -205,6 +222,9 @@ func (h *Handler) GetBatch(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) EnqueueBatch(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
+	if !h.requireAvailable(w, r) {
+		return
+	}
 	if h.runtime == nil {
 		httpx.Error(w, r, http.StatusServiceUnavailable, "subjective_worker_unavailable", "subjective worker runtime is unavailable")
 		return
@@ -354,6 +374,9 @@ func (h *Handler) CompleteWorker(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ExecuteWorker(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
+	if !h.requireAvailable(w, r) {
+		return
+	}
 	if h.runtime == nil {
 		httpx.Error(w, r, http.StatusServiceUnavailable, "subjective_worker_unavailable", "subjective worker runtime is unavailable")
 		return
@@ -393,7 +416,7 @@ func (h *Handler) ExecuteWorker(w http.ResponseWriter, r *http.Request) {
 	output, err := h.adapter.Grade(r.Context(), AdapterInput{RequestID: run.RequestID, SegmentID: ctx.SegmentID, Subject: ctx.Subject, GradeLevel: ctx.GradeLevel, Question: ctx.Question, Rubric: ctx.Rubric, AnswerText: ctx.AnswerText, AnswerImageRef: ctx.AnswerImageRef, OCRConfidence: ctx.OCRConfidence, ModelPolicy: policy, PromptGuard: promptGuard})
 	output.RequestID = run.RequestID
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadGateway, "subjective_agent_failed", "governed grading agent failed")
+		httpx.Error(w, r, http.StatusServiceUnavailable, "ai_service_unavailable", "AI grading service is unavailable; use manual review")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"run_id": run.ID, "task_id": task.ID, "output": output})
@@ -540,6 +563,34 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (h *Handler) Availability(w http.ResponseWriter, _ *http.Request) {
+	httpx.JSON(w, http.StatusOK, map[string]any{"ai_grading": h.runtimeStatus()})
+}
+
+func (h *Handler) runtimeStatus() RuntimeStatus {
+	if provider, ok := h.adapter.(RuntimeStatusProvider); ok {
+		return provider.RuntimeStatus()
+	}
+	return RuntimeStatus{Enabled: true, Available: true, Mode: "custom"}
+}
+
+func (h *Handler) requireAvailable(w http.ResponseWriter, r *http.Request) bool {
+	status := h.runtimeStatus()
+	if status.Available {
+		return true
+	}
+	code := status.ErrorCode
+	if code == "" {
+		code = "ai_service_unavailable"
+	}
+	message := "AI grading service is unavailable; manual review remains available"
+	if code == "ai_grading_disabled" {
+		message = "AI grading is disabled; use manual review"
+	}
+	httpx.Error(w, r, http.StatusServiceUnavailable, code, message)
+	return false
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {

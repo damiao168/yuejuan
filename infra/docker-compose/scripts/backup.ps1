@@ -15,6 +15,18 @@ $backupRoot = if ([IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Joi
 $backupDir = Join-Path $backupRoot "edugrade-$stamp"
 $backupDir = (New-Item -ItemType Directory -Force -Path $backupDir).FullName
 $composeDir = Split-Path -Parent $composePath
+$envValues = @{}
+Get-Content -LiteralPath $envPath -Encoding utf8 | ForEach-Object {
+  $line = $_.Trim()
+  if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
+    $parts = $line.Split("=", 2)
+    $envValues[$parts[0].Trim()] = $parts[1].Trim().Trim('"').Trim("'")
+  }
+}
+$migrationDir = (Resolve-Path -LiteralPath (Join-Path $composeDir "../../services/api-gateway/migrations")).Path
+$latestMigration = Get-ChildItem -LiteralPath $migrationDir -File -Filter "*.sql" | Sort-Object Name | Select-Object -Last 1
+if (-not $latestMigration) { throw "No database migrations were found." }
+$schemaVersion = $latestMigration.BaseName.Split('_')[0]
 
 Push-Location $composeDir
 try {
@@ -79,9 +91,12 @@ try {
   $composeProject = if ($composeProjectProperty) { [string]$composeProjectProperty.Value } else { "" }
   if ([string]::IsNullOrWhiteSpace($composeProject)) { throw "Reading Compose project evidence failed." }
   $manifest = [ordered]@{
+    format_version = 2
     created_at = (Get-Date).ToUniversalTime().ToString("o")
+    source_environment = [string]$envValues["EDUGRADE_ENV"]
     compose_project = $composeProject
     applied_migration_count = [int]$migrationCount
+    schema_version = $schemaVersion
     postgres_file = $postgresFile
     minio_directory = "minio-$stamp"
     images = $images

@@ -37,11 +37,22 @@ func TestBuildOCRWorkerServiceStatusStale(t *testing.T) {
 	}
 }
 
-func TestBuildOCRWorkerServiceStatusUnavailable(t *testing.T) {
+func TestBuildOCRWorkerServiceStatusNotConfiguredWhenIdle(t *testing.T) {
 	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
 	status := buildWorkerServiceStatus(workerruntime.Metrics{}, "ocr_worker", "ocr-worker", "ocr", now, 30*time.Second)
 
-	if status.Status != "error" || status.Availability != "unavailable" || status.AutomationAvailable || status.LastSeenAt != "" {
+	if status.Status != "not_configured" || status.Availability != "not_configured" || status.AutomationAvailable || status.LastSeenAt != "" {
+		t.Fatalf("unexpected idle worker status: %#v", status)
+	}
+}
+
+func TestBuildOCRWorkerServiceStatusUnavailableWithQueuedWork(t *testing.T) {
+	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	status := buildWorkerServiceStatus(workerruntime.Metrics{
+		Queues: []workerruntime.QueueMetrics{{QueueName: "ocr", Queued: 2}},
+	}, "ocr_worker", "ocr-worker", "ocr", now, 30*time.Second)
+
+	if status.Status != "error" || status.Availability != "unavailable" || status.AutomationAvailable || status.QueuedTasks != 2 {
 		t.Fatalf("unexpected unavailable worker status: %#v", status)
 	}
 }

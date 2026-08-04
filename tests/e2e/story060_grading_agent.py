@@ -23,9 +23,9 @@ status, ready = call_json(f"{AGENT}/ready", timeout=10)
 assert status == 200 and ready["status"] == "ready", ready
 
 status, login = call_json(
-    f"{API}/api/v1/auth/login",
+    f"{API}/api/v1/auth/token",
     method="POST",
-    payload={"tenant_code": "platform", "username": "platform_admin", "password": PASSWORD},
+    payload={"tenant_code": "platform", "username": "platform_admin", "password": PASSWORD, "client_type": "desktop", "device_name": "STORY-060 E2E"},
 )
 assert status == 200 and login.get("access_token"), login
 headers = {"Authorization": f"Bearer {login['access_token']}"}

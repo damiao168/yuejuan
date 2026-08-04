@@ -35,6 +35,7 @@ import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import { examStatusLabels, examStatusTone, examSubjectOptions } from "../constants/examStatus";
 import type { ProductExperience } from "../router/experience";
+import { hashQueryParam } from "../router/query";
 
 const statusFlow = ["draft", "configured", "ready", "collecting", "grading", "reviewing", "finalized", "published", "archived"];
 
@@ -131,7 +132,10 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
   const [form] = Form.useForm<ExamFormValues>();
   const watchedSchoolId = Form.useWatch("school_id", form);
   const watchedGradingMode = Form.useWatch("grading_mode", form);
-  const [filters, setFilters] = useState<Filters>({ search: "", schoolId: "", subject: "", gradeId: "", status: "", examType: "" });
+  const [filters, setFilters] = useState<Filters>(() => {
+    const status = hashQueryParam("status");
+    return { search: "", schoolId: "", subject: "", gradeId: "", status: status === "active" || statusFlow.includes(status) ? status : "", examType: "" };
+  });
   const [exams, setExams] = useState<Exam[]>([]);
   const [schools, setSchools] = useState<School[]>([]);
   const [grades, setGrades] = useState<Grade[]>([]);
@@ -152,7 +156,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
     setLoading(true);
     setError(null);
     try {
-      const examResult = await listExams({ status: filters.status || undefined, school_id: teacherMode ? undefined : filters.schoolId || undefined });
+      const examResult = await listExams({ status: filters.status && filters.status !== "active" ? filters.status : undefined, school_id: teacherMode ? undefined : filters.schoolId || undefined });
       setExams(examResult.exams);
       if (teacherMode) {
         setSchools([]);
@@ -253,6 +257,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
         !keyword ||
         exam.name.toLowerCase().includes(keyword) ||
         labelFrom(subjectOptions, exam.subject).toLowerCase().includes(keyword);
+      const statusMatched = filters.status !== "active" || !["published", "archived"].includes(exam.status);
       const subjectMatched = !filters.subject || exam.subject === filters.subject;
       const typeMatched = !filters.examType || exam.exam_type === filters.examType;
       const gradeMatched =
@@ -261,7 +266,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
           const schoolClass = classById.get(classId);
           return schoolClass?.grade_id === filters.gradeId;
         });
-      return keywordMatched && subjectMatched && typeMatched && gradeMatched;
+      return keywordMatched && statusMatched && subjectMatched && typeMatched && gradeMatched;
     });
   }, [classById, exams, filters.examType, filters.gradeId, filters.search, filters.subject]);
 
@@ -296,7 +301,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
     setSubmitting(true);
     try {
       if (drawer?.mode === "edit" && drawer.exam) {
-        await updateExam(drawer.exam.id, payload);
+        await updateExam(drawer.exam.id, { ...payload, expected_revision: drawer.exam.revision });
         message.success("考试已更新");
       } else {
         await createExam(payload);
@@ -320,7 +325,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
       onOk: async () => {
         setActioningId(exam.id);
         try {
-          await updateExamStatus(exam.id, status);
+          await updateExamStatus(exam.id, status, exam.revision);
           message.success("状态已更新");
           await loadData();
         } catch (currentError) {
@@ -342,7 +347,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
       onOk: async () => {
         setActioningId(exam.id);
         try {
-          await archiveExam(exam.id);
+          await archiveExam(exam.id, exam.revision);
           message.success("考试已归档");
           await loadData();
         } catch (currentError) {
@@ -459,7 +464,10 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
             placeholder="状态"
             allowClear
             value={filters.status || undefined}
-            options={statusFlow.map((status) => ({ label: examStatusLabels[status] ?? "未知状态", value: status }))}
+            options={[
+              { label: "进行中", value: "active" },
+              ...statusFlow.map((status) => ({ label: examStatusLabels[status] ?? "未知状态", value: status }))
+            ]}
             onChange={(value) => setFilters((current) => ({ ...current, status: value ?? "" }))}
           />
         </div>

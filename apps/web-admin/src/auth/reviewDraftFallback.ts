@@ -1,151 +1,73 @@
-const storagePrefix = "edugrade.review-draft.v1";
+const storagePrefix = "edugrade.review-draft.";
 const maxDraftsPerUser = 12;
-const maxDraftBytes = 96 * 1024;
-const maxDraftAgeMs = 24 * 60 * 60 * 1000;
-
-interface DraftIndexEntry {
-  taskId: string;
-  updatedAt: number;
-}
+const maxDraftAgeMs = 30 * 60 * 1000;
 
 export interface ReviewDraftFallback<T> {
   updatedAt: number;
   snapshot: T;
 }
 
-function storageAvailable() {
-  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
-}
+const memoryDrafts = new Map<string, Map<string, ReviewDraftFallback<unknown>>>();
 
-function userScope(userId: string) {
-  return encodeURIComponent(userId.trim());
-}
-
-function entryKey(userId: string, taskId: string) {
-  return `${storagePrefix}:draft:${userScope(userId)}:${encodeURIComponent(taskId.trim())}`;
-}
-
-function indexKey(userId: string) {
-  return `${storagePrefix}:index:${userScope(userId)}`;
-}
-
-function readIndex(userId: string): DraftIndexEntry[] {
-  if (!storageAvailable() || !userId.trim()) return [];
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(indexKey(userId)) ?? "[]") as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((entry) => {
-      if (!entry || typeof entry !== "object") return [];
-      const typed = entry as { taskId?: unknown; updatedAt?: unknown };
-      if (typeof typed.taskId !== "string" || typeof typed.updatedAt !== "number" || !Number.isFinite(typed.updatedAt)) return [];
-      return [{ taskId: typed.taskId, updatedAt: typed.updatedAt }];
-    });
-  } catch {
-    return [];
-  }
-}
-
-function writeIndex(userId: string, entries: DraftIndexEntry[]) {
-  if (!storageAvailable()) return;
-  try {
-    window.localStorage.setItem(indexKey(userId), JSON.stringify(entries));
-  } catch {
-    // Browser storage may be unavailable or quota-limited. The server draft remains authoritative.
-  }
-}
-
-function prune(userId: string, now = Date.now()) {
-  const entries = readIndex(userId);
-  const expired = entries.filter((entry) => now-entry.updatedAt > maxDraftAgeMs);
-  for (const entry of expired) {
-    try {
-      window.localStorage.removeItem(entryKey(userId, entry.taskId));
-    } catch {
-      // Expiry cleanup is best effort.
-    }
-  }
-  const live = entries
-    .filter((entry) => now-entry.updatedAt <= maxDraftAgeMs)
-    .sort((left, right) => right.updatedAt-left.updatedAt);
-  const retained = live.slice(0, maxDraftsPerUser);
-  for (const entry of live.slice(maxDraftsPerUser)) {
-    try {
-      window.localStorage.removeItem(entryKey(userId, entry.taskId));
-    } catch {
-      // A failed cleanup must not stop the active draft from being saved.
-    }
-  }
-  writeIndex(userId, retained);
-  return retained;
-}
-
+// Browser drafts are deliberately memory-only. The service-side draft and its
+// revision are authoritative; sensitive comments, answers and rubrics must not
+// survive a reload or be readable from browser storage on a shared computer.
 export function saveReviewDraftFallback<T>(userId: string, taskId: string, snapshot: T): boolean {
-  if (!storageAvailable() || !userId.trim() || !taskId.trim()) return false;
+  if (!userId.trim() || !taskId.trim()) return false;
   const now = Date.now();
-  const value: ReviewDraftFallback<T> = { updatedAt: now, snapshot };
-  let raw: string;
-  try {
-    raw = JSON.stringify(value);
-  } catch {
-    return false;
+  const drafts = memoryDrafts.get(userId) ?? new Map<string, ReviewDraftFallback<unknown>>();
+  for (const [id, value] of drafts) {
+    if (now - value.updatedAt > maxDraftAgeMs) drafts.delete(id);
   }
-  if (raw.length > maxDraftBytes) return false;
-  try {
-    const retained = prune(userId, now).filter((entry) => entry.taskId !== taskId);
-    const next = [{ taskId, updatedAt: now }, ...retained].slice(0, maxDraftsPerUser);
-    for (const entry of retained.slice(Math.max(0, maxDraftsPerUser-1))) {
-      if (!next.some((candidate) => candidate.taskId === entry.taskId)) {
-        window.localStorage.removeItem(entryKey(userId, entry.taskId));
-      }
-    }
-    window.localStorage.setItem(entryKey(userId, taskId), raw);
-    writeIndex(userId, next);
-    return true;
-  } catch {
-    return false;
+  drafts.delete(taskId);
+  drafts.set(taskId, { updatedAt: now, snapshot });
+  while (drafts.size > maxDraftsPerUser) {
+    const oldest = drafts.keys().next().value;
+    if (typeof oldest !== "string") break;
+    drafts.delete(oldest);
   }
+  memoryDrafts.set(userId, drafts);
+  purgeLegacyPersistentDrafts();
+  return true;
 }
 
 export function loadReviewDraftFallback<T>(userId: string, taskId: string): ReviewDraftFallback<T> | null {
-  if (!storageAvailable() || !userId.trim() || !taskId.trim()) return null;
-  prune(userId);
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(entryKey(userId, taskId)) ?? "null") as unknown;
-    if (!parsed || typeof parsed !== "object") return null;
-    const typed = parsed as { updatedAt?: unknown; snapshot?: unknown };
-    if (typeof typed.updatedAt !== "number" || !Number.isFinite(typed.updatedAt) || Date.now()-typed.updatedAt > maxDraftAgeMs || !("snapshot" in typed)) {
-      removeReviewDraftFallback(userId, taskId);
-      return null;
-    }
-    return { updatedAt: typed.updatedAt, snapshot: typed.snapshot as T };
-  } catch {
+  purgeLegacyPersistentDrafts();
+  const value = memoryDrafts.get(userId)?.get(taskId);
+  if (!value || Date.now() - value.updatedAt > maxDraftAgeMs) {
     removeReviewDraftFallback(userId, taskId);
     return null;
   }
+  return value as ReviewDraftFallback<T>;
 }
 
 export function removeReviewDraftFallback(userId: string, taskId: string) {
-  if (!storageAvailable() || !userId.trim() || !taskId.trim()) return;
-  try {
-    window.localStorage.removeItem(entryKey(userId, taskId));
-    writeIndex(userId, readIndex(userId).filter((entry) => entry.taskId !== taskId));
-  } catch {
-    // Cleanup is best effort; the expiry guard will retry on the next use.
-  }
+  const drafts = memoryDrafts.get(userId);
+  drafts?.delete(taskId);
+  if (drafts?.size === 0) memoryDrafts.delete(userId);
+  purgeLegacyPersistentDrafts();
 }
 
 export function clearReviewDraftFallbacks(userId: string) {
-  if (!storageAvailable() || !userId.trim()) return;
-  for (const entry of readIndex(userId)) {
-    try {
-      window.localStorage.removeItem(entryKey(userId, entry.taskId));
-    } catch {
-      // Continue cleaning the remaining task-scoped drafts.
-    }
-  }
+  memoryDrafts.delete(userId);
+  purgeLegacyPersistentDrafts();
+}
+
+export function clearAllReviewDraftFallbacks() {
+  memoryDrafts.clear();
+  purgeLegacyPersistentDrafts();
+}
+
+function purgeLegacyPersistentDrafts() {
+  if (typeof window === "undefined" || !window.localStorage) return;
   try {
-    window.localStorage.removeItem(indexKey(userId));
+    const keys: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith(storagePrefix)) keys.push(key);
+    }
+    for (const key of keys) window.localStorage.removeItem(key);
   } catch {
-    // No further action is possible when browser storage is unavailable.
+    // Storage may be disabled. Memory-only operation remains safe.
   }
 }

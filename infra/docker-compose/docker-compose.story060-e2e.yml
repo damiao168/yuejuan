@@ -200,7 +200,7 @@ services:
       grading-agent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/health | grep -q healthy"]
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/health/ready | grep -q '\"status\":\"ready\"'"]
       interval: 2s
       timeout: 2s
       retries: 90

@@ -74,13 +74,20 @@ func TestModelApprovalRequiresCompletedAuthorizedEvidenceAndExactVersions(t *tes
 		t.Fatalf("duplicate active approval must conflict: %v", err)
 	}
 	revoked, err := store.RevokeModelApproval(
-		context.Background(), tenantID, "actor", approval.ID, "quality policy withdrawn",
+		context.Background(), tenantID, "actor", approval.ID, ModelApprovalRevokeInput{
+			Reason: "quality policy withdrawn", ExpectedRevision: approval.Revision,
+		},
 	)
 	if err != nil || revoked.RevokedAt == nil {
 		t.Fatalf("revoke approval: %#v %v", revoked, err)
 	}
 	if _, err := RequireActiveModelApproval([]ModelApproval{revoked}, scope, time.Now().UTC()); !errors.Is(err, ErrModelNotApproved) {
 		t.Fatalf("revoked approval must fail closed: %v", err)
+	}
+	if _, err := store.RevokeModelApproval(context.Background(), tenantID, "actor", approval.ID, ModelApprovalRevokeInput{
+		Reason: "stale retry", ExpectedRevision: approval.Revision,
+	}); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("stale approval revocation must conflict by revision: %v", err)
 	}
 }
 

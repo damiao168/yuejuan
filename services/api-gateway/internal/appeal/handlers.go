@@ -9,6 +9,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/pagination"
 )
 
 type Handler struct {
@@ -51,10 +52,23 @@ func (h *Handler) CreateAppeal(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListAppeals(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 50, 200)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 200")
+		return
+	}
+	cursor, err := pagination.Decode(r.URL.Query().Get("cursor"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
 	filter := ListFilter{
-		ExamID:    r.URL.Query().Get("exam_id"),
-		StudentID: r.URL.Query().Get("student_id"),
-		Status:    r.URL.Query().Get("status"),
+		ExamID:          r.URL.Query().Get("exam_id"),
+		StudentID:       r.URL.Query().Get("student_id"),
+		Status:          r.URL.Query().Get("status"),
+		Limit:           limit + 1,
+		CursorCreatedAt: cursor.CreatedAt,
+		CursorID:        cursor.ID,
 	}
 	if hasPermission(user, "appeal:work") && !hasPermission(user, "appeal:manage") {
 		filter.StudentID = ""
@@ -77,7 +91,16 @@ func (h *Handler) ListAppeals(w http.ResponseWriter, r *http.Request) {
 			items[index] = teacherAppealView(items[index])
 		}
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"appeals": items})
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		nextCursor = pagination.Encode(last.CreatedAt, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"appeals": items, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) GetAppeal(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +254,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, "invalid_appeal_transition", "appeal transition is invalid")
 	case errors.Is(err, ErrUnpublishedGrade):
 		httpx.Error(w, r, http.StatusConflict, "grade_not_published", "grade is not published")
+	case errors.Is(err, ErrRevisionConflict):
+		httpx.Error(w, r, http.StatusConflict, "resource_version_conflict", "appeal was updated by another user; refresh and retry")
 	default:
 		httpx.Error(w, r, http.StatusInternalServerError, "appeal_operation_failed", "appeal operation failed")
 	}
