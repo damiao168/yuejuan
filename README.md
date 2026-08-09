@@ -217,7 +217,8 @@ go test ./internal/subjective -run TestHTTPAdapterRealLocalAgent -count=1 -v
 
 ## 当前状态与未完成项
 
-- Lab 到主项目的真实请求链路已经接入并通过本地模型验证。
+- 当前能力、证据强度和未验证边界统一维护在 [`docs/verification-status.md`](docs/verification-status.md)；历史 Story 的 `Approved` 不等于当前版本 Production Ready。
+- Lab 到主项目的请求链路已经接入；Mock Playwright 只用于 UI 回归，STORY-060 外部模型协议模拟器只证明跨服务协议，不证明真实模型效果。
 - AI 阅卷仍是影子建议，不具备自动发布最终成绩的权限。
 - `confidence=0` 是有意的治理信号，生产 Pilot 前还需要真实受治理数据、教师一致性、校准、公平性和模型选择证据。
 - 作文和论述题当前只允许 `shadow_only`。
@@ -227,6 +228,7 @@ go test ./internal/subjective -run TestHTTPAdapterRealLocalAgent -count=1 -v
 
 ## 重要文档
 
+- [当前能力与验证状态（事实源）](docs/verification-status.md)
 - [主项目与 Lab 集成说明](docs/integration/lab-main-project.md)
 - [主观题阅卷 API](docs/api/subjective-grading.md)
 - [Grading Agent 生产契约](docs/stories/STORY-057-grading-agent-production-contract.md)

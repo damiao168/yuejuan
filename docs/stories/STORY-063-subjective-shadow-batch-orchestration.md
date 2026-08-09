@@ -61,4 +61,13 @@ Worker Runtime 已将 `subjective_grading_run` 纳入领域源激活保护；在
 - 管理端刷新批次时，后端会依据持久化运行记录重新汇总排队、处理中、成功和失败数量；批次全部成功才进入 `completed`，存在最终失败则进入 `failed`。
 - 新增 `npm run check:story063`，固定检查路由、迁移、租约保护、Worker、Compose 配置、管理端权限和真实联调入口。
 - 新增 `infra/docker-compose/scripts/story063-subjective-smoke-test.ps1`，用于在已有真实答题片段上创建批次、入队并轮询至终态。脚本不会输出密码或访问令牌。
-- 当前机器 Docker Desktop 未启动，因此本轮只完成了代码回归、Compose 静态解析和联调脚本语法检查；PostgreSQL 迁移与真实 Worker 闭环仍必须在 Docker 启动后执行，不能据此宣称生产验收通过。
+- 当时机器 Docker Desktop 未启动，因此该次记录只证明代码回归、Compose 静态解析和联调脚本语法；它不是当前环境状态，也不能据此宣称生产验收通过。
+
+## 2026-08-09 Worker 自动门禁与批次可靠性整改
+
+- Python CI 已纳入主观题 Worker 的 editable 安装、Ruff、pytest 和依赖检查。
+- Compose CI 已纳入 `subjective-grading` profile、镜像构建和配置烟测；Worker 增加运行健康标记、断线重登和本地 HTTP 协议烟测。
+- 管理页已收敛幂等键生命周期、非重叠轮询和可见错误；后端批量加载片段上下文，并以结构化结果报告部分成功。
+- 本机 Worker `5` 项测试、Ruff、STORY-063 门禁和 Compose 配置检查通过；随后隔离 Compose 已验证主观题批次、专用 Worker 服务账号、租约/执行、模型协议适配、AI 建议、审计和数据库收敛，Worker 健康检查通过。该结果仍不证明真实模型效果、设备或学校现场能力。
+
+当前状态、验证强度和未覆盖边界统一见 [`docs/verification-status.md`](../verification-status.md)。

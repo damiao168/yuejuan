@@ -2,6 +2,8 @@
 
 本目录用于按 Story 分步交付 EduGrade Enterprise。
 
+> Story 文档是规划和实施记录，不是当前生产能力清单。当前能力、验证强度和未覆盖边界以 [`docs/verification-status.md`](../verification-status.md) 为事实源；`Approved` 只表示对应 Story 当时通过其约定验收，不等于当前版本 Production Ready。
+
 ## 执行规则
 
 1. 每次只执行一个 Story。

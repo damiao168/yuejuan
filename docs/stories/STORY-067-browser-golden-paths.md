@@ -1,35 +1,41 @@
-# STORY-067：浏览器黄金路径回归基础
+# STORY-067：浏览器回归与真实系统黄金路径
 
-状态：Implemented（轻量 PR 门禁）
+状态：Implemented（Mock UI 回归 + 隔离真实系统路径；现场验收未完成）
 
 ## 目标
 
-使用少量稳定的浏览器用例保护真实用户入口，不重复覆盖 Go/Python 已验证的领域细节。
+使用少量稳定的浏览器用例保护用户入口，并明确区分 Mock UI 回归与不拦截 API 的真实系统验证，不重复覆盖 Go/Python 已验证的领域细节。
 
 ## 当前范围
 
-- Playwright 使用 Chromium，失败时保留截图、视频、Trace 和请求失败清单。
-- PR/`main` CI 启动 Vite，使用 API Mock 验证：
+- Mock Playwright 使用 Chromium，失败时保留截图、视频、Trace 和请求失败清单。
+- 快速 UI 回归启动 Vite，使用 API Mock 验证：
   1. 学校管理员登录；
   2. 可信工作台显示服务端聚合口径；
   3. 从正式导航进入答题卡导入并看到上传入口；
   4. 平台管理员和阅卷老师的直达 URL 权限边界。
 
+- 隔离真实系统 E2E 启动 Web、反向代理、API、PostgreSQL、真实 `grading-agent` 和明确标识的外部模型协议模拟器；Playwright 不注册 API 路由拦截，验证学校管理员登录、工作台和已持久化考试列表。
+- 同一隔离任务验证评分代理、模型协议、数据库、审计以及 AI 不写 `final_grade` 的边界。
+
 ## 分层策略
 
-- PR：三条浏览器用例，只验证页面、导航、权限和接口契约，目标是快速、确定。
+- Mock 浏览器回归：只验证页面、导航、权限和前端接口契约，目标是快速、确定；不能作为生产跨服务证明。
+- 真实系统 E2E：验证实际网络边界、认证、持久化和页面读取；模型协议模拟器只提供确定性响应，不作为模型效果证明。
 - Go/Python：继续承担领域规则、持久化、Worker 和模型输出校验。
-- Compose 全链路：在 Docker 可用且有隔离测试数据时按夜间或手工方式执行，不在每次 PR 重复启动整套服务。
+- 物理/模型验收：真实扫描仪、真实模型、真实受治理数据和整场考试仍由预生产或学校现场执行。
 
 ## 非范围
 
 - 不用浏览器重复遍历每个按钮、状态或后端异常分支。
 - 不使用生产账号、真实学生数据或真实第三方模型密钥。
-- 当前用例不声明完成真实扫描、打印机或整场考试生产验收。
+- 当前用例不声明完成真实扫描、打印机、真实模型效果或整场考试生产验收。
 
 ## 验收证据
 
-- `npm run test:e2e` 三条用例通过。
-- CI 安装固定 Playwright 版本对应的 Chromium 后执行同一命令。
+- `npm run test:e2e` 继续执行 Mock UI 回归，fixture 明确拦截 API。
+- CI 的 `real-system-e2e` job 使用 `playwright.real.config.ts`，不会加载 API Mock fixture。
+- 2026-08-09 本机隔离栈评分/持久化/审计检查通过，真实系统 Playwright `1/1` 通过。
 - 测试产物统一保存在 `output/playwright`，不进入业务源码目录。
 
+当前完整证据口径见 [`docs/verification-status.md`](../verification-status.md)。
