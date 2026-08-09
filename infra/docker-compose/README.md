@@ -41,7 +41,7 @@ API 的 PostgreSQL 容量保护默认值为：最大连接 `10`、最大空闲�
 ```text
 EDUGRADE_GRADING_MODEL_BASE_URL=http://host.docker.internal:8087/v1
 EDUGRADE_AI_MODEL_VERSION=Qwen/Qwen3-4B-GGUF:Q4_K_M
-EDUGRADE_AI_PROMPT_VERSION=subjective-local-structured-v2
+EDUGRADE_AI_PROMPT_VERSION=subjective-governed-structured-v3
 ```
 
 ## 校验与初始化

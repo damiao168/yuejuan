@@ -54,10 +54,11 @@ class ProviderAdapterRegistry:
 
 def default_provider_adapter_registry():
     # Keep imports local so the protocol does not depend on any vendor runtime.
-    from .model import LocalLlamaCppAdapter
+    from .model import DashScopeNativeAdapter, LocalLlamaCppAdapter
 
     registry = ProviderAdapterRegistry()
     registry.register("local_llama_cpp", LocalLlamaCppAdapter)
+    registry.register("dashscope_native", DashScopeNativeAdapter)
     return registry
 
 

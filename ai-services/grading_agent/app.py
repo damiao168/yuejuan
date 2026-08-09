@@ -9,6 +9,7 @@ from .capabilities import CapabilityMatrix
 from .contract import normalize_model_output, validate_request
 from .errors import AgentError
 from .guardrails import detect_prompt_injection
+from .model import PromptRegistry
 from .provider_adapter import build_provider_adapter
 
 
@@ -19,6 +20,7 @@ class GradingAgentApplication:
         if self.matrix.profile_id != settings.capability_profile:
             raise ValueError("configured capability profile does not match the governed capability matrix")
         self.model = model or build_provider_adapter(settings, adapter_registry)
+        self.prompt_registry = PromptRegistry(settings.prompt_root, settings.prompt_version)
         self.clock = clock or time.time
         self.logger = logger or self._default_logger
         self._cache = OrderedDict()
@@ -215,6 +217,9 @@ class GradingAgentApplication:
 
     def readiness(self):
         return self.model.ready()
+
+    def prompt_snapshot(self):
+        return self.prompt_registry.snapshot()
 
     def _log(self, request_id, status, **fields):
         self.logger({"event": "grading_agent_request", "request_id": request_id, "status": status, **fields})

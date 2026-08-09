@@ -7004,3 +7004,142 @@ select {
   justify-content: center;
   padding: 16px 0 4px;
 }
+
+.prompt-version-workspace {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  min-height: 580px;
+  border-top: 1px solid #e7e9ee;
+}
+
+.prompt-version-index {
+  padding: 22px 16px;
+  border-right: 1px solid #e7e9ee;
+  background: #fafbfc;
+}
+
+.prompt-version-meta {
+  display: grid;
+  gap: 5px;
+  padding: 0 8px 18px;
+}
+
+.prompt-version-meta span,
+.prompt-version-eyebrow,
+.prompt-version-inspector footer span {
+  color: #667085;
+  font-size: 12px;
+}
+
+.prompt-version-meta strong {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+}
+
+.prompt-version-meta code,
+.prompt-version-inspector footer code {
+  color: #667085;
+  font-size: 12px;
+}
+
+.prompt-version-index nav {
+  display: grid;
+  gap: 5px;
+}
+
+.prompt-version-index button {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #344054;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.prompt-version-index button small {
+  grid-column: 2;
+  color: #98a2b3;
+  font-size: 11px;
+}
+
+.prompt-version-index button:hover,
+.prompt-version-index button.active {
+  border-color: #d0d5dd;
+  background: #fff;
+}
+
+.prompt-version-index button.active {
+  color: #175cd3;
+  box-shadow: inset 3px 0 #1677ff;
+}
+
+.prompt-version-inspector {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+  padding: 24px 28px;
+}
+
+.prompt-version-inspector header,
+.prompt-version-actions,
+.prompt-version-inspector footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.prompt-version-inspector h2 {
+  margin: 4px 0 2px;
+  font-size: 21px;
+}
+
+.prompt-version-inspector header p {
+  margin: 0;
+  color: #667085;
+  font-size: 13px;
+}
+
+.prompt-content-viewer {
+  min-height: 330px;
+  max-height: 520px;
+  margin: 0;
+  padding: 18px 20px;
+  overflow: auto;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  color: #1d2939;
+  font: 13px/1.75 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  background: #fcfcfd;
+}
+
+.prompt-version-inspector footer code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 900px) {
+  .prompt-version-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-version-index {
+    border-right: 0;
+    border-bottom: 1px solid #e7e9ee;
+  }
+
+  .prompt-version-index nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .prompt-version-inspector {
+    padding: 20px 16px;
+  }
+}

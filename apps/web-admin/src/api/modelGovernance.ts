@@ -110,6 +110,21 @@ export interface SecretProbe {
   meets_minimum_strength: boolean;
 }
 
+export interface RuntimePromptComponent {
+  key: "base" | "short_answer" | "calculation" | "essay" | "discussion" | "structured";
+  filename: string;
+  sha256: string;
+  content: string;
+}
+
+export interface RuntimePrompt {
+  prompt_version: string;
+  bundle_sha256: string;
+  components: RuntimePromptComponent[];
+  activation_mode: "deployment_manifest";
+  mutable_at_runtime: false;
+}
+
 export type EvaluationEvidenceClass = "protocol_fixture" | "authorized_frozen_set";
 export type EvaluationRunStatus = "draft" | "completed" | "invalidated";
 
@@ -271,6 +286,10 @@ export function probeModelSecret(credentialRef: string) {
     method: "POST",
     body: JSON.stringify({ credential_ref: credentialRef })
   });
+}
+
+export function getCurrentRuntimePrompt() {
+  return apiClient.request<{ prompt: RuntimePrompt }>("/api/v1/model-prompts/current");
 }
 
 export function listModelEvaluationRuns(filter: { limit?: number; cursor?: string } = {}) {

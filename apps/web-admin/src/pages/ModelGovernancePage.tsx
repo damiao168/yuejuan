@@ -56,8 +56,9 @@ import { ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { ModelEvaluationWorkspace } from "../components/model-governance/ModelEvaluationWorkspace";
 import { ModelApprovalWorkspace } from "../components/model-governance/ModelApprovalWorkspace";
+import { PromptVersionWorkspace } from "../components/model-governance/PromptVersionWorkspace";
 
-type GovernanceView = "providers" | "deployments" | "evaluations" | "approvals" | "policy";
+type GovernanceView = "providers" | "deployments" | "prompts" | "evaluations" | "approvals" | "policy";
 
 const policyModeLabels: Record<PolicyMode, string> = {
   local_only: "仅本地",
@@ -506,6 +507,7 @@ export function ModelGovernancePage({
                 options={[
                   { value: "providers", label: `供应商 ${providers.length}` },
                   { value: "deployments", label: `部署 ${deployments.length}` },
+                  { value: "prompts", label: "系统提示词" },
                   { value: "evaluations", label: `评测 ${evaluationRuns.length}` },
                   { value: "approvals", label: `批准 ${modelApprovals.filter((item) => !item.revoked_at && new Date(item.expires_at).getTime() > Date.now()).length}` },
                   { value: "policy", label: "租户策略" }
@@ -540,6 +542,7 @@ export function ModelGovernancePage({
                     <ResponsiveTable rowKey="id" columns={deploymentColumns} dataSource={deployments} pagination={false} />
                   </div>
                 ) : null}
+                {activeView === "prompts" ? <PromptVersionWorkspace /> : null}
                 {activeView === "evaluations" ? (
                   <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                     <ModelEvaluationWorkspace
@@ -618,7 +621,7 @@ export function ModelGovernancePage({
           form={providerForm}
           layout="vertical"
           className="model-governance-form"
-          initialValues={{ provider_kind: "external", status: "unverified", data_policy: { retention_mode: "no_store" } }}
+          initialValues={{ provider_kind: "external", adapter_type: "dashscope_native", status: "unverified", data_policy: { retention_mode: "no_store" } }}
         >
           <Form.Item name="display_name" label="显示名称" rules={[{ required: true }]}><Input placeholder="例如：厂商 A" /></Form.Item>
           <Form.Item name="provider_key" label="供应商标识" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]}><Input placeholder="vendor-a" /></Form.Item>
@@ -626,15 +629,15 @@ export function ModelGovernancePage({
             <Select disabled options={[{ value: "external", label: "外部原生供应商" }]} />
           </Form.Item>
           <Form.Item name="adapter_type" label="Adapter 类型" extra="必须是厂商原生 Adapter，OpenAI-compatible 会被服务端拒绝。" rules={[{ required: true }]}>
-            <Input placeholder="vendor_a_native" />
+            <Select options={[{ value: "dashscope_native", label: "阿里云百炼（DashScope 原生）" }]} />
           </Form.Item>
           <Form.Item
             name="credential_ref"
             label="Secret 引用"
-            extra="例如 env://VENDOR_A_KEY、vault://edugrade/vendor-a"
+            extra="例如 env://DASHSCOPE_API_KEY、vault://edugrade/dashscope"
             rules={[{ required: true, message: "请输入外部供应商的 Secret 引用" }]}
           >
-            <Input prefix={<KeyRound size={15} />} placeholder="vault://edugrade/vendor-a" />
+            <Input prefix={<KeyRound size={15} />} placeholder="vault://edugrade/dashscope" />
           </Form.Item>
           <Form.Item name="region" label="处理区域" rules={[{ required: true }]}><Input placeholder="cn-east" /></Form.Item>
           <Form.Item name={["data_policy", "retention_mode"]} label="数据保留策略" rules={[{ required: true }]}>

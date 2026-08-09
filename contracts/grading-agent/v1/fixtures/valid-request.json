@@ -11,7 +11,7 @@
   "answer_text": "因为他对家乡有责任感，也希望帮助村里的孩子继续读书。",
   "ocr_confidence": 0.96,
   "rubric_version": "rubric-v3",
-  "prompt_version": "subjective-local-structured-v2",
+  "prompt_version": "subjective-governed-structured-v3",
   "rubric": {
     "rubric_id": "rubric-001",
     "rubric_version": "rubric-v3",

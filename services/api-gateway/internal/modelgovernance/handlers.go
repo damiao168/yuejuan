@@ -19,10 +19,29 @@ type Handler struct {
 	audit    auth.Store
 	secrets  SecretReferenceResolver
 	baseline LocalBaseline
+	prompts  RuntimePromptSource
 }
 
 func NewHandler(store Store, audit auth.Store, secrets SecretReferenceResolver, baseline LocalBaseline) *Handler {
 	return &Handler{store: store, audit: audit, secrets: secrets, baseline: baseline}
+}
+
+func (h *Handler) WithRuntimePromptSource(source RuntimePromptSource) *Handler {
+	h.prompts = source
+	return h
+}
+
+func (h *Handler) GetCurrentPrompt(w http.ResponseWriter, r *http.Request) {
+	if h.prompts == nil {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "runtime_prompt_unavailable", "评分服务当前不可用")
+		return
+	}
+	prompt, err := h.prompts.Current(r.Context())
+	if err != nil {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "runtime_prompt_unavailable", "无法读取评分服务当前提示词")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"prompt": prompt})
 }
 
 func (h *Handler) ListProviders(w http.ResponseWriter, r *http.Request) {

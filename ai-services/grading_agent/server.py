@@ -21,6 +21,13 @@ class GradingAgentHandler(BaseHTTPRequestHandler):
     server_version = "EduGradeGradingAgent/1"
 
     def do_GET(self):
+        if self.path == "/grading/prompts/current":
+            try:
+                self._authorize()
+                self._json(200, {"prompt": self.server.application.prompt_snapshot()})
+            except AgentError as exc:
+                self._error(exc)
+            return
         if self.path == "/health":
             self._json(
                 200,

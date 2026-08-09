@@ -165,14 +165,17 @@ class DashScopeNativeTransportTests(unittest.TestCase):
                     seam.execute_text(fixture("request-text.json"))
                 self.assertEqual(caught.exception.code, "model_output_invalid")
 
-    def test_no_default_or_custom_network_transport_can_be_installed(self):
+    def test_fixture_seam_still_rejects_network_transport(self):
         class NetworkCapableTransport:
             def send(self, **_kwargs):
                 raise AssertionError("must remain unreachable")
 
         with self.assertRaisesRegex(TypeError, "FixtureDashScopeTransport"):
             DashScopeNativeTransportSeam(NetworkCapableTransport())
-        self.assertEqual(default_provider_adapter_registry().enabled_types(), ("local_llama_cpp",))
+        self.assertEqual(
+            default_provider_adapter_registry().enabled_types(),
+            ("dashscope_native", "local_llama_cpp"),
+        )
 
 
 if __name__ == "__main__":

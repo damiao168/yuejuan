@@ -40,7 +40,7 @@ class Settings:
     adapter_type: str = "local_llama_cpp"
     deployment_region: str = "on_premise"
     capability_profile: str = "local-pilot-v1"
-    prompt_version: str = "subjective-local-structured-v2"
+    prompt_version: str = "subjective-governed-structured-v3"
     model_timeout_seconds: int = 230
     model_ready_timeout_seconds: int = 3
     model_queue_timeout_seconds: int = 5
@@ -74,7 +74,7 @@ class Settings:
             capability_profile=os.getenv(
                 "EDUGRADE_GRADING_CAPABILITY_PROFILE", "local-pilot-v1"
             ).strip(),
-            prompt_version=os.getenv("EDUGRADE_GRADING_PROMPT_VERSION", "subjective-local-structured-v2").strip(),
+            prompt_version=os.getenv("EDUGRADE_GRADING_PROMPT_VERSION", "subjective-governed-structured-v3").strip(),
             model_timeout_seconds=_integer("EDUGRADE_GRADING_MODEL_TIMEOUT_SECONDS", 230, 1, 600),
             model_ready_timeout_seconds=_integer("EDUGRADE_GRADING_MODEL_READY_TIMEOUT_SECONDS", 3, 1, 30),
             model_queue_timeout_seconds=_integer("EDUGRADE_GRADING_MODEL_QUEUE_TIMEOUT_SECONDS", 5, 0, 120),
@@ -125,8 +125,19 @@ class Settings:
             for value in identity.values()
         ):
             raise ValueError("provider and deployment identity fields must be non-empty bounded identifiers")
-        if settings.adapter_type != "local_llama_cpp":
-            raise ValueError("the current service build only enables the local_llama_cpp adapter")
+        if settings.adapter_type not in {"local_llama_cpp", "dashscope_native"}:
+            raise ValueError("EDUGRADE_GRADING_ADAPTER_TYPE is not enabled in this build")
+        if settings.adapter_type == "dashscope_native":
+            if model_url.scheme != "https" or model_url.hostname != "dashscope.aliyuncs.com":
+                raise ValueError(
+                    "dashscope_native requires https://dashscope.aliyuncs.com/api/v1"
+                )
+            if model_url.path.rstrip("/") != "/api/v1":
+                raise ValueError(
+                    "dashscope_native requires https://dashscope.aliyuncs.com/api/v1"
+                )
+            if len(settings.model_api_key.strip()) < 16:
+                raise ValueError("dashscope_native requires EDUGRADE_GRADING_MODEL_API_KEY")
         if not settings.model_name or not settings.model_version or not settings.prompt_version:
             raise ValueError("model and prompt versions must be configured")
         return settings

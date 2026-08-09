@@ -43,7 +43,7 @@ POST /api/v1/answer-segments/{id}/subjective-ai-grade
     "grader_type": "llm_subjective",
     "answer_version": "answer-uuid",
     "model_version": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
-    "prompt_version": "subjective-local-structured-v2",
+    "prompt_version": "subjective-governed-structured-v3",
     "rubric_version": "rubric-v3",
     "delivery_mode": "teacher_suggestion",
     "capability_profile": "local-pilot-v1",

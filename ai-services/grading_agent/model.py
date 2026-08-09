@@ -7,6 +7,13 @@ from typing import ClassVar
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
+from .dashscope_native_contract import (
+    DASHSCOPE_TEXT_GENERATION_PATH,
+    build_dashscope_grading_payload,
+    map_dashscope_error,
+    parse_dashscope_text_response,
+)
+from .dashscope_native_transport import MAX_DASHSCOPE_RESPONSE_BYTES, MAX_DASHSCOPE_TEXT_REQUEST_BYTES
 from .errors import AgentError
 
 MODEL_RISK_FLAGS = [
@@ -161,6 +168,34 @@ class PromptRegistry:
             )
         return messages
 
+    def snapshot(self):
+        components = []
+        for key, filename in self.FILES.items():
+            content = self.prompts[key]
+            components.append(
+                {
+                    "key": key,
+                    "filename": filename,
+                    "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    "content": content,
+                }
+            )
+        bundle_hash = hashlib.sha256(
+            json.dumps(
+                {"version": self.version, "components": components},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return {
+            "prompt_version": self.version,
+            "bundle_sha256": bundle_hash,
+            "components": components,
+            "activation_mode": "deployment_manifest",
+            "mutable_at_runtime": False,
+        }
+
 
 def _default_transport(url, payload, headers, timeout):
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -289,3 +324,122 @@ class LocalLlamaCppAdapter:
                 return 200 <= response.status < 300
         except (urlerror.URLError, OSError, TimeoutError):
             return False
+
+
+class DashScopeNativeAdapter:
+    """DashScope's native generation protocol; no OpenAI-compatible endpoint."""
+
+    def __init__(self, settings, transport=None):
+        self.settings = settings
+        self.prompt_registry = PromptRegistry(settings.prompt_root, settings.prompt_version)
+        self.transport = transport or self._http_transport
+
+    @contextmanager
+    def session(self, _request_id):
+        yield
+
+    def request(self, grading_request, repair_reason=None):
+        request_id = grading_request["request_id"]
+        try:
+            payload = build_dashscope_grading_payload(
+                grading_request=grading_request,
+                prompt_registry=self.prompt_registry,
+                model=self.settings.model_name,
+                max_completion_tokens=self.settings.model_max_output_tokens,
+                temperature=self.settings.model_temperature,
+                seed=self.settings.model_seed,
+                repair_reason=repair_reason,
+            )
+            response = self.transport(
+                f"{self.settings.model_base_url}{DASHSCOPE_TEXT_GENERATION_PATH}",
+                payload,
+                {
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.settings.model_api_key}",
+                    "Content-Type": "application/json",
+                    "X-DashScope-SSE": "disable",
+                },
+                self.settings.model_timeout_seconds,
+            )
+            return parse_dashscope_text_response(response).output
+        except AgentError:
+            raise
+        except TimeoutError as exc:
+            raise AgentError(
+                "model_timeout",
+                "external model request timed out",
+                status=504,
+                retryable=True,
+                request_id=request_id,
+            ) from exc
+        except urlerror.HTTPError as exc:
+            error_payload = self._read_error_payload(exc)
+            mapped = map_dashscope_error(exc.code, error_payload)
+            mapped.request_id = mapped.request_id or request_id
+            raise mapped from exc
+        except (urlerror.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+            raise AgentError(
+                "model_unavailable",
+                "external model request failed",
+                status=503,
+                retryable=True,
+                request_id=request_id,
+            ) from exc
+
+    @staticmethod
+    def _http_transport(url, payload, headers, timeout):
+        body = json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if not body or len(body) > MAX_DASHSCOPE_TEXT_REQUEST_BYTES:
+            raise AgentError(
+                "invalid_request",
+                "native provider request exceeds its approved size",
+                status=413,
+            )
+        req = urlrequest.Request(url, data=body, headers=headers, method="POST")
+        with urlrequest.urlopen(req, timeout=timeout) as response:
+            content_type = response.headers.get_content_type()
+            raw = response.read(MAX_DASHSCOPE_RESPONSE_BYTES + 1)
+            if content_type != "application/json" or not raw or len(raw) > MAX_DASHSCOPE_RESPONSE_BYTES:
+                raise AgentError(
+                    "model_output_invalid",
+                    "provider response envelope is invalid",
+                    status=502,
+                )
+            return DashScopeNativeAdapter._strict_json(raw)
+
+    @staticmethod
+    def _strict_json(raw):
+        def reject_duplicates(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate JSON field")
+                value[key] = item
+            return value
+
+        return json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicates,
+            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError("non-finite JSON number")),
+        )
+
+    @staticmethod
+    def _read_error_payload(error):
+        try:
+            raw = error.read(MAX_DASHSCOPE_RESPONSE_BYTES + 1)
+            if not raw or len(raw) > MAX_DASHSCOPE_RESPONSE_BYTES:
+                return {}
+            payload = json.loads(raw.decode("utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+
+    def ready(self):
+        # Avoid a billable model call from readiness. Startup validation already
+        # pins the native HTTPS host and requires a non-empty API key.
+        return bool(self.settings.model_api_key)

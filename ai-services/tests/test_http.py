@@ -60,6 +60,21 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(suggestion["status"], "suggestion")
         self.assertEqual(replay, "false")
 
+    def test_current_prompt_requires_auth_and_reports_loaded_content(self):
+        request = urlrequest.Request(
+            f"{self.base_url}/grading/prompts/current",
+            headers={"Authorization": f"Bearer {self.settings.service_token}"},
+        )
+        with urlrequest.urlopen(request, timeout=2) as response:
+            prompt = json.loads(response.read())["prompt"]
+        self.assertEqual(prompt["prompt_version"], self.settings.prompt_version)
+        self.assertFalse(prompt["mutable_at_runtime"])
+        self.assertEqual(len(prompt["bundle_sha256"]), 64)
+        self.assertEqual(
+            {item["key"] for item in prompt["components"]},
+            {"base", "short_answer", "calculation", "essay", "discussion", "structured"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

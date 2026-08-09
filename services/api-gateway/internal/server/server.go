@@ -356,7 +356,11 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 		authStore,
 		modelgovernance.NewEnvironmentSecretResolver(""),
 		localModelBaseline(cfg),
-	)
+	).WithRuntimePromptSource(modelgovernance.NewHTTPRuntimePromptSource(
+		cfg.AIService.URL,
+		cfg.AIService.Token,
+		cfg.AIService.Timeout,
+	))
 	dashboardHandler := dashboard.NewHandler(dashboard.Dependencies{
 		Exams:       examStore,
 		Submissions: submissionStore,
@@ -549,6 +553,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/model-deployments", requireModelProviderManage(modelGovernanceHandler.CreateDeployment))
 	mux.Handle("PATCH /api/v1/model-deployments/{id}/state", requireModelProviderManage(modelGovernanceHandler.UpdateDeploymentState))
 	mux.Handle("GET /api/v1/model-policy", requireModelRead(modelGovernanceHandler.GetPolicy))
+	mux.Handle("GET /api/v1/model-prompts/current", requireModelRead(modelGovernanceHandler.GetCurrentPrompt))
 	mux.Handle("PUT /api/v1/model-policy", requireModelPolicyManage(modelGovernanceHandler.UpdatePolicy))
 	mux.Handle("POST /api/v1/model-secrets/probe", requireModelProviderManage(modelGovernanceHandler.ProbeSecret))
 	mux.Handle("GET /api/v1/model-sandbox-approvals", requireModelRead(modelGovernanceHandler.ListSandboxApprovals))

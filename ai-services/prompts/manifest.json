@@ -1,11 +1,11 @@
 {
-  "prompt_version": "subjective-local-structured-v2",
+  "prompt_version": "subjective-governed-structured-v3",
   "files": {
-    "base_grading.md": "b4d35e60d967bee8d1cad7f5f825402d6f372086a65d670d8842417fe875cb3e",
-    "calculation.md": "f19460188946b4416a94400e2a41065104885356ec92c3ff99e93828ae52999b",
-    "discussion.md": "78de3649474fd63d98f4d1ddd8a11127c3a60ed81c7d5c0223c6ca48980f2aa4",
-    "essay.md": "d4e049ab6de4602501ed29738981d6fdcc75ca3c289c4172b3edb3ddd4f7e339",
-    "local_structured_grading.md": "0c96009b32cf908af0d164791106d158cd90ee1740058482c18ae1830b19383f",
-    "short_answer.md": "c618d9cca663b9df0fab6e4532a2715fdd0598a2fb587b9bafc1091008be21f2"
+    "base_grading.md": "21e5c1203dd4890348dc25a68915e9d51dcb61e959258c94ba4643bc1278bc1f",
+    "calculation.md": "65bdad05d0cd83c198dc70176bf6d9d494f029236dfc75114dcc46e460c69508",
+    "discussion.md": "f7e50b3fdfcbd95d2c02272d9ea4ca5e1eb848eee03a0d61d18150e3d86fd650",
+    "essay.md": "a61ef024378f819608b0d3016d6ea64a32075801c8cceddee42d51a369db3db2",
+    "local_structured_grading.md": "516abc0ab390bcdeeed40f827f8fd0a5b78fbed1097790aa8fbddc0213e47795",
+    "short_answer.md": "2ec03a028d5b32327ee27b5677110ec9f83baac1718e7a914e1df58655d46a5c"
   }
 }
