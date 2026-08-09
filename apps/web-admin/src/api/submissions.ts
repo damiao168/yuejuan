@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { buildQueryString } from "./query";
 
 export interface QualityIssue {
   code: string;
@@ -118,11 +119,7 @@ export async function createSubmission(examId: string, payload: CreateSubmission
 }
 
 export async function listSubmissions(examId: string, filter: { limit?: number; cursor?: string } = {}) {
-  const params = new URLSearchParams();
-  if (filter.limit) params.set("limit", String(filter.limit));
-  if (filter.cursor) params.set("cursor", filter.cursor);
-  const query = params.toString();
-  return apiClient.request<{ submissions: Submission[]; next_cursor: string; has_more: boolean }>(`/api/v1/exams/${encodeURIComponent(examId)}/submissions${query ? `?${query}` : ""}`);
+  return apiClient.request<{ submissions: Submission[]; next_cursor: string; has_more: boolean }>(`/api/v1/exams/${encodeURIComponent(examId)}/submissions${buildQueryString(filter)}`);
 }
 
 export async function getSubmission(submissionId: string) {
@@ -168,12 +165,8 @@ export async function createOcrTask(submissionId: string) {
 }
 
 export async function listOcrTasks(submissionId: string, filter: { limit?: number; cursor?: string } = {}) {
-  const params = new URLSearchParams();
-  if (filter.limit) params.set("limit", String(filter.limit));
-  if (filter.cursor) params.set("cursor", filter.cursor);
-  const query = params.toString();
   return apiClient.request<{ tasks: OcrTask[]; next_cursor: string; has_more: boolean }>(
-    `/api/v1/submissions/${encodeURIComponent(submissionId)}/ocr-tasks${query ? `?${query}` : ""}`
+    `/api/v1/submissions/${encodeURIComponent(submissionId)}/ocr-tasks${buildQueryString(filter)}`
   );
 }
 

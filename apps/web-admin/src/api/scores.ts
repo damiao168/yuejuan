@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { buildQueryString } from "./query";
 
 export interface FinalGrade {
   id: string;
@@ -128,12 +129,6 @@ export async function listExamGrades(
   examId: string,
   filter: { status?: string; q?: string; limit?: number; cursor?: string } = {}
 ) {
-  const params = new URLSearchParams();
-  if (filter.status) params.set("status", filter.status);
-  if (filter.q) params.set("q", filter.q);
-  if (filter.limit) params.set("limit", String(filter.limit));
-  if (filter.cursor) params.set("cursor", filter.cursor);
-  const query = params.toString();
   return apiClient.request<{
     grades: SubmissionGrade[];
     total: number;
@@ -141,7 +136,7 @@ export async function listExamGrades(
     all_locked: boolean;
     next_cursor: string;
     has_more: boolean;
-  }>(`/api/v1/exams/${encodeURIComponent(examId)}/grades${query ? `?${query}` : ""}`);
+  }>(`/api/v1/exams/${encodeURIComponent(examId)}/grades${buildQueryString(filter)}`);
 }
 
 export async function checkExamGradeQuality(examId: string, stage: "confirmation" | "publish" = "publish") {

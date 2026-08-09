@@ -1,0 +1,136 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "EduGrade Core Pilot API",
+    "version": "0.1.0",
+    "description": "Machine-checked core pilot contract. This is an explicitly partial contract and must not be presented as full API coverage."
+  },
+  "x-edugrade-coverage": "core-pilot-partial",
+  "servers": [{ "url": "/" }],
+  "security": [{ "sessionCookie": [] }, { "bearerAuth": [] }],
+  "paths": {
+    "/api/v1/exams": {
+      "get": {
+        "operationId": "listExams",
+        "parameters": [
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "name": "status", "in": "query", "schema": { "type": "string" } },
+          { "name": "school_id", "in": "query", "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Stable cursor page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExamPage" } } } },
+          "400": { "$ref": "#/components/responses/InvalidPagination" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/exams/{examId}/submissions": {
+      "get": {
+        "operationId": "listExamSubmissions",
+        "parameters": [
+          { "$ref": "#/components/parameters/ExamId" },
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Cursor" }
+        ],
+        "responses": {
+          "200": { "description": "Stable cursor page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SubmissionPage" } } } },
+          "400": { "$ref": "#/components/responses/InvalidPagination" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/review-tasks": {
+      "get": {
+        "operationId": "listReviewTasks",
+        "parameters": [
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "name": "status", "in": "query", "schema": { "type": "string" } },
+          { "name": "assigned_to", "in": "query", "schema": { "type": "string" } },
+          { "name": "exam_id", "in": "query", "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Priority-ordered cursor page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReviewTaskPage" } } } },
+          "400": { "$ref": "#/components/responses/InvalidPagination" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/appeals": {
+      "get": {
+        "operationId": "listAppeals",
+        "parameters": [
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "name": "exam_id", "in": "query", "schema": { "type": "string", "format": "uuid" } },
+          { "name": "student_id", "in": "query", "schema": { "type": "string", "format": "uuid" } },
+          { "name": "status", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Scope-filtered cursor page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AppealPage" } } } },
+          "400": { "$ref": "#/components/responses/InvalidPagination" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/subjective-grading-batches/{batchId}/enqueue": {
+      "post": {
+        "operationId": "enqueueSubjectiveGradingBatch",
+        "parameters": [{ "$ref": "#/components/parameters/BatchId" }],
+        "responses": {
+          "200": { "description": "Idempotent full or partial enqueue result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BatchEnqueueResponse" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Batch not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": { "type": "apiKey", "in": "cookie", "name": "edugrade_session" },
+      "bearerAuth": { "type": "http", "scheme": "bearer" }
+    },
+    "parameters": {
+      "Limit": { "name": "limit", "in": "query", "description": "Requested page size; endpoint maximum is enforced server-side.", "schema": { "type": "integer", "minimum": 1, "maximum": 200 } },
+      "Cursor": { "name": "cursor", "in": "query", "description": "Opaque cursor returned by the preceding response.", "schema": { "type": "string", "maxLength": 1024 } },
+      "ExamId": { "name": "examId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "BatchId": { "name": "batchId", "in": "path", "required": true, "schema": { "type": "string" } }
+    },
+    "responses": {
+      "InvalidPagination": { "description": "Invalid limit or cursor", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+      "Unauthorized": { "description": "Authentication required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+      "Forbidden": { "description": "Permission or resource scope denied", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["error"],
+        "properties": { "error": { "type": "object", "required": ["code", "message"], "properties": { "code": { "type": "string" }, "message": { "type": "string" } } } }
+      },
+      "CursorPageMeta": {
+        "type": "object",
+        "required": ["next_cursor", "has_more"],
+        "properties": { "next_cursor": { "type": "string" }, "has_more": { "type": "boolean" } }
+      },
+      "ExamPage": { "allOf": [{ "$ref": "#/components/schemas/CursorPageMeta" }, { "type": "object", "required": ["exams"], "properties": { "exams": { "type": "array", "items": { "type": "object", "required": ["id", "name", "status"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "status": { "type": "string" } }, "additionalProperties": true } } } }] },
+      "SubmissionPage": { "allOf": [{ "$ref": "#/components/schemas/CursorPageMeta" }, { "type": "object", "required": ["submissions"], "properties": { "submissions": { "type": "array", "items": { "type": "object", "required": ["id", "exam_id", "status"], "properties": { "id": { "type": "string" }, "exam_id": { "type": "string" }, "status": { "type": "string" } }, "additionalProperties": true } } } }] },
+      "ReviewTaskPage": { "allOf": [{ "$ref": "#/components/schemas/CursorPageMeta" }, { "type": "object", "required": ["tasks"], "properties": { "tasks": { "type": "array", "items": { "type": "object", "additionalProperties": true } } } }] },
+      "AppealPage": { "allOf": [{ "$ref": "#/components/schemas/CursorPageMeta" }, { "type": "object", "required": ["appeals"], "properties": { "appeals": { "type": "array", "items": { "type": "object", "additionalProperties": true } } } }] },
+      "BatchEnqueueResponse": {
+        "type": "object",
+        "required": ["batch", "tasks", "enqueue_result"],
+        "properties": {
+          "batch": { "type": "object", "additionalProperties": true },
+          "tasks": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "enqueue_result": { "type": "object", "required": ["requested_count", "accepted_count", "task_count", "failed_count", "partial_success", "failures"], "properties": { "requested_count": { "type": "integer", "minimum": 0 }, "accepted_count": { "type": "integer", "minimum": 0 }, "task_count": { "type": "integer", "minimum": 0 }, "failed_count": { "type": "integer", "minimum": 0 }, "partial_success": { "type": "boolean" }, "failures": { "type": "array", "items": { "type": "object", "required": ["segment_id", "code"], "properties": { "segment_id": { "type": "string" }, "code": { "type": "string" } } } } } }
+        }
+      }
+    }
+  }
+}

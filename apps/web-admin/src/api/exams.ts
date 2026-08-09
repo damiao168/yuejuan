@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { buildQueryString } from "./query";
 
 export type ExamStatus = "draft" | "configured" | "ready" | "collecting" | "grading" | "reviewing" | "finalized" | "published" | "archived";
 
@@ -41,26 +42,8 @@ export interface ExamPayload {
   class_ids: string[];
 }
 
-function queryString(filter: ExamListFilter) {
-  const params = new URLSearchParams();
-  if (filter.status) {
-    params.set("status", filter.status);
-  }
-  if (filter.school_id) {
-    params.set("school_id", filter.school_id);
-  }
-  if (filter.limit) {
-    params.set("limit", String(filter.limit));
-  }
-  if (filter.cursor) {
-    params.set("cursor", filter.cursor);
-  }
-  const query = params.toString();
-  return query ? `?${query}` : "";
-}
-
 export async function listExams(filter: ExamListFilter = {}) {
-  return apiClient.request<{ exams: Exam[]; next_cursor?: string; has_more?: boolean }>(`/api/v1/exams${queryString(filter)}`);
+  return apiClient.request<{ exams: Exam[]; next_cursor?: string; has_more?: boolean }>(`/api/v1/exams${buildQueryString(filter)}`);
 }
 
 export async function getExam(id: string) {

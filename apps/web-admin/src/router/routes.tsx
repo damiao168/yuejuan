@@ -50,7 +50,7 @@ export interface AppRoute {
   workspaces?: Workspace[];
 }
 
-export const routes: AppRoute[] = [
+const productionRouteDefinitions: AppRoute[] = [
   {
     key: "dashboard", path: "/dashboard", title: "工作总览", group: "工作台", icon: <Home size={18} />, permissions: [], mock: false, productionReady: true,
     workspaces: ["platform", "school_admin", "exam_owner", "teacher", "grader", "arbitrator"],
@@ -103,19 +103,6 @@ export const routes: AppRoute[] = [
     experiences: { admin: { title: "阅卷任务", group: "阅卷中心" }, teacher: { title: "我的阅卷", group: "阅卷工作" } }
   },
   {
-    key: "review",
-    path: "/review",
-    title: "人工复核",
-    group: "阅卷",
-    icon: <BookOpenCheck size={18} />,
-    permissions: ["review:manage"],
-    navigation: false,
-    mock: true,
-    productionReady: false,
-    replacementPath: "/grading",
-    experiences: { teacher: { title: "我的复核", group: "阅卷工作" } }
-  },
-  {
     key: "arbitration", path: "/arbitration", title: "质量与仲裁", group: "阅卷与质量", icon: <Gavel size={18} />, permissions: [], anyPermissions: ["arbitration:manage", "arbitration:work"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
     workspaces: ["school_admin", "exam_owner", "arbitrator"],
@@ -133,10 +120,6 @@ export const routes: AppRoute[] = [
     experiences: { admin: { title: "成绩分析", group: "成绩管理" }, teacher: { title: "班级成绩", group: "教学工作" } }
   },
   {
-    key: "quality", path: "/quality", title: "质量控制", group: "阅卷与质量", icon: <Activity size={18} />, permissions: ["quality:read"], navigation: false, mock: true, productionReady: false,
-    experiences: { admin: { title: "质量控制", group: "阅卷与质量" } }
-  },
-  {
     key: "appeals", path: "/appeals", title: "申诉管理", group: "结果管理", icon: <Inbox size={18} />, permissions: ["appeal:read"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
     workspaces: ["school_admin", "exam_owner", "teacher"],
@@ -146,14 +129,6 @@ export const routes: AppRoute[] = [
     key: "organization", path: "/organization/setup", title: "组织与用户", group: "系统管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
     workspaces: ["school_admin"], experiences: { admin: { title: "组织与账号", group: "学校管理" } }
-  },
-  {
-    key: "permissions", path: "/permissions", title: "用户权限", group: "系统管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: true, productionReady: false,
-    experiences: { admin: { title: "用户权限", group: "系统管理" } }
-  },
-  {
-    key: "settings", path: "/settings", title: "系统设置", group: "系统管理", icon: <Settings size={18} />, permissions: ["system:manage"], mock: true, productionReady: false,
-    experiences: { admin: { title: "系统设置", group: "系统管理" } }
   },
   {
     key: "modelGovernance", path: "/system/models", title: "模型治理", group: "系统管理", icon: <BrainCircuit size={18} />, permissions: ["model:read"], mock: false, productionReady: true,
@@ -175,6 +150,40 @@ export const routes: AppRoute[] = [
     workspaces: ["platform", "school_admin"], experiences: { admin: { title: "操作审计", group: "系统管理" } }
   }
 ];
+
+const mockRouteDefinitions: AppRoute[] = [
+  {
+    key: "review",
+    path: "/review",
+    title: "人工复核",
+    group: "阅卷",
+    icon: <BookOpenCheck size={18} />,
+    permissions: ["review:manage"],
+    navigation: false,
+    mock: true,
+    productionReady: false,
+    replacementPath: "/grading",
+    experiences: { teacher: { title: "我的复核", group: "阅卷工作" } }
+  },
+  {
+    key: "quality", path: "/quality", title: "质量控制", group: "阅卷与质量", icon: <Activity size={18} />, permissions: ["quality:read"], navigation: false, mock: true, productionReady: false,
+    experiences: { admin: { title: "质量控制", group: "阅卷与质量" } }
+  },
+  {
+    key: "permissions", path: "/permissions", title: "用户权限", group: "系统管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: true, productionReady: false,
+    experiences: { admin: { title: "用户权限", group: "系统管理" } }
+  },
+  {
+    key: "settings", path: "/settings", title: "系统设置", group: "系统管理", icon: <Settings size={18} />, permissions: ["system:manage"], mock: true, productionReady: false,
+    experiences: { admin: { title: "系统设置", group: "系统管理" } }
+  }
+];
+
+export function createRouteRegistry(includeMockRoutes: boolean): AppRoute[] {
+  return includeMockRoutes
+    ? [...productionRouteDefinitions, ...mockRouteDefinitions]
+    : [...productionRouteDefinitions];
+}
 
 export const examWorkspaceRoute: AppRoute = {
   key: "examWorkspace",
@@ -223,21 +232,42 @@ export const notFoundRoute: AppRoute = {
   experiences: { admin: { title: "未找到", group: "系统" }, teacher: { title: "未找到", group: "系统" } }
 };
 
-export function mockRoutesEnabled(): boolean {
-  return import.meta.env.DEV || import.meta.env.MODE === "demo" || import.meta.env.VITE_ENABLE_MOCK_ROUTES === "true";
+export interface RouteBuildEnvironment {
+  DEV: boolean;
+  MODE: string;
+  VITE_ENABLE_MOCK_ROUTES?: string;
 }
 
-export function isRouteVisible(route: AppRoute): boolean {
-  return route.productionReady || mockRoutesEnabled();
+export function shouldEnableMockRoutes(environment: RouteBuildEnvironment): boolean {
+  if (environment.MODE === "production") {
+    return false;
+  }
+  return environment.DEV
+    || environment.MODE === "demo"
+    || environment.VITE_ENABLE_MOCK_ROUTES === "true";
 }
+
+const includeMockRoutes = import.meta.env.MODE !== "production"
+  && (import.meta.env.DEV
+    || import.meta.env.MODE === "demo"
+    || import.meta.env.VITE_ENABLE_MOCK_ROUTES === "true");
+
+export function mockRoutesEnabled(): boolean {
+  return includeMockRoutes;
+}
+
+// This is the runtime registry, not a visibility filter over every route.
+// Production mode therefore cannot resolve or navigate to mock-only pages.
+export const routes = includeMockRoutes
+  ? createRouteRegistry(true)
+  : productionRouteDefinitions;
 
 export function routePresentation(route: AppRoute, experience: ProductExperience): RoutePresentation {
   return route.experiences[experience] ?? { title: route.title, group: route.group };
 }
 
 export function visibleRoutes(experience: ProductExperience): AppRoute[] {
-  return routes.filter((route) => isRouteVisible(route)
-    && Boolean(route.experiences[experience])
+  return routes.filter((route) => Boolean(route.experiences[experience])
     && (route.navigation !== false || route.navigationExperiences?.includes(experience)));
 }
 
@@ -251,12 +281,12 @@ export function hasRouteAccess(user: SessionUser | null, route: AppRoute, experi
     && (!route.workspaces || workspaces.some((workspace) => route.workspaces?.includes(workspace)));
 }
 
-export function routeFromPath(pathname: string): AppRoute {
+export function routeFromPath(pathname: string, registry: readonly AppRoute[] = routes): AppRoute {
   const canonicalPath = canonicalPathFromPath(pathname);
   if (examWorkspaceFromPath(canonicalPath)) {
     return examWorkspaceRoute;
   }
-  return routes.filter(isRouteVisible).find((route) => route.path === canonicalPath) ?? notFoundRoute;
+  return registry.find((route) => route.path === canonicalPath) ?? notFoundRoute;
 }
 
 export function examWorkspaceFromPath(pathname: string): { examId: string; section: string } | null {

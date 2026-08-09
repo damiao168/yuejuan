@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { buildQueryString } from "./query";
 
 export type AppealStatus = "submitted" | "under_review" | "need_more_info" | "accepted" | "rejected" | "score_adjusted" | "closed";
 
@@ -97,29 +98,8 @@ export interface AppealStatistics {
   average_handle_hours: number;
 }
 
-function queryString(filter: AppealListFilter) {
-  const params = new URLSearchParams();
-  if (filter.exam_id) {
-    params.set("exam_id", filter.exam_id);
-  }
-  if (filter.student_id) {
-    params.set("student_id", filter.student_id);
-  }
-  if (filter.status) {
-    params.set("status", filter.status);
-  }
-  if (filter.limit) {
-    params.set("limit", String(filter.limit));
-  }
-  if (filter.cursor) {
-    params.set("cursor", filter.cursor);
-  }
-  const query = params.toString();
-  return query ? `?${query}` : "";
-}
-
 export async function listAppeals(filter: AppealListFilter = {}) {
-  return apiClient.request<{ appeals: Appeal[]; next_cursor: string; has_more: boolean }>(`/api/v1/appeals${queryString(filter)}`);
+  return apiClient.request<{ appeals: Appeal[]; next_cursor: string; has_more: boolean }>(`/api/v1/appeals${buildQueryString(filter)}`);
 }
 
 export async function getAppeal(id: string) {

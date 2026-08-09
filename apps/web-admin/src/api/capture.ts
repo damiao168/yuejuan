@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { buildQueryString } from "./query";
 
 export interface CaptureBatch {
   id: string;
@@ -95,11 +96,7 @@ export async function createCaptureBatch(examId: string, payload: { name: string
 }
 
 export async function listCaptureBatches(examId: string, filter: { limit?: number; cursor?: string } = {}) {
-  const params = new URLSearchParams();
-  if (filter.limit) params.set("limit", String(filter.limit));
-  if (filter.cursor) params.set("cursor", filter.cursor);
-  const query = params.toString();
-  return apiClient.request<{ batches: CaptureBatch[]; next_cursor: string; has_more: boolean }>(`/api/v1/exams/${encodeURIComponent(examId)}/capture-batches${query ? `?${query}` : ""}`);
+  return apiClient.request<{ batches: CaptureBatch[]; next_cursor: string; has_more: boolean }>(`/api/v1/exams/${encodeURIComponent(examId)}/capture-batches${buildQueryString(filter)}`);
 }
 
 export async function getCaptureBatch(batchId: string) {

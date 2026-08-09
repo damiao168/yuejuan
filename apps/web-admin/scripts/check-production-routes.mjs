@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const root = process.cwd();
@@ -56,18 +56,42 @@ assert(
 );
 
 assert(
-  /productionReady/.test(routes) && /mockRoutesEnabled/.test(routes) && /visibleRoutes/.test(routes),
-  "Routes must declare production readiness and expose environment-aware visibleRoutes()."
+  /productionReady/.test(routes)
+    && /createRouteRegistry/.test(routes)
+    && /mockRoutesEnabled/.test(routes)
+    && /visibleRoutes/.test(routes),
+  "Routes must declare production readiness and build an environment-specific route registry."
 );
 
 for (const key of ["review", "quality", "permissions", "settings"]) {
   const routePattern = new RegExp(`key:\\s*["']${key}["'][\\s\\S]*?productionReady:\\s*false`);
-  assert(routePattern.test(routes), `Route ${key} must be hidden from production navigation.`);
+  assert(routePattern.test(routes), `Route ${key} must remain explicitly marked as non-production.`);
+}
+
+const productionEntry = join(root, "dist", "index.html");
+if (existsSync(productionEntry)) {
+  const entryHtml = readFileSync(productionEntry, "utf8");
+  const entryScript = entryHtml.match(/src=["']\/?(assets\/index-[^"']+\.js)["']/)?.[1];
+  assert(Boolean(entryScript), "Production build must expose a discoverable application entry chunk.");
+  if (entryScript) {
+    const bundle = readFileSync(join(root, "dist", entryScript), "utf8");
+    for (const path of ["/review", "/quality", "/permissions", "/settings"]) {
+      assert(!bundle.includes(`path:"${path}"`), `Production bundle must not register mock route ${path}.`);
+    }
+  }
 }
 
 assert(
-  /routeFromPath[\s\S]*routes\.filter\(isRouteVisible\)/.test(routes),
-  "routeFromPath must resolve only environment-visible routes, including hidden workspace routes."
+  /MODE === ["']production["'][\s\S]*?return false;/.test(routes)
+    && /const includeMockRoutes = import\.meta\.env\.MODE !== ["']production["']/.test(routes)
+    && /export const routes = includeMockRoutes[\s\S]*?: productionRouteDefinitions;/.test(routes),
+  "Production mode must construct a registry that cannot be overridden to include mock routes."
+);
+
+assert(
+  /routeFromPath[\s\S]*registry\.find\(\(route\) => route\.path === canonicalPath\)/.test(routes)
+    && !/routes\.filter\(isRouteVisible\)/.test(routes),
+  "routeFromPath must resolve the active registry rather than filter a registry containing mock routes."
 );
 
 assert(
