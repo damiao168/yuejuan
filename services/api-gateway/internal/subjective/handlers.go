@@ -1,6 +1,7 @@
 package subjective
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -183,12 +184,12 @@ func (h *Handler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	for _, segmentID := range segments {
-		ctx, loadErr := h.store.LoadContext(r.Context(), user.TenantID, segmentID)
-		if loadErr != nil {
-			writeStoreError(w, r, loadErr)
-			return
-		}
+	contexts, err := loadBatchContexts(r.Context(), h.store, user.TenantID, segments)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	for _, ctx := range contexts {
 		if !IsSupportedQuestionType(ctx.Question.QuestionType) {
 			writeStoreError(w, r, ErrUnsupportedQuestionType)
 			return
@@ -242,23 +243,25 @@ func (h *Handler) EnqueueBatch(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
+	contexts, err := loadBatchContexts(r.Context(), h.store, user.TenantID, batch.SegmentIDs)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
 	tasks := make([]workerruntime.Task, 0, len(batch.SegmentIDs))
+	failures := make([]BatchEnqueueFailure, 0)
 	queued, processing, succeeded, failed := 0, 0, 0, 0
-	for _, segmentID := range batch.SegmentIDs {
-		ctx, loadErr := h.store.LoadContext(r.Context(), user.TenantID, segmentID)
-		if loadErr != nil {
-			writeStoreError(w, r, loadErr)
-			return
-		}
+	for _, ctx := range contexts {
+		segmentID := ctx.SegmentID
 		requestID, idErr := stableRequestID(user.TenantID, ctx, policy, batch.IdempotencyKey+":"+segmentID)
 		if idErr != nil {
-			writeStoreError(w, r, idErr)
-			return
+			failures = append(failures, BatchEnqueueFailure{SegmentID: segmentID, Code: "request_identity_failed"})
+			continue
 		}
 		run, runErr := h.store.GetOrCreateRun(r.Context(), user.TenantID, user.ID, CreateRunInput{AnswerSegmentID: ctx.SegmentID, BatchID: batch.ID, AnswerVersion: ctx.AnswerVersion, QuestionID: ctx.Question.ID, RubricVersion: ctx.Rubric.Version, ModelVersion: policy.ModelVersion, PromptVersion: policy.PromptVersion, MinConfidence: policy.MinConfidence, RequestID: requestID})
 		if runErr != nil {
-			writeStoreError(w, r, runErr)
-			return
+			failures = append(failures, BatchEnqueueFailure{SegmentID: segmentID, Code: "run_creation_failed"})
+			continue
 		}
 		if run.Status == RunSucceeded {
 			succeeded++
@@ -270,8 +273,8 @@ func (h *Handler) EnqueueBatch(w http.ResponseWriter, r *http.Request) {
 		}
 		task, taskErr := h.runtime.CreateTask(r.Context(), user.TenantID, user.ID, workerruntime.CreateTaskInput{TaskType: "ai_grade", QueueName: "subjective-grading", SourceType: "subjective_grading_run", SourceID: run.ID, Priority: 100, Payload: map[string]any{"run_id": run.ID, "answer_segment_id": ctx.SegmentID, "answer_version": ctx.AnswerVersion, "question_id": ctx.Question.ID, "rubric_version": ctx.Rubric.Version, "model_version": policy.ModelVersion, "prompt_version": policy.PromptVersion}, PayloadSchemaVersion: "subjective-grade-v1", IdempotencyKey: requestID, DedupeKey: "subjective:" + batch.ID + ":" + ctx.SegmentID, MaxAttempts: 3, RetryBackoffSeconds: 30})
 		if taskErr != nil {
-			writeStoreError(w, r, taskErr)
-			return
+			failures = append(failures, BatchEnqueueFailure{SegmentID: segmentID, Code: "task_creation_failed"})
+			continue
 		}
 		tasks = append(tasks, task)
 		switch task.Status {
@@ -298,8 +301,37 @@ func (h *Handler) EnqueueBatch(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	h.auditAction(r, "subjective.batch_enqueued", "subjective_grading_batch", batch.ID, "enqueue subjective grading worker tasks")
-	httpx.JSON(w, http.StatusOK, map[string]any{"batch": updated, "tasks": tasks})
+	result := BatchEnqueueResult{
+		RequestedCount: len(batch.SegmentIDs),
+		AcceptedCount:  len(batch.SegmentIDs) - len(failures),
+		TaskCount:      len(tasks),
+		FailedCount:    len(failures),
+		PartialSuccess: len(failures) > 0 && len(failures) < len(batch.SegmentIDs),
+		Failures:       failures,
+	}
+	auditAction := "subjective.batch_enqueued"
+	auditReason := "enqueue subjective grading worker tasks"
+	if len(failures) > 0 {
+		auditAction = "subjective.batch_enqueue_partial"
+		auditReason = "subjective grading batch requires an idempotent enqueue retry"
+	}
+	h.auditAction(r, auditAction, "subjective_grading_batch", batch.ID, auditReason)
+	httpx.JSON(w, http.StatusOK, map[string]any{"batch": updated, "tasks": tasks, "enqueue_result": result})
+}
+
+func loadBatchContexts(ctx context.Context, store Store, tenantID string, segmentIDs []string) ([]Context, error) {
+	if bulkStore, ok := store.(BatchContextStore); ok {
+		return bulkStore.LoadContexts(ctx, tenantID, segmentIDs)
+	}
+	contexts := make([]Context, 0, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		value, err := store.LoadContext(ctx, tenantID, segmentID)
+		if err != nil {
+			return nil, err
+		}
+		contexts = append(contexts, value)
+	}
+	return contexts, nil
 }
 
 func (h *Handler) CompleteWorker(w http.ResponseWriter, r *http.Request) {

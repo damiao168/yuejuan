@@ -9,33 +9,90 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "主观题批次操作失败";
 }
 
+function newBatchIdempotencyKey() {
+  return `admin-${crypto.randomUUID()}`;
+}
+
 export function SubjectiveGradingBatchPage() {
-  const [idempotencyKey, setIdempotencyKey] = useState(() => `admin-${Date.now()}`);
+  const [idempotencyKey, setIdempotencyKey] = useState(newBatchIdempotencyKey);
   const [segmentText, setSegmentText] = useState("");
   const [batch, setBatch] = useState<SubjectiveGradingBatch>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const [enqueueNotice, setEnqueueNotice] = useState<string>();
+  const [pollError, setPollError] = useState<string>();
 
   const progress = useMemo(() => {
     if (!batch || batch.total_count === 0) return 0;
     return Math.round(((batch.succeeded_count + batch.failed_count) / batch.total_count) * 100);
   }, [batch]);
 
+  const batchId = batch?.id;
+  const batchStatus = batch?.status;
   useEffect(() => {
-    if (!batch || ["completed", "failed", "cancelled"].includes(batch.status)) return;
-    const timer = window.setInterval(() => {
-      void getSubjectiveGradingBatch(batch.id).then((result) => setBatch(result.batch)).catch(() => undefined);
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [batch]);
+    if (!batchId || !batchStatus || ["completed", "failed", "cancelled"].includes(batchStatus)) return;
+    let cancelled = false;
+    let inFlight = false;
+    let timer: number | undefined;
+    let controller: AbortController | undefined;
+
+    const schedule = () => {
+      if (!cancelled && document.visibilityState !== "hidden") {
+        timer = window.setTimeout(() => void poll(), 5000);
+      }
+    };
+    const poll = async () => {
+      if (cancelled || document.visibilityState === "hidden" || inFlight) {
+        schedule();
+        return;
+      }
+      inFlight = true;
+      const requestController = new AbortController();
+      controller = requestController;
+      try {
+        const result = await getSubjectiveGradingBatch(batchId, requestController.signal);
+        if (!cancelled) {
+          setBatch(result.batch);
+          setPollError(undefined);
+        }
+      } catch (refreshError) {
+        if (!cancelled && !(refreshError instanceof DOMException && refreshError.name === "AbortError")) {
+          setPollError(`自动刷新失败：${errorMessage(refreshError)}`);
+        }
+      } finally {
+        if (controller === requestController) controller = undefined;
+        inFlight = false;
+        schedule();
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        controller?.abort();
+        return;
+      }
+      if (timer !== undefined) window.clearTimeout(timer);
+      if (!inFlight) void poll();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    schedule();
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [batchId, batchStatus]);
 
   async function createBatch() {
     setLoading(true);
     setError(undefined);
+    setEnqueueNotice(undefined);
     try {
       const segmentIds = segmentText.split(/[\s,，]+/).map((value) => value.trim()).filter(Boolean);
       const result = await createSubjectiveGradingBatch(idempotencyKey.trim(), segmentIds);
       setBatch(result.batch);
+      setIdempotencyKey(newBatchIdempotencyKey());
     } catch (createError) {
       setError(errorMessage(createError));
     } finally {
@@ -47,9 +104,14 @@ export function SubjectiveGradingBatchPage() {
     if (!batch) return;
     setLoading(true);
     setError(undefined);
+    setEnqueueNotice(undefined);
     try {
       const result = await enqueueSubjectiveGradingBatch(batch.id);
       setBatch(result.batch);
+      if (result.enqueue_result.failed_count > 0) {
+        const prefix = result.enqueue_result.partial_success ? "批次已部分入队" : "批次暂未入队";
+        setEnqueueNotice(`${prefix}：${result.enqueue_result.accepted_count} 个已接受，${result.enqueue_result.failed_count} 个失败，可安全重试。`);
+      }
     } catch (enqueueError) {
       setError(errorMessage(enqueueError));
     } finally {
@@ -63,6 +125,8 @@ export function SubjectiveGradingBatchPage() {
     try {
       const result = await getSubjectiveGradingBatch(batch.id);
       setBatch(result.batch);
+      setError(undefined);
+      setPollError(undefined);
     } catch (refreshError) {
       setError(errorMessage(refreshError));
     } finally {
@@ -77,10 +141,12 @@ export function SubjectiveGradingBatchPage() {
         <Sparkles size={28} aria-hidden="true" />
       </section>
       {error ? <Alert type="error" showIcon message={error} /> : null}
+      {enqueueNotice ? <Alert type="warning" showIcon message={enqueueNotice} /> : null}
+      {pollError ? <Alert type="warning" showIcon message={pollError} action={<Button size="small" onClick={() => void refresh()}>立即重试</Button>} /> : null}
       <Card title="创建批次">
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Input value={idempotencyKey} onChange={(event) => setIdempotencyKey(event.target.value)} addonBefore="幂等键" />
-          <Input.TextArea value={segmentText} onChange={(event) => setSegmentText(event.target.value)} placeholder="输入答题片段 ID，使用换行或逗号分隔（最多 1000 个）" autoSize={{ minRows: 4, maxRows: 8 }} />
+          <Input.TextArea value={segmentText} onChange={(event) => { setSegmentText(event.target.value); setIdempotencyKey(newBatchIdempotencyKey()); }} placeholder="输入答题片段 ID，使用换行或逗号分隔（最多 1000 个）" autoSize={{ minRows: 4, maxRows: 8 }} />
           <Button type="primary" loading={loading} onClick={() => void createBatch()}>创建批次</Button>
         </Space>
       </Card>

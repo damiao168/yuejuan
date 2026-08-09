@@ -1,13 +1,42 @@
+CREATE TEMP TABLE story060_expected_migration_count (value INT NOT NULL);
+INSERT INTO story060_expected_migration_count (value) VALUES (:'expected_migration_count'::INT);
+
 DO $$
 DECLARE
+  expected_migration_count INT;
   migration_count INT;
+  batch_count INT;
+  worker_task_count INT;
   grade_count INT;
   audit_count INT;
   final_count INT;
 BEGIN
+  SELECT value INTO expected_migration_count FROM story060_expected_migration_count;
   SELECT count(*) INTO migration_count FROM schema_migration;
-  IF migration_count <> 44 THEN
-    RAISE EXCEPTION 'expected 44 migrations, found %', migration_count;
+  IF migration_count <> expected_migration_count THEN
+    RAISE EXCEPTION 'expected % migrations, found %', expected_migration_count, migration_count;
+  END IF;
+
+  SELECT count(*) INTO batch_count
+  FROM subjective_grading_batch
+  WHERE tenant_id = '00000000-0000-0000-0000-000000000001'
+    AND idempotency_key = 'story060-real-worker-batch'
+    AND status = 'completed'
+    AND total_count = 1
+    AND succeeded_count = 1
+    AND failed_count = 0;
+  IF batch_count <> 1 THEN
+    RAISE EXCEPTION 'expected one completed subjective batch, found %', batch_count;
+  END IF;
+
+  SELECT count(*) INTO worker_task_count
+  FROM agent_worker_task
+  WHERE tenant_id = '00000000-0000-0000-0000-000000000001'
+    AND queue_name = 'subjective-grading'
+    AND source_type = 'subjective_grading_run'
+    AND status = 'succeeded';
+  IF worker_task_count <> 1 THEN
+    RAISE EXCEPTION 'expected one succeeded subjective worker task, found %', worker_task_count;
   END IF;
 
   SELECT count(*) INTO grade_count
@@ -35,10 +64,10 @@ BEGIN
   SELECT count(*) INTO audit_count
   FROM audit_log
   WHERE tenant_id = '00000000-0000-0000-0000-000000000001'
-    AND action = 'subjective.ai_grade_created'
-    AND target_type = 'ai_grade';
+    AND action = 'subjective.worker_completed'
+    AND target_type = 'subjective_grading_run';
   IF audit_count <> 1 THEN
-    RAISE EXCEPTION 'expected one AI-grade audit event, found %', audit_count;
+    RAISE EXCEPTION 'expected one worker completion audit event, found %', audit_count;
   END IF;
 
   SELECT count(*) INTO final_count

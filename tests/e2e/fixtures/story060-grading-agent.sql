@@ -104,4 +104,39 @@ BEGIN
     '00000000-0000-0000-0000-000000000615', tenant_uuid, '00000000-0000-0000-0000-000000000614',
     '因为他对家乡有责任感，也希望帮助村里的孩子继续读书。', '{"synthetic":true}', 'ocr_text', 0.96, actor_uuid
   );
+
+  UPDATE user_role ur
+  SET data_scope = jsonb_build_object(
+        'scope', 'school',
+        'school_id', '00000000-0000-0000-0000-000000000601'::uuid,
+        'school_name', 'STORY-060 Synthetic School',
+        'synthetic', true
+      ),
+      updated_at = now()
+  FROM app_user u, role r
+  WHERE ur.tenant_id = tenant_uuid
+    AND ur.user_id = u.id
+    AND ur.role_id = r.id
+    AND u.tenant_id = tenant_uuid
+    AND u.username = 'story060_school_admin'
+    AND r.tenant_id = tenant_uuid
+    AND r.code = 'school_admin';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'STORY-060 school administrator scope was not seeded';
+  END IF;
+
+  UPDATE user_role ur
+  SET data_scope = jsonb_build_object('scope', 'tenant', 'synthetic', true),
+      updated_at = now()
+  FROM app_user u, role r
+  WHERE ur.tenant_id = tenant_uuid
+    AND ur.user_id = u.id
+    AND ur.role_id = r.id
+    AND u.tenant_id = tenant_uuid
+    AND u.username = 'story060_subjective_worker'
+    AND r.tenant_id = tenant_uuid
+    AND r.code = 'subjective_grading_worker';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'STORY-060 subjective worker scope was not seeded';
+  END IF;
 END $$;

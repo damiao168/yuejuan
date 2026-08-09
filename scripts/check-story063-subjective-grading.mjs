@@ -11,6 +11,7 @@ const handlers = read("services", "api-gateway", "internal", "subjective", "hand
 const types = read("services", "api-gateway", "internal", "subjective", "types.go");
 const runMigration = read("services", "api-gateway", "migrations", "000063_story063_subjective_grading_runs.sql");
 const batchMigration = read("services", "api-gateway", "migrations", "000064_story063_subjective_grading_batches.sql");
+const workerRoleMigration = read("services", "api-gateway", "migrations", "000075_subjective_grading_worker_role.sql");
 const workerAPI = read("services", "subjective-grading-worker", "subjective_grading_worker", "api.py");
 const workerRunner = read("services", "subjective-grading-worker", "subjective_grading_worker", "runner.py");
 const workerMain = read("services", "subjective-grading-worker", "subjective_grading_worker", "__main__.py");
@@ -47,6 +48,8 @@ assert.ok(runMigration.includes("uq_subjective_grading_run_request"), "run reque
 assert.ok(runMigration.includes("'queued', 'processing', 'succeeded', 'failed', 'conflict'"), "run lifecycle constraint is incomplete");
 assert.ok(batchMigration.includes("chk_subjective_grading_batch_counts"), "batch count constraint is missing");
 assert.ok(batchMigration.includes("idx_subjective_grading_run_batch"), "batch/run lookup index is missing");
+assert.ok(workerRoleMigration.includes("subjective_grading_worker"), "dedicated subjective worker role is missing");
+assert.ok(workerRoleMigration.includes("orchestrator:manage"), "subjective worker role must have orchestration permission");
 
 for (const endpoint of ["/tasks/claim", "/heartbeat", "/execute", "/result", "/failure"]) {
   assert.ok(workerAPI.includes(endpoint), `worker client endpoint missing ${endpoint}`);

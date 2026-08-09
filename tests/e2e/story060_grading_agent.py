@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from urllib import request as urlrequest
 
 
@@ -30,30 +31,68 @@ status, login = call_json(
 assert status == 200 and login.get("access_token"), login
 headers = {"Authorization": f"Bearer {login['access_token']}"}
 
-status, result = call_json(
-    f"{API}/api/v1/answer-segments/{SEGMENT_ID}/subjective-ai-grade",
+status, created = call_json(
+    f"{API}/api/v1/subjective-grading-batches",
     method="POST",
-    payload={"model_policy": {"model_version": "caller-cannot-select", "prompt_version": "caller-cannot-select", "min_confidence": 0.1}},
+    payload={"idempotency_key": "story060-real-worker-batch", "segment_ids": [SEGMENT_ID]},
     headers=headers,
-    timeout=360,
 )
-assert status == 201, result
-grade = result["grade"]
-assert grade["status"] == "succeeded", grade.get("failure_reason")
+assert status == 201, created
+batch_id = created["batch"]["id"]
+
+status, enqueued = call_json(
+    f"{API}/api/v1/subjective-grading-batches/{batch_id}/enqueue",
+    method="POST",
+    payload={},
+    headers=headers,
+)
+assert status == 200, enqueued
+assert enqueued["enqueue_result"] == {
+    "requested_count": 1,
+    "accepted_count": 1,
+    "task_count": 1,
+    "failed_count": 0,
+    "partial_success": False,
+    "failures": [],
+}, enqueued
+
+deadline = time.monotonic() + 180
+while time.monotonic() < deadline:
+    status, current = call_json(
+        f"{API}/api/v1/subjective-grading-batches/{batch_id}",
+        headers=headers,
+    )
+    assert status == 200, current
+    if current["batch"]["status"] == "completed":
+        break
+    assert current["batch"]["status"] != "failed", current
+    time.sleep(1)
+else:
+    raise AssertionError("subjective grading batch did not reach a terminal state")
+
+status, grades = call_json(
+    f"{API}/api/v1/answer-segments/{SEGMENT_ID}/ai-grades",
+    headers=headers,
+)
+assert status == 200 and len(grades["grades"]) == 1, grades
+grade = grades["grades"][0]
+assert grade["grader_type"] == "llm_subjective"
 assert grade["mock"] is False
 assert grade["needs_human_review"] is True
 assert grade["confidence"] == 0
-assert grade["model_version"] == "Qwen/Qwen3-4B-GGUF:Q4_K_M"
-assert grade["prompt_version"] == "subjective-local-structured-v2"
-assert grade["rubric_version"] == "rubric-v3"
-assert grade["delivery_mode"] == "teacher_suggestion"
-assert grade["capability_profile"] == "local-pilot-v1"
-assert grade["adapter_name"] == "local_llama_cpp"
-assert 1 <= grade["adapter_attempts"] <= 2
 assert grade["suggested_score"] == sum(point["score"] for point in grade["matched_points"])
 assert grade["evidence"]
-assert all(item["answer_text"] in "因为他对家乡有责任感，也希望帮助村里的孩子继续读书。" for item in grade["evidence"])
-assert "tenant_id" not in grade.get("raw_output", {})
-assert "student_id" not in grade.get("raw_output", {})
+assert all(
+    item["answer_text"] == "因为他对家乡有责任感，也希望帮助村里的孩子继续读书。"
+    for item in grade["evidence"]
+)
+raw_output = grade.get("raw_output", {})
+assert raw_output["schema_version"] == "grading-agent-v1"
+assert raw_output["delivery"] == "teacher_suggestion"
+assert raw_output["capability_profile"] == "local-pilot-v1"
+assert raw_output["telemetry"]["adapter"] == "local_llama_cpp"
+assert 1 <= raw_output["telemetry"]["attempts"] <= 2
+assert "tenant_id" not in raw_output
+assert "student_id" not in raw_output
 
-print("STORY-060 real local-model shadow grading API verification passed")
+print("STORY-060 real batch worker and model-adapter verification passed")

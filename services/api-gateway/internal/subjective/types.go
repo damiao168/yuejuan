@@ -237,6 +237,24 @@ type UpdateBatchInput struct {
 	FailedCount     int
 }
 
+type BatchEnqueueFailure struct {
+	SegmentID string `json:"segment_id"`
+	Code      string `json:"code"`
+}
+
+type BatchEnqueueResult struct {
+	RequestedCount int                   `json:"requested_count"`
+	AcceptedCount  int                   `json:"accepted_count"`
+	TaskCount      int                   `json:"task_count"`
+	FailedCount    int                   `json:"failed_count"`
+	PartialSuccess bool                  `json:"partial_success"`
+	Failures       []BatchEnqueueFailure `json:"failures"`
+}
+
+type BatchContextStore interface {
+	LoadContexts(ctx context.Context, tenantID string, segmentIDs []string) ([]Context, error)
+}
+
 type Store interface {
 	LoadContext(ctx context.Context, tenantID string, segmentID string) (Context, error)
 	GetRun(ctx context.Context, tenantID string, runID string) (GradingRun, error)

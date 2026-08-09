@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -342,6 +343,81 @@ func TestSubjectiveBatchCreationValidatesSegmentsAndIsIdempotent(t *testing.T) {
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("duplicate segment IDs expected 400, got %d %s", invalid.Code, invalid.Body.String())
 	}
+}
+
+func TestSubjectiveBatchEnqueueReportsPartialSuccessAndCanRetry(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"grading:manage"})
+	store := &countingBatchStore{MemoryStore: subjective.NewMemoryStore()}
+	store.AddContext(tenantID, "segment-1", subjectiveContext("short_answer", 8, "answer one", nil))
+	store.AddContext(tenantID, "segment-2", subjectiveContext("short_answer", 8, "answer two", nil))
+	baseRuntime := workerruntime.NewMemoryStore()
+	runtime := &selectiveFailureRuntime{Store: baseRuntime, failedSegmentID: "segment-2"}
+	handler := subjective.NewHandler(store, fixedAdapter{}, authStore).WithWorkerRuntimeStore(runtime)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/subjective-grading-batches", bytes.NewBufferString(`{"idempotency_key":"batch-partial-1","segment_ids":["segment-1","segment-2"]}`))
+	createReq = createReq.WithContext(auth.WithUser(createReq.Context(), auth.User{ID: userID, TenantID: tenantID, Permissions: []string{"grading:manage"}}))
+	createRec := httptest.NewRecorder()
+	handler.CreateBatch(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create partial batch: %d %s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		Batch subjective.GradingBatch `json:"batch"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	enqueue := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/subjective-grading-batches/"+created.Batch.ID+"/enqueue", nil)
+		req.SetPathValue("batchId", created.Batch.ID)
+		req = req.WithContext(auth.WithUser(req.Context(), auth.User{ID: userID, TenantID: tenantID, Permissions: []string{"grading:manage"}}))
+		rec := httptest.NewRecorder()
+		handler.EnqueueBatch(rec, req)
+		return rec
+	}
+	partial := enqueue()
+	if partial.Code != http.StatusOK || !strings.Contains(partial.Body.String(), `"partial_success":true`) || !strings.Contains(partial.Body.String(), `"accepted_count":1`) || !strings.Contains(partial.Body.String(), `"code":"task_creation_failed"`) {
+		t.Fatalf("partial enqueue must return an actionable summary: %d %s", partial.Code, partial.Body.String())
+	}
+	assertAuditAction(t, authStore, "subjective.batch_enqueue_partial")
+	if store.bulkLoads != 2 || store.singleLoads != 0 {
+		t.Fatalf("create and enqueue must use two bulk loads, got bulk=%d single=%d", store.bulkLoads, store.singleLoads)
+	}
+
+	runtime.failedSegmentID = ""
+	retried := enqueue()
+	if retried.Code != http.StatusOK || !strings.Contains(retried.Body.String(), `"failed_count":0`) || !strings.Contains(retried.Body.String(), `"queued_count":2`) {
+		t.Fatalf("safe retry must complete the missing task without duplication: %d %s", retried.Code, retried.Body.String())
+	}
+}
+
+type countingBatchStore struct {
+	*subjective.MemoryStore
+	bulkLoads   int
+	singleLoads int
+}
+
+func (s *countingBatchStore) LoadContext(ctx context.Context, tenantID string, segmentID string) (subjective.Context, error) {
+	s.singleLoads++
+	return s.MemoryStore.LoadContext(ctx, tenantID, segmentID)
+}
+
+func (s *countingBatchStore) LoadContexts(ctx context.Context, tenantID string, segmentIDs []string) ([]subjective.Context, error) {
+	s.bulkLoads++
+	return s.MemoryStore.LoadContexts(ctx, tenantID, segmentIDs)
+}
+
+type selectiveFailureRuntime struct {
+	workerruntime.Store
+	failedSegmentID string
+}
+
+func (s *selectiveFailureRuntime) CreateTask(ctx context.Context, tenantID string, actorID string, input workerruntime.CreateTaskInput) (workerruntime.Task, error) {
+	if input.Payload["answer_segment_id"] == s.failedSegmentID {
+		return workerruntime.Task{}, errors.New("synthetic task creation failure")
+	}
+	return s.Store.CreateTask(ctx, tenantID, actorID, input)
 }
 
 func TestSubjectiveGradeRejectsUnknownFieldsAndInvalidIdempotencyKey(t *testing.T) {

@@ -105,6 +105,44 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  bootstrap-school-admin:
+    build:
+      context: ../..
+      dockerfile: services/api-gateway/Dockerfile
+    entrypoint: ["api-gateway", "bootstrap-admin"]
+    environment:
+      EDUGRADE_ENV: test
+      EDUGRADE_LOG_LEVEL: error
+      EDUGRADE_POSTGRES_DSN: postgres://edugrade:story060_e2e_postgres_only@postgres:5432/edugrade?sslmode=disable
+      EDUGRADE_BOOTSTRAP_TENANT_CODE: platform
+      EDUGRADE_BOOTSTRAP_ROLE_CODE: school_admin
+      EDUGRADE_BOOTSTRAP_USERNAME: story060_school_admin
+      EDUGRADE_BOOTSTRAP_DISPLAY_NAME: STORY-060 E2E School Admin
+      EDUGRADE_BOOTSTRAP_PASSWORD: ${EDUGRADE_E2E_SCHOOL_ADMIN_PASSWORD:?set by the STORY-060 runner}
+    depends_on:
+      bootstrap-admin:
+        condition: service_completed_successfully
+    restart: "no"
+
+  bootstrap-subjective-worker:
+    build:
+      context: ../..
+      dockerfile: services/api-gateway/Dockerfile
+    entrypoint: ["api-gateway", "bootstrap-admin"]
+    environment:
+      EDUGRADE_ENV: test
+      EDUGRADE_LOG_LEVEL: error
+      EDUGRADE_POSTGRES_DSN: postgres://edugrade:story060_e2e_postgres_only@postgres:5432/edugrade?sslmode=disable
+      EDUGRADE_BOOTSTRAP_TENANT_CODE: platform
+      EDUGRADE_BOOTSTRAP_ROLE_CODE: subjective_grading_worker
+      EDUGRADE_BOOTSTRAP_USERNAME: story060_subjective_worker
+      EDUGRADE_BOOTSTRAP_DISPLAY_NAME: STORY-060 E2E Subjective Worker
+      EDUGRADE_BOOTSTRAP_PASSWORD: ${EDUGRADE_E2E_SUBJECTIVE_WORKER_PASSWORD:?set by the STORY-060 runner}
+    depends_on:
+      bootstrap-school-admin:
+        condition: service_completed_successfully
+    restart: "no"
+
   seed:
     image: postgres:16-alpine
     environment:
@@ -114,9 +152,22 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command: ["psql \"$${EDUGRADE_POSTGRES_DSN}\" -v ON_ERROR_STOP=1 -f /fixture.sql"]
     depends_on:
-      bootstrap-admin:
+      bootstrap-subjective-worker:
         condition: service_completed_successfully
     restart: "no"
+
+  model-stub:
+    image: python:3.12-alpine
+    environment:
+      EDUGRADE_E2E_MODEL_API_KEY: ${EDUGRADE_E2E_MODEL_API_KEY:?set by the STORY-060 runner}
+    volumes:
+      - ../../tests/e2e/story060_model_stub.py:/e2e/story060_model_stub.py:ro
+    command: ["python", "/e2e/story060_model_stub.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8087/v1/models', timeout=2)"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
 
   grading-agent:
     build:
@@ -124,7 +175,7 @@ services:
       dockerfile: ai-services/Dockerfile
     environment:
       EDUGRADE_GRADING_AGENT_TOKEN: ${EDUGRADE_E2E_GRADING_TOKEN:?set by the STORY-060 runner}
-      EDUGRADE_GRADING_MODEL_BASE_URL: http://host.docker.internal:8087/v1
+      EDUGRADE_GRADING_MODEL_BASE_URL: ${EDUGRADE_E2E_MODEL_BASE_URL:-http://model-stub:8087/v1}
       EDUGRADE_GRADING_MODEL_API_KEY: ${EDUGRADE_E2E_MODEL_API_KEY:?set by the STORY-060 runner}
       EDUGRADE_GRADING_MODEL_NAME: qwen3-4b-q4-k-m
       EDUGRADE_GRADING_MODEL_VERSION: Qwen/Qwen3-4B-GGUF:Q4_K_M
@@ -139,8 +190,9 @@ services:
       EDUGRADE_GRADING_MODEL_READY_TIMEOUT_SECONDS: "3"
       EDUGRADE_GRADING_MODEL_QUEUE_TIMEOUT_SECONDS: "5"
       EDUGRADE_GRADING_MODEL_MAX_RETRIES: "1"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      model-stub:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8100/health | grep -q healthy"]
       interval: 2s
@@ -205,6 +257,26 @@ services:
       timeout: 2s
       retries: 90
 
+  subjective-grading-worker:
+    build:
+      context: ../..
+      dockerfile: services/subjective-grading-worker/Dockerfile
+    environment:
+      EDUGRADE_API_BASE_URL: http://api-gateway:8080
+      EDUGRADE_SUBJECTIVE_WORKER_TENANT_CODE: platform
+      EDUGRADE_SUBJECTIVE_WORKER_USERNAME: story060_subjective_worker
+      EDUGRADE_SUBJECTIVE_WORKER_PASSWORD: ${EDUGRADE_E2E_SUBJECTIVE_WORKER_PASSWORD:?set by the STORY-060 runner}
+      EDUGRADE_SUBJECTIVE_WORKER_ID: story060-subjective-worker-1
+      EDUGRADE_SUBJECTIVE_WORKER_POLL_INTERVAL: "1"
+      EDUGRADE_SUBJECTIVE_WORKER_LEASE_SECONDS: "120"
+      EDUGRADE_SUBJECTIVE_WORKER_HEARTBEAT_INTERVAL: "5"
+      EDUGRADE_SUBJECTIVE_WORKER_HEARTBEAT_TIMEOUT: "2"
+      EDUGRADE_SUBJECTIVE_WORKER_HEALTH_MAX_AGE: "30"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    profiles: ["e2e"]
+
   e2e-runner:
     build:
       context: ../..
@@ -224,8 +296,12 @@ services:
       EDUGRADE_POSTGRES_DSN: postgres://edugrade:story060_e2e_postgres_only@postgres:5432/edugrade?sslmode=disable
     volumes:
       - ../../tests/e2e/fixtures/story060-grading-agent-verify.sql:/verify.sql:ro
+      - ../../services/api-gateway/migrations:/migrations:ro
     entrypoint: ["/bin/sh", "-ec"]
-    command: ["psql \"$${EDUGRADE_POSTGRES_DSN}\" -v ON_ERROR_STOP=1 -f /verify.sql"]
+    command:
+      - |
+        expected_migration_count="$$(find /migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')"
+        psql "$${EDUGRADE_POSTGRES_DSN}" -v ON_ERROR_STOP=1 -v expected_migration_count="$${expected_migration_count}" -f /verify.sql
     depends_on:
       api-gateway:
         condition: service_healthy

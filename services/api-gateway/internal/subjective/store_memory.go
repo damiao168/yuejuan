@@ -46,6 +46,26 @@ func (s *MemoryStore) LoadContext(_ context.Context, tenantID string, segmentID 
 	return ctx, nil
 }
 
+func (s *MemoryStore) LoadContexts(_ context.Context, tenantID string, segmentIDs []string) ([]Context, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	contexts := make([]Context, 0, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		ctx, ok := s.contexts[key(tenantID, segmentID)]
+		if !ok {
+			return nil, ErrNotFound
+		}
+		if ctx.AnswerText == "" {
+			return nil, ErrAnswerMissing
+		}
+		if ctx.Rubric.ID == "" {
+			return nil, ErrRubricMissing
+		}
+		contexts = append(contexts, ctx)
+	}
+	return contexts, nil
+}
+
 func (s *MemoryStore) CreateGrade(_ context.Context, tenantID string, actorID string, grade Grade) (Grade, error) {
 	if grade.AnswerSegmentID == "" || grade.QuestionID == "" {
 		return Grade{}, ErrInvalidInput
