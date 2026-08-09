@@ -16,6 +16,8 @@ class Settings:
     lease_seconds: int = 300
     heartbeat_interval: float = 10.0
     heartbeat_timeout: float = 3.0
+    health_file: str = "/tmp/edugrade-subjective-grading-worker.ready"
+    health_max_age: float = 120.0
 
 
 def load_settings() -> Settings:
@@ -29,6 +31,8 @@ def load_settings() -> Settings:
         lease_seconds=int(os.environ.get("EDUGRADE_SUBJECTIVE_WORKER_LEASE_SECONDS", "300")),
         heartbeat_interval=float(os.environ.get("EDUGRADE_SUBJECTIVE_WORKER_HEARTBEAT_INTERVAL", "10")),
         heartbeat_timeout=float(os.environ.get("EDUGRADE_SUBJECTIVE_WORKER_HEARTBEAT_TIMEOUT", "3")),
+        health_file=os.environ.get("EDUGRADE_SUBJECTIVE_WORKER_HEALTH_FILE", "/tmp/edugrade-subjective-grading-worker.ready"),
+        health_max_age=float(os.environ.get("EDUGRADE_SUBJECTIVE_WORKER_HEALTH_MAX_AGE", "120")),
     )
     validate_settings(settings)
     return settings
@@ -48,3 +52,7 @@ def validate_settings(settings: Settings) -> None:
         raise ValueError("heartbeat values must be greater than 0")
     if settings.heartbeat_interval + settings.heartbeat_timeout >= settings.lease_seconds:
         raise ValueError("heartbeat interval plus timeout must be shorter than the lease")
+    if not settings.health_file.strip():
+        raise ValueError("health_file must not be empty")
+    if not math.isfinite(settings.health_max_age) or settings.health_max_age <= 0:
+        raise ValueError("health_max_age must be greater than 0")

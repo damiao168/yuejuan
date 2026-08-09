@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
 from urllib import error, request
 from urllib.parse import urlsplit
-from typing import Any
 
 
 class APIError(RuntimeError):
@@ -63,6 +63,9 @@ class EduGradeClient:
 
     def fail(self, run_id: str, task_id: str, lease_token: str, code: str, retryable: bool, duration_ms: int) -> None:
         self._request("POST", f"/api/v1/internal/subjective-grading/runs/{run_id}/failure", {"task_id": task_id, "lease_token": lease_token, "retryable": retryable, "error_code": code, "error_detail": {}, "duration_ms": duration_ms})
+
+    def fail_task(self, task_id: str, lease_token: str, code: str, retryable: bool) -> None:
+        self._request("POST", f"/api/v1/internal/worker/tasks/{task_id}/fail", {"lease_token": lease_token, "retryable": retryable, "error_code": code, "error_detail": {}, "duration_ms": 0})
 
     def _request(self, method: str, path: str, payload: dict[str, Any], *, auth: bool = True, timeout: float = 60) -> dict[str, Any]:
         url = _trusted_url(self.base_url, path)

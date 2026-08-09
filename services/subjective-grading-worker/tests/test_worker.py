@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import time
+
 from subjective_grading_worker.config import Settings, validate_settings
+from subjective_grading_worker.healthcheck import is_healthy, mark_healthy
 from subjective_grading_worker.runner import Runner
 
 
@@ -26,6 +29,9 @@ class FakeAPI:
     def fail(self, run_id, task_id, lease, code, retryable, duration_ms):
         self.calls.append(("fail", run_id, task_id, lease, code, retryable))
 
+    def fail_task(self, task_id, lease, code, retryable):
+        self.calls.append(("fail_task", task_id, lease, code, retryable))
+
 
 def settings() -> Settings:
     return Settings("http://127.0.0.1:8088", "demo", "worker", "secret", heartbeat_interval=1, heartbeat_timeout=0.5)
@@ -42,7 +48,7 @@ def test_runner_executes_and_completes_domain_result():
 def test_runner_rejects_invalid_runtime_source():
     api = FakeAPI({"id": "task-1", "source_id": "run-1", "source_type": "ocr_task", "lease_token": "lease-1"})
     Runner(api=api, settings=settings()).process_once()
-    assert any(call[0] == "fail" and call[4] == "invalid_subjective_runtime_payload" for call in api.calls)
+    assert any(call[0] == "fail_task" and call[3] == "invalid_subjective_runtime_payload" for call in api.calls)
 
 
 def test_settings_reject_unsafe_lease_heartbeat():
@@ -53,3 +59,11 @@ def test_settings_reject_unsafe_lease_heartbeat():
         assert "heartbeat" in str(exc)
     else:
         raise AssertionError("expected heartbeat validation failure")
+
+
+def test_health_marker_requires_recent_success(tmp_path):
+    marker = tmp_path / "worker.ready"
+    assert not is_healthy(str(marker), 30)
+    mark_healthy(str(marker))
+    assert is_healthy(str(marker), 30)
+    assert not is_healthy(str(marker), 1, now=time.time() + 5)

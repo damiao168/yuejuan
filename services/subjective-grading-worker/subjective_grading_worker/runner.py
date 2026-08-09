@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any
+from typing import Any, Self
 
 from .api import APIError
 from .config import Settings
@@ -29,7 +29,13 @@ class Runner:
         if callable(activate_task):
             activate_task(task, self.settings.worker_id)
         if task.get("source_type") != "subjective_grading_run" or not runtime_id or not lease or not run_id:
-            self.api.fail(run_id, runtime_id, lease, "invalid_subjective_runtime_payload", False, 0)
+            fail_task = getattr(self.api, "fail_task", None)
+            if not runtime_id or not lease:
+                raise APIError("subjective grading task is missing its runtime capability")
+            if callable(fail_task):
+                fail_task(runtime_id, lease, "invalid_subjective_runtime_payload", False)
+            else:
+                self.api.fail(run_id, runtime_id, lease, "invalid_subjective_runtime_payload", False, 0)
             return
         with _Heartbeat(self.api, runtime_id, lease, self.settings) as heartbeat:
             try:
@@ -52,7 +58,7 @@ class _Heartbeat:
         self._error: Exception | None = None
         self._thread: threading.Thread | None = None
 
-    def __enter__(self) -> "_Heartbeat":
+    def __enter__(self) -> Self:
         self.api.heartbeat(self.task_id, self.token, self.settings.worker_id, self.settings.lease_seconds, self.settings.heartbeat_timeout)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()

@@ -13,8 +13,11 @@ const runMigration = read("services", "api-gateway", "migrations", "000063_story
 const batchMigration = read("services", "api-gateway", "migrations", "000064_story063_subjective_grading_batches.sql");
 const workerAPI = read("services", "subjective-grading-worker", "subjective_grading_worker", "api.py");
 const workerRunner = read("services", "subjective-grading-worker", "subjective_grading_worker", "runner.py");
+const workerMain = read("services", "subjective-grading-worker", "subjective_grading_worker", "__main__.py");
+const workerDockerfile = read("services", "subjective-grading-worker", "Dockerfile");
 const compose = read("infra", "docker-compose", "docker-compose.yml");
 const envExample = read("infra", "docker-compose", ".env.example");
+const ci = read(".github", "workflows", "ci.yml");
 const webAPI = read("apps", "web-admin", "src", "api", "subjectiveGrading.ts");
 const webPage = read("apps", "web-admin", "src", "pages", "SubjectiveGradingBatchPage.tsx");
 const routes = read("apps", "web-admin", "src", "router", "routes.tsx");
@@ -50,6 +53,8 @@ for (const endpoint of ["/tasks/claim", "/heartbeat", "/execute", "/result", "/f
 }
 assert.ok(workerRunner.includes("with _Heartbeat"), "worker must maintain its lease while the grading agent runs");
 assert.ok(workerRunner.includes("source_type") && workerRunner.includes("subjective_grading_run"), "worker must reject unrelated task sources");
+assert.ok(workerMain.includes("except APIError") && workerMain.includes("api.token = None"), "worker must retry after API failures and re-authenticate");
+assert.ok(workerDockerfile.includes("HEALTHCHECK") && workerDockerfile.includes("subjective_grading_worker.healthcheck"), "worker image must expose a runtime health check");
 
 assert.ok(compose.includes('profiles: ["subjective-grading"]'), "subjective worker compose profile is missing");
 for (const variable of [
@@ -67,6 +72,17 @@ for (const endpoint of ["/api/v1/subjective-grading-batches", "/enqueue"]) {
 assert.ok(routes.includes('/grading/subjective-batches'), "admin batch route is missing");
 assert.ok(routes.includes('permissions: ["grading:manage"]'), "admin batch route must be permission gated");
 assert.ok(webPage.includes("getSubjectiveGradingBatch"), "admin batch page must refresh persisted progress");
+
+for (const ciInvariant of [
+  "services/subjective-grading-worker/pyproject.toml",
+  "-e services/subjective-grading-worker",
+  "services/subjective-grading-worker/tests",
+  "--profile subjective-grading",
+  "build subjective-grading-worker",
+  "npm run check:story063"
+]) {
+  assert.ok(ci.includes(ciInvariant), `CI is missing subjective worker gate: ${ciInvariant}`);
+}
 
 assert.ok(smoke.includes("Invoke-SubjectiveApi"), "real integration smoke script is incomplete");
 assert.ok(smoke.includes('status -eq "completed"') && smoke.includes('status -eq "failed"'), "smoke script must wait for a terminal batch status");

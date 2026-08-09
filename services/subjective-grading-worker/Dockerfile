@@ -9,4 +9,6 @@ COPY services/subjective-grading-worker/subjective_grading_worker ./subjective_g
 RUN python -m pip install --no-cache-dir --timeout 180 --retries 10 "pip==26.1.2" "setuptools==83.0.0" \
     && python -m pip install --no-cache-dir --no-deps .
 USER nobody
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+    CMD ["python", "-m", "subjective_grading_worker.healthcheck"]
 CMD ["python", "-m", "subjective_grading_worker"]

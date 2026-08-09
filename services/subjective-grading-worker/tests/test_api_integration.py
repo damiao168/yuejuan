@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import ClassVar
+
+from subjective_grading_worker.__main__ import run_cycle
+from subjective_grading_worker.api import EduGradeClient
+from subjective_grading_worker.config import Settings
+from subjective_grading_worker.runner import Runner
+
+
+class _Handler(BaseHTTPRequestHandler):
+    requests: ClassVar[list[dict[str, object]]] = []
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        self.requests.append({"path": self.path, "headers": dict(self.headers), "payload": payload})
+
+        if self.path == "/api/v1/auth/token":
+            response = {"access_token": "test-access-token"}
+        elif self.path == "/api/v1/internal/worker/tasks/claim":
+            response = {
+                "tasks": [
+                    {
+                        "id": "task-1",
+                        "source_id": "run-1",
+                        "source_type": "subjective_grading_run",
+                        "lease_token": "lease-1",
+                    }
+                ]
+            }
+        elif self.path.endswith("/execute"):
+            response = {"output": {"request_id": "request-1", "model_version": "model-v1"}}
+        else:
+            response = {}
+
+        body = json.dumps(response).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+
+def test_worker_protocol_smoke_from_login_to_persisted_result(tmp_path):
+    _Handler.requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        settings = Settings(
+            api_base_url=f"http://127.0.0.1:{server.server_port}",
+            tenant_code="demo",
+            username="worker",
+            password="secret",
+            heartbeat_interval=1,
+            heartbeat_timeout=0.5,
+            health_file=str(tmp_path / "worker.ready"),
+        )
+        api = EduGradeClient(settings.api_base_url, settings.tenant_code, settings.username, settings.password)
+
+        assert run_cycle(api, Runner(api=api, settings=settings), settings) == 1
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+    paths = [str(item["path"]) for item in _Handler.requests]
+    assert paths == [
+        "/api/v1/auth/token",
+        "/api/v1/internal/worker/tasks/claim",
+        "/api/v1/internal/worker/tasks/task-1/heartbeat",
+        "/api/v1/internal/subjective-grading/runs/run-1/execute",
+        "/api/v1/internal/subjective-grading/runs/run-1/result",
+    ]
+    result_headers = _Handler.requests[-1]["headers"]
+    assert isinstance(result_headers, dict)
+    normalized_headers = {str(key).lower(): value for key, value in result_headers.items()}
+    assert normalized_headers["authorization"] == "Bearer test-access-token"
+    assert normalized_headers["x-edugrade-worker-task-id"] == "task-1"
+    assert normalized_headers["x-edugrade-worker-lease-token"] == "lease-1"

@@ -1,19 +1,40 @@
 from __future__ import annotations
 
+import logging
 import time
 
-from .api import EduGradeClient
-from .config import load_settings
+from .api import APIError, EduGradeClient
+from .config import Settings, load_settings
+from .healthcheck import mark_healthy
 from .runner import Runner
+
+LOGGER = logging.getLogger("edugrade.subjective_grading_worker")
+
+
+def run_cycle(api: EduGradeClient, runner: Runner, settings: Settings) -> int:
+    if not api.token:
+        api.login()
+    processed = runner.process_once()
+    mark_healthy(settings.health_file)
+    return processed
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = load_settings()
     api = EduGradeClient(settings.api_base_url, settings.tenant_code, settings.username, settings.password)
-    api.login()
     runner = Runner(api=api, settings=settings)
     while True:
-        runner.process_once()
+        try:
+            processed = run_cycle(api, runner, settings)
+            if processed:
+                LOGGER.info("processed %d subjective grading task(s)", processed)
+        except APIError as exc:
+            api.token = None
+            LOGGER.warning("subjective grading API cycle failed; retrying: %s", exc)
+        except Exception:
+            api.token = None
+            LOGGER.exception("unexpected subjective grading worker failure; retrying")
         time.sleep(settings.poll_interval)
 
 
