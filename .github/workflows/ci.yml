@@ -30,9 +30,11 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npm --prefix lab audit --audit-level=high
       - run: npm run typecheck
+      - run: npm --workspace apps/web-admin run test
       - run: npm run build
       - run: npm --workspace apps/web-admin run check:production-routes
       - run: npm --workspace apps/desktop-client run check:security-config
+      - run: npm --workspace apps/desktop-client run test
       - run: npm run check:story049
       - run: npm run check:story050
       - run: npm run check:story051
@@ -204,9 +206,60 @@ jobs:
       - name: Validate STORY-060 isolated Compose
         env:
           EDUGRADE_E2E_ADMIN_PASSWORD: ci-story060-admin
+          EDUGRADE_E2E_SCHOOL_ADMIN_PASSWORD: ci-story060-school-admin
+          EDUGRADE_E2E_SUBJECTIVE_WORKER_PASSWORD: ci-story060-subjective-worker
           EDUGRADE_E2E_GRADING_TOKEN: ci-story060-grading-token-at-least-32-characters
           EDUGRADE_E2E_MODEL_API_KEY: ci-story060-model-key
         run: docker compose -f infra/docker-compose/docker-compose.story060-e2e.yml --profile e2e config -q
+
+  real-system-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      COMPOSE_PROJECT_NAME: story060-${{ github.run_id }}-${{ github.run_attempt }}
+      EDUGRADE_E2E_ADMIN_PASSWORD: Ci-Story060-Admin!2026
+      EDUGRADE_E2E_SCHOOL_ADMIN_PASSWORD: Ci-Story060-School!2026
+      EDUGRADE_E2E_SUBJECTIVE_WORKER_PASSWORD: Ci-Story060-Worker!2026
+      EDUGRADE_E2E_GRADING_TOKEN: ci-story060-grading-token-at-least-32-characters
+      EDUGRADE_E2E_MODEL_API_KEY: ci-story060-model-protocol-key
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Start real isolated system stack
+        run: >-
+          docker compose
+          -f infra/docker-compose/docker-compose.story060-e2e.yml
+          up -d --build --wait --wait-timeout 300 browser-gateway subjective-grading-worker
+      - name: Verify real grading-agent and PostgreSQL persistence
+        run: |
+          docker compose -f infra/docker-compose/docker-compose.story060-e2e.yml run --rm --no-deps e2e-runner
+          docker compose -f infra/docker-compose/docker-compose.story060-e2e.yml run --rm --no-deps db-verify
+      - name: Resolve isolated browser URL
+        run: |
+          gateway_port="$(docker compose -f infra/docker-compose/docker-compose.story060-e2e.yml port browser-gateway 80 | awk -F: '{print $NF}')"
+          test -n "${gateway_port}"
+          echo "EDUGRADE_REAL_E2E_BASE_URL=http://127.0.0.1:${gateway_port}" >> "${GITHUB_ENV}"
+      - name: Browser golden path without API interception
+        run: npx playwright test --config playwright.real.config.ts
+      - name: Preserve failure diagnostics
+        if: failure()
+        run: docker compose -f infra/docker-compose/docker-compose.story060-e2e.yml logs --no-color --tail 300
+      - name: Upload real browser evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: real-system-e2e-evidence
+          path: output/playwright/real-test-results
+          if-no-files-found: ignore
+      - name: Remove isolated E2E project
+        if: always()
+        run: docker compose -f infra/docker-compose/docker-compose.story060-e2e.yml down --volumes --remove-orphans
 
   supply-chain:
     runs-on: ubuntu-latest
