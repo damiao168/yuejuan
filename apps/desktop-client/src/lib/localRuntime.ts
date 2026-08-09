@@ -2,6 +2,17 @@ import { invoke } from "@tauri-apps/api/core";
 import type { CapabilityProbe, LocalCacheSecurityStatus, LocalLogEntry, RuntimeDiagnostics } from "../types";
 
 const logKey = "edugrade.desktop.logs";
+const redactedValue = "[REDACTED]";
+const sensitiveAssignmentPattern = /["']?\b(authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|password|secret|credential)\b["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi;
+const bearerPattern = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
+let runtimeLogs: LocalLogEntry[] = [];
+
+export interface StoredDesktopCredentials {
+  server_url: string;
+  tenant_code: string;
+  username: string;
+  password: string;
+}
 
 export function isTauriRuntime() {
   return typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
@@ -29,8 +40,8 @@ export async function getCapabilityStatuses(): Promise<CapabilityProbe[]> {
     {
       key: "secure_config",
       name: "本地加密配置存储",
-      status: "not_configured",
-      detail: "未配置/待接入 Stronghold、Windows DPAPI 或企业安全存储。当前只保留接口。"
+      status: "unavailable",
+      detail: "浏览器开发模式不提供系统凭据库；不会降级为 localStorage 保存密码。"
     },
     {
       key: "local_cache",
@@ -54,18 +65,25 @@ export async function getCapabilityStatuses(): Promise<CapabilityProbe[]> {
 }
 
 export async function appendLocalLog(entry: Omit<LocalLogEntry, "id" | "at">) {
-  const next: LocalLogEntry = {
+  const next = redactLocalLogEntry({
     id: crypto.randomUUID(),
     at: new Date().toISOString(),
     ...entry
-  };
-  const current = readLocalLogs();
-  window.localStorage.setItem(logKey, JSON.stringify([next, ...current].slice(0, 120)));
-  await invokeOptional("append_local_log", { entry: next });
+  });
+  if (isTauriRuntime()) {
+    await invoke("append_local_log", { entry: next });
+    runtimeLogs = [next, ...runtimeLogs].slice(0, 120);
+  } else {
+    const current = readLocalLogs();
+    window.localStorage.setItem(logKey, JSON.stringify([next, ...current].slice(0, 120)));
+  }
   return next;
 }
 
 export function readLocalLogs(): LocalLogEntry[] {
+  if (isTauriRuntime()) {
+    return [...runtimeLogs];
+  }
   try {
     const raw = window.localStorage.getItem(logKey);
     if (!raw) {
@@ -78,8 +96,42 @@ export function readLocalLogs(): LocalLogEntry[] {
   }
 }
 
-export function clearLocalLogs() {
+export async function clearLocalLogs() {
+  if (isTauriRuntime()) {
+    await invoke("clear_local_logs");
+    runtimeLogs = [];
+    return;
+  }
   window.localStorage.removeItem(logKey);
+}
+
+export async function loadStoredCredentials(): Promise<StoredDesktopCredentials | null> {
+  requireTauriCredentialStore();
+  return invoke<StoredDesktopCredentials | null>("load_desktop_credentials");
+}
+
+export async function saveStoredCredentials(credentials: StoredDesktopCredentials): Promise<void> {
+  requireTauriCredentialStore();
+  await invoke("save_desktop_credentials", { credentials });
+}
+
+export async function deleteStoredCredentials(): Promise<void> {
+  requireTauriCredentialStore();
+  await invoke("delete_desktop_credentials");
+}
+
+export function redactSensitiveText(value: string): string {
+  return value
+    .replace(bearerPattern, `Bearer ${redactedValue}`)
+    .replace(sensitiveAssignmentPattern, (_match, key: string) => `${key}=${redactedValue}`);
+}
+
+export function redactLocalLogEntry(entry: LocalLogEntry): LocalLogEntry {
+  return {
+    ...entry,
+    message: redactSensitiveText(entry.message),
+    context: entry.context ? redactSensitiveText(entry.context) : entry.context
+  };
 }
 
 export function scanLocalCacheSecurity(): LocalCacheSecurityStatus {
@@ -125,5 +177,11 @@ async function invokeOptional<T>(command: string, args?: Record<string, unknown>
     return await invoke<T>(command, args);
   } catch {
     return null;
+  }
+}
+
+function requireTauriCredentialStore() {
+  if (!isTauriRuntime()) {
+    throw new Error("系统凭据库仅在 Windows 桌面客户端中可用；已拒绝不安全降级。");
   }
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Button,
+  Checkbox,
   ConfigProvider,
   Empty,
   Form,
@@ -34,7 +35,7 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { getCurrentUser, login } from "./api/auth";
-import { DesktopApiClient } from "./api/client";
+import { DesktopApiClient, normalizeBaseUrl } from "./api/client";
 import { listExams } from "./api/exams";
 import { uploadFileWithProgress } from "./api/files";
 import { listReviewTasks } from "./api/review";
@@ -43,10 +44,15 @@ import { OfflineWorkbench } from "./components/OfflineWorkbench";
 import {
   appendLocalLog,
   clearLocalLogs,
+  deleteStoredCredentials,
   getCapabilityStatuses,
   getRuntimeDiagnostics,
+  isTauriRuntime,
+  loadStoredCredentials,
   scanLocalCacheSecurity,
-  readLocalLogs
+  readLocalLogs,
+  saveStoredCredentials,
+  type StoredDesktopCredentials
 } from "./lib/localRuntime";
 import { readOfflineDraftEnvelopes } from "./lib/offlineStore";
 import type {
@@ -103,6 +109,9 @@ function App() {
   const [tenantCode, setTenantCode] = useState("demo");
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
+  const [rememberLogin, setRememberLogin] = useState(false);
+  const [credentialStoreMessage, setCredentialStoreMessage] = useState<string | null>(null);
+  const [credentialStoreReady, setCredentialStoreReady] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -133,6 +142,7 @@ function App() {
   const fileBufferRef = useRef(new Map<string, File>());
   const uploadInFlightRef = useRef(new Set<string>());
   const queueRef = useRef(queue);
+  const autoLoginStartedRef = useRef(false);
 
   const client = useMemo(
     () =>
@@ -192,30 +202,113 @@ function App() {
   }, []);
 
   const saveServerForSession = async () => {
-    window.sessionStorage.setItem("edugrade.desktop.server_url", serverUrl);
-    await logEvent("info", "server url saved for current session", serverUrl);
+    setDiagnosticError(null);
+    try {
+      const normalizedServerUrl = normalizeBaseUrl(serverUrl);
+      setServerUrl(normalizedServerUrl);
+      window.sessionStorage.setItem("edugrade.desktop.server_url", normalizedServerUrl);
+      await logEvent("info", "server url saved for current session", normalizedServerUrl);
+    } catch (error) {
+      setDiagnosticError(error instanceof Error ? error.message : "服务器地址无效");
+    }
   };
 
-  const handleLogin = async () => {
+  const performLogin = useCallback(async (
+    credentials: StoredDesktopCredentials,
+    persistence: "save" | "delete" | "none"
+  ) => {
     setAuthError(null);
     setIsLoggingIn(true);
     try {
-      const result = await login(new DesktopApiClient({ baseUrl: serverUrl }), {
-        tenant_code: tenantCode.trim(),
-        username: username.trim(),
-        password
+      const result = await login(new DesktopApiClient({ baseUrl: credentials.server_url }), {
+        tenant_code: credentials.tenant_code.trim(),
+        username: credentials.username.trim(),
+        password: credentials.password
       });
+      setServerUrl(credentials.server_url);
+      setTenantCode(credentials.tenant_code.trim());
+      setUsername(credentials.username.trim());
       setToken(result.access_token);
       setExpiresAt(result.expires_at);
       setUser(result.user);
-      setPassword("");
+      if (persistence === "save") {
+        try {
+          await saveStoredCredentials(credentials);
+          setCredentialStoreReady(true);
+          setCredentialStoreMessage("登录信息已保存到当前 Windows 用户的系统凭据库。");
+        } catch (error) {
+          setCredentialStoreReady(false);
+          setCredentialStoreMessage(error instanceof Error ? error.message : "系统凭据库保存失败；未写入其他本地存储。");
+        }
+      } else if (persistence === "delete") {
+        try {
+          await deleteStoredCredentials();
+          setCredentialStoreMessage("未保存登录信息，已有系统凭据已清除。");
+        } catch (error) {
+          setCredentialStoreMessage(error instanceof Error ? error.message : "系统凭据清除失败。");
+        }
+      }
       await logEvent("info", "login succeeded", `${result.user.username}@${result.user.tenant_code}`);
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : "登录请求失败";
       setAuthError(message);
       await logEvent("error", "login failed", message);
+      return false;
     } finally {
+      setPassword("");
       setIsLoggingIn(false);
+    }
+  }, [logEvent]);
+
+  const handleLogin = () => performLogin(
+    {
+      server_url: serverUrl,
+      tenant_code: tenantCode,
+      username,
+      password
+    },
+    rememberLogin ? "save" : credentialStoreReady ? "delete" : "none"
+  );
+
+  useEffect(() => {
+    if (autoLoginStartedRef.current) return;
+    autoLoginStartedRef.current = true;
+    if (!isTauriRuntime()) {
+      setCredentialStoreReady(false);
+      setCredentialStoreMessage("浏览器开发模式不保存密码；请使用 Windows 桌面客户端测试自动登录。");
+      return;
+    }
+    void loadStoredCredentials()
+      .then(async (stored) => {
+        setCredentialStoreReady(true);
+        if (!stored) {
+          setCredentialStoreMessage("Windows 系统凭据库可用，当前没有保存的登录信息。");
+          return;
+        }
+        setServerUrl(stored.server_url);
+        setTenantCode(stored.tenant_code);
+        setUsername(stored.username);
+        setRememberLogin(true);
+        setCredentialStoreMessage("已从 Windows 系统凭据库读取登录信息，正在自动登录。");
+        const succeeded = await performLogin(stored, "none");
+        if (succeeded) {
+          setCredentialStoreMessage("已使用 Windows 系统凭据库自动登录。");
+        }
+      })
+      .catch((error) => {
+        setCredentialStoreReady(false);
+        setCredentialStoreMessage(error instanceof Error ? error.message : "Windows 系统凭据库不可用；已停止自动登录。");
+      });
+  }, [performLogin]);
+
+  const handleForgetStoredLogin = async () => {
+    try {
+      await deleteStoredCredentials();
+      setRememberLogin(false);
+      setCredentialStoreMessage("已从 Windows 系统凭据库清除保存的登录信息。");
+    } catch (error) {
+      setCredentialStoreMessage(error instanceof Error ? error.message : "系统凭据清除失败。");
     }
   };
 
@@ -572,7 +665,7 @@ function App() {
     });
   };
 
-  const activeCapabilityWarnings = capabilities.filter((item) => item.status === "not_configured");
+  const activeCapabilityWarnings = capabilities.filter((item) => item.status !== "ready");
 
   return (
     <ConfigProvider
@@ -612,7 +705,7 @@ function App() {
           </nav>
           <div className="desktop-sidebar-footer">
             <StatusLine label="后端" value={serverUrl} tone={token ? "ready" : "idle"} />
-            <StatusLine label="安全存储" value="未配置/待接入" tone="warning" />
+            <StatusLine label="安全存储" value={credentialStoreReady ? "Windows 凭据库" : "不可用"} tone={credentialStoreReady ? "ready" : "warning"} />
           </div>
         </aside>
 
@@ -675,7 +768,7 @@ function App() {
         </section>
 
         <section className="panel">
-          <SectionHead icon={<LogIn size={20} />} title="登录" description="调用桌面客户端专用 POST /api/v1/auth/token；token 仅保存在内存中。" />
+          <SectionHead icon={<LogIn size={20} />} title="登录" description="访问令牌只保存在内存中；勾选保存后，密码仅写入当前 Windows 用户的系统凭据库。" />
           <Form layout="vertical">
             <Form.Item label="租户代码">
               <Input value={tenantCode} onChange={(event) => setTenantCode(event.target.value)} />
@@ -684,17 +777,26 @@ function App() {
               <Input value={username} onChange={(event) => setUsername(event.target.value)} />
             </Form.Item>
             <Form.Item label="密码">
-              <Input.Password value={password} onChange={(event) => setPassword(event.target.value)} onPressEnter={handleLogin} />
+              <Input.Password value={password} onChange={(event) => setPassword(event.target.value)} onPressEnter={() => void handleLogin()} />
+            </Form.Item>
+            <Form.Item>
+              <Checkbox checked={rememberLogin} disabled={!credentialStoreReady} onChange={(event) => setRememberLogin(event.target.checked)}>
+                保存到 Windows 凭据库，下次自动登录
+              </Checkbox>
             </Form.Item>
             <Space wrap>
-              <Button type="primary" icon={<LogIn size={16} />} loading={isLoggingIn} onClick={handleLogin}>
+              <Button type="primary" icon={<LogIn size={16} />} loading={isLoggingIn} onClick={() => void handleLogin()}>
                 登录后端
               </Button>
               <Button icon={<ShieldAlert size={16} />} disabled={!token} onClick={handleCheckSession}>
                 校验 session
               </Button>
+              <Button disabled={!credentialStoreReady} onClick={() => void handleForgetStoredLogin()}>
+                清除已保存登录
+              </Button>
             </Space>
           </Form>
+          {credentialStoreMessage && <Alert className="section-alert" type={credentialStoreReady ? "info" : "warning"} message={credentialStoreMessage} showIcon />}
           {authError && <Alert className="section-alert" type="error" message={authError} showIcon />}
           {user && (
             <div className="identity-strip">
@@ -1038,10 +1140,9 @@ function App() {
           action={
             <Button
               danger
-              onClick={() => {
-                clearLocalLogs();
-                refreshLogs();
-              }}
+              onClick={() => void clearLocalLogs()
+                .then(refreshLogs)
+                .catch((error) => setDiagnosticError(error instanceof Error ? error.message : "本地日志清除失败"))}
             >
               清空本地日志
             </Button>

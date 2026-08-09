@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tauriConfig = JSON.parse(await readFile(join(appRoot, "src-tauri", "tauri.conf.json"), "utf8"));
 const capability = JSON.parse(await readFile(join(appRoot, "src-tauri", "capabilities", "default.json"), "utf8"));
+const cargoManifest = await readFile(join(appRoot, "src-tauri", "Cargo.toml"), "utf8");
+const apiClient = await readFile(join(appRoot, "src", "api", "client.ts"), "utf8");
+const localRuntime = await readFile(join(appRoot, "src", "lib", "localRuntime.ts"), "utf8");
 const failures = [];
 
 function fail(message) {
@@ -64,7 +67,15 @@ if (!Array.isArray(capability.permissions) || capability.permissions.length !== 
   fail("no Tauri core or plugin permission is currently required");
 }
 
-const expectedCommands = new Set(["append_local_log", "capability_statuses", "runtime_diagnostics"]);
+const expectedCommands = new Set([
+  "append_local_log",
+  "capability_statuses",
+  "clear_local_logs",
+  "delete_desktop_credentials",
+  "load_desktop_credentials",
+  "runtime_diagnostics",
+  "save_desktop_credentials"
+]);
 const invokedCommands = new Set();
 
 async function inspectSources(directory) {
@@ -91,6 +102,20 @@ for (const command of invokedCommands) {
 }
 for (const command of expectedCommands) {
   if (!invokedCommands.has(command)) fail(`expected application command is not invoked by the frontend: ${command}`);
+}
+
+if (!/cfg\(windows\)[\s\S]*keyring[\s\S]*windows-native/.test(cargoManifest)) {
+  fail("saved desktop credentials must use the Windows-native system credential store");
+}
+if (!/requireTauriCredentialStore/.test(localRuntime)
+    || !/系统凭据库仅在 Windows 桌面客户端中可用；已拒绝不安全降级/.test(localRuntime)) {
+  fail("credential persistence must fail closed outside the native Windows runtime");
+}
+if (/saveStoredCredentials[\s\S]{0,500}localStorage\.setItem/.test(localRuntime)) {
+  fail("credential persistence must never fall back to localStorage");
+}
+if (!/远程 API 必须使用 HTTPS；HTTP 仅允许本机开发地址/.test(apiClient)) {
+  fail("desktop API credentials must not be sent over non-loopback HTTP");
 }
 
 if (failures.length) {

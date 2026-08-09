@@ -62,6 +62,9 @@ export class DesktopApiClient {
   }
 
   url(path: string): string {
+    if (!path.startsWith("/") || path.startsWith("//")) {
+      throw new Error("API path must be a same-server absolute path");
+    }
     return `${this.baseUrl}${path}`;
   }
 
@@ -131,7 +134,30 @@ function addIdempotencyHeader(path: string, method: string | undefined, headers:
 
 export function normalizeBaseUrl(value: string) {
   const trimmed = value.trim().replace(/\/+$/, "");
-  return trimmed || "http://127.0.0.1:8080";
+  if (!trimmed) {
+    throw new Error("API 服务端地址不能为空");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("API 服务端地址格式无效");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("API 服务端地址不能包含用户名或密码");
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error("API 服务端地址不能包含查询参数或片段");
+  }
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLoopbackHost(parsed.hostname))) {
+    throw new Error("远程 API 必须使用 HTTPS；HTTP 仅允许本机开发地址");
+  }
+  return parsed.toString().replace(/\/+$/, "");
+}
+
+function isLoopbackHost(hostname: string) {
+  const normalized = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return normalized === "localhost" || normalized === "::1" || normalized.startsWith("127.");
 }
 
 async function toApiError(response: Response): Promise<ApiClientError> {
