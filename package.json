@@ -29,6 +29,6 @@
     "test:e2e:report": "playwright show-report output/playwright/report"
   },
   "devDependencies": {
-    "@playwright/test": "1.55.1"
+    "@playwright/test": "1.62.1"
   }
 }
