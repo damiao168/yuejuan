@@ -34,6 +34,8 @@ Copy-Item .env.example .env
 
 以下新增项都有默认值，不填也能启动：`EDUGRADE_INTERNAL_BIND_HOST`（默认 `127.0.0.1`，数据面端口只监听回环，仅 nginx 对外）、`EDUGRADE_CONTAINER_LOG_MAX_*`、各 `EDUGRADE_*_MEM_LIMIT`、`EDUGRADE_PAGE_PROCESSING_HEARTBEAT_*`。若需要从其他机器直连数据库或 MinIO 控制台，显式设置 `EDUGRADE_INTERNAL_BIND_HOST=0.0.0.0`（生产环境 preflight 会拒绝该值）。
 
+API 的 PostgreSQL 容量保护默认值为：最大连接 `10`、最大空闲连接 `5`、连接最长生命周期 `30m`、空闲回收 `5m`、单条语句超时 `60s`、锁等待超时 `5s`。可通过 `EDUGRADE_POSTGRES_MAX_*`、`EDUGRADE_POSTGRES_CONN_MAX_*`、`EDUGRADE_POSTGRES_STATEMENT_TIMEOUT` 和 `EDUGRADE_POSTGRES_LOCK_TIMEOUT` 调整；非法范围会使 API 启动失败。调整连接数前必须结合 PostgreSQL `max_connections`、API 副本数和后台工具连接预算，默认值不是容量验收结论。
+
 模型运行参数：
 
 ```text

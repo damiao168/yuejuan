@@ -3,7 +3,9 @@ package db
 import (
 	"context"
 	"database/sql"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/config"
@@ -18,23 +20,47 @@ type QueryObserver struct {
 }
 
 func OpenPostgres(cfg config.PostgresConfig, observers ...QueryObserver) (*sql.DB, func() error, error) {
-	dsn := cfg.DSN
-	if len(observers) > 0 {
-		connConfig, err := pgx.ParseConfig(cfg.DSN)
-		if err != nil {
-			return nil, nil, err
-		}
-		connConfig.Tracer = queryTracer{observer: observers[0]}
-		dsn = stdlib.RegisterConnConfig(connConfig)
-	}
-	database, err := sql.Open("pgx", dsn)
+	connConfig, err := newPostgresConnConfig(cfg, observers...)
 	if err != nil {
 		return nil, nil, err
 	}
-	database.SetMaxOpenConns(10)
-	database.SetMaxIdleConns(5)
-	database.SetConnMaxLifetime(30 * time.Minute)
-	return database, database.Close, nil
+	registeredConfig := stdlib.RegisterConnConfig(connConfig)
+	database, err := sql.Open("pgx", registeredConfig)
+	if err != nil {
+		stdlib.UnregisterConnConfig(registeredConfig)
+		return nil, nil, err
+	}
+	database.SetMaxOpenConns(cfg.MaxOpenConns)
+	database.SetMaxIdleConns(cfg.MaxIdleConns)
+	database.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	database.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+	var closeOnce sync.Once
+	var closeErr error
+	closeDatabase := func() error {
+		closeOnce.Do(func() {
+			closeErr = database.Close()
+			stdlib.UnregisterConnConfig(registeredConfig)
+		})
+		return closeErr
+	}
+	return database, closeDatabase, nil
+}
+
+func newPostgresConnConfig(cfg config.PostgresConfig, observers ...QueryObserver) (*pgx.ConnConfig, error) {
+	connConfig, err := pgx.ParseConfig(cfg.DSN)
+	if err != nil {
+		return nil, err
+	}
+	connConfig.RuntimeParams["statement_timeout"] = postgresDuration(cfg.StatementTimeout)
+	connConfig.RuntimeParams["lock_timeout"] = postgresDuration(cfg.LockTimeout)
+	if len(observers) > 0 {
+		connConfig.Tracer = queryTracer{observer: observers[0]}
+	}
+	return connConfig, nil
+}
+
+func postgresDuration(value time.Duration) string {
+	return strconv.FormatInt(value.Milliseconds(), 10) + "ms"
 }
 
 type queryTraceState struct {

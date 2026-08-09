@@ -43,7 +43,13 @@ func (c ServiceConfig) Addr() string {
 }
 
 type PostgresConfig struct {
-	DSN string
+	DSN              string
+	MaxOpenConns     int
+	MaxIdleConns     int
+	ConnMaxLifetime  time.Duration
+	ConnMaxIdleTime  time.Duration
+	StatementTimeout time.Duration
+	LockTimeout      time.Duration
 }
 
 type AuthConfig struct {
@@ -182,7 +188,13 @@ func Load(envFile string) (Config, error) {
 			TrustedProxyCIDRs:   splitCSV(getEnv("EDUGRADE_TRUSTED_PROXY_CIDRS", "")),
 		},
 		Postgres: PostgresConfig{
-			DSN: secretValues["EDUGRADE_POSTGRES_DSN"],
+			DSN:              secretValues["EDUGRADE_POSTGRES_DSN"],
+			MaxOpenConns:     getEnvInt("EDUGRADE_POSTGRES_MAX_OPEN_CONNS", 10),
+			MaxIdleConns:     getEnvInt("EDUGRADE_POSTGRES_MAX_IDLE_CONNS", 5),
+			ConnMaxLifetime:  getEnvDuration("EDUGRADE_POSTGRES_CONN_MAX_LIFETIME", 30*time.Minute),
+			ConnMaxIdleTime:  getEnvDuration("EDUGRADE_POSTGRES_CONN_MAX_IDLE_TIME", 5*time.Minute),
+			StatementTimeout: getEnvDuration("EDUGRADE_POSTGRES_STATEMENT_TIMEOUT", 60*time.Second),
+			LockTimeout:      getEnvDuration("EDUGRADE_POSTGRES_LOCK_TIMEOUT", 5*time.Second),
 		},
 		Redis: RedisConfig{
 			Addr:     getEnv("EDUGRADE_REDIS_ADDR", "127.0.0.1:6379"),
@@ -251,6 +263,9 @@ func parseBarcodeKeys(raw string) map[string][]byte {
 }
 
 func validateProductionConfig(cfg Config) error {
+	if err := validatePostgresCapacity(cfg.Postgres); err != nil {
+		return err
+	}
 	for _, cidr := range cfg.Security.TrustedProxyCIDRs {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			return fmt.Errorf("invalid EDUGRADE_TRUSTED_PROXY_CIDRS entry %q", cidr)
@@ -316,6 +331,28 @@ func validateProductionConfig(cfg Config) error {
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("unsafe production configuration: %s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func validatePostgresCapacity(cfg PostgresConfig) error {
+	if cfg.MaxOpenConns < 1 || cfg.MaxOpenConns > 500 {
+		return fmt.Errorf("EDUGRADE_POSTGRES_MAX_OPEN_CONNS must be between 1 and 500")
+	}
+	if cfg.MaxIdleConns < 0 || cfg.MaxIdleConns > cfg.MaxOpenConns {
+		return fmt.Errorf("EDUGRADE_POSTGRES_MAX_IDLE_CONNS must be between 0 and EDUGRADE_POSTGRES_MAX_OPEN_CONNS")
+	}
+	if cfg.ConnMaxLifetime < time.Minute || cfg.ConnMaxLifetime > 24*time.Hour {
+		return fmt.Errorf("EDUGRADE_POSTGRES_CONN_MAX_LIFETIME must be between 1m and 24h")
+	}
+	if cfg.ConnMaxIdleTime < 10*time.Second || cfg.ConnMaxIdleTime > cfg.ConnMaxLifetime {
+		return fmt.Errorf("EDUGRADE_POSTGRES_CONN_MAX_IDLE_TIME must be between 10s and EDUGRADE_POSTGRES_CONN_MAX_LIFETIME")
+	}
+	if cfg.StatementTimeout < time.Second || cfg.StatementTimeout > 15*time.Minute {
+		return fmt.Errorf("EDUGRADE_POSTGRES_STATEMENT_TIMEOUT must be between 1s and 15m")
+	}
+	if cfg.LockTimeout < 100*time.Millisecond || cfg.LockTimeout > cfg.StatementTimeout {
+		return fmt.Errorf("EDUGRADE_POSTGRES_LOCK_TIMEOUT must be between 100ms and EDUGRADE_POSTGRES_STATEMENT_TIMEOUT")
 	}
 	return nil
 }

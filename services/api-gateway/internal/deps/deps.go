@@ -38,9 +38,6 @@ type PostgresChecker struct {
 }
 
 func NewPostgresChecker(db *sql.DB) *PostgresChecker {
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(2)
-	db.SetConnMaxLifetime(30 * time.Minute)
 	return &PostgresChecker{db: db}
 }
 

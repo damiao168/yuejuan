@@ -43,6 +43,12 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv("EDUGRADE_HTTP_PORT", "18080")
 	t.Setenv("EDUGRADE_MINIO_USE_SSL", "true")
 	t.Setenv("EDUGRADE_WORKER_HEARTBEAT_STALE_AFTER", "45s")
+	t.Setenv("EDUGRADE_POSTGRES_MAX_OPEN_CONNS", "24")
+	t.Setenv("EDUGRADE_POSTGRES_MAX_IDLE_CONNS", "8")
+	t.Setenv("EDUGRADE_POSTGRES_CONN_MAX_LIFETIME", "45m")
+	t.Setenv("EDUGRADE_POSTGRES_CONN_MAX_IDLE_TIME", "4m")
+	t.Setenv("EDUGRADE_POSTGRES_STATEMENT_TIMEOUT", "40s")
+	t.Setenv("EDUGRADE_POSTGRES_LOCK_TIMEOUT", "3s")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -59,6 +65,26 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	}
 	if cfg.Observability.WorkerHeartbeatStaleAfter != 45*time.Second {
 		t.Fatalf("unexpected worker heartbeat stale threshold: %s", cfg.Observability.WorkerHeartbeatStaleAfter)
+	}
+	if cfg.Postgres.MaxOpenConns != 24 || cfg.Postgres.MaxIdleConns != 8 ||
+		cfg.Postgres.ConnMaxLifetime != 45*time.Minute || cfg.Postgres.ConnMaxIdleTime != 4*time.Minute ||
+		cfg.Postgres.StatementTimeout != 40*time.Second || cfg.Postgres.LockTimeout != 3*time.Second {
+		t.Fatalf("unexpected PostgreSQL capacity configuration: %#v", cfg.Postgres)
+	}
+}
+
+func TestLoadRejectsUnsafePostgresCapacityConfiguration(t *testing.T) {
+	t.Setenv("EDUGRADE_POSTGRES_MAX_OPEN_CONNS", "5")
+	t.Setenv("EDUGRADE_POSTGRES_MAX_IDLE_CONNS", "6")
+	if _, err := Load(""); err == nil {
+		t.Fatal("idle connections must not exceed the open connection ceiling")
+	}
+
+	t.Setenv("EDUGRADE_POSTGRES_MAX_IDLE_CONNS", "2")
+	t.Setenv("EDUGRADE_POSTGRES_LOCK_TIMEOUT", "2m")
+	t.Setenv("EDUGRADE_POSTGRES_STATEMENT_TIMEOUT", "1m")
+	if _, err := Load(""); err == nil {
+		t.Fatal("lock timeout must not exceed the statement timeout")
 	}
 }
 
