@@ -13,7 +13,10 @@ from .dashscope_native_contract import (
     map_dashscope_error,
     parse_dashscope_text_response,
 )
-from .dashscope_native_transport import MAX_DASHSCOPE_RESPONSE_BYTES, MAX_DASHSCOPE_TEXT_REQUEST_BYTES
+from .dashscope_native_transport import (
+    MAX_DASHSCOPE_RESPONSE_BYTES,
+    MAX_DASHSCOPE_TEXT_REQUEST_BYTES,
+)
 from .errors import AgentError
 
 MODEL_RISK_FLAGS = [

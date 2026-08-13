@@ -12,7 +12,7 @@ var (
 	ErrConflict              = errors.New("calibration state conflict")
 	ErrPolicyMissing         = errors.New("calibration policy is not configured")
 	ErrGoldSetIncomplete     = errors.New("active approved Gold Set is insufficient")
-	ErrSampleNotInSession    = errors.New("Gold Paper is not part of this calibration session")
+	ErrSampleNotInSession    = errors.New("gold paper is not part of this calibration session")
 	ErrQualificationRequired = errors.New("current grader qualification is required")
 )
 

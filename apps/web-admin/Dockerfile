@@ -8,8 +8,15 @@ COPY package.json package-lock.json ./
 COPY apps/web-admin/package.json apps/web-admin/package.json
 COPY apps/desktop-client/package.json apps/desktop-client/package.json
 COPY packages/shared-types/package.json packages/shared-types/package.json
+COPY packages/design-tokens/package.json packages/design-tokens/package.json
+COPY packages/sdk/package.json packages/sdk/package.json
+COPY packages/ui/package.json packages/ui/package.json
 RUN npm ci --workspace apps/web-admin --include-workspace-root
 
+COPY packages/shared-types packages/shared-types
+COPY packages/design-tokens packages/design-tokens
+COPY packages/sdk packages/sdk
+COPY packages/ui packages/ui
 COPY apps/web-admin apps/web-admin
 ARG VITE_API_BASE_URL=
 ARG VITE_RELEASE_ID=local
