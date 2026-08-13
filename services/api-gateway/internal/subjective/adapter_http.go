@@ -227,6 +227,11 @@ func (a *HTTPAdapter) buildRequest(requestID string, input AdapterInput) (gradin
 			SuspectedInjection:       input.PromptGuard.SuspectedInjection,
 			Signals:                  nonNilStrings(input.PromptGuard.Signals),
 		},
+		OutputConstraint: gradingAgentOutputConstraint{
+			CriteriaEvidenceOnly: input.OutputConstraint.CriteriaEvidenceOnly,
+			AllowModelFinalScore: false,
+			FinalScoreAuthority:  input.OutputConstraint.FinalScoreAuthority,
+		},
 	}, nil
 }
 
@@ -450,22 +455,23 @@ func nonNilAny(values []any) []any {
 }
 
 type gradingAgentRequest struct {
-	SchemaVersion   string                  `json:"schema_version"`
-	RequestID       string                  `json:"request_id"`
-	Subject         string                  `json:"subject"`
-	GradeLevel      string                  `json:"grade_level"`
-	QuestionID      string                  `json:"question_id"`
-	AnswerSegmentID string                  `json:"answer_segment_id"`
-	QuestionType    string                  `json:"question_type"`
-	QuestionText    string                  `json:"question_text"`
-	MaxScore        float64                 `json:"max_score"`
-	AnswerText      string                  `json:"answer_text"`
-	OCRConfidence   float64                 `json:"ocr_confidence"`
-	RubricVersion   string                  `json:"rubric_version"`
-	PromptVersion   string                  `json:"prompt_version"`
-	Rubric          gradingAgentRubric      `json:"rubric"`
-	ModelPolicy     gradingAgentModelPolicy `json:"model_policy"`
-	PromptGuard     gradingAgentPromptGuard `json:"prompt_guard"`
+	SchemaVersion    string                       `json:"schema_version"`
+	RequestID        string                       `json:"request_id"`
+	Subject          string                       `json:"subject"`
+	GradeLevel       string                       `json:"grade_level"`
+	QuestionID       string                       `json:"question_id"`
+	AnswerSegmentID  string                       `json:"answer_segment_id"`
+	QuestionType     string                       `json:"question_type"`
+	QuestionText     string                       `json:"question_text"`
+	MaxScore         float64                      `json:"max_score"`
+	AnswerText       string                       `json:"answer_text"`
+	OCRConfidence    float64                      `json:"ocr_confidence"`
+	RubricVersion    string                       `json:"rubric_version"`
+	PromptVersion    string                       `json:"prompt_version"`
+	Rubric           gradingAgentRubric           `json:"rubric"`
+	ModelPolicy      gradingAgentModelPolicy      `json:"model_policy"`
+	PromptGuard      gradingAgentPromptGuard      `json:"prompt_guard"`
+	OutputConstraint gradingAgentOutputConstraint `json:"output_constraint"`
 }
 
 type gradingAgentRubric struct {
@@ -501,6 +507,12 @@ type gradingAgentPromptGuard struct {
 	StudentAnswerIsUntrusted bool     `json:"student_answer_is_untrusted"`
 	SuspectedInjection       bool     `json:"suspected_injection"`
 	Signals                  []string `json:"signals"`
+}
+
+type gradingAgentOutputConstraint struct {
+	CriteriaEvidenceOnly bool   `json:"criteria_evidence_only"`
+	AllowModelFinalScore bool   `json:"allow_model_final_score"`
+	FinalScoreAuthority  string `json:"final_score_authority"`
 }
 
 type gradingAgentResponse struct {

@@ -7,18 +7,25 @@ import (
 	"io"
 	"net/http"
 
+	"edugrade-enterprise/services/api-gateway/internal/assessment"
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/grading"
+	"edugrade-enterprise/services/api-gateway/internal/gradingevaluation"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/modelcalibration"
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
 
 type Handler struct {
-	store   Store
-	adapter LLMGradingAdapter
-	audit   auth.Store
-	runtime workerruntime.Store
+	store         Store
+	adapter       LLMGradingAdapter
+	audit         auth.Store
+	runtime       workerruntime.Store
+	eligibility   EligibilityGate
+	evaluation    EvaluationEvidenceProvider
+	calibration   CalibrationEvidenceProvider
+	parserQuality ParserQualityProvider
 }
 
 func NewHandler(store Store, adapter LLMGradingAdapter, audit auth.Store) *Handler {
@@ -27,6 +34,46 @@ func NewHandler(store Store, adapter LLMGradingAdapter, audit auth.Store) *Handl
 
 func (h *Handler) WithWorkerRuntimeStore(runtime workerruntime.Store) *Handler {
 	h.runtime = runtime
+	return h
+}
+
+func (h *Handler) WithEligibilityGate(gate EligibilityGate) *Handler {
+	h.eligibility = gate
+	return h
+}
+
+// EvaluationEvidenceProvider supplies only the aggregate, aligned offline
+// evidence needed by A14. It cannot expose answers or make a model eligible
+// by itself; the admission policy remains the final gate.
+type EvaluationEvidenceProvider interface {
+	AdmissionEvidenceFor(context.Context, string, string, string, string, assessment.SubjectCode, string) (gradingevaluation.AdmissionEvidence, error)
+}
+
+func (h *Handler) WithEvaluationEvidence(provider EvaluationEvidenceProvider) *Handler {
+	h.evaluation = provider
+	return h
+}
+
+type CalibrationEvidenceProvider interface {
+	Approved(context.Context, string, modelcalibration.Axis) (modelcalibration.ApprovedEvidence, error)
+	RecordCandidate(context.Context, string, modelcalibration.RecordCandidateInput) (modelcalibration.Candidate, error)
+}
+
+func (h *Handler) WithCalibrationEvidence(provider CalibrationEvidenceProvider) *Handler {
+	h.calibration = provider
+	return h
+}
+
+// ParserQualityProvider supplies specialised parser quality only for the
+// answer segment being considered. It must return nil when that evidence is
+// absent so the AI admission policy can abstain rather than treat OCR text
+// quality as a mathematical, chemical, diagram, or table parse.
+type ParserQualityProvider interface {
+	ParserQualityForSegment(context.Context, string, string, assessment.SubjectCode, string) (*float64, error)
+}
+
+func (h *Handler) WithParserQuality(provider ParserQualityProvider) *Handler {
+	h.parserQuality = provider
 	return h
 }
 
@@ -94,19 +141,40 @@ func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 		_, updateErr := h.store.UpdateRun(r.Context(), user.TenantID, runID, UpdateRunInput{Status: status, GradeID: grade.ID, ErrorCode: errorCode})
 		return updateErr
 	}
+	decision, allowed, decisionErr := h.decideEligibility(r.Context(), user.TenantID, runID, ctx, policy)
+	if decisionErr != nil {
+		writeStoreError(w, r, decisionErr)
+		return
+	}
+	if !allowed {
+		grade, createErr := h.store.CreateGrade(r.Context(), user.TenantID, user.ID, failedGrade(ctx, policy, runID, "ai_eligibility_abstained", eligibilityAbstentionOutput(policy, decision)))
+		if createErr != nil {
+			writeStoreError(w, r, createErr)
+			return
+		}
+		if updateErr := finishRun(RunFailed, grade, "ai_eligibility_abstained"); updateErr != nil {
+			writeStoreError(w, r, updateErr)
+			return
+		}
+		h.auditAction(r, "subjective.ai_eligibility_abstained", "subjective_grading_run", runID, "external AI was not admitted")
+		httpx.JSON(w, http.StatusCreated, map[string]any{"grade": grade, "eligibility_decision": decision})
+		return
+	}
 	promptGuard := InspectPromptInjection(ctx.AnswerText)
 	adapterInput := AdapterInput{
-		RequestID:      requestID,
-		SegmentID:      ctx.SegmentID,
-		Subject:        ctx.Subject,
-		GradeLevel:     ctx.GradeLevel,
-		Question:       ctx.Question,
-		Rubric:         ctx.Rubric,
-		AnswerText:     ctx.AnswerText,
-		AnswerImageRef: ctx.AnswerImageRef,
-		OCRConfidence:  ctx.OCRConfidence,
-		ModelPolicy:    policy,
-		PromptGuard:    promptGuard,
+		RequestID:          requestID,
+		SegmentID:          ctx.SegmentID,
+		Subject:            ctx.Subject,
+		GradeLevel:         ctx.GradeLevel,
+		Question:           ctx.Question,
+		Rubric:             ctx.Rubric,
+		AnswerText:         ctx.AnswerText,
+		AnswerImageRef:     ctx.AnswerImageRef,
+		OCRConfidence:      ctx.OCRConfidence,
+		AssessmentSnapshot: ctx.AssessmentSnapshot,
+		ModelPolicy:        policy,
+		PromptGuard:        promptGuard,
+		OutputConstraint:   decision.OutputConstraint,
 	}
 	output, err := h.adapter.Grade(r.Context(), adapterInput)
 	output.RequestID = requestID
@@ -155,6 +223,11 @@ func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ApplyPromptGuard(&output, promptGuard)
+	DeriveSuggestedScore(&output)
+	if err := h.recordCalibrationCandidate(r.Context(), user.TenantID, runID, ctx, policy, decision, &output); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
 	ApplyReviewPolicy(&output, ctx, policy)
 	grade, err := h.store.CreateGrade(r.Context(), user.TenantID, user.ID, successfulGrade(ctx, policy, runID, output))
 	if err != nil {
@@ -371,16 +444,32 @@ func (h *Handler) CompleteWorker(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
+	policy := ModelPolicy{ModelVersion: run.ModelVersion, PromptVersion: run.PromptVersion, MinConfidence: run.MinConfidence}
+	decision, allowed, decisionErr := h.decideEligibility(r.Context(), user.TenantID, run.ID, ctx, policy)
+	if decisionErr != nil {
+		writeStoreError(w, r, decisionErr)
+		return
+	}
+	if !allowed {
+		_, _ = h.runtime.Fail(r.Context(), user.TenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: false, ErrorCode: "ai_eligibility_abstained", ErrorDetail: map[string]any{"decision_id": decision.ID}, DurationMS: input.DurationMS})
+		_, _ = h.store.UpdateRun(r.Context(), user.TenantID, run.ID, UpdateRunInput{Status: RunFailed, ErrorCode: "ai_eligibility_abstained", AttemptCount: task.AttemptCount})
+		httpx.Error(w, r, http.StatusUnprocessableEntity, "ai_eligibility_abstained", "AI grading is not admitted for this frozen question context")
+		return
+	}
 	if err := ValidateOutput(input.Output, ctx); err != nil {
 		_, _ = h.runtime.Fail(r.Context(), user.TenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: false, ErrorCode: "invalid_model_output", ErrorDetail: map[string]any{"reason": err.Error()}, DurationMS: input.DurationMS})
 		_, _ = h.store.UpdateRun(r.Context(), user.TenantID, run.ID, UpdateRunInput{Status: RunFailed, ErrorCode: "invalid_model_output", AttemptCount: task.AttemptCount})
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_model_output", "worker result failed schema validation")
 		return
 	}
-	policy := ModelPolicy{ModelVersion: run.ModelVersion, PromptVersion: run.PromptVersion, MinConfidence: run.MinConfidence}
 	promptGuard := InspectPromptInjection(ctx.AnswerText)
 	output := input.Output
+	DeriveSuggestedScore(&output)
 	ApplyPromptGuard(&output, promptGuard)
+	if err := h.recordCalibrationCandidate(r.Context(), user.TenantID, run.ID, ctx, policy, decision, &output); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
 	ApplyReviewPolicy(&output, ctx, policy)
 	grade, err := h.store.GetGradeByAdapterRequestID(r.Context(), user.TenantID, run.RequestID)
 	if errors.Is(err, ErrNotFound) {
@@ -444,8 +533,19 @@ func (h *Handler) ExecuteWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy := ModelPolicy{ModelVersion: run.ModelVersion, PromptVersion: run.PromptVersion, MinConfidence: run.MinConfidence}
+	decision, allowed, decisionErr := h.decideEligibility(r.Context(), user.TenantID, run.ID, ctx, policy)
+	if decisionErr != nil {
+		writeStoreError(w, r, decisionErr)
+		return
+	}
+	if !allowed {
+		_, _ = h.runtime.Fail(r.Context(), user.TenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: false, ErrorCode: "ai_eligibility_abstained", ErrorDetail: map[string]any{"decision_id": decision.ID}})
+		_, _ = h.store.UpdateRun(r.Context(), user.TenantID, run.ID, UpdateRunInput{Status: RunFailed, ErrorCode: "ai_eligibility_abstained", AttemptCount: task.AttemptCount})
+		httpx.Error(w, r, http.StatusUnprocessableEntity, "ai_eligibility_abstained", "AI grading is not admitted for this frozen question context")
+		return
+	}
 	promptGuard := InspectPromptInjection(ctx.AnswerText)
-	output, err := h.adapter.Grade(r.Context(), AdapterInput{RequestID: run.RequestID, SegmentID: ctx.SegmentID, Subject: ctx.Subject, GradeLevel: ctx.GradeLevel, Question: ctx.Question, Rubric: ctx.Rubric, AnswerText: ctx.AnswerText, AnswerImageRef: ctx.AnswerImageRef, OCRConfidence: ctx.OCRConfidence, ModelPolicy: policy, PromptGuard: promptGuard})
+	output, err := h.adapter.Grade(r.Context(), AdapterInput{RequestID: run.RequestID, SegmentID: ctx.SegmentID, Subject: ctx.Subject, GradeLevel: ctx.GradeLevel, Question: ctx.Question, Rubric: ctx.Rubric, AnswerText: ctx.AnswerText, AnswerImageRef: ctx.AnswerImageRef, OCRConfidence: ctx.OCRConfidence, AssessmentSnapshot: ctx.AssessmentSnapshot, ModelPolicy: policy, PromptGuard: promptGuard, OutputConstraint: decision.OutputConstraint})
 	output.RequestID = run.RequestID
 	if err != nil {
 		httpx.Error(w, r, http.StatusServiceUnavailable, "ai_service_unavailable", "AI grading service is unavailable; use manual review")

@@ -23,6 +23,7 @@ import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { examSubjectLabel } from "../constants/examStatus";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
+import { QuestionAppealWorkspace } from "../components/QuestionAppealWorkspace";
 import type { SessionUser } from "../auth/session";
 import type { StatusTone } from "../types";
 import type { ProductExperience } from "../router/experience";
@@ -1082,6 +1083,13 @@ export function AppealCenterPage({ mode, canRead, canManage, canWork, canReadAud
           />
         </aside>}
       </section>
+
+      <QuestionAppealWorkspace
+        examId={examFilter === "all" ? "" : examFilter}
+        canManage={canManage}
+        canWork={canWork}
+        onChanged={() => void loadList()}
+      />
     </div>
   );
 }

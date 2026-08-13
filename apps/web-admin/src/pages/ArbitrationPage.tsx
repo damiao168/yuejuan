@@ -19,6 +19,8 @@ import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import type { StatusTone } from "../types";
 import { hashQueryParam } from "../router/query";
+import { GoldCoverageGaps } from "../features/gold-papers";
+import { AnswerGroupingDrawer } from "../features/answer-groups";
 
 type ScopeFilter = "mine" | "all";
 type StatusFilter = "active" | "pending" | "assigned" | "submitted";
@@ -159,6 +161,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [actioning, setActioning] = useState<string | null>(null);
+  const [answerGroupingOpen, setAnswerGroupingOpen] = useState(false);
   const taskRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const auditRequestRef = useRef(0);
@@ -594,11 +597,18 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
           <p>对比两次评分及其依据，确认最终得分。</p>
         </div>
         <Space wrap>
+          {!personalScope ? (
+            <Button disabled={!selectedTask?.exam_id && !initialExamId} onClick={() => setAnswerGroupingOpen(true)}>
+              相似答案分组
+            </Button>
+          ) : null}
           <Button icon={<RefreshCw size={16} />} onClick={() => void refreshCurrent()} loading={loadingTasks || detailLoading}>
             刷新
           </Button>
         </Space>
       </section>
+
+      {!personalScope ? <GoldCoverageGaps examId={initialExamId} /> : null}
 
       <section className="arbitration-filterbar">
         {personalScope ? <span className="scope-fixed-label">仅显示分配给我的任务</span> : <Select className="toolbar-select" value={scope} options={scopeOptions} onChange={setScope} />}
@@ -768,6 +778,13 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
           </section>
         </aside>
       </section>
+      <AnswerGroupingDrawer
+        open={answerGroupingOpen}
+        examId={selectedTask?.exam_id || initialExamId}
+        initialQuestionId={selectedTask?.question_id ?? ""}
+        canManage={canAssign}
+        onClose={() => setAnswerGroupingOpen(false)}
+      />
     </div>
   );
 }

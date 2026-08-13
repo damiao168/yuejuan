@@ -6,9 +6,16 @@ import (
 	"strings"
 	"time"
 
+	"edugrade-enterprise/services/api-gateway/internal/aidisagreement"
+	"edugrade-enterprise/services/api-gateway/internal/aieligibility"
+	"edugrade-enterprise/services/api-gateway/internal/answergroup"
 	"edugrade-enterprise/services/api-gateway/internal/appeal"
+	"edugrade-enterprise/services/api-gateway/internal/assessment"
 	"edugrade-enterprise/services/api-gateway/internal/auth"
+	"edugrade-enterprise/services/api-gateway/internal/backmark"
+	"edugrade-enterprise/services/api-gateway/internal/calibration"
 	"edugrade-enterprise/services/api-gateway/internal/capture"
+	"edugrade-enterprise/services/api-gateway/internal/captureupload"
 	"edugrade-enterprise/services/api-gateway/internal/config"
 	"edugrade-enterprise/services/api-gateway/internal/dashboard"
 	"edugrade-enterprise/services/api-gateway/internal/db"
@@ -16,12 +23,16 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/evidence"
 	"edugrade-enterprise/services/api-gateway/internal/exam"
 	"edugrade-enterprise/services/api-gateway/internal/files"
+	"edugrade-enterprise/services/api-gateway/internal/goldpaper"
+	"edugrade-enterprise/services/api-gateway/internal/graderdrift"
 	"edugrade-enterprise/services/api-gateway/internal/grading"
+	"edugrade-enterprise/services/api-gateway/internal/gradingevaluation"
 	"edugrade-enterprise/services/api-gateway/internal/handlers"
 	"edugrade-enterprise/services/api-gateway/internal/idempotency"
 	"edugrade-enterprise/services/api-gateway/internal/imagequality"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
 	"edugrade-enterprise/services/api-gateway/internal/middleware"
+	"edugrade-enterprise/services/api-gateway/internal/modelcalibration"
 	"edugrade-enterprise/services/api-gateway/internal/modelgovernance"
 	"edugrade-enterprise/services/api-gateway/internal/observability"
 	ocrpkg "edugrade-enterprise/services/api-gateway/internal/ocr"
@@ -29,17 +40,61 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/org"
 	"edugrade-enterprise/services/api-gateway/internal/outbox"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
+	"edugrade-enterprise/services/api-gateway/internal/processing"
+	"edugrade-enterprise/services/api-gateway/internal/qualitydashboard"
+	"edugrade-enterprise/services/api-gateway/internal/regrade"
+	"edugrade-enterprise/services/api-gateway/internal/regraderelease"
+	"edugrade-enterprise/services/api-gateway/internal/releasegate"
 	"edugrade-enterprise/services/api-gateway/internal/report"
 	"edugrade-enterprise/services/api-gateway/internal/review"
+	"edugrade-enterprise/services/api-gateway/internal/reviewannotation"
 	"edugrade-enterprise/services/api-gateway/internal/score"
+	"edugrade-enterprise/services/api-gateway/internal/scorerelease"
+	"edugrade-enterprise/services/api-gateway/internal/seedquality"
 	"edugrade-enterprise/services/api-gateway/internal/segment"
+	"edugrade-enterprise/services/api-gateway/internal/studentportal"
 	"edugrade-enterprise/services/api-gateway/internal/subjective"
 	"edugrade-enterprise/services/api-gateway/internal/submission"
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
+	"edugrade-enterprise/services/api-gateway/internal/workspace"
 )
 
 type Server struct {
 	handler http.Handler
+}
+
+// releaseGatePublisher adapts A20's evidence-producing coordinator to A18's
+// narrow publish seam. Evidence stays append-only in A20 and is retrieved
+// through its scoped endpoint, not echoed as mutable publish input.
+type releaseGatePublisher struct {
+	coordinator *releasegate.PublicationCoordinator
+}
+
+func (p releaseGatePublisher) PublishPublication(ctx context.Context, tenantID, examID, releaseID, actorID string) (scorerelease.Release, error) {
+	release, _, err := p.coordinator.Publish(ctx, tenantID, examID, releaseID, actorID)
+	return release, err
+}
+
+// regradeBlocker projects only publication-relevant state. A20 does not need
+// regrade scores, reviewers, or answer material to decide whether publishing
+// must wait for a correction plan.
+type regradeBlocker struct{ service *regrade.Service }
+
+func (b regradeBlocker) BlockingRegradeCount(ctx context.Context, tenantID, examID string) (int, error) {
+	jobs, err := b.service.List(ctx, tenantID, examID, "")
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, job := range jobs {
+		// A ready plan is frozen and can safely be materialised as its own
+		// successor release. All earlier states are still changing evidence and
+		// must block public publication.
+		if job.Status != regrade.StatusCancelled && job.Status != regrade.StatusReadyForRelease {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
@@ -76,12 +131,44 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 	subjectiveStore := subjective.NewPostgresStore(postgresDB)
 	evidenceStore := evidence.NewPostgresStore(postgresDB)
 	reviewStore := review.NewPostgresStore(postgresDB)
+	reviewAnnotationStore := reviewannotation.NewPostgresStore(postgresDB)
+	goldPaperStore := goldpaper.NewPostgresStore(postgresDB)
+	calibrationStore := calibration.NewPostgresStore(postgresDB)
+	answerGroupStore := answergroup.NewPostgresStore(postgresDB, nil, answergroup.DefaultPolicy())
+	backmarkStore := backmark.NewPostgresStore(postgresDB)
+	regradeStore := regrade.NewPostgresStore(postgresDB)
+	graderDriftStore := graderdrift.NewPostgresStore(postgresDB)
+	seedQualityStore := seedquality.NewPostgresStore(postgresDB)
 	scoreStore := score.NewPostgresStore(postgresDB)
 	appealStore := appeal.NewPostgresStore(postgresDB)
+	publishedQuestionAppealStore := appeal.NewPublishedQuestionAppealPostgresStore(postgresDB)
 	reportStore := report.NewPostgresStore(postgresDB)
 	captureStore := capture.NewPostgresStoreWithBarcodeKeyring(postgresDB, capture.BarcodeKeyring{ActiveKeyID: cfg.Barcode.ActiveKeyID, Keys: cfg.Barcode.HMACKeys})
+	captureUploadStore := captureupload.NewPostgresStore(postgresDB)
+	processingStore := processing.NewPostgresStore(postgresDB)
 	modelGovernanceStore := modelgovernance.NewPostgresStore(postgresDB)
+	assessmentStore := assessment.NewPostgresStore(postgresDB)
+	eligibilityStore := aieligibility.NewPostgresStore(postgresDB)
+	gradingEvaluationStore := gradingevaluation.NewPostgresStore(postgresDB)
+	modelCalibrationStore := modelcalibration.NewPostgresStore(postgresDB)
+	aiDisagreementStore := aidisagreement.NewPostgresStore(postgresDB)
 	idempotencyStore := idempotency.NewPostgresStore(postgresDB)
+	qualityCalibrationService := calibration.NewService(calibrationStore, goldPaperStore)
+	qualitySeedService := seedquality.NewService(seedQualityStore, goldPaperStore, qualityCalibrationService, assessmentStore)
+	qualityDriftService := graderdrift.NewService(graderDriftStore, qualitySeedService, qualityCalibrationService)
+	qualityDashboardService := qualitydashboard.NewService(qualitydashboard.Sources{
+		Questions:   qualitydashboard.NewPostgresQuestionReader(postgresDB),
+		Gold:        goldPaperStore,
+		Calibration: qualitydashboard.NewPostgresCalibrationReader(postgresDB),
+		Seeds:       seedQualityStore,
+		Groups:      answerGroupStore,
+		Review:      reviewStore,
+		Drift:       qualitydashboard.NewDriftReader(qualityDriftService),
+		Backmark:    qualitydashboard.NewBackmarkReader(backmark.NewService(backmarkStore)),
+	})
+	scoreReleaseStore := scorerelease.NewPostgresStore(postgresDB, qualityDashboardService)
+	releaseGateStore := releasegate.NewPostgresStore(postgresDB)
+	studentPortalStore := studentportal.NewPostgresStore(postgresDB)
 	metricsRegistry.SetDatabaseStats(func() observability.DatabaseStats {
 		stats := postgresDB.Stats()
 		return observability.DatabaseStats{
@@ -191,7 +278,7 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 	})
 
 	loginLimiter := auth.NewRedisLoginFailureLimiter(redisChecker.Client(), cfg.Auth.LoginFailureLimit, cfg.Auth.LoginFailureWindow)
-	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, scoreStore, appealStore, reportStore, captureStore, modelGovernanceStore, idempotencyStore, fileReconciler, loginLimiter, metricsRegistry)
+	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, reviewAnnotationStore, goldPaperStore, calibrationStore, answerGroupStore, backmarkStore, regradeStore, graderDriftStore, seedQualityStore, scoreStore, scoreReleaseStore, releaseGateStore, studentPortalStore, appealStore, publishedQuestionAppealStore, reportStore, captureStore, captureUploadStore, processingStore, modelGovernanceStore, assessmentStore, eligibilityStore, gradingEvaluationStore, modelCalibrationStore, aiDisagreementStore, idempotencyStore, fileReconciler, loginLimiter, metricsRegistry, qualityDashboardService)
 	cleanup := func() {
 		for i := len(cleanups) - 1; i >= 0; i-- {
 			_ = cleanups[i]()
@@ -218,6 +305,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	var loginLimiter auth.LoginLimiter
 	var metricsRegistry *observability.Registry
 	var fileReconciliationReader files.ReconciliationReader
+	var qualityDashboardService *qualitydashboard.Service
 	for _, optionalStore := range optionalStores {
 		if limiter, ok := optionalStore.(auth.LoginLimiter); ok && limiter != nil {
 			loginLimiter = limiter
@@ -254,11 +342,30 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	var subjectiveStore subjective.Store = subjective.NewMemoryStore()
 	var evidenceStore evidence.Store = evidence.NewMemoryStore()
 	var reviewStore review.Store = review.NewMemoryStore()
+	var reviewAnnotationStore reviewannotation.Store = reviewannotation.NewMemoryStore()
+	var goldPaperStore goldpaper.Store = goldpaper.NewMemoryStore()
+	var calibrationStore calibration.Store = calibration.NewMemoryStore()
+	var answerGroupStore answergroup.Store = answergroup.NewMemoryStore(nil, answergroup.DefaultPolicy())
+	var backmarkStore backmark.Store = backmark.NewMemoryStore()
+	var regradeStore regrade.Store = regrade.NewMemoryStore()
+	var graderDriftStore graderdrift.Store = graderdrift.NewMemoryStore()
+	var seedQualityStore seedquality.Store = seedquality.NewMemoryStore()
 	var scoreStore score.Store = score.NewMemoryStore()
+	var scoreReleaseStore scorerelease.Store = scorerelease.NewMemoryStore()
+	var releaseGateStore releasegate.Store = releasegate.NewMemoryStore()
+	var studentPortalStore studentportal.Store = studentportal.NewMemoryStore()
 	var appealStore appeal.Store = appeal.NewMemoryStore()
+	var publishedQuestionAppealStore appeal.PublishedQuestionAppealStore = appeal.NewPublishedQuestionAppealMemoryStore()
 	var reportStore report.Store = report.NewMemoryStore()
 	var captureStore capture.Store = capture.NewMemoryStore()
+	var captureUploadStore captureupload.Store = captureupload.NewMemoryStore()
+	var processingStore processing.Store = processing.NewMemoryStore()
 	var modelGovernanceStore modelgovernance.Store = modelgovernance.NewMemoryStore()
+	var assessmentStore assessment.Store = assessment.NewMemoryStore()
+	var eligibilityStore aieligibility.Store
+	var gradingEvaluationStore gradingevaluation.Store = gradingevaluation.NewMemoryStore()
+	var modelCalibrationStore modelcalibration.Store = modelcalibration.NewMemoryStore()
+	var aiDisagreementStore aidisagreement.Store = aidisagreement.NewMemoryStore()
 	var idempotencyStore idempotency.Store = idempotency.NewMemoryStore()
 	for _, optionalStore := range optionalStores {
 		switch store := optionalStore.(type) {
@@ -290,13 +397,61 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 			if store != nil {
 				reviewStore = store
 			}
+		case reviewannotation.Store:
+			if store != nil {
+				reviewAnnotationStore = store
+			}
+		case goldpaper.Store:
+			if store != nil {
+				goldPaperStore = store
+			}
+		case calibration.Store:
+			if store != nil {
+				calibrationStore = store
+			}
+		case answergroup.Store:
+			if store != nil {
+				answerGroupStore = store
+			}
+		case backmark.Store:
+			if store != nil {
+				backmarkStore = store
+			}
+		case regrade.Store:
+			if store != nil {
+				regradeStore = store
+			}
+		case graderdrift.Store:
+			if store != nil {
+				graderDriftStore = store
+			}
+		case seedquality.Store:
+			if store != nil {
+				seedQualityStore = store
+			}
 		case score.Store:
 			if store != nil {
 				scoreStore = store
 			}
+		case scorerelease.Store:
+			if store != nil {
+				scoreReleaseStore = store
+			}
+		case releasegate.Store:
+			if store != nil {
+				releaseGateStore = store
+			}
+		case studentportal.Store:
+			if store != nil {
+				studentPortalStore = store
+			}
 		case appeal.Store:
 			if store != nil {
 				appealStore = store
+			}
+		case appeal.PublishedQuestionAppealStore:
+			if store != nil {
+				publishedQuestionAppealStore = store
 			}
 		case report.Store:
 			if store != nil {
@@ -306,13 +461,45 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 			if store != nil {
 				captureStore = store
 			}
+		case captureupload.Store:
+			if store != nil {
+				captureUploadStore = store
+			}
+		case processing.Store:
+			if store != nil {
+				processingStore = store
+			}
 		case modelgovernance.Store:
 			if store != nil {
 				modelGovernanceStore = store
 			}
+		case assessment.Store:
+			if store != nil {
+				assessmentStore = store
+			}
+		case aieligibility.Store:
+			if store != nil {
+				eligibilityStore = store
+			}
+		case gradingevaluation.Store:
+			if store != nil {
+				gradingEvaluationStore = store
+			}
+		case modelcalibration.Store:
+			if store != nil {
+				modelCalibrationStore = store
+			}
+		case aidisagreement.Store:
+			if store != nil {
+				aiDisagreementStore = store
+			}
 		case idempotency.Store:
 			if store != nil {
 				idempotencyStore = store
+			}
+		case *qualitydashboard.Service:
+			if store != nil {
+				qualityDashboardService = store
 			}
 		}
 	}
@@ -322,6 +509,12 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	imageQualityHandler := imagequality.NewHandler(imageQualityStore, submissionStore, fileStore, authStore, workerRuntimeStore).WithCaptureStore(captureStore)
 	workerRuntimeHandler := workerruntime.NewHandler(workerRuntimeStore, authStore, workerSourceLeaseRenewer{imageQuality: imageQualityStore})
 	captureHandler := capture.NewHandler(captureStore, fileStore, examStore, workerRuntimeStore, authStore)
+	var captureUploadHandler *captureupload.Handler
+	if lifecycleFiles, ok := fileStore.(files.LifecycleStore); ok {
+		captureUploadHandler = captureupload.NewHandler(captureupload.NewService(captureUploadStore, captureStore, lifecycleFiles, objectStore, cfg.Files), authStore)
+	}
+	processingService := processing.NewService(processingStore, workerRuntimeStore)
+	processingHandler := processing.NewHandler(processingService, authStore)
 	gradingHandler := grading.NewHandler(gradingStore, grading.NewEngine(), authStore)
 	gradingHandler.SetProductionDependencies(workerRuntimeStore, fileStore)
 	var subjectiveAdapter subjective.LLMGradingAdapter
@@ -345,11 +538,57 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	} else {
 		subjectiveAdapter = subjective.NewDisabledAdapter("ai_grading_disabled", cfg.AIService.ModelVersion, cfg.AIService.PromptVersion)
 	}
-	subjectiveHandler := subjective.NewHandler(subjectiveStore, subjectiveAdapter, authStore).WithWorkerRuntimeStore(workerRuntimeStore)
+	gradingEvaluationService := gradingevaluation.NewService(gradingEvaluationStore)
+	modelCalibrationService := modelcalibration.NewService(modelCalibrationStore, modelcalibration.NewEvaluationReader(gradingEvaluationService))
+	subjectiveHandler := subjective.NewHandler(subjectiveStore, subjectiveAdapter, authStore).WithWorkerRuntimeStore(workerRuntimeStore).WithEvaluationEvidence(gradingEvaluationService).WithCalibrationEvidence(modelCalibrationService).WithParserQuality(processingService)
+	var eligibilityService *aieligibility.Service
+	var eligibilityHandler *aieligibility.Handler
+	if eligibilityStore != nil {
+		eligibilityService = aieligibility.NewService(eligibilityStore)
+		eligibilityHandler = aieligibility.NewHandler(eligibilityService)
+		subjectiveHandler.WithEligibilityGate(eligibilityService)
+	}
+	gradingEvaluationHandler := gradingevaluation.NewHandler(gradingEvaluationService)
+	modelCalibrationHandler := modelcalibration.NewHandler(modelCalibrationService)
+	aiDisagreementService := aidisagreement.NewService(aiDisagreementStore)
+	aiDisagreementHandler := aidisagreement.NewHandler(aiDisagreementService)
 	evidenceHandler := evidence.NewHandler(evidenceStore, evidence.NewEngine(), authStore)
-	reviewHandler := review.NewHandler(reviewStore, authStore, segmentHandler.GetImage, fileHandler.Download)
+	calibrationService := calibration.NewService(calibrationStore, goldPaperStore)
+	calibrationHandler := calibration.NewHandler(calibrationService, authStore)
+	seedQualityService := seedquality.NewService(seedQualityStore, goldPaperStore, calibrationService, assessmentStore)
+	seedQualityHandler := seedquality.NewHandler(seedQualityService, authStore)
+	graderDriftService := graderdrift.NewService(graderDriftStore, seedQualityService, calibrationService)
+	graderDriftHandler := graderdrift.NewHandler(graderDriftService, authStore)
+	backmarkService := backmark.NewService(backmarkStore)
+	if contextStore, ok := reviewStore.(review.TaskContextStore); ok {
+		backmarkService.WithContextSource(contextStore)
+	}
+	backmarkService.WithTaskSource(reviewStore)
+	regradeService := regrade.NewService(regradeStore)
+	if contextStore, ok := regradeStore.(regrade.ContextSource); ok {
+		regradeService.WithContextSource(contextStore)
+	}
+	regradeHandler := regrade.NewHandler(regradeService, authStore).WithSegmentImage(segmentHandler.GetImage)
+	backmarkHandler := backmark.NewHandler(backmarkService, authStore).WithSegmentImage(segmentHandler.GetImage).WithRegradeService(regradeService)
+	var qualityDashboardHandler *qualitydashboard.Handler
+	if qualityDashboardService != nil {
+		qualityDashboardHandler = qualitydashboard.NewHandler(qualityDashboardService)
+	}
+	reviewHandler := review.NewHandler(reviewStore, authStore, segmentHandler.GetImage, fileHandler.Download).WithQualificationGate(calibrationService).WithSeedHook(seedQualityService).WithSeedObservationRefresher(graderDriftService).WithAIHumanDisagreementObserver(aiDisagreementService)
+	reviewAnnotationHandler := reviewannotation.NewHandler(reviewAnnotationStore, authStore)
+	goldPaperHandler := goldpaper.NewHandler(goldPaperStore, authStore)
+	answerGroupHandler := answergroup.NewHandlerWithReferences(answerGroupStore, authStore, goldPaperStore)
 	scoreHandler := score.NewHandler(scoreStore, authStore)
+	scoreReleaseService := scorerelease.NewService(scoreReleaseStore)
+	releaseGateService := releasegate.NewService(releaseGateStore, scoreReleaseService).WithRegradeBlockerReader(regradeBlocker{service: regradeService})
+	releaseGateHandler := releasegate.NewHandler(releaseGateService, authStore)
+	scoreReleaseHandler := scorerelease.NewHandler(scoreReleaseService, authStore).WithPublicationPublisher(releaseGatePublisher{
+		coordinator: releasegate.NewPublicationCoordinator(releaseGateService, scoreReleaseService),
+	}).WithStudentQuestionImage(segmentHandler.GetImage)
+	studentPortalHandler := studentportal.NewHandler(studentportal.NewService(studentPortalStore))
+	regradeReleaseHandler := regraderelease.NewHandler(regraderelease.NewService(regradeService, scoreReleaseService))
 	appealHandler := appeal.NewHandler(appealStore, authStore)
+	publishedQuestionAppealHandler := appeal.NewPublishedQuestionAppealHandler(appeal.NewPublishedQuestionAppealService(publishedQuestionAppealStore), authStore).WithSegmentImage(segmentHandler.GetImage)
 	reportHandler := report.NewHandler(reportStore, authStore)
 	modelGovernanceHandler := modelgovernance.NewHandler(
 		modelGovernanceStore,
@@ -361,6 +600,10 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 		cfg.AIService.Token,
 		cfg.AIService.Timeout,
 	))
+	assessmentHandler := assessment.NewHandler(assessmentStore, authStore)
+	workspaceHandler := workspace.NewHandler(workspace.Dependencies{
+		Exams: examStore, Papers: paperStore, Submissions: submissionStore, Reviews: reviewStore, Assessments: assessmentStore, Processing: processingService,
+	})
 	dashboardHandler := dashboard.NewHandler(dashboard.Dependencies{
 		Exams:       examStore,
 		Submissions: submissionStore,
@@ -384,6 +627,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	}
 	requireExamManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("exam:manage")(handler))
+	}
+	requireAssessmentRead := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequireAnyPermission("exam:manage", "review:manage", "review:work")(handler))
 	}
 	requireDashboardRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("exam:manage")(handler))
@@ -456,6 +702,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	}
 	requireAppealWork := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("appeal:work")(handler))
+	}
+	requireQuestionAppealRead := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequireAnyPermission("student:grade:read", "appeal:read", "appeal:work", "appeal:manage")(handler))
 	}
 	requireAuditRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("audit:read")(handler))
@@ -567,6 +816,12 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/model-approvals", requireModelRead(modelGovernanceHandler.ListModelApprovals))
 	mux.Handle("POST /api/v1/model-approvals", requireModelEvaluationManage(modelGovernanceHandler.CreateModelApproval))
 	mux.Handle("POST /api/v1/model-approvals/{id}/revoke", requireModelEvaluationManage(modelGovernanceHandler.RevokeModelApproval))
+	if eligibilityHandler != nil {
+		aieligibility.RegisterRoutes(mux, eligibilityHandler, requireModelRead, requireModelPolicyManage)
+	}
+	gradingevaluation.RegisterRoutes(mux, gradingEvaluationHandler, requireModelEvaluationManage)
+	modelcalibration.RegisterRoutes(mux, modelCalibrationHandler, requireModelEvaluationManage)
+	aidisagreement.RegisterRoutes(mux, aiDisagreementHandler, requireReviewWork, requireReviewManage)
 
 	mux.Handle("POST /api/v1/tenants", requireTenantManage(orgHandler.CreateTenant))
 	mux.Handle("GET /api/v1/tenants", requireAuth(http.HandlerFunc(orgHandler.ListTenants)))
@@ -589,6 +844,12 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("PATCH /api/v1/exams/{id}", requireExamManage(examHandler.UpdateExam))
 	mux.Handle("POST /api/v1/exams/{id}/archive", requireExamManage(examHandler.Archive))
 	mux.Handle("POST /api/v1/exams/{id}/status", requireExamManage(examHandler.UpdateStatus))
+	workspace.RegisterRoutes(mux, workspaceHandler, requireDashboardRead)
+	mux.Handle("GET /api/v1/assessment/subject-profiles", requireAssessmentRead(assessmentHandler.ListSubjectProfiles))
+	mux.Handle("GET /api/v1/assessment/question-archetypes", requireAssessmentRead(assessmentHandler.ListQuestionArchetypes))
+	mux.Handle("GET /api/v1/exams/{examId}/questions/{questionId}/assessment-profile", requireAssessmentRead(withScopedExam(assessmentHandler.GetQuestionConfig)))
+	mux.Handle("PUT /api/v1/exams/{examId}/questions/{questionId}/assessment-profile", requireExamManage(withScopedExam(assessmentHandler.ConfigureQuestion)))
+	mux.Handle("GET /api/v1/exams/{examId}/questions/{questionId}/assessment-snapshot", requireAssessmentRead(withScopedExam(assessmentHandler.GetQuestionSnapshot)))
 	mux.Handle("GET /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(withScopedExam(paperHandler.ListTemplates)))
 	mux.Handle("POST /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(withScopedExam(paperHandler.CreateTemplate)))
 	mux.Handle("PATCH /api/v1/answer-sheet-templates/{id}", requireExamManage(paperHandler.UpdateTemplate))
@@ -630,6 +891,12 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/submission-pages/{id}/quality-override", requireCaptureManage(imageQualityHandler.OverridePageQuality))
 	mux.Handle("POST /api/v1/submissions/{id}/status", requireSubmissionManage(submissionHandler.UpdateStatus))
 	mux.Handle("POST /api/v1/exams/{examId}/capture-batches", requireCaptureManage(withScopedExam(captureHandler.CreateBatch)))
+	if captureUploadHandler != nil {
+		captureupload.RegisterRoutes(mux, captureUploadHandler, requireCaptureManage)
+	}
+	processing.RegisterRoutes(mux, processingHandler, func(handler http.HandlerFunc) http.Handler {
+		return requireCaptureManage(withScopedExam(handler))
+	}, requireCaptureManage, requireCaptureManage)
 	mux.Handle("GET /api/v1/exams/{examId}/capture-batches", requireCaptureManage(withScopedExam(captureHandler.ListBatches)))
 	mux.Handle("GET /api/v1/capture-batches/{id}", requireCaptureManage(captureHandler.GetBatch))
 	mux.Handle("GET /api/v1/capture-batches/{id}/matching-queue", requireCaptureManage(captureHandler.GetMatchingQueue))
@@ -754,6 +1021,12 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("PUT /api/v1/exams/{examId}/roster/{studentId}/attendance", requireRosterManage(withScopedExam(scoreHandler.SetAttendance)))
 	mux.Handle("POST /api/v1/exams/{examId}/confirm-grades", requireScoreManage(withScopedExam(scoreHandler.ConfirmGrades)))
 	mux.Handle("POST /api/v1/exams/{examId}/publish", requireScoreManage(withScopedExam(scoreHandler.PublishGrades)))
+	scoreReleaseExamManage := func(handler http.HandlerFunc) http.Handler {
+		return requireScoreManage(withScopedExam(handler))
+	}
+	scorerelease.RegisterRoutes(mux, scoreReleaseHandler, scoreReleaseExamManage, requireScoreManage, requireStudentGradeAccess)
+	releasegate.RegisterRoutes(mux, releaseGateHandler, scoreReleaseExamManage)
+	studentportal.RegisterRoutes(mux, studentPortalHandler, requireStudentGradeAccess)
 	mux.Handle("GET /api/v1/exams/{examId}/grades/export", requireScoreManage(withScopedExam(scoreHandler.ExportGrades)))
 	mux.Handle("GET /api/v1/students/{studentId}/exams/{examId}/grade", requireStudentGradeAccess(withScopedExam(scoreHandler.GetStudentGrade)))
 	mux.Handle("POST /api/v1/appeals", requireAppealCreate(appealHandler.CreateAppeal))
@@ -764,17 +1037,44 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/appeals/{id}/recommendation", requireAppealWork(appealHandler.SubmitRecommendation))
 	mux.Handle("POST /api/v1/appeals/{id}/review", requireAppealManage(appealHandler.ReviewAppeal))
 	mux.Handle("POST /api/v1/appeals/{id}/close", requireAppealManage(appealHandler.CloseAppeal))
+	mux.Handle("POST /api/v1/student/exams/{examId}/question-appeals", requireStudentGradeAccess(publishedQuestionAppealHandler.Create))
+	mux.Handle("GET /api/v1/student/question-appeals", requireStudentGradeAccess(publishedQuestionAppealHandler.List))
+	mux.Handle("GET /api/v1/question-appeals", requireQuestionAppealRead(publishedQuestionAppealHandler.List))
+	mux.Handle("GET /api/v1/question-appeals/{id}", requireQuestionAppealRead(publishedQuestionAppealHandler.Get))
+	mux.Handle("GET /api/v1/question-appeals/{id}/context", requireQuestionAppealRead(publishedQuestionAppealHandler.Context))
+	mux.Handle("GET /api/v1/question-appeals/{id}/answer-image", requireQuestionAppealRead(publishedQuestionAppealHandler.AnswerImage))
+	mux.Handle("POST /api/v1/question-appeals/{id}/start-review", requireAppealManage(publishedQuestionAppealHandler.StartReview))
+	mux.Handle("POST /api/v1/question-appeals/{id}/decide", requireQuestionAppealRead(publishedQuestionAppealHandler.Decide))
+	mux.Handle("POST /api/v1/question-appeals/{id}/resolve", requireQuestionAppealRead(publishedQuestionAppealHandler.Resolve))
+	mux.Handle("GET /api/v1/question-appeals/{id}/events", requireQuestionAppealRead(publishedQuestionAppealHandler.Events))
 	mux.Handle("GET /api/v1/exams/{examId}/reports/overview", requireReportRead(withScopedExam(reportHandler.Overview)))
 	mux.Handle("GET /api/v1/exams/{examId}/reports/classes", requireReportRead(withScopedExam(reportHandler.Classes)))
 	mux.Handle("GET /api/v1/exams/{examId}/reports/questions", requireReportRead(withScopedExam(reportHandler.Questions)))
 	mux.Handle("GET /api/v1/exams/{examId}/reports/grading-quality", requireReportRead(withScopedExam(reportHandler.GradingQuality)))
 	mux.Handle("GET /api/v1/students/{studentId}/reports/{examId}", requireAuth(auth.RequireScopedResource("exam", "examId")(http.HandlerFunc(reportHandler.StudentReport))))
 	mux.Handle("POST /api/v1/exams/{examId}/reports/export", requireReportExport(withScopedExam(reportHandler.Export)))
+	// Gold sets, answer-group reference cases, Seed observations and drift
+	// evidence are quality-management facts.  A grader receives only the
+	// current calibration/Seed task through the ordinary review flow; exposing
+	// these lists to review:work would reveal reference scores or make dark
+	// samples identifiable.
+	goldpaper.RegisterRoutes(mux, goldPaperHandler, requireReviewManage, requireReviewManage)
+	calibration.RegisterRoutes(mux, calibrationHandler, requireReviewWork, requireReviewManage, requireReviewWork)
+	answergroup.RegisterRoutes(mux, answerGroupHandler, requireReviewManage, requireReviewManage)
+	seedquality.RegisterRoutes(mux, seedQualityHandler, requireReviewManage, requireReviewManage)
+	graderdrift.RegisterRoutes(mux, graderDriftHandler, requireReviewManage, requireReviewManage)
+	backmark.RegisterRoutes(mux, backmarkHandler, requireReviewManage, requireReviewWork)
+	regrade.RegisterRoutes(mux, regradeHandler, requireReviewManage, requireReviewWork)
+	regraderelease.RegisterRoutes(mux, regradeReleaseHandler, requireScoreManage)
+	if qualityDashboardHandler != nil {
+		qualitydashboard.RegisterRoutes(mux, qualityDashboardHandler, requireReviewManage)
+	}
 	mux.Handle("POST /api/v1/review-tasks", requireReviewManage(reviewHandler.CreateTask))
 	mux.Handle("GET /api/v1/review-tasks", requireReviewWork(reviewHandler.ListTasks))
 	mux.Handle("POST /api/v1/review-tasks/next", requireReviewWork(reviewHandler.ClaimNextTask))
 	mux.Handle("POST /api/v1/review-tasks/batch-assign", requireReviewManage(reviewHandler.BatchAssignTasks))
 	mux.Handle("GET /api/v1/review-tasks/{id}", requireReviewWork(reviewHandler.GetTask))
+	mux.Handle("GET /api/v1/review-tasks/{id}/context", requireReviewWork(reviewHandler.GetTaskContext))
 	mux.Handle("GET /api/v1/review-tasks/{id}/workspace", requireReviewWork(reviewHandler.GetWorkspace))
 	mux.Handle("GET /api/v1/review-tasks/{id}/segment-image", requireReviewWork(reviewHandler.GetWorkspaceSegmentImage))
 	mux.Handle("GET /api/v1/review-tasks/{id}/original-image", requireOriginalReviewImage(reviewHandler.GetWorkspaceOriginalImage))
@@ -782,9 +1082,21 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/review-tasks/{id}/release", requireReviewWork(reviewHandler.ReleaseTaskClaim))
 	mux.Handle("POST /api/v1/review-tasks/{id}/assign", requireReviewManage(reviewHandler.AssignTask))
 	mux.Handle("POST /api/v1/review-tasks/{id}/submit", requireReviewWork(reviewHandler.SubmitGrade))
-	mux.Handle("POST /api/v1/review-tasks/{id}/return", requireReviewManage(reviewHandler.ReturnTask))
+	mux.Handle("POST /api/v1/review-tasks/{id}/return", requireReviewWork(reviewHandler.ReturnTask))
 	mux.Handle("GET /api/v1/review-tasks/{id}/draft", requireReviewWork(reviewHandler.GetDraft))
 	mux.Handle("PUT /api/v1/review-tasks/{id}/draft", requireReviewWork(reviewHandler.SaveDraft))
+	mux.Handle("GET /api/v1/review-tasks/{id}/annotations", requireReviewWork(reviewAnnotationHandler.ListAnnotations))
+	mux.Handle("POST /api/v1/review-tasks/{id}/annotations", requireReviewWork(reviewAnnotationHandler.CreateAnnotation))
+	mux.Handle("GET /api/v1/student/exams/{examId}/questions/{questionId}/annotations", requireStudentGradeAccess(reviewAnnotationHandler.ListStudentQuestionAnnotations))
+	mux.Handle("GET /api/v1/review/annotations/{annotationId}", requireReviewWork(reviewAnnotationHandler.GetAnnotation))
+	mux.Handle("PUT /api/v1/review/annotations/{annotationId}", requireReviewWork(reviewAnnotationHandler.UpdateAnnotation))
+	mux.Handle("DELETE /api/v1/review/annotations/{annotationId}", requireReviewWork(reviewAnnotationHandler.DeleteAnnotation))
+	mux.Handle("GET /api/v1/review/comment-templates", requireReviewWork(reviewAnnotationHandler.ListCommentTemplates))
+	mux.Handle("POST /api/v1/review/comment-templates", requireReviewWork(reviewAnnotationHandler.CreateCommentTemplate))
+	mux.Handle("GET /api/v1/review/comment-templates/{templateId}", requireReviewWork(reviewAnnotationHandler.GetCommentTemplate))
+	mux.Handle("PUT /api/v1/review/comment-templates/{templateId}", requireReviewWork(reviewAnnotationHandler.UpdateCommentTemplate))
+	mux.Handle("DELETE /api/v1/review/comment-templates/{templateId}", requireReviewWork(reviewAnnotationHandler.DeleteCommentTemplate))
+	mux.Handle("POST /api/v1/review/comment-templates/{shortcut}/use", requireReviewWork(reviewAnnotationHandler.UseCommentTemplate))
 	mux.HandleFunc("/", h.NotFound)
 
 	return middleware.Chain(

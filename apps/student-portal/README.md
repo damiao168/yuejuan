@@ -1,5 +1,9 @@
-# Student Portal
+# EduGrade 学生端
 
-学生端预留目录。
+独立的学生成绩门户。它只调用学生范围的已发布成绩 API：
 
-后续用于成绩查看、反馈展示和申诉提交。当前阶段不实现业务代码。
+- `GET /api/v1/student/exams`
+- `GET /api/v1/student/exams/{examId}/result`
+- `GET /api/v1/student/exams/{examId}/questions/{questionId}`
+
+不加载管理端、阅卷端或模型治理数据。开发时运行 `npm --workspace @edugrade/student-portal run dev`，默认端口为 `5174`。

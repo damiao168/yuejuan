@@ -1,0 +1,148 @@
+package subjective
+
+import (
+	"context"
+	"strings"
+
+	"edugrade-enterprise/services/api-gateway/internal/aieligibility"
+	"edugrade-enterprise/services/api-gateway/internal/assessment"
+	"edugrade-enterprise/services/api-gateway/internal/modelcalibration"
+)
+
+// EligibilityGate is the narrow admission boundary for an external grading
+// model. It is optional for isolated legacy tests; production composition
+// always injects the real A14 gate.
+type EligibilityGate interface {
+	Decide(context.Context, string, aieligibility.DecisionInput) (aieligibility.Decision, error)
+}
+
+func (h *Handler) decideEligibility(ctx context.Context, tenantID, runID string, value Context, policy ModelPolicy) (aieligibility.Decision, bool, error) {
+	if h.eligibility == nil {
+		return aieligibility.Decision{}, true, nil
+	}
+	evaluation := aieligibility.EvaluationEvidence{}
+	if h.evaluation != nil {
+		evidence, err := h.evaluation.AdmissionEvidenceFor(ctx, tenantID, policy.ModelVersion, policy.PromptVersion, value.Rubric.Version, value.AssessmentSnapshot.SubjectCode, value.AssessmentSnapshot.ArchetypeCode)
+		if err != nil {
+			return aieligibility.Decision{}, false, err
+		}
+		evaluation = aieligibility.EvaluationEvidence{Approved: evidence.Approved, SampleCount: evidence.SampleCount, SevereErrorRate: evidence.SevereErrorRate, EvaluationRef: evidence.EvaluationRef}
+	}
+	calibration := aieligibility.CalibrationEvidence{}
+	if h.calibration != nil {
+		evidence, err := h.calibration.Approved(ctx, tenantID, modelcalibration.Axis{
+			ModelReference: policy.ModelVersion, PromptVersion: policy.PromptVersion, RubricVersion: value.Rubric.Version,
+			Subject: string(value.AssessmentSnapshot.SubjectCode), Archetype: value.AssessmentSnapshot.ArchetypeCode, SliceKey: "all",
+		})
+		if err != nil {
+			return aieligibility.Decision{}, false, err
+		}
+		calibration = aieligibility.CalibrationEvidence{Available: evidence.Available, CalibrationRef: evidence.CalibrationRef}
+	}
+	var parserQuality *float64
+	if h.parserQuality != nil && strings.TrimSpace(value.SegmentID) != "" {
+		quality, err := h.parserQuality.ParserQualityForSegment(ctx, tenantID, value.SegmentID, value.AssessmentSnapshot.SubjectCode, value.AssessmentSnapshot.ArchetypeCode)
+		if err != nil {
+			return aieligibility.Decision{}, false, err
+		}
+		parserQuality = quality
+	}
+	decision, err := h.eligibility.Decide(ctx, tenantID, aieligibility.DecisionInput{
+		RunItemID:          runID,
+		AssessmentSnapshot: value.AssessmentSnapshot,
+		RequestedMode:      requestedScoringMode(value),
+		OCRQuality:         value.OCRConfidence,
+		// Absence remains nil, so A14 safely abstains rather than treating a
+		// generic OCR signal as evidence of a specialised parser result.
+		ParserQuality:     parserQuality,
+		RubricComplete:    rubricIsComplete(value),
+		EvidenceAvailable: hasRequiredMaterialEvidence(value),
+		Evaluation:        evaluation,
+		Calibration:       calibration,
+	})
+	if err != nil {
+		return aieligibility.Decision{}, false, err
+	}
+	return decision, decision.CanCallExternalAI(), nil
+}
+
+func requestedScoringMode(value Context) assessment.ScoringMode {
+	mode := value.AssessmentSnapshot.ScoringPolicySnapshot.Mode
+	if !mode.Valid() {
+		return assessment.ScoringHumanPrimary
+	}
+	return mode
+}
+
+func rubricIsComplete(value Context) bool {
+	if len(value.Rubric.Points) == 0 {
+		return false
+	}
+	var total float64
+	for _, point := range value.Rubric.Points {
+		if strings.TrimSpace(point.ID) == "" || point.Score <= 0 {
+			return false
+		}
+		total += point.Score
+	}
+	return total+0.000001 >= value.Question.Score
+}
+
+func hasRequiredMaterialEvidence(value Context) bool {
+	if value.AssessmentSnapshot.SubjectCode != assessment.SubjectHistory && value.AssessmentSnapshot.SubjectCode != assessment.SubjectEthicsPolitics {
+		return true
+	}
+	return strings.TrimSpace(value.AnswerText) != "" && len(value.AnswerImageRef) > 0
+}
+
+// recordCalibrationCandidate preserves the raw model confidence separately
+// from score facts and applies A15's empirical risk-coverage abstention. It
+// runs only after the response passed schema/evidence validation. A returned
+// suggestion remains teacher-review-only in every branch.
+func (h *Handler) recordCalibrationCandidate(ctx context.Context, tenantID, runID string, value Context, policy ModelPolicy, decision aieligibility.Decision, output *AdapterOutput) error {
+	if h.calibration == nil || output == nil || !decision.CanCallExternalAI() {
+		return nil
+	}
+	targetRisk := decision.OutputConstraint.MaxSevereErrorRisk
+	candidate, err := h.calibration.RecordCandidate(ctx, tenantID, modelcalibration.RecordCandidateInput{
+		CandidateKey: runID,
+		Axis: modelcalibration.Axis{
+			ModelReference: policy.ModelVersion, PromptVersion: policy.PromptVersion, RubricVersion: value.Rubric.Version,
+			Subject: string(value.AssessmentSnapshot.SubjectCode), Archetype: value.AssessmentSnapshot.ArchetypeCode, SliceKey: "all",
+		},
+		RawConfidence: output.Confidence, TargetRisk: &targetRisk,
+	})
+	if err != nil {
+		return err
+	}
+	if output.RawOutput == nil {
+		output.RawOutput = map[string]any{}
+	}
+	output.RawOutput["model_score_candidate"] = map[string]any{
+		"id": candidate.ID, "raw_confidence": candidate.RawConfidence,
+		"calibrated_confidence": candidate.CalibratedConfidence, "calibration_id": candidate.CalibrationID,
+		"abstain_reason": candidate.AbstainReason,
+	}
+	if candidate.AbstainReason != "" {
+		output.NeedsHumanReview = true
+		output.RiskFlags = appendFlag(output.RiskFlags, "calibration_risk_coverage_abstained")
+	}
+	return nil
+}
+
+func eligibilityAbstentionOutput(policy ModelPolicy, decision aieligibility.Decision) AdapterOutput {
+	flags := []string{"ai_eligibility_abstained"}
+	for _, item := range decision.Reasons {
+		flags = appendFlag(flags, item.Code)
+	}
+	return AdapterOutput{
+		ModelVersion: policy.ModelVersion, PromptVersion: policy.PromptVersion,
+		RiskFlags: flags, NeedsHumanReview: true,
+		TeacherNote: "AI scoring was not admitted for this frozen question context; route to human review.",
+		RawOutput: map[string]any{
+			"eligibility_decision_id": decision.ID,
+			"external_ai_allowed":     false,
+			"reasons":                 decision.Reasons,
+		},
+	}
+}

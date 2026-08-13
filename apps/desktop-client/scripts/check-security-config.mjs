@@ -68,13 +68,29 @@ if (!Array.isArray(capability.permissions) || capability.permissions.length !== 
 }
 
 const expectedCommands = new Set([
+  "archive_durable_scan_queue_items",
   "append_local_log",
   "capability_statuses",
   "clear_local_logs",
   "delete_desktop_credentials",
+  "delete_scanner_profile",
+  "list_durable_drafts",
+  "list_durable_scan_queue",
+  "list_scanner_devices",
+  "list_scanner_profiles",
+  "load_durable_draft",
   "load_desktop_credentials",
+  "persist_durable_scan_queue_item",
+  "purge_expired_durable_drafts",
+  "read_durable_local_asset",
   "runtime_diagnostics",
-  "save_desktop_credentials"
+  "run_scanner_preflight",
+  "save_durable_draft",
+  "save_desktop_credentials",
+  "save_scanner_profile",
+  "scanner_integration_status",
+  "spool_local_asset",
+  "update_durable_draft_status"
 ]);
 const invokedCommands = new Set();
 

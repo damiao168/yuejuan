@@ -196,7 +196,7 @@ services:
         BUILD_TIME: ${EDUGRADE_BUILD_TIME:-unknown}
         IMAGE_DIGEST: ${EDUGRADE_IMAGE_DIGEST:-unknown}
         RELEASE_ID: ${EDUGRADE_RELEASE_ID:-local}
-        SCHEMA_VERSION: ${EDUGRADE_SCHEMA_VERSION:-000075}
+        SCHEMA_VERSION: ${EDUGRADE_SCHEMA_VERSION:-000096}
     image: edugrade/api-gateway:${EDUGRADE_IMAGE_TAG:-local}
     container_name: edugrade-api-gateway
     environment:

@@ -1,3 +1,6 @@
+mod durable_store;
+mod scanner;
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{fs, fs::OpenOptions, io::Write, path::Path, sync::LazyLock};
@@ -153,15 +156,24 @@ fn redact_sensitive_text(value: &str) -> String {
 }
 
 #[tauri::command]
-fn capability_statuses() -> Vec<CapabilityProbe> {
+fn capability_statuses(app: AppHandle) -> Vec<CapabilityProbe> {
+    let local_cache = match durable_store::status(app) {
+        Ok(status) => CapabilityProbe {
+            key: "local_cache".into(),
+            name: "SQLite 加密本地存储".into(),
+            status: "ready".into(),
+            detail: format!("SQLite 队列与加密 spool 已就绪：{}", status.spool_path),
+        },
+        Err(error) => CapabilityProbe {
+            key: "local_cache".into(),
+            name: "SQLite 加密本地存储".into(),
+            status: "unavailable".into(),
+            detail: format!("本地安全存储不可用，客户端不会回退到明文扫描队列：{error}"),
+        },
+    };
     vec![
         secure_config_capability(),
-        CapabilityProbe {
-            key: "local_cache".into(),
-            name: "SQLite 本地缓存".into(),
-            status: "not_configured".into(),
-            detail: "未配置/待接入 SQLite schema、加密密钥和离线任务包缓存。".into(),
-        },
+        local_cache,
         CapabilityProbe {
             key: "device_binding".into(),
             name: "设备绑定".into(),
@@ -324,6 +336,73 @@ fn delete_desktop_credentials() -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn spool_local_asset(
+    app: AppHandle,
+    input: durable_store::SpoolAssetInput,
+) -> Result<durable_store::DurableQueueItem, String> {
+    durable_store::spool_local_asset(app, input)
+}
+
+#[tauri::command]
+fn list_durable_scan_queue(app: AppHandle) -> Result<Vec<durable_store::DurableQueueItem>, String> {
+    durable_store::list_durable_scan_queue(app)
+}
+
+#[tauri::command]
+fn persist_durable_scan_queue_item(
+    app: AppHandle,
+    item: durable_store::DurableQueueItem,
+) -> Result<(), String> {
+    durable_store::persist_durable_scan_queue_item(app, item)
+}
+
+#[tauri::command]
+fn archive_durable_scan_queue_items(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+    durable_store::archive_durable_scan_queue_items(app, ids)
+}
+
+#[tauri::command]
+fn read_durable_local_asset(
+    app: AppHandle,
+    local_asset_id: String,
+) -> Result<durable_store::DurableSpoolFile, String> {
+    durable_store::read_durable_local_asset(app, local_asset_id)
+}
+
+#[tauri::command]
+fn save_durable_draft(app: AppHandle, record: serde_json::Value) -> Result<(), String> {
+    durable_store::save_durable_draft(app, record)
+}
+
+#[tauri::command]
+fn list_durable_drafts(app: AppHandle) -> Result<Vec<durable_store::OfflineDraftEnvelope>, String> {
+    durable_store::list_durable_drafts(app)
+}
+
+#[tauri::command]
+fn load_durable_draft(
+    app: AppHandle,
+    task_id: String,
+) -> Result<Option<serde_json::Value>, String> {
+    durable_store::load_durable_draft(app, task_id)
+}
+
+#[tauri::command]
+fn update_durable_draft_status(
+    app: AppHandle,
+    task_id: String,
+    sync_status: String,
+    sync_message: Option<String>,
+) -> Result<(), String> {
+    durable_store::update_durable_draft_status(app, task_id, sync_status, sync_message)
+}
+
+#[tauri::command]
+fn purge_expired_durable_drafts(app: AppHandle, now: String) -> Result<usize, String> {
+    durable_store::purge_expired_durable_drafts(app, now)
+}
+
 #[cfg(windows)]
 fn credential_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT).map_err(|err| err.to_string())
@@ -334,6 +413,22 @@ pub fn run() {
     if let Err(error) = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             capability_statuses,
+            spool_local_asset,
+            list_durable_scan_queue,
+            persist_durable_scan_queue_item,
+            archive_durable_scan_queue_items,
+            read_durable_local_asset,
+            save_durable_draft,
+            list_durable_drafts,
+            load_durable_draft,
+            update_durable_draft_status,
+            purge_expired_durable_drafts,
+            scanner::list_scanner_devices,
+            scanner::scanner_integration_status,
+            scanner::list_scanner_profiles,
+            scanner::save_scanner_profile,
+            scanner::delete_scanner_profile,
+            scanner::run_scanner_preflight,
             runtime_diagnostics,
             append_local_log,
             clear_local_logs,

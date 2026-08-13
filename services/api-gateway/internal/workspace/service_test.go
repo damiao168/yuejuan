@@ -1,0 +1,196 @@
+package workspace
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"edugrade-enterprise/services/api-gateway/internal/assessment"
+	"edugrade-enterprise/services/api-gateway/internal/auth"
+	"edugrade-enterprise/services/api-gateway/internal/exam"
+	"edugrade-enterprise/services/api-gateway/internal/paper"
+	"edugrade-enterprise/services/api-gateway/internal/processing"
+	"edugrade-enterprise/services/api-gateway/internal/review"
+	"edugrade-enterprise/services/api-gateway/internal/submission"
+)
+
+type fakeExamReader struct{ item exam.Exam }
+
+func (f fakeExamReader) GetExam(_ context.Context, scope auth.AccessScope, id string) (exam.Exam, error) {
+	if f.item.ID != id || f.item.TenantID != scope.TenantID {
+		return exam.Exam{}, exam.ErrNotFound
+	}
+	return f.item, nil
+}
+
+type fakePaperReader struct {
+	papers    []paper.Paper
+	questions []paper.Question
+	readiness paper.ReadinessResult
+	err       error
+}
+
+func (f fakePaperReader) ListPapers(context.Context, string, string) ([]paper.Paper, error) {
+	return f.papers, f.err
+}
+func (f fakePaperReader) ListQuestions(context.Context, string, string) ([]paper.Question, error) {
+	return f.questions, f.err
+}
+func (f fakePaperReader) Readiness(context.Context, string, string) (paper.ReadinessResult, error) {
+	return f.readiness, f.err
+}
+
+type fakeSubmissionReader struct {
+	items []submission.Submission
+	err   error
+}
+
+func (f fakeSubmissionReader) ListByExam(context.Context, string, string, submission.ListFilter) ([]submission.Submission, error) {
+	return f.items, f.err
+}
+
+type fakeReviewReader struct {
+	tasks        []review.ReviewTask
+	arbitrations []review.ArbitrationTask
+	err          error
+}
+
+type fakeAssessmentReader struct {
+	summary assessment.ExamAssessmentSummary
+	err     error
+}
+
+type fakeProcessingReader struct {
+	summary processing.Summary
+	items   processing.ListResult
+	err     error
+}
+
+func (f fakeProcessingReader) Summary(context.Context, string, string) (processing.Summary, error) {
+	return f.summary, f.err
+}
+
+func (f fakeProcessingReader) ListExceptions(context.Context, string, processing.ExceptionFilter) (processing.ListResult, error) {
+	return f.items, f.err
+}
+
+func (f fakeAssessmentReader) GetExamAssessmentSummary(context.Context, string, string) (assessment.ExamAssessmentSummary, error) {
+	return f.summary, f.err
+}
+
+func (f fakeReviewReader) ListTasks(context.Context, string, review.ListFilter) ([]review.ReviewTask, error) {
+	return f.tasks, f.err
+}
+func (f fakeReviewReader) ListArbitrationTasks(context.Context, string, review.ArbitrationFilter) ([]review.ArbitrationTask, error) {
+	return f.arbitrations, f.err
+}
+
+func TestProjectionKeepsFiveStagesAndActionableBlockers(t *testing.T) {
+	now := time.Date(2026, 8, 9, 8, 0, 0, 0, time.UTC)
+	service := NewService(Dependencies{
+		Exams: fakeExamReader{item: exam.Exam{
+			ID: "exam-1", TenantID: "tenant-1", Name: "九年级期末考试", Subject: "math", TotalScore: 120,
+			Status: "configured", GradingMode: "blind_double_mark", Revision: 7,
+		}},
+		Papers: fakePaperReader{
+			papers: []paper.Paper{{ID: "paper-1"}},
+			questions: []paper.Question{
+				{ID: "q1", QuestionType: "single_choice"}, {ID: "q2", QuestionType: "extended_response"},
+			},
+			readiness: paper.ReadinessResult{Checks: []paper.ReadinessCheck{
+				{Code: "locked_template", Label: "答题卡模板", Message: "需要锁定模板", Section: "template", Severity: "blocker"},
+			}},
+		},
+		Submissions: fakeSubmissionReader{items: []submission.Submission{
+			{ID: "submission-1", Status: "processing_failed", QualityStatus: "failed"},
+		}},
+		Reviews: fakeReviewReader{arbitrations: []review.ArbitrationTask{{ID: "arb-1", Status: "pending"}}},
+		Assessments: fakeAssessmentReader{summary: assessment.ExamAssessmentSummary{
+			ExamID: "exam-1", SubjectCode: assessment.SubjectMathematics, RiskTier: assessment.RiskR3,
+			ConfiguredQuestionCount: 2, FrozenQuestionCount: 2, Source: "snapshot",
+		}},
+		Now: func() time.Time { return now },
+	})
+
+	result, err := service.Get(context.Background(), auth.AccessScope{TenantID: "tenant-1", TenantWide: true}, "exam-1")
+	if err != nil {
+		t.Fatalf("get projection: %v", err)
+	}
+	if len(result.Stages) != 5 || result.Stage != "prepare" {
+		t.Fatalf("workspace must expose exactly five stages and current stage, got %#v", result.Stages)
+	}
+	if result.RiskTier != "R3" || result.SubjectSummary.Label != "数学" || result.SubjectSummary.QuestionTypes["extended_response"] != 1 || result.SubjectSummary.RiskTierSource != "snapshot" {
+		t.Fatalf("subject and risk projection mismatch: %#v", result)
+	}
+	if result.Counts.FailedSubmissionCount != 1 || result.Counts.UnmatchedSubmissionCount != 1 || result.Counts.PendingArbitrationCount != 1 {
+		t.Fatalf("operational counts mismatch: %#v", result.Counts)
+	}
+	if len(result.Blockers) < 3 {
+		t.Fatalf("expected readiness, failed submission, identity and arbitration blockers: %#v", result.Blockers)
+	}
+	for _, blocker := range result.Blockers {
+		if blocker.ActionRoute == "" {
+			t.Fatalf("every blocker must be actionable: %#v", blocker)
+		}
+	}
+	if result.Blockers[0].ActionRoute != "/exams/exam-1/template" {
+		t.Fatalf("readiness blocker must stay inside the five-stage workspace: %#v", result.Blockers[0])
+	}
+	if len(result.NextActions) == 0 || result.UpdatedAt != now {
+		t.Fatalf("projection must provide deterministic next actions and update time: %#v", result)
+	}
+	if len(result.StageProgress) != 5 || result.StageProgress[0].Total == nil || *result.StageProgress[0].Total != 1 || result.StageProgress[1].Total != nil {
+		t.Fatalf("stage progress must use real denominators and omit unknown capture total: %#v", result.StageProgress)
+	}
+}
+
+func TestProjectionKeepsExamAvailableWhenOptionalCountsFail(t *testing.T) {
+	service := NewService(Dependencies{
+		Exams:       fakeExamReader{item: exam.Exam{ID: "exam-1", TenantID: "tenant-1", Subject: "history", Status: "grading"}},
+		Papers:      fakePaperReader{err: errors.New("paper down")},
+		Submissions: fakeSubmissionReader{err: errors.New("submission down")},
+		Reviews:     fakeReviewReader{err: errors.New("review down")},
+	})
+
+	result, err := service.Get(context.Background(), auth.AccessScope{TenantID: "tenant-1", TenantWide: true}, "exam-1")
+	if err != nil {
+		t.Fatalf("partial dependency failures must not hide the exam workspace: %v", err)
+	}
+	if result.Stage != "grading" || len(result.Warnings) != 6 {
+		t.Fatalf("expected grading stage with explicit partial-data warnings, got %#v", result)
+	}
+}
+
+func TestProjectionLinksBlockingProcessingExceptionIntoUnifiedProcessingCentre(t *testing.T) {
+	service := NewService(Dependencies{
+		Exams:       fakeExamReader{item: exam.Exam{ID: "exam-1", TenantID: "tenant-1", Status: "collecting"}},
+		Papers:      fakePaperReader{},
+		Submissions: fakeSubmissionReader{},
+		Reviews:     fakeReviewReader{},
+		Processing: fakeProcessingReader{
+			summary: processing.Summary{ExamID: "exam-1", BlockedPages: 2},
+			items: processing.ListResult{Exceptions: []processing.Exception{{
+				ID: "exception-1", PageID: "12345678-page", Blocking: true, Status: processing.ExceptionOpen,
+				Code: processing.IssueBadAlignment,
+			}}},
+		},
+	})
+
+	result, err := service.Get(context.Background(), auth.AccessScope{TenantID: "tenant-1", TenantWide: true}, "exam-1")
+	if err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+	var found bool
+	for _, blocker := range result.Blockers {
+		if blocker.Code == "processing_exception_exception-1" {
+			found = true
+			if blocker.ActionRoute != "/exams/exam-1/processing?exception=exception-1" {
+				t.Fatalf("processing blocker route=%q", blocker.ActionRoute)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("workspace must surface a canonical processing blocker: %#v", result.Blockers)
+	}
+}

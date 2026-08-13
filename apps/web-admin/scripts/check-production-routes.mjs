@@ -10,7 +10,9 @@ function read(path) {
 const routes = read("src/router/routes.tsx");
 const dashboard = read("src/pages/DashboardPage.tsx");
 const appLayout = read("src/components/AppLayout.tsx");
-const app = read("src/App.tsx");
+const appEntry = read("src/App.tsx");
+const appShell = read("src/AppShell.tsx");
+const appRouter = read("src/router/appRouter.tsx");
 const login = read("src/pages/LoginPage.tsx");
 const grading = read("src/pages/GradingWorkbenchPage.tsx");
 const experience = read("src/router/experience.ts");
@@ -111,7 +113,12 @@ assert(
 );
 
 assert(
-  /defaultExperience\(nextUser\)/.test(app) && /hasExperienceAccess\(user, experience\)/.test(app),
+  /RouterProvider/.test(appEntry) && /component:\s*AppShell/.test(appRouter),
+  "The production router must mount AppShell, where role-aware route composition lives."
+);
+
+assert(
+  /defaultExperience\(nextUser\)/.test(appShell) && /hasExperienceAccess\(user, experience\)/.test(appShell),
   "Login and deep-link access must enforce the role-specific product experience."
 );
 
@@ -133,17 +140,17 @@ assert(
 
 assert(
   /teacher:\s*\[\]/.test(routes)
-    && /hasExamWorkspaceSectionAccess/.test(app),
+    && /hasExamWorkspaceSectionAccess/.test(appShell),
   "Teacher identities must remain outside administrator exam workspaces for navigation and deep links."
 );
 
 assert(
-  /AdminGradingOperationsPage/.test(app) && /experience === "admin"/.test(app),
+  /AdminGradingOperationsPage/.test(appShell) && /experience === "admin"/.test(appShell),
   "Administrator grading navigation must open exam-level operations instead of the personal workbench."
 );
 
 assert(
-  /canWork=\{experience === "teacher" && hasEveryPermission\(user, \["appeal:work"\]\)\}/.test(app)
+  /canWork=\{experience === "teacher" && hasEveryPermission\(user, \["appeal:work"\]\)\}/.test(appShell)
     && /selectedAppeal\?\.assigned_to === currentUser\.id/.test(appealCenter),
   "Teacher appeal handling must require appeal:work and an assignment to the current user."
 );
@@ -187,9 +194,9 @@ assert(
 );
 
 assert(
-  /loadTaskContext\(task: ReviewTask, allowOriginalImage: boolean\)/.test(grading)
-    && /originalImageUrl: allowOriginalImage \? workspace\.original_image_url : undefined/.test(grading)
-    && /canViewOriginalImage=\{experience === "admin"\}/.test(app)
+  /loadTaskContext\(taskId: string, allowOriginalImage: boolean\)/.test(grading)
+    && /originalImageUrl: allowOriginalImage \? artifact\.original_image_url : undefined/.test(grading)
+    && /canViewOriginalImage=\{experience === "admin"\}/.test(appShell)
     && /viewerMode === "original" && \(!canViewOriginalImage/.test(grading)
     && /options=\{canViewOriginalImage/.test(grading),
   "Teacher grading must neither retain nor request the original answer-sheet image."
@@ -223,7 +230,7 @@ assert(
 );
 
 assert(
-  /lazy\(\(\) => import/.test(app) && /Suspense/.test(app),
+  /lazy\(\(\) => import/.test(appShell) && /Suspense/.test(appShell),
   "Production pages must be loaded on demand."
 );
 

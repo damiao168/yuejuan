@@ -48,6 +48,7 @@ func (s *PostgresStore) LoadContext(ctx context.Context, tenantID string, segmen
 	row := s.db.QueryRowContext(ctx, `
 SELECT
   seg.id::text,
+  to_jsonb(eqs),
   q.id::text, q.tenant_id::text, q.exam_id::text, COALESCE(q.exam_paper_id::text, ''),
   q.question_no, q.question_type, q.score::float8, COALESCE(q.stem, ''),
   q.knowledge_points, q.answer_area, q.sort_order, q.status,
@@ -60,6 +61,7 @@ SELECT
   ans.confidence::float8, COALESCE(ans.recorded_by::text, ''), ans.created_at
 FROM answer_segment seg
 JOIN question q ON q.tenant_id = seg.tenant_id AND q.id = seg.question_id
+JOIN exam_question_snapshot eqs ON eqs.tenant_id = q.tenant_id AND eqs.exam_id = q.exam_id AND eqs.question_id = q.id
 LEFT JOIN LATERAL (
   SELECT id, answer_version, standard_answer, equivalent_answers, tolerance
   FROM question_answer_key
@@ -84,6 +86,8 @@ LEFT JOIN LATERAL (
 WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 `, tenantID, segmentID)
 	var segmentIDOut string
+	var snapshotRaw []byte
+	var result Context
 	var question paper.Question
 	var kpRaw, areaRaw []byte
 	var keyID, keyVersion string
@@ -94,6 +98,7 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 	var answerCreated sql.NullTime
 	if err := row.Scan(
 		&segmentIDOut,
+		&snapshotRaw,
 		&question.ID,
 		&question.TenantID,
 		&question.ExamID,
@@ -122,6 +127,9 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 		if errors.Is(err, sql.ErrNoRows) {
 			return Context{}, ErrNotFound
 		}
+		return Context{}, err
+	}
+	if err := json.Unmarshal(snapshotRaw, &result.AssessmentSnapshot); err != nil {
 		return Context{}, err
 	}
 	if err := decodeJSONB(kpRaw, &question.KnowledgePoints, "question.knowledge_points"); err != nil {
@@ -160,7 +168,8 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 	if answerCreated.Valid {
 		answer.CreatedAt = answerCreated.Time.UTC()
 	}
-	return Context{SegmentID: segmentIDOut, Question: question, AnswerKey: answerKey, Answer: answer}, nil
+	result.SegmentID, result.Question, result.AnswerKey, result.Answer = segmentIDOut, question, answerKey, answer
+	return result, nil
 }
 
 func (s *PostgresStore) CreateGrade(ctx context.Context, tenantID string, actorID string, grade Grade) (Grade, error) {

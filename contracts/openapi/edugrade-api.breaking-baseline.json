@@ -1,0 +1,753 @@
+{
+  "openapi": "3.1.0",
+  "operations": {
+    "GET /api/v1/exams": {
+      "operationId": "listExams",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "in": "query",
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "status",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "school_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ExamPage"
+      }
+    },
+    "GET /api/v1/exams/{examId}/workspace": {
+      "operationId": "getExamWorkspace",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ExamWorkspaceResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/submissions": {
+      "operationId": "listExamSubmissions",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "in": "query",
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/SubmissionPage"
+      }
+    },
+    "GET /api/v1/review-tasks": {
+      "operationId": "listReviewTasks",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "in": "query",
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "status",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "assigned_to",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "exam_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ReviewTaskPage"
+      }
+    },
+    "GET /api/v1/appeals": {
+      "operationId": "listAppeals",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "in": "query",
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "exam_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "query",
+          "name": "student_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "query",
+          "name": "status",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/AppealPage"
+      }
+    },
+    "POST /api/v1/subjective-grading-batches/{batchId}/enqueue": {
+      "operationId": "enqueueSubjectiveGradingBatch",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "batchId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/BatchEnqueueResponse"
+      }
+    },
+    "GET /api/v1/assessment/subject-profiles": {
+      "operationId": "listAssessmentSubjectProfiles",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "stage",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/EducationStage"
+          }
+        },
+        {
+          "in": "query",
+          "name": "subject",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/SubjectCode"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/SubjectProfileListResponse"
+      }
+    },
+    "GET /api/v1/assessment/question-archetypes": {
+      "operationId": "listAssessmentQuestionArchetypes",
+      "parameters": [],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/QuestionArchetypeListResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/questions/{questionId}/assessment-profile": {
+      "operationId": "getExamQuestionAssessmentProfile",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/QuestionAssessmentProfileResponse"
+      }
+    },
+    "PUT /api/v1/exams/{examId}/questions/{questionId}/assessment-profile": {
+      "operationId": "putExamQuestionAssessmentProfile",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/PutQuestionAssessmentProfileRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/QuestionAssessmentProfileResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/questions/{questionId}/assessment-snapshot": {
+      "operationId": "getExamQuestionAssessmentSnapshot",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ExamQuestionAssessmentSnapshotResponse"
+      }
+    }
+  },
+  "schemas": {
+    "ErrorResponse": {
+      "type": "object",
+      "required": [
+        "error"
+      ],
+      "properties": {}
+    },
+    "CursorPageMeta": {
+      "type": "object",
+      "required": [
+        "next_cursor",
+        "has_more"
+      ],
+      "properties": {}
+    },
+    "ExamWorkspaceStage": {
+      "type": "object",
+      "required": [
+        "key",
+        "label",
+        "state",
+        "action_route"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamWorkspaceStageProgress": {
+      "type": "object",
+      "required": [
+        "stage",
+        "status",
+        "summary"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamWorkspaceNotice": {
+      "type": "object",
+      "required": [
+        "code",
+        "title",
+        "message",
+        "severity"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamWorkspaceCounts": {
+      "type": "object",
+      "required": [
+        "paper_count",
+        "question_count",
+        "submission_count",
+        "failed_submission_count",
+        "quality_issue_submission_count",
+        "unmatched_submission_count",
+        "pending_review_count",
+        "pending_arbitration_count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamWorkspaceNextAction": {
+      "type": "object",
+      "required": [
+        "code",
+        "label",
+        "description",
+        "route",
+        "priority"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamWorkspaceSubjectSummary": {
+      "type": "object",
+      "required": [
+        "code",
+        "label",
+        "total_score",
+        "question_count",
+        "configured_question_count",
+        "frozen_question_count",
+        "question_types"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamWorkspaceProjection": {
+      "type": "object",
+      "required": [
+        "exam_id",
+        "exam_name",
+        "exam_status",
+        "revision",
+        "stage",
+        "stages",
+        "stage_progress",
+        "blockers",
+        "warnings",
+        "counts",
+        "next_actions",
+        "risk_tier",
+        "subject_summary",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamWorkspaceResponse": {
+      "type": "object",
+      "required": [
+        "workspace"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamPage": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/CursorPageMeta"
+        },
+        {
+          "type": "object",
+          "required": [
+            "exams"
+          ],
+          "properties": {}
+        }
+      ]
+    },
+    "SubmissionPage": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/CursorPageMeta"
+        },
+        {
+          "type": "object",
+          "required": [
+            "submissions"
+          ],
+          "properties": {}
+        }
+      ]
+    },
+    "ReviewTask": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "question_id",
+        "question_no",
+        "answer_segment_id",
+        "submission_id",
+        "anonymous_code",
+        "source",
+        "status",
+        "priority",
+        "grade_round",
+        "revision",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewTaskPage": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/CursorPageMeta"
+        },
+        {
+          "type": "object",
+          "required": [
+            "tasks"
+          ],
+          "properties": {}
+        }
+      ]
+    },
+    "AppealPage": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/CursorPageMeta"
+        },
+        {
+          "type": "object",
+          "required": [
+            "appeals"
+          ],
+          "properties": {}
+        }
+      ]
+    },
+    "BatchEnqueueResponse": {
+      "type": "object",
+      "required": [
+        "batch",
+        "tasks",
+        "enqueue_result"
+      ],
+      "properties": {}
+    },
+    "EducationStage": {
+      "type": "string",
+      "enum": [
+        "junior",
+        "senior"
+      ]
+    },
+    "SubjectCode": {
+      "type": "string",
+      "enum": [
+        "chinese",
+        "mathematics",
+        "english",
+        "physics",
+        "chemistry",
+        "biology",
+        "history",
+        "geography",
+        "ethics_politics"
+      ]
+    },
+    "SubjectProfileStatus": {
+      "type": "string",
+      "enum": [
+        "active",
+        "retired"
+      ]
+    },
+    "QuestionArchetypeCode": {
+      "type": "string",
+      "enum": [
+        "selected_response",
+        "exact_text",
+        "numeric_expression",
+        "structured_steps",
+        "short_constructed",
+        "extended_response",
+        "diagram_graph",
+        "table_experiment"
+      ]
+    },
+    "EvidenceType": {
+      "type": "string",
+      "enum": [
+        "selected_option",
+        "exact_text",
+        "text_span",
+        "numeric_value",
+        "math_expression",
+        "math_step",
+        "unit_value",
+        "chemical_equation",
+        "concept",
+        "relation",
+        "diagram_feature",
+        "table_cell"
+      ]
+    },
+    "ScoringMode": {
+      "type": "string",
+      "enum": [
+        "RULE_AUTO",
+        "AI_ASSIST",
+        "AI_FAST_CONFIRM",
+        "HUMAN_PRIMARY",
+        "DUAL_HUMAN",
+        "MANUAL_ONLY"
+      ]
+    },
+    "ExamRiskTier": {
+      "type": "string",
+      "enum": [
+        "R1",
+        "R2",
+        "R3"
+      ]
+    },
+    "SubjectProfile": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "code",
+        "education_stage",
+        "subject_code",
+        "version",
+        "status",
+        "parser_policy",
+        "evidence_policy",
+        "scoring_default",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "SubjectProfileListResponse": {
+      "type": "object",
+      "required": [
+        "subject_profiles"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "QuestionArchetype": {
+      "type": "object",
+      "required": [
+        "code",
+        "response_schema",
+        "evidence_types",
+        "default_scoring_mode"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "QuestionArchetypeListResponse": {
+      "type": "object",
+      "required": [
+        "question_archetypes"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PutQuestionAssessmentProfileRequest": {
+      "type": "object",
+      "required": [
+        "subject_profile_id",
+        "archetype_code",
+        "allowed_evidence_types",
+        "risk_tier",
+        "scoring_policy",
+        "expected_revision"
+      ],
+      "properties": {},
+      "allOf": [
+        {}
+      ],
+      "additionalProperties": false
+    },
+    "QuestionAssessmentProfile": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "question_id",
+        "subject_profile_id",
+        "subject_profile_code",
+        "subject_profile_version",
+        "education_stage",
+        "subject_code",
+        "archetype_code",
+        "allowed_evidence_types",
+        "risk_tier",
+        "scoring_policy",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "QuestionAssessmentProfileResponse": {
+      "type": "object",
+      "required": [
+        "assessment_profile"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamQuestionAssessmentSnapshot": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "question_id",
+        "snapshot_version",
+        "subject_profile_id",
+        "subject_profile_code",
+        "subject_profile_version",
+        "education_stage",
+        "subject_code",
+        "archetype_code",
+        "allowed_evidence_types",
+        "risk_tier",
+        "profile_snapshot",
+        "archetype_snapshot",
+        "rubric_snapshot",
+        "scoring_policy_snapshot",
+        "content_hash",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamQuestionAssessmentSnapshotResponse": {
+      "type": "object",
+      "required": [
+        "assessment_snapshot"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "QuestionScoringPolicy": {
+      "type": "object",
+      "required": [
+        "mode",
+        "require_evidence"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    }
+  }
+}

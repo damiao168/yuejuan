@@ -10,6 +10,9 @@
   "scripts": {
     "dev": "npm --workspace apps/web-admin run dev",
     "build": "npm --workspaces --if-present run build",
+    "generate:sdk": "node scripts/generate-sdk.mjs",
+    "openapi:baseline": "node scripts/update-openapi-baseline.mjs",
+    "check:openapi-breaking": "node scripts/check-openapi-breaking.mjs",
     "check:story049": "node scripts/check-story049-ocr-worker.mjs",
     "check:story050": "node scripts/check-story050-image-quality.mjs",
     "check:story051": "node scripts/check-story051-agent-worker-runtime.mjs",
@@ -26,6 +29,8 @@
     "preview": "npm --workspace apps/web-admin run preview",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "showcase:exam-workspace": "playwright test tests/e2e/specs/exam-workspace.visual.spec.ts --project=chromium",
+    "showcase:exam-workspace:ui": "playwright test tests/e2e/specs/exam-workspace.visual.spec.ts --project=chromium --ui",
     "test:e2e:report": "playwright show-report output/playwright/report"
   },
   "devDependencies": {

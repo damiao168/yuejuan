@@ -57,8 +57,9 @@ import { ResponsiveTable } from "../components/ResponsiveTable";
 import { ModelEvaluationWorkspace } from "../components/model-governance/ModelEvaluationWorkspace";
 import { ModelApprovalWorkspace } from "../components/model-governance/ModelApprovalWorkspace";
 import { PromptVersionWorkspace } from "../components/model-governance/PromptVersionWorkspace";
+import { ScoringAssuranceWorkspace } from "../components/model-governance/ScoringAssuranceWorkspace";
 
-type GovernanceView = "providers" | "deployments" | "prompts" | "evaluations" | "approvals" | "policy";
+type GovernanceView = "providers" | "deployments" | "prompts" | "evaluations" | "assurance" | "approvals" | "policy";
 
 const policyModeLabels: Record<PolicyMode, string> = {
   local_only: "仅本地",
@@ -106,11 +107,17 @@ function microsToYuan(value: number) {
 export function ModelGovernancePage({
   canManageProviders,
   canManagePolicy,
-  canManageEvaluations
+  canManageEvaluations,
+  canReadEligibility,
+  canReadDisagreements,
+  canManageDisagreements
 }: {
   canManageProviders: boolean;
   canManagePolicy: boolean;
   canManageEvaluations: boolean;
+  canReadEligibility: boolean;
+  canReadDisagreements: boolean;
+  canManageDisagreements: boolean;
 }) {
   const { message } = App.useApp();
   const [providers, setProviders] = useState<ModelProvider[]>([]);
@@ -509,6 +516,7 @@ export function ModelGovernancePage({
                   { value: "deployments", label: `部署 ${deployments.length}` },
                   { value: "prompts", label: "系统提示词" },
                   { value: "evaluations", label: `评测 ${evaluationRuns.length}` },
+                  { value: "assurance", label: "评分保障" },
                   { value: "approvals", label: `批准 ${modelApprovals.filter((item) => !item.revoked_at && new Date(item.expires_at).getTime() > Date.now()).length}` },
                   { value: "policy", label: "租户策略" }
                 ]}
@@ -558,6 +566,15 @@ export function ModelGovernancePage({
                       </Button>
                     ) : null}
                   </Space>
+                ) : null}
+                {activeView === "assurance" ? (
+                  <ScoringAssuranceWorkspace
+                    canReadEligibility={canReadEligibility}
+                    canManageEligibility={canManagePolicy}
+                    canManageEvaluations={canManageEvaluations}
+                    canReadDisagreements={canReadDisagreements}
+                    canManageDisagreements={canManageDisagreements}
+                  />
                 ) : null}
                 {activeView === "approvals" ? (
                   <ModelApprovalWorkspace

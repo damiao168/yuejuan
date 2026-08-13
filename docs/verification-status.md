@@ -1,109 +1,67 @@
 # EduGrade 当前能力与验证状态
 
-更新日期：2026-08-09
-适用范围：当前 `main` 代码及本文件列出的可复现验证入口
+更新日期：2026-08-13
+适用范围：当前工作树（含尚未提交的 A01–A26 实现）；不是对 GitHub `main` 或学校生产环境的声明。
 
-本文件是项目当前能力、验证强度和剩余风险的事实源。README、Story、评审报告记录设计与实施过程；当它们与本文件的当前状态冲突时，以代码、自动化脚本和本文件最近一次核验结果为准。
+本文件只记录代码、自动验证和明确的外部边界。它不把 Mock、协议模拟器、静态检查或本机构建写成真实设备、真实模型质量或学校现场验收。
 
 ## 状态口径
 
-| 状态 | 含义 | 不能推导出的结论 |
+| 状态 | 含义 | 不代表 |
 | --- | --- | --- |
-| 已实现且有自动验证 | 生产代码已存在，并有 CI、单元测试、集成测试或静态门禁覆盖关键不变量 | 不等于真实设备、真实数据、真实模型质量或学校现场已验收 |
-| 已实现，需本地或人工验证 | 代码和可复现入口已存在，但需要 Docker、模型运行时、物理设备、受治理数据或人工检查 | 不能仅凭代码审查标记为 Production Ready |
-| 尚未验证或规划中 | 只有局部实现、开发中工作树、方案或历史 Story 描述，尚无足够证据闭环 | 不能出现在对外“已交付能力”清单中 |
+| 已实现且有自动验证 | 代码、路由/界面或耐久存储接线已存在，且有定向测试、类型检查、构建或契约门禁 | 已在真实学校生产运行 |
+| 已实现，待外部验证 | 产品代码已闭环，但依赖设备、受治理数据、第三方模型或预生产环境 | 真实效果、容量或现场可用性已证明 |
+| 外部验证边界 | 必须由人工或预生产留存证据的条件 | 可以通过放宽门禁或文档声明跳过 |
 
-“自动验证”只表示仓库中存在并执行对应门禁。除非同时附有本次 GitHub Actions 运行链接或归档产物，否则不表述为“当前远端 CI 已通过”。
+## A01–A26 实施总览
 
-## 当前能力矩阵
+| 范围 | 当前实现 | 自动验证与边界 |
+| --- | --- | --- |
+| A01–A06：学科领域、工作区、SDK、专业工作台、批注 | 版本化 Assessment Snapshot、五阶段考试工作区、Feature/Router/Query 架构、按学科的阅卷上下文、键盘操作、任务预取、批注和评语模板均已接线 | Go 领域/路由测试、Web 类型检查、Vitest、生产构建与路由门禁；20 份语文/数学/物理/历史夹具的键盘浏览器流程及双窗口草稿 revision conflict 均通过；真实教师连续阅卷体验仍需现场观察 |
+| A07–A13：人工质量体系 | 相似答案分组、Gold Papers、阅卷员校准、Seed、漂移检测、回标和质量总控台均有持久化模型、服务、管理入口和质量门禁接线；回标严重差异只能显式转入 A19 待审批题目复评，不改当前分或发布 | 对应 Go 包定向测试通过；样本分布、校准阈值和真实阅卷员一致性待试点数据验证 |
+| A14–A17：AI 准入与评测 | Eligibility 先于外部 AI 调用并保守拒绝；模型置信度校准、分学科切片评测、难度投影、AI/人工分歧分类均已接线，并在既有“模型治理”的“评分保障”工作区实际可管理 | 对应 Go 包定向测试通过；真实外部模型、数据出境审批、有效校准曲线和公平性结论尚未验证 |
+| A18–A22：发布、重评、学生端与申诉 | 不可变 Score Release、题级 Regrade、发布门禁、独立 Student Portal、发布版本锚定的题目申诉均已实现；题级重评包含分派、盲评候选、冻结 Rubric 证据、管理端逐项复核和后继版本草稿；学生可圈选本题答题图，学校端在同一申诉上下文中处理原图、冻结 Rubric 与版本事实 | Go 领域/处理器测试、OpenAPI/SDK 门禁及学生端/管理端类型构建通过；真实发布流程和学校申诉运营需预生产演练 |
+| A23–A26：桌面扫描站与处理异常 | Tauri 使用 SQLite、本地受控文件 Spool、AES-GCM 信封和 Windows Credential Manager；断点续传、扫描 Profile/预检、统一 Processing State 与异常处理中心已接线；工作区可直达阻断异常，导入页可定位相应异常 | Desktop Vitest、Rust 测试/Clippy、Web 构建与 Go 定向测试通过；真实扫描仪、设备驱动及大批量断电恢复仍待验证 |
+
+详细的逐项范围、接线、验证和外部边界见 [`docs/stories/README.md`](stories/README.md) 的 A 系列索引及各 Story 事实记录。
+
+## 关键能力矩阵
 
 | 能力 | 当前状态 | 证据与边界 |
 | --- | --- | --- |
-| 认证、RBAC、租户/学校数据范围 | 已实现且有自动验证 | Go 测试、PostgreSQL E2E 和前端角色入口检查覆盖主要边界；前端路由权限只提供用户体验，后端授权仍是安全边界 |
-| 考试、试卷、题目、Rubric、答卷与文件流程 | 已实现且有自动验证 | Go 全量测试、Story 静态门禁及 PostgreSQL 工作流覆盖核心状态；不代表真实扫描现场已验收 |
-| OCR、图像质量、页面处理 Worker | 已实现且有自动验证 | Python CI 包含 Ruff、依赖审计和各 Worker 测试，Compose profile 可静态解析；真实打印、扫描、复杂版面和大规模吞吐仍需现场验证 |
-| 客观题规则评分、OMR 校准与人工回退 | 已实现且有自动验证 | STORY-056/060 的 Go/PostgreSQL 测试覆盖规则评分、模板差异、租约恢复和完整性阻断；当前外部样本规模不构成生产准确率证明 |
-| 主观题单题建议、证据校验与人工复核边界 | 已实现且有自动验证 | API Gateway、`grading-agent`、Lab 契约和测试覆盖“建议而非最终成绩”；作文/论述题保持 `shadow_only`，置信度尚未完成生产校准 |
-| 主观题批次 Worker 运行时 | 已实现且有自动验证 | Python CI 已纳入安装、Ruff、pytest、Compose profile、镜像构建和配置烟测；Worker 有健康标记、断线重登和本地 HTTP 协议烟测 |
-| 主观题批次端到端运行 | 已实现且有自动验证 | 隔离 Compose 已验证批次、专用 Worker 服务账号、租约、受治理 Agent、AI 建议、审计和数据库收敛；Worker 健康检查通过。它仍不证明真实模型效果或学校现场能力 |
-| 主观题批次可靠性 | 已实现且有自动验证 | 管理页按用户意图轮换幂等键，轮询避免重叠且错误可见；后端批量加载片段上下文并返回结构化部分成功结果，隔离 PostgreSQL 批次链路已通过；尚无大批量性能基线 |
-| 人工阅卷、双评、仲裁、发布与申诉 | 已实现且有自动验证 | 领域测试覆盖主要状态和权限；最终成绩必须由人工流程确认，AI 没有发布权限 |
-| Web 角色入口与关键页面回归 | 已实现且有自动验证 | Vitest 覆盖角色体验和路由注册关键逻辑；当前 `npm run test:e2e` 会拦截 `/api/v1/**` 并使用 `tests/e2e/fixtures/apiMocks.ts`，它只证明 UI、导航、权限展示和前端接口契约，不是跨服务生产证明 |
-| 生产 Mock 页面退场 | 已实现且有自动验证 | 生产模式从注册表构造阶段排除 `productionReady: false` 页面，不能用环境开关重新启用；Vitest 和生产路由脚本覆盖该边界 |
-| 不拦截 API 的浏览器跨服务黄金路径 | 已实现且有自动验证 | 隔离 Compose 启动真实 Web、反向代理、API 和 PostgreSQL；Playwright 未注册 API 路由拦截，已验证学校管理员登录、工作台和已持久化考试列表。范围尚不包含真实扫描仪或整场考试浏览器操作 |
-| STORY-060 外部模型协议模拟器 | 测试夹具，自动执行 | 固定响应模拟器只存在于隔离测试边界，用于验证真实 `grading-agent` 适配器、API、PostgreSQL、审计及“AI 不写 `final_grade`”约束；它不是生产模型，也不证明真实模型的准确率、鲁棒性、校准、公平性或成本 |
-| 本地真实模型适配器 | 已实现，需本地或人工验证 | 需要显式启动 llama.cpp 与受治理模型，再运行 opt-in 测试；模型文件和密钥不进入仓库，模拟器通过不能替代该验证 |
-| 多厂商模型治理 | 已实现，需本地或人工验证 | Provider、Deployment、Secret 引用状态、租户策略和 fail-closed 门禁已有实现；真实外部厂商调用、数据出境审批、效果评测和灰度证据尚未完成 |
-| 核心 API 契约与前端查询一致性 | 已实现且有自动验证 | OpenAPI 3.1 明确标记为 `core-pilot-partial`，覆盖核心列表和主观题部分入队语义；共享查询构造器已迁移高频列表并有前后端契约测试。它不是全量 API 描述，也尚未生成客户端或做破坏性差异门禁 |
-| Windows/Tauri 客户端 | 已实现，需本地或人工验证 | 自动登录凭据使用 Windows Credential Manager，失败时不降级到 WebView 存储；远程 API 强制 HTTPS，日志在前端与 Rust 双层脱敏，CI 覆盖前端/Rust/安全配置。真实凭据库写入、离线草稿加密 SQLite、设备绑定、扫描仪与安装升级仍需专项验收 |
-| 私有化部署、备份、恢复与可观测性 | 已实现，需本地或人工验证 | Compose、预检和运维脚本存在并有静态检查；恢复演练、容量基线、告警闭环和长时间运行必须在预生产环境留存证据 |
-| PostgreSQL 容量保护 | 已实现且有自动验证 | 连接池上限、连接生命周期、空闲回收、语句超时和锁等待超时可配置且有安全范围校验；这只防止资源无界占用，不是容量基线或 SLO 证明 |
-| 数据库 RLS、容量基线、AI Pilot 效果治理 | 尚未验证或规划中 | RLS 仍需受控应用角色和事务级 tenant context 试点；真实数据评测、教师一致性和容量报告完成前，不宣称学校生产就绪 |
+| 多租户考试、试卷、题目、Rubric 与冻结评分事实 | 已实现且有自动验证 | A01 Assessment、考试工作区和评分链路使用冻结快照；真实数据迁移与学校配置仍需人工核验 |
+| 人工阅卷、双评、仲裁与质量控制 | 已实现且有自动验证 | 人工评分仍是最终成绩来源；AI 建议不拥有发布或最终分权限 |
+| OCR、图像质量、页面处理与异常运营 | 已实现且有自动验证 | A26 只投影既有处理事实并通过异常中心处理；复杂扫描版面和吞吐未由本轮证明 |
+| 多厂商模型治理与主观题 AI 建议 | 已实现，待外部验证 | 受治理的 Provider/Deployment/策略、Eligibility、评测和校准事实已存在；未接入或未批准的模型必须 fail closed |
+| OpenAPI 与 Generated SDK | 已实现且有自动验证 | `npm run generate:sdk`、`npm run check:openapi-breaking` 和 SDK 类型检查已通过；契约仍只覆盖已登记的核心 API，不等于全仓 API 已覆盖 |
+| Web 管理端生产路由 | 已实现且有自动验证 | Web Vitest、类型检查、生产构建及生产路由门禁通过；Mock 浏览器回归仅证明前端交互，不冒充跨服务生产证明 |
+| 学生端成绩与题目申诉 | 已实现且有自动验证 | 独立 Student DTO 仅读取已发布版本；真实学生身份接入、通知与申诉处理时效需要学校侧验证 |
+| Windows 扫描工作站 | 已实现，待外部验证 | Tauri SQLite/AES-GCM/系统凭据与本地 Spool 已实现；WIA 设备发现/Profile/预检可用，直接采集能力不对未经验证的设备作保证 |
+| 私有化部署与恢复 | 已实现，待外部验证 | Compose 与运维入口存在；恢复演练、容量基线、告警闭环和长时间运行必须在预生产留存证据 |
 
-## 测试证据分层
+## 最近一次本机验证快照
 
-### 每次 PR / `main` 的自动门禁
+2026-08-13 在 Windows 工作区执行的定向验证：
 
-以 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) 为准：
+- Web：`npm --workspace @edugrade/web-admin run test`（`32` 项）、`typecheck`、`build`、`check:production-routes`、`check:story053`、`check:story057`、`check:story061`、`check:story063` 通过；Exam Workspace 在 `1366×768`、`1440×900`、`1920×1080` 的 Playwright 视觉回归与无横向溢出检查通过；构建仅有包体积提示。
+- 阅卷 E2E：20 份跨学科夹具以键盘完成领取、草稿保存、刷新恢复、提交并切换下一份；双浏览器窗口草稿 revision conflict 均通过。均为状态化 API mock 浏览器回归，不冒充真实学校数据链路。
+- OpenAPI/SDK：`npm run generate:sdk`、`npm run check:openapi-breaking`、`npm --workspace @edugrade/sdk run typecheck` 通过。
+- Go：A01–A26 相关领域包、OpenAPI 契约和服务器路由的定向 `go test` 通过；未把一次受本机时限中断的全量命令写成成功。
+- Student Portal：`npm --workspace @edugrade/student-portal run typecheck` 与 `build` 通过。
+- Desktop：上传续传定向 Vitest、TypeScript、生产构建、`cargo test --lib`（`10` 项）与 `cargo clippy -- -D warnings` 通过；500 页 fixture 的第 173 页中断、断网/5xx、重启续传与幂等完成均有 Rust、桌面客户端及服务端定向测试。
+- 基础检查：`git diff --check` 通过。
 
-- Web：依赖审计、TypeScript、生产构建、生产路由检查、Story 门禁、Mock Playwright 回归、Lab 测试/合成评测/开发门禁。
-- Go：全量测试、并发安全 race 子集、`go vet`、`staticcheck`、`govulncheck`、PostgreSQL 工作流及 Lab/主项目边界检查。
-- Python：依赖一致性与审计、Ruff、OCR/图像质量/页面处理/主观题 Worker 测试、AI 服务和评测测试。
-- Desktop：Rust 格式、编译、测试、Clippy 和 PowerShell 语法检查。
-- Compose / 供应链：配置解析、主观题 Worker 镜像构建与配置烟测、隔离 E2E Compose 静态检查、SBOM 和高危漏洞门禁。
-- 真实系统 E2E：隔离启动 STORY-060 服务，先验证评分代理、模型协议、数据库和审计，再运行不拦截 API 的 Playwright 用例；失败时保留容器日志和浏览器产物。
+本机未配置 `EDUGRADE_E2E_DATABASE_URL`，因此依赖真实 PostgreSQL 的 E2E 在本机为跳过状态；Docker Desktop 当前未运行，不能把 Compose/真实系统 E2E 记为本机通过。远端 CI 的结果须以对应 Actions 运行记录为准。
 
-这些门禁覆盖代码与协议不变量，但不会自动产生真实打印机、真实模型效果或学校现场结果。
+## 必须保留的外部验证边界
 
-### 显式的本地/预生产验证
-
-| 目标 | 入口 | 前置条件 |
-| --- | --- | --- |
-| 主观题 Worker 静态与协议门禁 | `npm.cmd run check:story063` | Node.js 与仓库依赖 |
-| 主观题 Worker 单测 | `python -m pytest -q services/subjective-grading-worker/tests` | 先安装对应 editable package，或仅开发时设置该服务目录到 `PYTHONPATH` |
-| 主观题批次真实服务闭环 | `infra/docker-compose/scripts/story063-subjective-smoke-test.ps1` | Compose 全栈、迁移、测试账号、真实答题片段、Worker 与 Agent 就绪 |
-| 当前 Mock 浏览器回归 | `npm.cmd run test:e2e` | Chromium；接口由 fixture 拦截 |
-| 真实系统浏览器回归 | `playwright.real.config.ts` 与 CI `real-system-e2e` job | 隔离 STORY-060 Compose；使用外部模型协议模拟器，不使用真实模型 |
-| 本地真实模型适配器 | README 中的 `TestHTTPAdapterRealLocalAgent` opt-in 命令 | llama.cpp、受治理模型、Agent 和本地服务令牌 |
-| 部署/恢复验收 | `infra/docker-compose/scripts` 与 `docs/deployment/preproduction-runbook.md` | 独立预生产环境、备份介质、监控和验收责任人 |
-
-## 最近一次本机核验快照
-
-2026-08-09 在 Windows 工作区执行：
-
-- A1：`check:story063`、Ruff、主观题 Worker `5` 项测试和 Compose 配置检查通过；CI 已配置 Worker 镜像构建与配置烟测。
-- A2：Docker Desktop Server `29.6.1` 下隔离 Compose 全栈一次启动成功；主观题批次、专用 Worker 服务账号、租约/执行、真实评分代理、外部模型协议模拟器、API、PostgreSQL 和审计验证通过，Worker healthy，并确认 AI 没有写入 `final_grade`。
-- A2：真实 Playwright 未注册 API 路由拦截，学校管理员登录、工作台、考试列表用例 `1/1` 通过。
-- A3：`go test ./internal/subjective`、批次测试重复运行、`go vet`、定向 `staticcheck`、前端 TypeScript 和生产构建通过；隔离 PostgreSQL 批次链路也已执行批量上下文加载。
-- A4：Web Vitest `3` 个文件、`9` 项测试通过；TypeScript、生产构建、生产路由检查和 STORY-053 门禁通过。
-- B：核心 OpenAPI 契约、公共分页约束和共享查询构造器测试通过；桌面 Vitest `5/5`、Rust `2/2`、Clippy、安全配置门禁与依赖审计通过。
-- C：PostgreSQL 连接池、连接生命周期、语句/锁超时已实际应用到 pgx，配置、DB 和依赖测试通过；修复 readiness checker 覆盖池配置的问题。
-
-以上是本机证据，不替代 GitHub Actions 远端结果。真实模型效果、真实扫描设备和学校现场仍未由本轮验证覆盖。
-
-## 本轮整改结果
-
-| 项目 | 结论 |
-| --- | --- |
-| A1 主观题 Worker 门禁 | 已完成代码与自动门禁，并在隔离 STORY-063 业务闭环中验证 Worker 运行健康 |
-| A2 真实跨服务路径 | 已完成并本机通过；浏览器请求未被 Mock，外部模型仍是明确标识的协议模拟器 |
-| A3 批次可靠性 | 已完成幂等、轮询、错误语义、部分成功和批量加载整改并通过定向检查；PostgreSQL 批量路径仍需集成用例 |
-| A4 前端最小测试与 Mock 退场 | 已完成；Mock 页面不进入生产注册表，Mock Playwright 保留为独立 UI 回归 |
-| A5 说明与证据 | 由本文件统一维护状态口径、能力矩阵、验证入口和未覆盖边界 |
-| B API 与桌面安全 | 核心 OpenAPI/查询统一、Windows 系统凭据库、HTTPS 门禁和日志脱敏已完成；全量契约和加密离线存储仍待后续 |
-| C 容量与治理核对 | PostgreSQL 容量保护已完成；RLS 与真实数据 AI 效果治理保留为明确的预生产工作，不以静态配置冒充完成 |
-
-## 当前整改优先级
-
-1. 远端门禁：合入后确认 GitHub Actions 的 Python、Web、Go、Compose、真实系统 E2E 和供应链 job 全部通过。
-2. 数据库纵深防御：设计非表所有者应用角色和事务级 tenant context，先对高风险表做 RLS 试点，不直接给现有连接池套用未验证策略。
-3. 预生产：用非生产受治理数据完成恢复演练、容量基线、告警闭环和持续运行验证。
-4. P1/P2：扩展 OpenAPI 全量覆盖与破坏性差异门禁，拆分超大文件，迁移离线草稿到加密 SQLite，并推进真实数据 AI Pilot 治理。
+1. **物理扫描与设备**：真实 WIA/TWAIN 设备、纸张、双面进纸、TIFF/PDF、样张质量和安装升级需要实际设备验收。
+2. **离线大批量恢复**：500 页受控 fixture 已覆盖第 173 页中断、重启、断网/5xx 与确认 offset 续传；真实扫描仪、断电、磁盘压力和现场网络仍需要演练，自动化 fixture 不能替代该演练。
+3. **第三方/本地模型效果**：真实 Provider 调用、提示词版本、数据审批、分学科切片、风险覆盖、校准、公平性和成本均需受治理评测证据。
+4. **学校现场**：账号接入、考试流程、教师校准、成绩发布、申诉时效、备份恢复、容量与告警必须由预生产/学校现场的责任人确认。
 
 ## 维护规则
 
-- 新增“已完成”声明时，必须同时写明证据入口、运行环境和未覆盖边界。
-- Mock、stub、合成数据和外部模型协议模拟器必须显式标识，不能写成“真实模型效果已验证”。
-- 物理扫描、真实考试数据、第三方厂商和容量结论必须附环境、数据版本、模型/提示词版本、日期和结果归档位置。
-- Story 的 `Approved` 表示该 Story 当时的验收结论，不自动升级为当前版本 Production Ready。
-- 一次验证失败时保留失败证据并更新本文件，不通过删除测试、放宽门禁或改写状态绕过。
+- 新增“已实现”必须同时列出代码接线、验证入口和未覆盖边界。
+- Mock、stub、合成数据和外部模型协议模拟器必须显式标识，不得写成真实模型或现场结果。
+- 发布到 GitHub、合并到 `main` 或远端 CI 通过是独立事实；本工作树状态不会自动同步到其中任何一个。

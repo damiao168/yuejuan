@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, App, Button, Divider, Empty, Input, List, Modal, Select, Space, type TableColumnsType } from "antd";
-import { Calculator, CheckCircle2, ClipboardCheck, Download, FileWarning, LockKeyhole, RefreshCw, Search, Send, ShieldCheck, UserCheck, UserX } from "lucide-react";
+import { Alert, App, Button, Divider, Empty, Input, InputNumber, List, Modal, Select, Space, type TableColumnsType } from "antd";
+import { Calculator, CheckCircle2, ClipboardCheck, Download, FileWarning, GitCompareArrows, LockKeyhole, RefreshCw, Search, Send, ShieldCheck, UserCheck, UserX } from "lucide-react";
 import { ApiClientError } from "../api/client";
 import { listAuditLogs, type AuditLog } from "../api/audit";
 import { examStatusLabels, examSubjectLabel } from "../constants/examStatus";
@@ -21,7 +21,30 @@ import {
   type RosterReport,
   type SubmissionGrade
 } from "../api/scores";
+import {
+  createRegradeJob,
+  createRegradeScoreRelease,
+  createScoreRelease,
+  getScoreReleaseGate,
+  getRegradeJob,
+  listRegradeJobs,
+  listScoreReleases,
+  approveRegradeJob,
+  startRegradeJob,
+  pauseRegradeJob,
+  resumeRegradeJob,
+  finalizeRegradeJob,
+  reviewRegradeItem,
+  previewRegrade,
+  publishScoreRelease,
+  type RegradeJob,
+  type RegradeSummary,
+  type RegradePreview,
+  type ScoreRelease,
+  type ScoreReleaseGate
+} from "../api/scoreReleases";
 import { listSubmissions, type Submission } from "../api/submissions";
+import { listManagedUsers, type ManagedUser } from "../api/users";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
@@ -106,6 +129,47 @@ const rosterResolutionLabels: Record<string, string> = {
   missing_pages: "实收页数少于应收页数或质量检查失败"
 };
 
+const scoreReleaseStatusLabels: Record<string, string> = {
+  draft: "草稿",
+  published: "已发布"
+};
+
+const scoreReleaseSourceLabels: Record<string, string> = {
+  initial: "初次发布",
+  regrade: "复评更正",
+  appeal: "申诉更正",
+  rollback: "回退版本",
+  migration: "历史迁移"
+};
+
+const regradeStatusLabels: Record<string, string> = {
+  awaiting_approval: "待批准",
+  approved: "已批准",
+  running: "复评中",
+  paused: "已暂停",
+  diff_review: "差异复核",
+  ready_for_release: "可生成新版本",
+  cancelled: "已取消"
+};
+
+const regradeReasonOptions = [
+  { label: "答案错误", value: "answer_key_error" },
+  { label: "评分细则错误", value: "rubric_error" },
+  { label: "识别结果更正", value: "ocr_correction" },
+  { label: "解析规则问题", value: "parser_bug" },
+  { label: "模型评分问题", value: "model_issue" },
+  { label: "质量事件", value: "quality_incident" },
+  { label: "申诉集中问题", value: "appeal_pattern" },
+  { label: "其他", value: "other" }
+];
+
+const regradeStrategyOptions = [
+  { label: "人工复核", value: "human_recheck" },
+  { label: "规则重新计算", value: "rule_recompute" },
+  { label: "AI 重算后人工复核", value: "ai_recompute_then_review" },
+  { label: "导入回标结果", value: "backmark_import" }
+];
+
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
     console.error("请求失败", error.status, error.code, error.message);
@@ -143,6 +207,10 @@ function statusTone(status: string): StatusTone {
     return "warning";
   }
   return "neutral";
+}
+
+function scoreReleaseTone(status: string): StatusTone {
+  return status === "published" ? "success" : "processing";
 }
 
 function issueCount(quality: QualityCheckResult | null, code: string) {
@@ -223,6 +291,9 @@ export function ScoreManagementPage({
   const [gradeNextCursor, setGradeNextCursor] = useState("");
   const [gradesHaveMore, setGradesHaveMore] = useState(false);
   const [quality, setQuality] = useState<QualityCheckResult | null>(null);
+  const [releaseGate, setReleaseGate] = useState<ScoreReleaseGate | null>(null);
+  const [scoreReleases, setScoreReleases] = useState<ScoreRelease[]>([]);
+  const [regradeJobs, setRegradeJobs] = useState<RegradeJob[]>([]);
   const [roster, setRoster] = useState<RosterReport | null>(null);
   const [identities, setIdentities] = useState<IdentityMaps>({ students: {}, classes: {} });
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
@@ -239,13 +310,67 @@ export function ScoreManagementPage({
   const [actioning, setActioning] = useState<string | null>(null);
   const [attendanceEditor, setAttendanceEditor] = useState<{ entry: RosterEntry; status: "expected" | "absent" } | null>(null);
   const [attendanceReason, setAttendanceReason] = useState("");
+  const [releaseReason, setReleaseReason] = useState("");
+  const [releaseModalOpen, setReleaseModalOpen] = useState(false);
+  const [regradeModalOpen, setRegradeModalOpen] = useState(false);
+  const [regradeQuestionId, setRegradeQuestionId] = useState("");
+  const [regradeReasonCode, setRegradeReasonCode] = useState("quality_incident");
+  const [regradeReasonText, setRegradeReasonText] = useState("");
+  const [regradeStrategy, setRegradeStrategy] = useState("human_recheck");
+  const [regradeAssigneeID, setRegradeAssigneeID] = useState("");
+  const [regradeGraders, setRegradeGraders] = useState<ManagedUser[]>([]);
+  const [regradeGradersError, setRegradeGradersError] = useState("");
+  const [loadingRegradeGraders, setLoadingRegradeGraders] = useState(false);
+  const [regradePreview, setRegradePreview] = useState<RegradePreview | null>(null);
+  const [regradeReview, setRegradeReview] = useState<RegradeSummary | null>(null);
+  const [regradeReviewOpen, setRegradeReviewOpen] = useState(false);
+  const [regradeReviewScores, setRegradeReviewScores] = useState<Record<string, number | null>>({});
+  const [previewingRegrade, setPreviewingRegrade] = useState(false);
   const scoreRequestRef = useRef(0);
 
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
   const summary = useMemo(() => createSummary(submissions, gradeTotal, quality, roster), [gradeTotal, quality, roster, submissions]);
   const scoreAuditLogs = useMemo(() => auditLogs.filter((item) => item.action.startsWith("score.")), [auditLogs]);
   const publishedOrLocked = selectedExam?.status === "published" || allGradesLocked;
+  const publishedRelease = useMemo(() => scoreReleases.find((release) => release.status === "published"), [scoreReleases]);
   const filteredGrades = grades;
+  const regradeQuestionOptions = useMemo(() => {
+    const byQuestion = new Map<string, { label: string; value: string }>();
+    for (const grade of grades) {
+      for (const item of grade.items ?? []) {
+        if (!byQuestion.has(item.question_id)) {
+          byQuestion.set(item.question_id, { value: item.question_id, label: `${item.question_no} · 满分 ${formatScore(item.max_score)}` });
+        }
+      }
+    }
+    return [...byQuestion.values()];
+  }, [grades]);
+  const regradeGraderOptions = useMemo(() => regradeGraders.map((user) => ({
+    value: user.id,
+    label: user.display_name || user.username
+  })), [regradeGraders]);
+
+  const loadRegradeGraders = useCallback(async () => {
+    if (!canManage) return;
+    setLoadingRegradeGraders(true);
+    try {
+      const result = await listManagedUsers({ limit: 200 });
+      const available = result.users.filter((user) => user.status === "active" && user.roles.includes("grader"));
+      setRegradeGraders(available);
+      setRegradeGradersError(available.length ? "" : "当前没有可分配的有效阅卷员账号");
+      setRegradeAssigneeID((current) => available.some((user) => user.id === current) ? current : available[0]?.id || "");
+    } catch (currentError) {
+      setRegradeGraders([]);
+      setRegradeAssigneeID("");
+      setRegradeGradersError(formatError(currentError));
+    } finally {
+      setLoadingRegradeGraders(false);
+    }
+  }, [canManage]);
+
+  useEffect(() => {
+    if (regradeModalOpen) void loadRegradeGraders();
+  }, [loadRegradeGraders, regradeModalOpen]);
 
   const loadExamList = useCallback(async () => {
     setLoadingExams(true);
@@ -279,6 +404,9 @@ export function ScoreManagementPage({
         setGradeNextCursor("");
         setGradesHaveMore(false);
         setQuality(null);
+        setReleaseGate(null);
+        setScoreReleases([]);
+        setRegradeJobs([]);
         setRoster(null);
         setAuditLogs([]);
         setLoadingScores(false);
@@ -287,7 +415,7 @@ export function ScoreManagementPage({
       setLoadingScores(true);
       setError(null);
       try {
-        const [submissionResult, gradeResult, qualityResult, rosterResult, auditResult] = await Promise.allSettled([
+        const [submissionResult, gradeResult, qualityResult, rosterResult, auditResult, releaseGateResult, releasesResult, regradesResult] = await Promise.allSettled([
           listSubmissions(examId, { limit: 50 }),
           listExamGrades(examId, {
             status: statusFilter === "all" ? undefined : statusFilter,
@@ -296,7 +424,10 @@ export function ScoreManagementPage({
           }),
           checkExamGradeQuality(examId, "publish"),
           canManage ? listExamRoster(examId) : Promise.resolve({ roster: null }),
-          canReadAudit ? listAuditLogs({ target_type: "exam", target_id: examId, limit: 20 }) : Promise.resolve({ audit_logs: [] })
+          canReadAudit ? listAuditLogs({ target_type: "exam", target_id: examId, limit: 20 }) : Promise.resolve({ audit_logs: [] }),
+          canManage ? getScoreReleaseGate(examId) : Promise.resolve({ release_gate: null }),
+          canManage ? listScoreReleases(examId) : Promise.resolve({ score_releases: [] }),
+          canManage ? listRegradeJobs(examId) : Promise.resolve({ regrade_jobs: [] })
         ]);
         if (requestId !== scoreRequestRef.current) return;
         if (submissionResult.status === "fulfilled") {
@@ -332,6 +463,21 @@ export function ScoreManagementPage({
         }
         if (auditResult.status === "fulfilled") {
           setAuditLogs(auditResult.value.audit_logs);
+        }
+        if (releaseGateResult.status === "fulfilled") {
+          setReleaseGate(releaseGateResult.value.release_gate);
+        } else if (canManage) {
+          throw releaseGateResult.reason;
+        }
+        if (releasesResult.status === "fulfilled") {
+          setScoreReleases(releasesResult.value.score_releases);
+        } else if (canManage) {
+          throw releasesResult.reason;
+        }
+        if (regradesResult.status === "fulfilled") {
+          setRegradeJobs(regradesResult.value.regrade_jobs);
+        } else if (canManage) {
+          throw regradesResult.reason;
         }
       } catch (currentError) {
         if (requestId !== scoreRequestRef.current) return;
@@ -493,6 +639,161 @@ export function ScoreManagementPage({
           "成绩已导出"
         )
     });
+  };
+
+  const createRelease = () => {
+    if (!selectedExamId) {
+      message.error("请先选择考试");
+      return;
+    }
+    if (!releaseReason.trim()) {
+      message.error("请填写本次发布版本的说明");
+      return;
+    }
+    void runAction(
+      "release-create",
+      async () => {
+        await createScoreRelease(selectedExamId, {
+          reason: releaseReason.trim(),
+          idempotency_key: crypto.randomUUID(),
+          visibility_policy: {
+            show_question_scores: true,
+            show_feedback: false,
+            show_rubric_summary: false
+          },
+          appeal_window: { enabled: selectedExam?.appeal_enabled ?? false }
+        });
+        setReleaseModalOpen(false);
+        setReleaseReason("");
+      },
+      "已创建成绩发布草稿"
+    );
+  };
+
+  const publishRelease = (release: ScoreRelease) => {
+    if (!releaseGate?.passed) {
+      message.error("发布门禁尚未通过，请先处理阻断项");
+      return;
+    }
+    modal.confirm({
+      title: `发布成绩版本 V${release.version}`,
+      content: "发布后该版本成为学生可见的正式成绩。后续更正必须创建新的成绩版本，不能直接改写本版本。",
+      okText: "确认发布",
+      cancelText: "取消",
+      onOk: () => runAction("release-publish", async () => { await publishScoreRelease(release.id); }, "成绩版本已发布")
+    });
+  };
+
+  const previewSelectedRegrade = async () => {
+    if (!selectedExamId || !regradeQuestionId || !publishedRelease) {
+      message.error("请选择题目，且本场考试必须已有已发布的成绩版本");
+      return;
+    }
+    setPreviewingRegrade(true);
+    try {
+      const response = await previewRegrade(selectedExamId, regradeQuestionId, {
+        source_release_id: publishedRelease.id,
+        selector: {}
+      });
+      setRegradePreview(response.preview);
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setPreviewingRegrade(false);
+    }
+  };
+
+  const createSelectedRegrade = () => {
+    if (!selectedExamId || !regradeQuestionId || !publishedRelease || !regradeReasonText.trim() || !regradeAssigneeID) {
+      message.error("请完成题目、原因、阅卷员分派和影响预览");
+      return;
+    }
+    if (!regradePreview || regradePreview.question_id !== regradeQuestionId || regradePreview.source_release_id !== publishedRelease.id) {
+      message.error("请先预览本次复评的影响范围");
+      return;
+    }
+    void runAction(
+      "regrade-create",
+      async () => {
+        await createRegradeJob(selectedExamId, regradeQuestionId, {
+          source_release_id: publishedRelease.id,
+          reason_code: regradeReasonCode,
+          reason_text: regradeReasonText.trim(),
+          strategy: regradeStrategy,
+          selector: {},
+          assignee_id: regradeAssigneeID,
+          idempotency_key: crypto.randomUUID()
+        });
+        setRegradeModalOpen(false);
+        setRegradePreview(null);
+        setRegradeReasonText("");
+      },
+      "题目复评任务已创建"
+    );
+  };
+
+  const materializeRegradeRelease = (job: RegradeJob) => {
+    modal.confirm({
+      title: "生成复评后的新成绩版本",
+      content: "此操作只创建一个新的草稿版本，不会改写当前已发布成绩。新版本仍需通过发布门禁后才能对学生生效。",
+      okText: "生成新版本",
+      cancelText: "取消",
+      onOk: () => runAction(
+        "regrade-release",
+        async () => { await createRegradeScoreRelease(job.id, { reason: `题目复评完成：${job.reason_text}`, idempotency_key: crypto.randomUUID() }); },
+        "已生成复评后的成绩版本草稿"
+      )
+    });
+  };
+
+  const transitionRegrade = (job: RegradeJob, action: "approve" | "start" | "pause" | "resume" | "finalize") => {
+    const actions = {
+      approve: { request: approveRegradeJob, label: "已批准复评任务" },
+      start: { request: startRegradeJob, label: "复评任务已启动，已分派的阅卷员可以领取" },
+      pause: { request: pauseRegradeJob, label: "复评任务已暂停" },
+      resume: { request: resumeRegradeJob, label: "复评任务已恢复" },
+      finalize: { request: finalizeRegradeJob, label: "复评已完成，可生成新的成绩版本" }
+    } as const;
+    const current = actions[action];
+    void runAction(`regrade-${action}`, async () => { await current.request(job.id); }, current.label);
+  };
+
+  const openRegradeReview = async (job: RegradeJob) => {
+    setActioning("regrade-load-review");
+    try {
+      const response = await getRegradeJob(job.id);
+      setRegradeReview(response.regrade);
+      setRegradeReviewScores(Object.fromEntries(response.regrade.items.map((item) => [item.id, item.candidate_score ?? null])));
+      setRegradeReviewOpen(true);
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setActioning(null);
+    }
+  };
+
+  const decideRegradeItem = (item: RegradeSummary["items"][number], decision: "accept" | "reject" | "exception") => {
+    const score = regradeReviewScores[item.id];
+    if (decision === "accept" && (score === null || score === undefined)) {
+      message.error("接受候选前请填写最终得分");
+      return;
+    }
+    void runAction(
+      `regrade-review-${item.id}`,
+      async () => {
+        await reviewRegradeItem(item.id, {
+          decision,
+          ...(decision === "accept" && score !== item.candidate_score ? { reviewed_score: score } : {}),
+          expected_revision: item.revision
+        });
+        if (regradeReview) {
+          const refreshed = await getRegradeJob(regradeReview.job.id);
+          setRegradeReview(refreshed.regrade);
+          setRegradeReviewScores(Object.fromEntries(refreshed.regrade.items.map((value) => [value.id, value.candidate_score ?? null])));
+        }
+      },
+      decision === "accept" ? "已接受重评候选" : decision === "reject" ? "已驳回重评候选" : "已标记重评异常"
+    );
   };
 
   const saveAttendance = async () => {
@@ -896,6 +1197,72 @@ export function ScoreManagementPage({
         </aside> : null}
       </section>
 
+      {mode === "admin" ? <section className="score-release-workspace">
+        <div className="score-release-heading">
+          <div>
+            <h2>正式成绩版本</h2>
+            <p>只有已发布版本会对学生生效；任何更正都以新版本发布，历史版本保持可追溯。</p>
+          </div>
+          <Space wrap>
+            <StatusTag tone={releaseGate?.passed ? "success" : "danger"}>{releaseGate?.passed ? "发布门禁通过" : "发布门禁待处理"}</StatusTag>
+            <Button type="primary" disabled={!canWrite || !selectedExamId || gradeTotal === 0} onClick={() => setReleaseModalOpen(true)}>创建发布草稿</Button>
+          </Space>
+        </div>
+
+        {releaseGate && (!releaseGate.passed || releaseGate.warnings.length > 0) ? <List
+          className="score-release-gate-list"
+          size="small"
+          dataSource={[...releaseGate.blocking, ...releaseGate.warnings]}
+          renderItem={(issue) => <List.Item>
+            <div className="score-release-gate-row">
+              <StatusTag tone={issue.blocking ? "danger" : "warning"}>{issue.blocking ? "阻断" : "提醒"}</StatusTag>
+              <div><strong>{issue.message}</strong><span>{issue.count} 项 · {issue.code}</span></div>
+              {issue.action_route === "quality" ? <Button size="small" href={selectedExamId ? `#/admin/exams/${encodeURIComponent(selectedExamId)}/quality` : undefined}>查看质量</Button> : null}
+              {issue.action_route === "regrade" ? <Button size="small" onClick={() => setRegradeModalOpen(true)}>查看复评</Button> : null}
+            </div>
+          </List.Item>}
+        /> : <Alert type="success" showIcon message="当前发布门禁通过" description="创建草稿后，仍会在实际发布时再次核验，避免状态变化后误发布。" />}
+
+        <div className="score-release-columns">
+          <section>
+            <div className="score-release-subhead"><h3>当前与草稿</h3><span>{scoreReleases.length} 个版本</span></div>
+            {scoreReleases.length ? <List
+              size="small"
+              dataSource={scoreReleases}
+              renderItem={(release) => <List.Item actions={release.status === "draft" ? [<Button key="publish" size="small" type="primary" disabled={!canWrite || !releaseGate?.passed} loading={actioning === "release-publish"} onClick={() => publishRelease(release)}>发布 V{release.version}</Button>] : undefined}>
+                <div className="score-release-row">
+                  <div><strong>V{release.version} · {scoreReleaseSourceLabels[release.source] ?? release.source}</strong><span>{release.reason}</span></div>
+                  <StatusTag tone={scoreReleaseTone(release.status)}>{scoreReleaseStatusLabels[release.status] ?? release.status}</StatusTag>
+                </div>
+              </List.Item>}
+            /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未创建正式成绩版本" />}
+          </section>
+
+          <section>
+            <div className="score-release-subhead"><h3>题目级复评</h3><Button size="small" icon={<GitCompareArrows size={15} />} disabled={!canWrite || !publishedRelease || regradeQuestionOptions.length === 0} onClick={() => setRegradeModalOpen(true)}>新建复评</Button></div>
+            <p className="score-release-note">复评只处理指定题目，完成后必须生成并发布新的成绩版本，不会直接改分。</p>
+            {regradeJobs.length ? <List
+              size="small"
+              dataSource={regradeJobs}
+              renderItem={(job) => <List.Item actions={[
+                ...(job.status === "awaiting_approval" ? [<Button key="approve" size="small" disabled={!canWrite} loading={actioning === "regrade-approve"} onClick={() => transitionRegrade(job, "approve")}>批准</Button>] : []),
+                ...(job.status === "approved" ? [<Button key="start" size="small" type="primary" disabled={!canWrite} loading={actioning === "regrade-start"} onClick={() => transitionRegrade(job, "start")}>启动并开放给阅卷员</Button>] : []),
+                ...(job.status === "running" || job.status === "diff_review" ? [<Button key="pause" size="small" disabled={!canWrite} loading={actioning === "regrade-pause"} onClick={() => transitionRegrade(job, "pause")}>暂停</Button>] : []),
+                ...(job.status === "paused" ? [<Button key="resume" size="small" type="primary" disabled={!canWrite} loading={actioning === "regrade-resume"} onClick={() => transitionRegrade(job, "resume")}>恢复</Button>] : []),
+                ...(job.status === "diff_review" ? [<Button key="finalize" size="small" type="primary" disabled={!canWrite} loading={actioning === "regrade-finalize"} onClick={() => transitionRegrade(job, "finalize")}>完成复评</Button>] : []),
+                ...(job.status === "diff_review" ? [<Button key="review" size="small" disabled={!canWrite} loading={actioning === "regrade-load-review"} onClick={() => void openRegradeReview(job)}>复核候选</Button>] : []),
+                ...(job.status === "ready_for_release" ? [<Button key="release" size="small" type="primary" disabled={!canWrite} loading={actioning === "regrade-release"} onClick={() => materializeRegradeRelease(job)}>生成新版本</Button>] : [])
+              ]}>
+                <div className="score-release-row">
+                  <div><strong>题目复评 · 影响 {job.affected_count} 份</strong><span>{job.reason_text}</span></div>
+                  <StatusTag tone={job.status === "ready_for_release" ? "success" : job.status === "cancelled" ? "neutral" : "processing"}>{regradeStatusLabels[job.status] ?? job.status}</StatusTag>
+                </div>
+              </List.Item>}
+            /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={publishedRelease ? "当前没有题目复评任务" : "发布首个成绩版本后，可发起题目级复评"} />}
+          </section>
+        </div>
+      </section> : null}
+
       <Modal
         open={Boolean(attendanceEditor)}
         title={attendanceEditor?.status === "absent" ? "确认标记缺考" : "确认恢复应考"}
@@ -922,6 +1289,73 @@ export function ScoreManagementPage({
           placeholder={attendanceEditor?.status === "absent" ? "例如：经监考记录与班主任确认，学生因病缺考" : "例如：已找到并确认该生答卷，恢复为应考"}
           onChange={(event) => setAttendanceReason(event.target.value)}
         />
+      </Modal>
+
+      <Modal
+        open={regradeReviewOpen}
+        title="复核题目重评候选"
+        footer={<Button onClick={() => setRegradeReviewOpen(false)}>关闭</Button>}
+        onCancel={() => setRegradeReviewOpen(false)}
+        width={860}
+      >
+        <Alert showIcon type="info" message="候选意见尚未改写成绩" description="逐项接受后才能完成复评。完成后仍需生成并发布新的成绩版本，原发布版本保持不变。" />
+        <List
+          dataSource={regradeReview?.items.filter((item) => item.status === "awaiting_review") ?? []}
+          locale={{ emptyText: "当前没有待复核的重评候选" }}
+          renderItem={(item) => {
+            const selections = item.candidate_rubric_selections ?? [];
+            return <List.Item actions={[
+              <Button key="accept" type="primary" loading={actioning === `regrade-review-${item.id}`} onClick={() => decideRegradeItem(item, "accept")}>接受</Button>,
+              <Button key="reject" loading={actioning === `regrade-review-${item.id}`} onClick={() => decideRegradeItem(item, "reject")}>驳回</Button>,
+              <Button key="exception" danger loading={actioning === `regrade-review-${item.id}`} onClick={() => decideRegradeItem(item, "exception")}>标记异常</Button>
+            ]}>
+              <List.Item.Meta
+                title={<Space><strong>重评候选</strong><span>建议得分</span><InputNumber min={0} max={item.max_score} precision={1} value={regradeReviewScores[item.id] ?? undefined} onChange={(value) => setRegradeReviewScores((current) => ({ ...current, [item.id]: value === null ? null : Number(value) }))} /><span>/ {item.max_score}</span></Space>}
+                description={<div className="score-regrade-review-detail">
+                  {selections.length ? <span>采分点：{selections.map((selection) => `${selection.point_id} ${selection.score}分`).join("；")}</span> : <span>未记录采分点明细</span>}
+                  {item.candidate_comment ? <span>评分依据：{item.candidate_comment}</span> : null}
+                </div>}
+              />
+            </List.Item>;
+          }}
+        />
+      </Modal>
+
+      <Modal
+        open={releaseModalOpen}
+        title="创建正式成绩发布草稿"
+        okText="创建草稿"
+        cancelText="取消"
+        confirmLoading={actioning === "release-create"}
+        onOk={createRelease}
+        onCancel={() => { setReleaseModalOpen(false); setReleaseReason(""); }}
+      >
+        <Alert type="info" showIcon message="草稿不会立即对学生生效" description="提交后会冻结当前已确认的成绩事实。请在发布门禁通过后，单独确认发布。" />
+        <label className="score-attendance-label" htmlFor="score-release-reason">发布说明（必填）</label>
+        <Input.TextArea id="score-release-reason" rows={3} maxLength={1000} showCount value={releaseReason} placeholder="例如：期末考试首次正式发布" onChange={(event) => setReleaseReason(event.target.value)} />
+      </Modal>
+
+      <Modal
+        open={regradeModalOpen}
+        title="发起题目级复评"
+        okText="创建复评任务"
+        cancelText="取消"
+        okButtonProps={{ disabled: !regradePreview || !regradeReasonText.trim() || !regradeAssigneeID }}
+        confirmLoading={actioning === "regrade-create"}
+        onOk={createSelectedRegrade}
+        onCancel={() => { setRegradeModalOpen(false); setRegradePreview(null); }}
+      >
+        <Alert type="warning" showIcon message="复评不会直接修改已发布成绩" description="先预览影响范围并创建任务；任务完成后生成新的成绩版本，再通过发布门禁正式发布。" />
+        <div className="score-regrade-form">
+          <label>题目<Select value={regradeQuestionId || undefined} placeholder="选择题目" options={regradeQuestionOptions} onChange={(value) => { setRegradeQuestionId(value); setRegradePreview(null); }} /></label>
+          <label>原因<Select value={regradeReasonCode} options={regradeReasonOptions} onChange={setRegradeReasonCode} /></label>
+          <label>处理方式<Select value={regradeStrategy} options={regradeStrategyOptions} onChange={setRegradeStrategy} /></label>
+          <label>分派阅卷员<Select value={regradeAssigneeID || undefined} placeholder="选择负责本次重评的阅卷员" options={regradeGraderOptions} loading={loadingRegradeGraders} onChange={setRegradeAssigneeID} /></label>
+          {regradeGradersError ? <Alert type="warning" showIcon message={regradeGradersError} description="请先在“组织与账号”中创建或启用阅卷员，再发起重评。" /> : null}
+          <label>处理说明<Input.TextArea rows={3} maxLength={2000} showCount value={regradeReasonText} placeholder="说明为什么需要本题复评" onChange={(event) => setRegradeReasonText(event.target.value)} /></label>
+          <Button onClick={() => void previewSelectedRegrade()} loading={previewingRegrade} disabled={!regradeQuestionId || !publishedRelease}>预览影响范围</Button>
+          {regradePreview ? <Alert type="info" showIcon message={`将影响 ${regradePreview.affected_count} 份答卷`} description={`来源：正式成绩 V${regradePreview.source_release_version}。预览只用于确认范围，创建时系统会再次冻结该版本对应的题目事实。`} /> : null}
+        </div>
       </Modal>
     </div>
   );

@@ -150,6 +150,33 @@ func TestReviewTaskRoutesRequirePermission(t *testing.T) {
 	}
 }
 
+func TestQualityManagementRoutesDoNotExposeGoldOrSeedEvidenceToGraders(t *testing.T) {
+	authStore := reviewAuthStoreByUser(t, map[string][]string{
+		"review_manager": {"review:manage"},
+		"review_grader":  {"review:work"},
+	})
+	router := reviewRouter(authStore, review.NewMemoryStore())
+	graderToken := reviewLogin(t, router, "review_grader")
+
+	// These paths deliberately need review:manage even when their backing
+	// store is empty.  A 403 proves the permission boundary runs before any
+	// Gold/Seed/quality projection can be returned.
+	for _, path := range []string{
+		"/api/v1/gold-papers",
+		"/api/v1/exams/exam-1/questions/question-1/answer-groups",
+		"/api/v1/exams/exam-1/questions/question-1/answer-group-metrics",
+		"/api/v1/seed-observations",
+		"/api/v1/grading-quality-incidents",
+	} {
+		req := reviewAuthedRequest(http.MethodGet, path, "", graderToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("grader must not read quality-management route %s, got %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestReviewWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 	authStore := reviewAuthStoreByUser(t, map[string][]string{
 		"review_manager":          {"review:manage"},
@@ -305,6 +332,82 @@ func TestReviewWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 	}
 }
 
+func TestReviewWorkerCanReturnOnlyOwnActiveClaim(t *testing.T) {
+	authStore := reviewAuthStoreByUser(t, map[string][]string{
+		"review_manager":       {"review:manage"},
+		"review_grader":        {"review:work"},
+		"review_second_grader": {"review:work"},
+	})
+	reviewStore := review.NewMemoryStore()
+	reviewStore.AddContext(reviewTenantID, "segment-1", reviewRouteContext())
+	reviewStore.AddContext(reviewTenantID, "segment-2", reviewRouteContext())
+	router := reviewRouter(authStore, reviewStore)
+	managerToken := reviewLogin(t, router, "review_manager")
+	graderToken := reviewLogin(t, router, "review_grader")
+	secondGraderToken := reviewLogin(t, router, "review_second_grader")
+
+	firstID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "manual_sample")
+	secondID := createReviewTaskForRoute(t, router, managerToken, "segment-2", "manual_sample")
+	assignReviewTaskForRoute(t, router, managerToken, firstID, reviewGraderID)
+	assignReviewTaskForRoute(t, router, managerToken, secondID, reviewSecondGraderID)
+
+	req := reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+firstID+"/return", `{"reason":"not claimed","expected_revision":2}`, graderToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("assigned but unclaimed task return expected 403, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/next", `{}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), firstID) || !strings.Contains(rec.Body.String(), `"revision":3`) {
+		t.Fatalf("claim next expected first task revision 3, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+firstID+"/release", "", graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("release claimed task expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+firstID+"/return", `{"reason":"lease released","expected_revision":4}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("released task return expected 403, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/next", `{}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"revision":5`) {
+		t.Fatalf("reclaim expected revision 5, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+firstID+"/return", `{"reason":"needs reassignment","expected_revision":5}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"returned"`) {
+		t.Fatalf("own active claim return expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+secondID+"/return", `{"reason":"another reviewer task","expected_revision":2}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("another reviewer's task return expected 403, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/next", `{}`, secondGraderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), secondID) {
+		t.Fatalf("second reviewer should still claim their own task, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReviewTaskClaimNextNeverImplicitlyAssignsPendingTask(t *testing.T) {
 	authStore := reviewAuthStoreByUser(t, map[string][]string{
 		"review_manager": {"review:manage"},
@@ -350,6 +453,96 @@ func TestReviewTaskClaimNextNeverImplicitlyAssignsPendingTask(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), assignedID) {
 		t.Fatalf("review worker should continue an explicitly assigned task, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// This is the server-side acceptance path used by the grading workbench.  It
+// deliberately reads the next assigned task's context before the first task
+// is submitted: context prefetch must remain read-only and must not take the
+// next task's lease.  The browser then owns only the task returned by /next.
+func TestReviewWorkbenchClaimDraftRefreshSubmitAndNext(t *testing.T) {
+	authStore := reviewAuthStoreByUser(t, map[string][]string{
+		"review_manager": {"review:manage"},
+		"review_grader":  {"review:work"},
+	})
+	reviewStore := review.NewMemoryStore()
+	firstContext := reviewRouteContext()
+	firstContext.AnswerSegmentID = "segment-1"
+	secondContext := reviewRouteContext()
+	secondContext.AnswerSegmentID = "segment-2"
+	secondContext.SubmissionID = "submission-2"
+	reviewStore.AddContext(reviewTenantID, "segment-1", firstContext)
+	reviewStore.AddContext(reviewTenantID, "segment-2", secondContext)
+	router := reviewRouter(authStore, reviewStore)
+	managerToken := reviewLogin(t, router, "review_manager")
+	graderToken := reviewLogin(t, router, "review_grader")
+
+	firstID := createReviewTaskForRoute(t, router, managerToken, "segment-1", "manual_sample")
+	secondID := createReviewTaskForRoute(t, router, managerToken, "segment-2", "manual_sample")
+	assignReviewTaskForRoute(t, router, managerToken, firstID, reviewGraderID)
+	assignReviewTaskForRoute(t, router, managerToken, secondID, reviewGraderID)
+
+	beforePrefetch, err := reviewStore.GetTask(t.Context(), reviewTenantID, secondID)
+	if err != nil {
+		t.Fatalf("get next task before prefetch: %v", err)
+	}
+	req := reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+secondID+"/context", "", graderToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"task":{"id":"`+secondID+`"`) {
+		t.Fatalf("prefetch next task context expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	afterPrefetch, err := reviewStore.GetTask(t.Context(), reviewTenantID, secondID)
+	if err != nil || afterPrefetch.Revision != beforePrefetch.Revision || afterPrefetch.Status != "assigned" {
+		t.Fatalf("context prefetch must not claim or mutate next task, before=%#v after=%#v err=%v", beforePrefetch, afterPrefetch, err)
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/next", `{}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"id":"`+firstID+`"`) {
+		t.Fatalf("claim first assigned task expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	claimed, err := reviewStore.GetTask(t.Context(), reviewTenantID, firstID)
+	if err != nil || claimed.Revision != 3 {
+		t.Fatalf("claim must establish the first task lease/version, task=%#v err=%v", claimed, err)
+	}
+
+	draftBody := `{"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"draft survives refresh","private_note":"teacher only","student_feedback":"good work","viewer_state":{"mode":"segment"},"expected_revision":0}`
+	req = reviewAuthedRequest(http.MethodPut, "/api/v1/review-tasks/"+firstID+"/draft", draftBody, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"revision":1`) {
+		t.Fatalf("initial draft save expected 200 revision 1, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+firstID+"/context", "", graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"comments":"draft survives refresh"`) || !strings.Contains(rec.Body.String(), `"expected_revision":3`) {
+		t.Fatalf("refresh must restore the server draft and task revision, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	staleDraftBody := `{"score":3,"rubric_selections":[{"point_id":"p1","score":3}],"comments":"stale tab","private_note":"","student_feedback":"","viewer_state":{},"expected_revision":0}`
+	req = reviewAuthedRequest(http.MethodPut, "/api/v1/review-tasks/"+firstID+"/draft", staleDraftBody, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "resource_version_conflict") {
+		t.Fatalf("stale draft revision must return conflict, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+firstID+"/submit", `{"expected_revision":3,"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"final grade","reason":"manual review"}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"status":"submitted"`) {
+		t.Fatalf("submit first task expected 201, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/next", `{}`, graderToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"id":"`+secondID+`"`) {
+		t.Fatalf("next task after submit expected second assigned task, got %d %s", rec.Code, rec.Body.String())
 	}
 }
 

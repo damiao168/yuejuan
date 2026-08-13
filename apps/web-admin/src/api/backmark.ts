@@ -1,0 +1,67 @@
+import { EduGradeApi } from "@edugrade/sdk";
+import type {
+  BackmarkBatch,
+  BackmarkGraderContext,
+  BackmarkGraderItem,
+  BackmarkPolicy,
+  BackmarkPreview,
+  BackmarkSummary,
+  BackmarkSelector,
+  BackmarkRegradeInput,
+  RegradePreview,
+  RegradeSummary,
+  SubmitBackmarkItemRequest
+} from "@edugrade/sdk";
+import { apiClient } from "./client";
+
+const generatedApi = new EduGradeApi(apiClient);
+
+export type { BackmarkBatch, BackmarkGraderContext, BackmarkGraderItem, BackmarkPolicy, BackmarkPreview, BackmarkSelector, BackmarkSummary, BackmarkRegradeInput };
+
+export function previewBackmarkBatch(examId: string, questionId: string, selector: BackmarkSelector) {
+  return generatedApi.previewBackmarkBatch({ path: { examId, questionId }, body: { selector } });
+}
+
+export function createBackmarkBatch(
+  examId: string,
+  questionId: string,
+  payload: { source_incident_id: string; selector: BackmarkSelector; policy: BackmarkPolicy; reassigned_to: string }
+) {
+  return generatedApi.createBackmarkBatch({ path: { examId, questionId }, body: payload });
+}
+
+export function listBackmarkBatches(examId: string, questionId?: string) {
+  return generatedApi.listBackmarkBatches({ query: { exam_id: examId, question_id: questionId } });
+}
+
+export function getBackmarkBatch(batchId: string) {
+  return generatedApi.getBackmarkBatch({ path: { batchId } });
+}
+
+export function previewBackmarkBatchRegrade(batchId: string, payload: BackmarkRegradeInput): Promise<{ preview: RegradePreview }> {
+  return generatedApi.previewBackmarkBatchRegrade({ path: { batchId }, body: payload });
+}
+
+export function createBackmarkBatchRegradeJob(batchId: string, payload: BackmarkRegradeInput): Promise<{ regrade: RegradeSummary }> {
+  return generatedApi.createBackmarkBatchRegradeJob({ path: { batchId }, body: payload });
+}
+
+export function listMyBackmarkItems() {
+  return generatedApi.listMyBackmarkItems();
+}
+
+export function claimBackmarkItem(itemId: string) {
+  return generatedApi.claimBackmarkItem({ path: { itemId } });
+}
+
+export function getBackmarkItemContext(itemId: string) {
+  return generatedApi.getBackmarkItemContext({ path: { itemId } });
+}
+
+export function submitBackmarkItem(itemId: string, payload: SubmitBackmarkItemRequest) {
+  return generatedApi.submitBackmarkItem({ path: { itemId }, body: payload });
+}
+
+export function downloadBackmarkSegmentImage(itemId: string) {
+  return apiClient.requestBlob(`/api/v1/backmark-items/${encodeURIComponent(itemId)}/segment-image`);
+}

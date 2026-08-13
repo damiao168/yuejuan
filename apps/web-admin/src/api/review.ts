@@ -1,27 +1,20 @@
+import { EduGradeApi } from "@edugrade/sdk";
+import type {
+  ReviewTask as GeneratedReviewTask,
+  ReviewTaskContext as GeneratedReviewTaskContext
+} from "@edugrade/sdk";
 import { apiClient } from "./client";
 import type { Question } from "./papers";
 
-export interface ReviewTask {
-  id: string;
-  tenant_id: string;
-  exam_id: string;
-  question_id: string;
-  question_no: string;
-  answer_segment_id: string;
-  submission_id: string;
-  anonymous_code: string;
-  source: string;
-  status: string;
-  priority: number;
-  assigned_to?: string;
-  return_reason?: string;
-  grade_round: string;
-  due_at?: string;
-  revision: number;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
-}
+export type ReviewTask = GeneratedReviewTask;
+// The API deliberately returns null when the reviewer has not saved a draft
+// yet. Keep that runtime fact explicit even though older generated contracts
+// modelled the field as required.
+export type ReviewTaskContext = Omit<GeneratedReviewTaskContext, "draft"> & {
+  draft: GeneratedReviewTaskContext["draft"] | null;
+};
+
+const generatedApi = new EduGradeApi(apiClient);
 
 export interface RubricSelection {
   point_id: string;
@@ -419,11 +412,16 @@ function queryString(filter: ReviewTaskFilter) {
 }
 
 export async function listReviewTasks(filter: ReviewTaskFilter = {}) {
-  return apiClient.request<{ tasks: ReviewTask[]; next_cursor: string; has_more: boolean }>(`/api/v1/review-tasks${queryString(filter)}`);
+  return generatedApi.listReviewTasks({ query: filter });
 }
 
 export async function getReviewTask(id: string) {
   return apiClient.request<{ task: ReviewTask }>(`/api/v1/review-tasks/${encodeURIComponent(id)}`);
+}
+
+export async function getReviewTaskContext(id: string, signal?: AbortSignal) {
+  const result = await generatedApi.getReviewTaskContext({ path: { taskId: id }, signal });
+  return { context: result.context as ReviewTaskContext };
 }
 
 export async function getReviewWorkspace(id: string) {

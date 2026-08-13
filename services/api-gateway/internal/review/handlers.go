@@ -1,27 +1,74 @@
 package review
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	"edugrade-enterprise/services/api-gateway/internal/aidisagreement"
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
 	"edugrade-enterprise/services/api-gateway/internal/pagination"
+	"edugrade-enterprise/services/api-gateway/internal/seedquality"
 )
 
+type GraderQualificationGate interface {
+	RequireQualification(context.Context, string, string, string, string) error
+}
+
+// SeedObservationRefresher is intentionally best-effort. A completed blind
+// quality sample is durable even when its aggregate monitoring projection is
+// temporarily unavailable.
+type SeedObservationRefresher interface {
+	RefreshSeedObservation(context.Context, string, string, string, string) error
+}
+
+// AIHumanDisagreementObserver runs only after the durable human-grade commit.
+// It is best-effort by design: observability must never roll back a teacher's
+// legitimate grading action or alter a current/final score.
+type AIHumanDisagreementObserver interface {
+	ObserveHumanGrade(context.Context, string, string, string) (aidisagreement.Disagreement, bool, error)
+}
+
 type Handler struct {
-	store        Store
-	audit        auth.Store
-	segmentImage http.HandlerFunc
-	fileDownload http.HandlerFunc
+	store             Store
+	audit             auth.Store
+	segmentImage      http.HandlerFunc
+	fileDownload      http.HandlerFunc
+	qualificationGate GraderQualificationGate
+	seedHook          seedquality.ReviewHook
+	seedRefresher     SeedObservationRefresher
+	disagreement      AIHumanDisagreementObserver
 }
 
 func NewHandler(store Store, audit auth.Store, segmentImage http.HandlerFunc, fileDownload http.HandlerFunc) *Handler {
 	return &Handler{store: store, audit: audit, segmentImage: segmentImage, fileDownload: fileDownload}
+}
+
+func (h *Handler) WithQualificationGate(gate GraderQualificationGate) *Handler {
+	h.qualificationGate = gate
+	return h
+}
+
+// WithSeedHook keeps dark quality samples behind the ordinary review routes.
+// The hook only returns synthetic identifiers and never exposes the Gold source.
+func (h *Handler) WithSeedHook(hook seedquality.ReviewHook) *Handler {
+	h.seedHook = hook
+	return h
+}
+
+func (h *Handler) WithSeedObservationRefresher(refresher SeedObservationRefresher) *Handler {
+	h.seedRefresher = refresher
+	return h
+}
+
+func (h *Handler) WithAIHumanDisagreementObserver(observer AIHumanDisagreementObserver) *Handler {
+	h.disagreement = observer
+	return h
 }
 
 func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
@@ -156,12 +203,50 @@ func (h *Handler) SubmitGrade(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	if h.seedHook != nil {
+		seedExamID, seedQuestionID := "", ""
+		if h.seedRefresher != nil {
+			// The task context carries only synthetic identifiers but retains the
+			// exam/question scope needed for aggregate quality monitoring.
+			if seedContext, handled, contextErr := h.seedHook.GetGraderTaskContext(r.Context(), user.TenantID, r.PathValue("id"), user.ID); contextErr == nil && handled {
+				seedExamID, seedQuestionID = seedContext.Task.ExamID, seedContext.Task.QuestionID
+			}
+		}
+		selections := make(map[string]any, len(input.RubricSelections))
+		for _, selection := range input.RubricSelections {
+			selections[selection.PointID] = selection.Score
+		}
+		receipt, handled, seedErr := h.seedHook.TrySubmit(r.Context(), user.TenantID, r.PathValue("id"), user.ID, seedquality.SubmitInput{
+			Score: input.Score, RubricSelections: selections, ExpectedRevision: input.ExpectedRevision,
+		})
+		if seedErr != nil {
+			writeSeedHookError(w, r, seedErr)
+			return
+		}
+		if handled {
+			h.auditAction(r, "review.human_grade_submitted", "review_task", receipt.TaskID, "submit quality review task")
+			if h.seedRefresher != nil && seedExamID != "" && seedQuestionID != "" {
+				// Keep the blind submission successful even if its asynchronous
+				// quality projection cannot be refreshed right now.
+				_ = h.seedRefresher.RefreshSeedObservation(r.Context(), user.TenantID, seedExamID, seedQuestionID, user.ID)
+			}
+			httpx.JSON(w, http.StatusCreated, map[string]any{"task": map[string]any{
+				"id": receipt.TaskID, "status": receipt.Status, "revision": receipt.Revision,
+			}})
+			return
+		}
+	}
 	result, err := h.store.SubmitGrade(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
 	}
 	h.auditAction(r, "review.human_grade_submitted", "review_task", result.Task.ID, "submit human grade")
+	if h.disagreement != nil && result.Task.GradeRound == "single" && result.Grade.AIGradeID != "" {
+		// Capture derives both source facts directly from tenant-scoped storage.
+		// A temporary projection error cannot invalidate the submitted grade.
+		_, _, _ = h.disagreement.ObserveHumanGrade(r.Context(), user.TenantID, result.Grade.AIGradeID, result.Grade.ID)
+	}
 	if result.FinalGrade != nil {
 		h.auditAction(r, "review.double_mark_auto_finalized", "final_grade", result.FinalGrade.ID, "double mark score difference within threshold")
 	}
@@ -186,13 +271,15 @@ func (h *Handler) SubmitGrade(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ReturnTask(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	if !h.authorizeReviewManager(w, r, user) {
+	isReviewManager := reviewManagerScoped(user)
+	if !h.authorizeTaskReturn(w, r, user) {
 		return
 	}
 	var input ReturnTaskInput
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	input.MustOwnActiveClaim = !isReviewManager
 	task, err := h.store.ReturnTask(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
 	if err != nil {
 		writeStoreError(w, r, err)
@@ -200,6 +287,40 @@ func (h *Handler) ReturnTask(w http.ResponseWriter, r *http.Request) {
 	}
 	h.auditAction(r, "review.task_returned", "review_task", task.ID, "return review task")
 	httpx.JSON(w, http.StatusOK, map[string]any{"task": task})
+}
+
+// A queue manager may return any mutable task. A reviewer may return only a
+// task that is both durably assigned to them and actively claimed by them.
+// Assignment alone is deliberately insufficient: merely opening or prefetching
+// a task must not grant authority to alter the queue.
+func (h *Handler) authorizeTaskReturn(w http.ResponseWriter, r *http.Request, user auth.User) bool {
+	if reviewManagerScoped(user) {
+		return true
+	}
+	task, err := h.store.GetTask(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return false
+	}
+	if task.AssignedTo == "" || task.AssignedTo != user.ID {
+		writeStoreError(w, r, ErrForbidden)
+		return false
+	}
+	contextStore, ok := h.store.(TaskContextStore)
+	if !ok {
+		writeStoreError(w, r, ErrForbidden)
+		return false
+	}
+	taskContext, err := contextStore.GetTaskContext(r.Context(), user.TenantID, task.ID)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return false
+	}
+	if taskContext.Claim.OwnerID != user.ID || taskContext.Claim.State != "claimed" {
+		writeStoreError(w, r, ErrForbidden)
+		return false
+	}
+	return true
 }
 
 func (h *Handler) GetDraft(w http.ResponseWriter, r *http.Request) {
@@ -343,6 +464,18 @@ func (h *Handler) ClaimNextTask(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	if h.seedHook != nil && input.ExamID != "" && input.QuestionID != "" {
+		seedTask, issued, seedErr := h.seedHook.MaybeIssue(r.Context(), user.TenantID, input.ExamID, input.QuestionID, input.QuestionID, user.ID)
+		if seedErr != nil {
+			writeSeedHookError(w, r, seedErr)
+			return
+		}
+		if issued {
+			h.auditAction(r, "review.task_claimed", "review_task", seedTask.ID, "claim next review task")
+			httpx.JSON(w, http.StatusOK, map[string]any{"task": seedquality.PublicTask(seedTask, user.TenantID)})
+			return
+		}
+	}
 	// Pending tasks require an explicit manager assignment; "next" never grants
 	// answer access through an implicit self-assignment.
 	options := ClaimTaskOptions{}
@@ -350,6 +483,21 @@ func (h *Handler) ClaimNextTask(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
+	}
+	if h.qualificationGate != nil {
+		contextValue, contextErr := h.store.(TaskContextStore).GetTaskContext(r.Context(), user.TenantID, task.ID)
+		if contextErr != nil {
+			_, _ = h.store.(WorkbenchStore).ReleaseTaskClaim(r.Context(), user.TenantID, task.ID, user.ID)
+			writeStoreError(w, r, contextErr)
+			return
+		}
+		if contextValue.QuestionSnapshot.RiskTier == "R3" {
+			if qualificationErr := h.qualificationGate.RequireQualification(r.Context(), user.TenantID, task.ExamID, task.QuestionID, user.ID); qualificationErr != nil {
+				_, _ = h.store.(WorkbenchStore).ReleaseTaskClaim(r.Context(), user.TenantID, task.ID, user.ID)
+				httpx.Error(w, r, http.StatusForbidden, "grader_qualification_required", "complete the current question calibration before claiming R3 work")
+				return
+			}
+		}
 	}
 	h.auditAction(r, "review.task_claimed", "review_task", task.ID, "claim next review task")
 	httpx.JSON(w, http.StatusOK, map[string]any{"task": task})
@@ -374,6 +522,23 @@ func (h *Handler) GetWorkspace(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetWorkspaceSegmentImage(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
+	if h.seedHook != nil {
+		seedImage, handled, seedErr := h.seedHook.GetGraderImageSource(r.Context(), user.TenantID, r.PathValue("id"), user.ID)
+		if seedErr != nil {
+			writeSeedHookError(w, r, seedErr)
+			return
+		}
+		if handled {
+			if h.segmentImage == nil {
+				httpx.Error(w, r, http.StatusInternalServerError, "review_image_unavailable", "review image handler is unavailable")
+				return
+			}
+			proxyRequest := r.Clone(r.Context())
+			proxyRequest.SetPathValue("id", seedImage.AnswerSegmentID)
+			h.segmentImage(w, proxyRequest)
+			return
+		}
+	}
 	if !h.authorizeTaskWorker(w, r, user) {
 		return
 	}
@@ -713,6 +878,21 @@ func reviewManagerScoped(user auth.User) bool {
 
 func arbitrationManagerScoped(user auth.User) bool {
 	return hasAnyRole(user, "platform_admin", "tenant_admin", "school_admin") && auth.HasPermission(user, "arbitration:manage")
+}
+
+func writeSeedHookError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, seedquality.ErrNotFound):
+		httpx.Error(w, r, http.StatusNotFound, "review_resource_not_found", "review resource not found")
+	case errors.Is(err, seedquality.ErrInvalidInput), errors.Is(err, seedquality.ErrContextUnavailable):
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_review_task", "review task is invalid")
+	case errors.Is(err, seedquality.ErrQualificationNeeded), errors.Is(err, seedquality.ErrSeedTaskForbidden):
+		httpx.Error(w, r, http.StatusForbidden, "grader_qualification_required", "current grader qualification is required")
+	case errors.Is(err, seedquality.ErrGoldSetChanged), errors.Is(err, seedquality.ErrConflict):
+		httpx.Error(w, r, http.StatusConflict, "review_task_conflict", "review task state changed; reload before continuing")
+	default:
+		httpx.Error(w, r, http.StatusInternalServerError, "review_operation_failed", "review operation failed")
+	}
 }
 
 func (h *Handler) auditAction(r *http.Request, action string, targetType string, targetID string, reason string) {

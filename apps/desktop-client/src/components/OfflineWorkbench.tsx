@@ -8,12 +8,14 @@ import { listAnswerSegments, listOcrTasks, listSubmissionPages } from "../api/su
 import type { DesktopApiClient } from "../api/client";
 import {
   loadOfflineDraft,
+  listOfflineDraftEnvelopes,
   purgeExpiredOfflineDrafts,
   readOfflineDraftEnvelopes,
   saveOfflineDraft,
   updateOfflineDraftStatus,
   type OfflineDraftEnvelope
 } from "../lib/offlineStore";
+import { hasDurableDesktopStore } from "../lib/durableStore";
 import type {
   AuthUser,
   AiGrade,
@@ -53,10 +55,14 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
 
   const latestAiGrade = useMemo(() => latestGrade(pkg?.aiGrades ?? []), [pkg?.aiGrades]);
   const maxScore = pkg?.question?.rubric?.max_score ?? pkg?.question?.score ?? latestAiGrade?.max_score ?? 0;
-  const hasKey = offlineKey.trim().length >= 8;
+  const hasKey = hasDurableDesktopStore() || offlineKey.trim().length >= 8;
   const currentEnvelope = envelopes.find((item) => item.taskId === (pkg?.task.id ?? selectedTaskId));
 
-  const refreshEnvelopes = () => setEnvelopes(readOfflineDraftEnvelopes());
+  const refreshEnvelopes = async () => setEnvelopes(await listOfflineDraftEnvelopes());
+
+  useEffect(() => {
+    void refreshEnvelopes();
+  }, []);
 
   useEffect(() => () => {
     if (imagePreview?.url) URL.revokeObjectURL(imagePreview.url);
@@ -154,7 +160,7 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
       draft
     };
     await saveOfflineDraft(record, offlineKey);
-    refreshEnvelopes();
+    await refreshEnvelopes();
     setSyncStatus("draft");
     setSyncMessage("草稿已加密保存到本地。");
     await onLog("info", "offline draft encrypted and saved", pkg.task.id);
@@ -203,8 +209,8 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
     }
     if (!token || !isOnline) {
       setSyncMessage("当前未登录或离线，无法同步；草稿可稍后重试。");
-      updateOfflineDraftStatus(pkg.task.id, { syncStatus: "failed", syncMessage: "未登录或离线" });
-      refreshEnvelopes();
+      await updateOfflineDraftStatus(pkg.task.id, { syncStatus: "failed", syncMessage: "未登录或离线" });
+      await refreshEnvelopes();
       return;
     }
     setSyncing(true);
@@ -214,8 +220,8 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
       if (conflict) {
         setSyncStatus("conflict");
         setSyncMessage(conflict);
-        updateOfflineDraftStatus(pkg.task.id, { syncStatus: "conflict", syncMessage: conflict });
-        refreshEnvelopes();
+        await updateOfflineDraftStatus(pkg.task.id, { syncStatus: "conflict", syncMessage: conflict });
+        await refreshEnvelopes();
         await onLog("warning", "offline draft sync conflict", conflict);
         return;
       }
@@ -232,15 +238,15 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
       });
       setSyncStatus("synced");
       setSyncMessage("同步成功，服务端已接收人工评分。");
-      updateOfflineDraftStatus(pkg.task.id, { syncStatus: "synced", syncMessage: "同步成功" });
-      refreshEnvelopes();
+      await updateOfflineDraftStatus(pkg.task.id, { syncStatus: "synced", syncMessage: "同步成功" });
+      await refreshEnvelopes();
       await onLog("info", "offline draft synced", pkg.task.id);
     } catch (error) {
       const message = formatError(error);
       setSyncStatus("failed");
       setSyncMessage(message);
-      updateOfflineDraftStatus(pkg.task.id, { syncStatus: "failed", syncMessage: message });
-      refreshEnvelopes();
+      await updateOfflineDraftStatus(pkg.task.id, { syncStatus: "failed", syncMessage: message });
+      await refreshEnvelopes();
       await onLog("error", "offline draft sync failed", message);
     } finally {
       setSyncing(false);
@@ -248,8 +254,8 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
   };
 
   const purgeExpired = async () => {
-    const count = purgeExpiredOfflineDrafts();
-    refreshEnvelopes();
+    const count = await purgeExpiredOfflineDrafts();
+    await refreshEnvelopes();
     await onLog("info", "expired offline drafts purged", `${count} drafts`);
     setSyncMessage(`已清理 ${count} 条过期本地缓存。`);
   };
@@ -271,10 +277,14 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
         <Alert
           type="info"
           showIcon
-          message="企业安全存储仍为未配置/待接入；当前草稿和任务包摘要使用 Web Crypto 加密后写入 localStorage，答案图片只在当前会话预览。"
+          message={
+            hasDurableDesktopStore()
+              ? "草稿与任务包已加密写入本机 SQLite，主密钥仅保存在 Windows 凭据库；本地答题图片只保留受控加密 spool，服务端确认与保留期结束前不会删除。"
+              : "浏览器开发模式仅使用显式加密草稿回退，不能作为生产扫描站或上传恢复验证。"
+          }
         />
         <div className="offline-toolbar">
-          <Input.Password prefix={<KeyRound size={14} />} value={offlineKey} onChange={(event) => setOfflineKey(event.target.value)} placeholder="本地离线密钥，至少 8 位" />
+          {!hasDurableDesktopStore() && <Input.Password prefix={<KeyRound size={14} />} value={offlineKey} onChange={(event) => setOfflineKey(event.target.value)} placeholder="浏览器开发密钥，至少 8 位" />}
           <Button icon={<RefreshCw size={16} />} loading={loadingTasks} disabled={!token || !user} onClick={loadMyTasks}>
             获取我的任务
           </Button>

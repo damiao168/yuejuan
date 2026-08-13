@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"edugrade-enterprise/services/api-gateway/internal/assessment"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
 )
 
@@ -89,10 +90,11 @@ type Grade struct {
 }
 
 type Context struct {
-	SegmentID string
-	Question  paper.Question
-	AnswerKey paper.AnswerKey
-	Answer    SegmentAnswer
+	SegmentID          string
+	AssessmentSnapshot assessment.ExamQuestionSnapshot
+	Question           paper.Question
+	AnswerKey          paper.AnswerKey
+	Answer             SegmentAnswer
 }
 
 type Store interface {

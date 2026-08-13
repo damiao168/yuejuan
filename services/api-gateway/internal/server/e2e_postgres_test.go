@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/appeal"
+	"edugrade-enterprise/services/api-gateway/internal/assessment"
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/capture"
 	"edugrade-enterprise/services/api-gateway/internal/config"
@@ -90,6 +91,19 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	question := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/questions", adminToken, `{"exam_paper_id":"`+paperID+`","question_no":"Q1","question_type":"short_answer","score":5,"stem":"Story 041 synthetic short answer","knowledge_points":["story041"],"answer_area":{"page":1,"x":0.1,"y":0.2,"w":0.6,"h":0.2},"sort_order":1}`, http.StatusCreated)["question"].(map[string]any)
 	questionID := e2eString(t, question, "id")
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/questions/"+questionID+"/rubric", adminToken, `{"status":"approved","max_score":5,"points":[{"id":"p1","description":"story041 synthetic rubric point","score":5,"required":true}],"deductions":[],"examples":[]}`, http.StatusCreated)
+	profiles := e2eGetJSON(t, router, "/api/v1/assessment/subject-profiles?stage=senior&subject=biology", adminToken, http.StatusOK)["subject_profiles"].([]any)
+	if len(profiles) != 1 {
+		t.Fatalf("expected one senior biology assessment profile, got %#v", profiles)
+	}
+	profileID := e2eString(t, profiles[0].(map[string]any), "id")
+	e2ePostJSON(t, router, http.MethodPut, "/api/v1/exams/"+examID+"/questions/"+questionID+"/assessment-profile", adminToken, `{"subject_profile_id":"`+profileID+`","archetype_code":"short_constructed","allowed_evidence_types":["text_span","concept"],"risk_tier":"R2","scoring_policy":{"mode":"AI_ASSIST","require_evidence":true,"human_review_below_confidence":true},"expected_revision":0}`, http.StatusOK)
+	if _, err := db.Exec(`UPDATE exam SET status='ready', updated_at=now() WHERE id=$1::uuid`, examID); err != nil {
+		t.Fatalf("freeze assessment snapshot for PostgreSQL workflow: %v", err)
+	}
+	snapshot := e2eGetJSON(t, router, "/api/v1/exams/"+examID+"/questions/"+questionID+"/assessment-snapshot", adminToken, http.StatusOK)["assessment_snapshot"].(map[string]any)
+	if e2eString(t, snapshot, "subject_code") != "biology" || e2eString(t, snapshot, "archetype_code") != "short_constructed" {
+		t.Fatalf("grading must use the frozen assessment snapshot: %#v", snapshot)
+	}
 	validation := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/validate-paper-config", adminToken, `{}`, http.StatusOK)["result"].(map[string]any)
 	if validation["valid"] != true {
 		t.Fatalf("test database paper config should be valid: %#v", validation)
@@ -240,6 +254,7 @@ func e2ePostgresRouter(db *sql.DB) http.Handler {
 		workerruntime.NewPostgresStore(db),
 		grading.NewPostgresStore(db),
 		subjective.NewPostgresStore(db),
+		assessment.NewPostgresStore(db),
 		evidence.NewPostgresStore(db),
 		review.NewPostgresStore(db),
 		score.NewPostgresStore(db),

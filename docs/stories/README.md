@@ -105,6 +105,37 @@
 | STORY-066 | 学校系统集成、离线采集与现场运维 | Planned |
 | STORY-067 | 限量学校试点与发布门禁 | Planned |
 
+## A 系列研究型实施路线
+
+| Story | 名称 | 状态 |
+| --- | --- | --- |
+| STORY-A01 | [多学科 Assessment Domain Foundation](STORY-A01-assessment-domain.md) | Implemented |
+| STORY-A02 | [Design System 与考试生命周期工作区](STORY-A02-design-system-workspace.md) | Implemented |
+| STORY-A03 | [OpenAPI、Generated SDK 与契约门禁](STORY-A03-openapi-sdk.md) | Implemented |
+| STORY-A04 | [Feature Architecture 与 Exam Workspace 重构](STORY-A04-feature-architecture-workspace.md) | Implemented |
+| STORY-A05 | [专业阅卷工作台内核重构](STORY-A05-subject-aware-grading-workbench.md) | Implemented |
+| STORY-A06 | [键盘优先、预取、批注与评语模板](STORY-A06-annotations-keyboard-prefetch.md) | Implemented |
+| STORY-A07 | [相似答案分组与 Human-amplification Grading](STORY-A07-answer-groups.md) | Implemented |
+| STORY-A08 | [Gold Papers / 标准卷体系](STORY-A08-gold-papers.md) | Implemented |
+| STORY-A09 | [Grader Calibration / 阅卷员校准](STORY-A09-grader-calibration.md) | Implemented |
+| STORY-A10 | [Seed Papers / 暗桩质量样本](STORY-A10-seed-quality.md) | Implemented |
+| STORY-A11 | [Reviewer Drift Detection / 阅卷漂移检测](STORY-A11-grader-drift.md) | Implemented |
+| STORY-A12 | [Back Marking / 受影响区间回溯重阅](STORY-A12-backmark.md) | Implemented |
+| STORY-A13 | [Scoring Quality Dashboard / 评分质量总控台](STORY-A13-quality-dashboard.md) | Implemented |
+| STORY-A14 | [AI Eligibility Engine / 题型级自动评分准入](STORY-A14-ai-eligibility.md) | Implemented |
+| STORY-A15 | [Confidence Calibration 与 Risk-Coverage 门禁](STORY-A15-model-confidence-calibration.md) | Implemented |
+| STORY-A16 | [分学科 Slice Evaluation 与 Response Difficulty](STORY-A16-slice-evaluation.md) | Implemented |
+| STORY-A17 | [Human-AI Disagreement 与错误分类闭环](STORY-A17-ai-human-disagreement.md) | Implemented |
+| STORY-A18 | [不可变 Score Release Version](STORY-A18-score-releases.md) | Implemented |
+| STORY-A19 | [Regrade Workflow / 题目级重评](STORY-A19-question-regrade.md) | Implemented |
+| STORY-A20 | [Release Gate / 成绩发布质量门禁](STORY-A20-release-gate.md) | Implemented |
+| STORY-A21 | [Student Portal 1.0 / 成绩与反馈](STORY-A21-student-portal.md) | Implemented |
+| STORY-A22 | [Question-level Appeal / 题目级申诉闭环](STORY-A22-question-appeal.md) | Implemented |
+| STORY-A23 | [Desktop Durable Storage / 本地耐久安全存储](STORY-A23-desktop-durable-storage.md) | Implemented |
+| STORY-A24 | [Offline Scan Spool 与断点续传](STORY-A24-offline-scan-spool.md) | Implemented |
+| STORY-A25 | [Scanner Integration 与设备 Profile](STORY-A25-scanner-profile.md) | Implemented |
+| STORY-A26 | [统一 Processing State 与异常中心](STORY-A26-processing-state.md) | Implemented |
+
 ## 编号语义说明（2026-07-26）
 
 `docs/deployment/production-readiness-roadmap.md` 中 V1.0 总控计划的 STORY-057～059（主观题 AI/质量中心/学生端）与实际实施的 STORY-057～059（lab 智能体接入三部曲）存在历史错位。**以本索引为准**：057～059 已被 lab 接入线占用并完成；总控计划中对应的能力（阅卷质量中心、学生端/申诉/报告）顺延至 STORY-061 之后重新编号。规划文档中引用旧编号处以本表为准，不再回改历史文档。

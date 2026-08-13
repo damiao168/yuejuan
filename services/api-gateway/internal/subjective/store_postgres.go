@@ -208,7 +208,7 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 func (s *PostgresStore) LoadContext(ctx context.Context, tenantID string, segmentID string) (Context, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT
-  seg.id::text, seg.submission_page_id::text, seg.bbox,
+  seg.id::text, to_jsonb(eqs), seg.submission_page_id::text, seg.bbox,
   e.subject, COALESCE(cohort.grade_level, ''),
   q.id::text, q.tenant_id::text, q.exam_id::text, COALESCE(q.exam_paper_id::text, ''),
   q.question_no, q.question_type, q.score::float8, COALESCE(q.stem, ''),
@@ -219,6 +219,7 @@ SELECT
   COALESCE(ans.id::text, ''), COALESCE(ans.answer_text, ''), ans.confidence::float8, ans.created_at
 FROM answer_segment seg
 JOIN question q ON q.tenant_id = seg.tenant_id AND q.id = seg.question_id
+JOIN exam_question_snapshot eqs ON eqs.tenant_id = q.tenant_id AND eqs.exam_id = q.exam_id AND eqs.question_id = q.id
 JOIN exam e ON e.tenant_id = q.tenant_id AND e.id = q.exam_id AND e.deleted_at IS NULL
 LEFT JOIN LATERAL (
   SELECT CASE
@@ -249,6 +250,7 @@ LEFT JOIN LATERAL (
 WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 `, tenantID, segmentID)
 	var out Context
+	var snapshotRaw []byte
 	var submissionPageID string
 	var bboxRaw, kpRaw, areaRaw []byte
 	var question paper.Question
@@ -259,6 +261,7 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 	var answerCreated sql.NullTime
 	if err := row.Scan(
 		&out.SegmentID,
+		&snapshotRaw,
 		&submissionPageID,
 		&bboxRaw,
 		&out.Subject,
@@ -293,6 +296,11 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 		}
 		return Context{}, err
 	}
+	if err := json.Unmarshal(snapshotRaw, &out.AssessmentSnapshot); err != nil {
+		return Context{}, err
+	}
+	out.Subject = string(out.AssessmentSnapshot.SubjectCode)
+	out.GradeLevel = string(out.AssessmentSnapshot.EducationStage)
 	if !IsSupportedQuestionType(question.QuestionType) {
 		return Context{}, ErrUnsupportedQuestionType
 	}
@@ -306,6 +314,9 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 	_ = json.Unmarshal(pointsRaw, &rubric.Points)
 	_ = json.Unmarshal(deductionsRaw, &rubric.Deductions)
 	_ = json.Unmarshal(examplesRaw, &rubric.Examples)
+	if frozen, ok := rubricFromAssessmentSnapshot(out.AssessmentSnapshot.RubricSnapshot, question.ID); ok {
+		rubric = frozen
+	}
 	if answerID == "" {
 		return Context{}, ErrAnswerMissing
 	}
@@ -325,6 +336,22 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL
 	return out, nil
 }
 
+func rubricFromAssessmentSnapshot(snapshot map[string]any, questionID string) (paper.Rubric, bool) {
+	if len(snapshot) == 0 {
+		return paper.Rubric{}, false
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return paper.Rubric{}, false
+	}
+	var rubric paper.Rubric
+	if err := json.Unmarshal(raw, &rubric); err != nil {
+		return paper.Rubric{}, false
+	}
+	rubric.QuestionID = questionID
+	return rubric, rubric.ID != "" || rubric.Version != "" || len(rubric.Points) > 0
+}
+
 func (s *PostgresStore) CreateGrade(ctx context.Context, tenantID string, actorID string, grade Grade) (Grade, error) {
 	matched, _ := json.Marshal(grade.MatchedPoints)
 	missing, _ := json.Marshal(grade.MissingPoints)
@@ -339,6 +366,7 @@ func (s *PostgresStore) CreateGrade(ctx context.Context, tenantID string, actorI
 	row := tx.QueryRowContext(ctx, `
 INSERT INTO ai_grade (
   tenant_id, answer_segment_id, question_id, question_no, question_type, answer_version,
+  exam_question_snapshot_id,
   grader_type, rule_version, suggested_score, max_score, confidence,
   matched_points, missing_points, evidence, risk_flags, needs_human_review,
   auto_pass, mock, raw_output, created_by, status, failure_reason,
@@ -347,7 +375,7 @@ INSERT INTO ai_grade (
   adapter_name, provider_key, deployment_key, deployment_region,
   adapter_attempts, adapter_latency_ms, adapter_repair_attempted, subjective_grading_run_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, 'llm-adapter', $8, $9, $10,
+VALUES ($1, $2, $3, $4, $5, $6, (SELECT id FROM exam_question_snapshot WHERE tenant_id=$1::uuid AND question_id=$3::uuid), $7, 'llm-adapter', $8, $9, $10,
   $11, $12, $13, $14, $15, false, $16, $17, $18, $19, NULLIF($20, ''),
   $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, NULLIF($36, '')::uuid)
 ON CONFLICT (tenant_id, adapter_request_id) WHERE adapter_request_id <> '' AND deleted_at IS NULL DO NOTHING

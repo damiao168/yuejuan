@@ -41,7 +41,7 @@ const checks = [
   {
     name: "exam workspace",
     file: "apps/web-admin/src/pages/ExamWorkspacePage.tsx",
-    includes: ["考试工作区导航", "总体进度", "examId", "当前下一步", "需要关注"]
+    includes: ["WorkspaceStageRail", "stage_progress", "examId", "当前下一步", "WorkspaceNoticeList"]
   },
   {
     name: "URL exam context",

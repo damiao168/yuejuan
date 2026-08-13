@@ -1,0 +1,801 @@
+package scorerelease
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"sort"
+	"strings"
+	"time"
+
+	"edugrade-enterprise/services/api-gateway/internal/qualitydashboard"
+)
+
+// DashboardReader is intentionally aggregate-only. The release service never
+// receives Gold answers, grader observations, candidate text, or other
+// sensitive quality data from the dashboard.
+type DashboardReader interface {
+	Get(context.Context, string, string) (qualitydashboard.Dashboard, error)
+}
+
+type PostgresStore struct {
+	db        *sql.DB
+	dashboard DashboardReader
+	now       func() time.Time
+}
+
+func NewPostgresStore(db *sql.DB, dashboard DashboardReader) *PostgresStore {
+	return &PostgresStore{db: db, dashboard: dashboard, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (s *PostgresStore) Create(ctx context.Context, tenantID, examID, actorID string, input CreateInput) (Release, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Release{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockExam(ctx, tx, tenantID, examID); err != nil {
+		return Release{}, err
+	}
+	if release, found, err := s.findIdempotentTx(ctx, tx, tenantID, examID, input.IdempotencyKey); err != nil {
+		return Release{}, err
+	} else if found {
+		if err := tx.Commit(); err != nil {
+			return Release{}, err
+		}
+		return release, nil
+	}
+	facts, err := s.currentFactsTx(ctx, tx, tenantID, examID)
+	if err != nil {
+		return Release{}, err
+	}
+	if len(facts) == 0 {
+		return Release{}, ErrNotFound
+	}
+	version, err := s.nextVersionTx(ctx, tx, tenantID, examID)
+	if err != nil {
+		return Release{}, err
+	}
+	release, err := s.insertReleaseTx(ctx, tx, tenantID, examID, actorID, version, input.Source, input.Reason, input.IdempotencyKey, input.VisibilityPolicy, input.AppealWindow, "")
+	if err != nil {
+		return Release{}, err
+	}
+	if err := s.insertFactsTx(ctx, tx, tenantID, release.ID, facts); err != nil {
+		return Release{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Release{}, err
+	}
+	return release, nil
+}
+
+func (s *PostgresStore) CreateRollback(ctx context.Context, tenantID, examID, actorID string, input RollbackInput) (Release, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Release{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockExam(ctx, tx, tenantID, examID); err != nil {
+		return Release{}, err
+	}
+	if release, found, err := s.findIdempotentTx(ctx, tx, tenantID, examID, input.IdempotencyKey); err != nil {
+		return Release{}, err
+	} else if found {
+		if err := tx.Commit(); err != nil {
+			return Release{}, err
+		}
+		return release, nil
+	}
+	source, err := s.releaseTx(ctx, tx, tenantID, input.SourceReleaseID, false)
+	if err != nil {
+		return Release{}, err
+	}
+	if source.ExamID != examID || source.Status != StatusPublished {
+		return Release{}, ErrInvalidTransition
+	}
+	version, err := s.nextVersionTx(ctx, tx, tenantID, examID)
+	if err != nil {
+		return Release{}, err
+	}
+	release, err := s.insertReleaseTx(ctx, tx, tenantID, examID, actorID, version, SourceRollback, input.Reason, input.IdempotencyKey, source.VisibilityPolicy, source.AppealWindow, source.ID)
+	if err != nil {
+		return Release{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO score_release_item (tenant_id, release_id, student_id, submission_id, total_score, max_score, status, snapshot_hash)
+SELECT tenant_id, $3::uuid, student_id, submission_id, total_score, max_score, status, snapshot_hash
+FROM score_release_item WHERE tenant_id = $1 AND release_id = $2::uuid
+`, tenantID, source.ID, release.ID); err != nil {
+		return Release{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO score_release_question (tenant_id, release_id, submission_id, question_id, question_no, final_grade_id, score, max_score, source_type, source_id, student_explanation)
+SELECT tenant_id, $3::uuid, submission_id, question_id, question_no, final_grade_id, score, max_score, source_type, source_id, student_explanation
+FROM score_release_question WHERE tenant_id = $1 AND release_id = $2::uuid
+`, tenantID, source.ID, release.ID); err != nil {
+		return Release{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Release{}, err
+	}
+	return release, nil
+}
+
+// CreateFromRegrade copies a published source snapshot under the exam lock,
+// applies only the reviewed plan's question replacements in memory, then
+// writes a new draft. It intentionally never joins current final_grade or
+// submission_grade, so later mutable activity cannot leak into the release.
+func (s *PostgresStore) CreateFromRegrade(ctx context.Context, tenantID, examID, actorID string, input CreateRegradeInput) (Release, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Release{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockExam(ctx, tx, tenantID, examID); err != nil {
+		return Release{}, err
+	}
+	if release, found, err := s.findIdempotentTx(ctx, tx, tenantID, examID, input.IdempotencyKey); err != nil {
+		return Release{}, err
+	} else if found {
+		if err := tx.Commit(); err != nil {
+			return Release{}, err
+		}
+		return release, nil
+	}
+	source, err := s.releaseTx(ctx, tx, tenantID, input.SourceReleaseID, false)
+	if err != nil {
+		return Release{}, err
+	}
+	if source.ExamID != examID || source.Status != StatusPublished {
+		return Release{}, ErrInvalidTransition
+	}
+	facts, err := s.releaseFactsTx(ctx, tx, tenantID, source.ID)
+	if err != nil {
+		return Release{}, err
+	}
+	if len(facts) == 0 || !applyRegradeChanges(facts, input) {
+		return Release{}, ErrInvalidInput
+	}
+	version, err := s.nextVersionTx(ctx, tx, tenantID, examID)
+	if err != nil {
+		return Release{}, err
+	}
+	release, err := s.insertReleaseTx(ctx, tx, tenantID, examID, actorID, version, SourceRegrade, input.Reason, input.IdempotencyKey, source.VisibilityPolicy, source.AppealWindow, source.ID)
+	if err != nil {
+		return Release{}, err
+	}
+	if err := s.insertFactsTx(ctx, tx, tenantID, release.ID, facts); err != nil {
+		return Release{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Release{}, err
+	}
+	return release, nil
+}
+
+func (s *PostgresStore) List(ctx context.Context, tenantID, examID string) ([]Release, error) {
+	rows, err := s.db.QueryContext(ctx, releaseColumns+` FROM score_release WHERE tenant_id = $1 AND exam_id = $2::uuid ORDER BY version DESC`, tenantID, examID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Release{}
+	for rows.Next() {
+		release, err := scanRelease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, release)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) Get(ctx context.Context, tenantID, id string) (Detail, error) {
+	release, err := s.release(ctx, tenantID, id)
+	if err != nil {
+		return Detail{}, err
+	}
+	items, err := s.items(ctx, tenantID, id)
+	if err != nil {
+		return Detail{}, err
+	}
+	questions, err := s.questions(ctx, tenantID, id, "")
+	if err != nil {
+		return Detail{}, err
+	}
+	return Detail{Release: release, Items: items, Questions: questions}, nil
+}
+
+func (s *PostgresStore) Diff(ctx context.Context, tenantID, id, baseID string) (Diff, error) {
+	current, err := s.Get(ctx, tenantID, id)
+	if err != nil {
+		return Diff{}, err
+	}
+	base, err := s.Get(ctx, tenantID, baseID)
+	if err != nil {
+		return Diff{}, err
+	}
+	if current.Release.ExamID != base.Release.ExamID {
+		return Diff{}, ErrInvalidInput
+	}
+	return releaseDiff(current, base), nil
+}
+
+func (s *PostgresStore) Gate(ctx context.Context, tenantID, examID string) (Gate, error) {
+	dashboardIssues, err := s.dashboardIssues(ctx, tenantID, examID)
+	if err != nil {
+		return Gate{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Gate{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	gate, err := s.gateTx(ctx, tx, tenantID, examID, "", dashboardIssues)
+	if err != nil {
+		return Gate{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Gate{}, err
+	}
+	return gate, nil
+}
+
+func (s *PostgresStore) Publish(ctx context.Context, tenantID, id, actorID string) (Release, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Release{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	release, err := s.releaseTx(ctx, tx, tenantID, id, true)
+	if err != nil {
+		return Release{}, err
+	}
+	if err := lockExam(ctx, tx, tenantID, release.ExamID); err != nil {
+		return Release{}, err
+	}
+	if release.Status == StatusPublished {
+		if err := tx.Commit(); err != nil {
+			return Release{}, err
+		}
+		return release, nil
+	}
+	if release.Status != StatusDraft {
+		return Release{}, ErrInvalidTransition
+	}
+	// Refresh the cross-service aggregate only after the exam advisory lock is
+	// held. Score writers use the same lock, so the gate and publication cannot
+	// race a normal score-finalisation transition.
+	dashboardIssues, err := s.dashboardIssues(ctx, tenantID, release.ExamID)
+	if err != nil {
+		return Release{}, err
+	}
+	gate, err := s.gateTx(ctx, tx, tenantID, release.ExamID, release.ID, dashboardIssues)
+	if err != nil {
+		return Release{}, err
+	}
+	if !gate.Passed {
+		return Release{}, ErrGateBlocked
+	}
+	gateJSON, err := json.Marshal(gate)
+	if err != nil {
+		return Release{}, err
+	}
+	var supersedes sql.NullString
+	_ = tx.QueryRowContext(ctx, `SELECT release_id::text FROM score_release_current WHERE tenant_id = $1 AND exam_id = $2::uuid FOR UPDATE`, tenantID, release.ExamID).Scan(&supersedes)
+	now := s.now().UTC()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE score_release
+SET status = 'published', published_by = $3::uuid, published_at = $4, gate_snapshot = $5::jsonb, supersedes_release_id = NULLIF($6, '')::uuid
+WHERE tenant_id = $1 AND id = $2::uuid AND status = 'draft'
+`, tenantID, release.ID, actorID, now, string(gateJSON), supersedes.String); err != nil {
+		return Release{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO score_release_current (tenant_id, exam_id, release_id, updated_at)
+VALUES ($1, $2::uuid, $3::uuid, $4)
+ON CONFLICT (tenant_id, exam_id) DO UPDATE SET release_id = EXCLUDED.release_id, updated_at = EXCLUDED.updated_at
+`, tenantID, release.ExamID, release.ID, now); err != nil {
+		return Release{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Release{}, err
+	}
+	release.Status, release.PublishedBy, release.PublishedAt, release.GateSnapshot, release.SupersedesReleaseID = StatusPublished, actorID, &now, gate, supersedes.String
+	return release, nil
+}
+
+func (s *PostgresStore) CurrentPublished(ctx context.Context, tenantID, examID string) (Detail, error) {
+	var id string
+	if err := s.db.QueryRowContext(ctx, `SELECT release_id::text FROM score_release_current WHERE tenant_id = $1 AND exam_id = $2::uuid`, tenantID, examID).Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Detail{}, ErrNotFound
+		}
+		return Detail{}, err
+	}
+	return s.Get(ctx, tenantID, id)
+}
+
+func (s *PostgresStore) StudentResult(ctx context.Context, tenantID, examID, studentID string) (StudentResult, error) {
+	detail, err := s.CurrentPublished(ctx, tenantID, examID)
+	if err != nil {
+		return StudentResult{}, err
+	}
+	for _, item := range detail.Items {
+		if item.StudentID != studentID {
+			continue
+		}
+		result := StudentResult{ExamID: examID, ReleaseID: detail.Release.ID, ReleaseVersion: detail.Release.Version, TotalScore: item.TotalScore, MaxScore: item.MaxScore,
+			AppealWindow: appealView(detail.Release.AppealWindow, s.now().UTC())}
+		if !detail.Release.VisibilityPolicy.ShowQuestionScores {
+			return result, nil
+		}
+		result.Questions = []StudentQuestion{}
+		for _, question := range detail.Questions {
+			if question.SubmissionID != item.SubmissionID {
+				continue
+			}
+			view := StudentQuestion{QuestionID: question.QuestionID, QuestionNo: question.QuestionNo, Score: question.Score, MaxScore: question.MaxScore}
+			if detail.Release.VisibilityPolicy.ShowFeedback {
+				view.Feedback = question.Explanation.Feedback
+			}
+			if detail.Release.VisibilityPolicy.ShowRubricSummary {
+				view.RubricSummary = append([]string(nil), question.Explanation.RubricSummary...)
+			}
+			result.Questions = append(result.Questions, view)
+		}
+		sort.Slice(result.Questions, func(i, j int) bool { return result.Questions[i].QuestionNo < result.Questions[j].QuestionNo })
+		return result, nil
+	}
+	return StudentResult{}, ErrNotFound
+}
+
+func (s *PostgresStore) StudentQuestion(ctx context.Context, tenantID, examID, studentID, questionID string) (StudentQuestion, error) {
+	result, err := s.StudentResult(ctx, tenantID, examID, studentID)
+	if err != nil {
+		return StudentQuestion{}, err
+	}
+	if !result.QuestionsIsVisible() {
+		return StudentQuestion{}, ErrForbidden
+	}
+	for _, question := range result.Questions {
+		if question.QuestionID == questionID {
+			return question, nil
+		}
+	}
+	return StudentQuestion{}, ErrNotFound
+}
+
+func (s *PostgresStore) StudentQuestionImage(ctx context.Context, tenantID, examID, studentID, questionID string) (StudentQuestionImageSource, error) {
+	var source StudentQuestionImageSource
+	err := s.db.QueryRowContext(ctx, `
+SELECT answer_segment.id::text
+FROM score_release_current current_release
+JOIN score_release release
+  ON release.tenant_id = current_release.tenant_id
+ AND release.id = current_release.release_id
+ AND release.status = 'published'
+JOIN score_release_item item
+  ON item.tenant_id = release.tenant_id
+ AND item.release_id = release.id
+ AND item.student_id = $3::uuid
+JOIN score_release_question release_question
+  ON release_question.tenant_id = item.tenant_id
+ AND release_question.release_id = item.release_id
+ AND release_question.submission_id = item.submission_id
+ AND release_question.question_id = $4::uuid
+JOIN answer_segment
+  ON answer_segment.tenant_id = release_question.tenant_id
+ AND answer_segment.submission_id = release_question.submission_id
+ AND answer_segment.question_id = release_question.question_id
+ AND answer_segment.deleted_at IS NULL
+WHERE current_release.tenant_id = $1
+  AND current_release.exam_id = $2::uuid
+  AND COALESCE((release.visibility_policy ->> 'show_question_scores')::boolean, false)
+ORDER BY answer_segment.updated_at DESC, answer_segment.id
+LIMIT 1
+`, tenantID, examID, studentID, questionID).Scan(&source.AnswerSegmentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return StudentQuestionImageSource{}, ErrNotFound
+	}
+	if err != nil {
+		return StudentQuestionImageSource{}, err
+	}
+	return source, nil
+}
+
+func (s *PostgresStore) currentFactsTx(ctx context.Context, tx *sql.Tx, tenantID, examID string) ([]SubmissionFact, error) {
+	rows, err := tx.QueryContext(ctx, `
+SELECT sg.student_id::text, sg.submission_id::text, sg.total_score::float8, sg.max_score::float8, sg.status,
+  fg.question_id::text, fg.question_no, fg.id::text, fg.score::float8, fg.max_score::float8, fg.source,
+  COALESCE(fg.arbitration_task_id::text, fg.double_mark_session_id::text, fg.id::text),
+  COALESCE((SELECT NULLIF(hg.student_feedback, '') FROM human_grade hg
+    WHERE hg.tenant_id = fg.tenant_id AND hg.answer_segment_id = fg.answer_segment_id AND hg.deleted_at IS NULL
+    ORDER BY hg.created_at DESC, hg.id DESC LIMIT 1),
+    (SELECT NULLIF(at.student_feedback, '') FROM arbitration_task at WHERE at.tenant_id = fg.tenant_id AND at.id = fg.arbitration_task_id AND at.deleted_at IS NULL), '')
+FROM submission_grade sg
+JOIN final_grade fg ON fg.tenant_id = sg.tenant_id AND fg.exam_id = sg.exam_id AND fg.submission_id = sg.submission_id AND fg.deleted_at IS NULL
+WHERE sg.tenant_id = $1 AND sg.exam_id = $2::uuid AND sg.deleted_at IS NULL
+ORDER BY sg.submission_id, fg.question_no, fg.id
+`, tenantID, examID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bySubmission := map[string]SubmissionFact{}
+	order := []string{}
+	for rows.Next() {
+		var studentID sql.NullString
+		var fact SubmissionFact
+		var question QuestionFact
+		var feedback string
+		if err := rows.Scan(&studentID, &fact.SubmissionID, &fact.TotalScore, &fact.MaxScore, &fact.Status, &question.QuestionID, &question.QuestionNo, &question.FinalGradeID, &question.Score, &question.MaxScore, &question.SourceType, &question.SourceID, &feedback); err != nil {
+			return nil, err
+		}
+		fact.StudentID, question.Explanation.Feedback = studentID.String, strings.TrimSpace(feedback)
+		if existing, ok := bySubmission[fact.SubmissionID]; ok {
+			existing.Questions = append(existing.Questions, question)
+			bySubmission[fact.SubmissionID] = existing
+		} else {
+			fact.Questions = []QuestionFact{question}
+			bySubmission[fact.SubmissionID] = fact
+			order = append(order, fact.SubmissionID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]SubmissionFact, 0, len(order))
+	for _, id := range order {
+		out = append(out, bySubmission[id])
+	}
+	return out, nil
+}
+
+func (s *PostgresStore) insertReleaseTx(ctx context.Context, tx *sql.Tx, tenantID, examID, actorID string, version int, source, reason, idempotencyKey string, visibility VisibilityPolicy, window AppealWindow, sourceReleaseID string) (Release, error) {
+	visibilityJSON, err := json.Marshal(visibility)
+	if err != nil {
+		return Release{}, err
+	}
+	windowJSON, err := json.Marshal(window)
+	if err != nil {
+		return Release{}, err
+	}
+	row := tx.QueryRowContext(ctx, `
+INSERT INTO score_release (tenant_id, exam_id, version, source, reason, idempotency_key, visibility_policy, appeal_window, source_release_id, created_by)
+VALUES ($1, $2::uuid, $3, $4, $5, $6, $7::jsonb, $8::jsonb, NULLIF($9, '')::uuid, $10::uuid)
+RETURNING `+releaseReturning, tenantID, examID, version, source, reason, idempotencyKey, string(visibilityJSON), string(windowJSON), sourceReleaseID, actorID)
+	return scanRelease(row)
+}
+
+func (s *PostgresStore) insertFactsTx(ctx context.Context, tx *sql.Tx, tenantID, releaseID string, facts []SubmissionFact) error {
+	for _, fact := range facts {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO score_release_item (tenant_id, release_id, student_id, submission_id, total_score, max_score, status, snapshot_hash)
+VALUES ($1, $2::uuid, NULLIF($3, '')::uuid, $4::uuid, $5, $6, $7, $8)
+`, tenantID, releaseID, fact.StudentID, fact.SubmissionID, fact.TotalScore, fact.MaxScore, fact.Status, snapshotHash(fact)); err != nil {
+			return err
+		}
+		for _, question := range fact.Questions {
+			explanation, err := json.Marshal(question.Explanation)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `
+INSERT INTO score_release_question (tenant_id, release_id, submission_id, question_id, question_no, final_grade_id, score, max_score, source_type, source_id, student_explanation)
+VALUES ($1, $2::uuid, $3::uuid, $4::uuid, $5, $6::uuid, $7, $8, $9, NULLIF($10, '')::uuid, $11::jsonb)
+`, tenantID, releaseID, fact.SubmissionID, question.QuestionID, question.QuestionNo, question.FinalGradeID, question.Score, question.MaxScore, question.SourceType, question.SourceID, string(explanation)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *PostgresStore) nextVersionTx(ctx context.Context, tx *sql.Tx, tenantID, examID string) (int, error) {
+	var version int
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) + 1 FROM score_release WHERE tenant_id = $1 AND exam_id = $2::uuid`, tenantID, examID).Scan(&version)
+	return version, err
+}
+
+func (s *PostgresStore) findIdempotentTx(ctx context.Context, tx *sql.Tx, tenantID, examID, key string) (Release, bool, error) {
+	release, err := scanRelease(tx.QueryRowContext(ctx, releaseColumns+` FROM score_release WHERE tenant_id = $1 AND exam_id = $2::uuid AND idempotency_key = $3`, tenantID, examID, key))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Release{}, false, nil
+	}
+	return release, err == nil, err
+}
+
+func (s *PostgresStore) release(ctx context.Context, tenantID, id string) (Release, error) {
+	release, err := scanRelease(s.db.QueryRowContext(ctx, releaseColumns+` FROM score_release WHERE tenant_id = $1 AND id = $2::uuid`, tenantID, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Release{}, ErrNotFound
+	}
+	return release, err
+}
+
+func (s *PostgresStore) releaseTx(ctx context.Context, tx *sql.Tx, tenantID, id string, forUpdate bool) (Release, error) {
+	query := releaseColumns + ` FROM score_release WHERE tenant_id = $1 AND id = $2::uuid`
+	if forUpdate {
+		query += " FOR UPDATE"
+	}
+	release, err := scanRelease(tx.QueryRowContext(ctx, query, tenantID, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Release{}, ErrNotFound
+	}
+	return release, err
+}
+
+func (s *PostgresStore) items(ctx context.Context, tenantID, releaseID string) ([]ReleaseItem, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT release_id::text, COALESCE(student_id::text, ''), submission_id::text, total_score::float8, max_score::float8, status, snapshot_hash FROM score_release_item WHERE tenant_id = $1 AND release_id = $2::uuid ORDER BY submission_id`, tenantID, releaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ReleaseItem{}
+	for rows.Next() {
+		var item ReleaseItem
+		if err := rows.Scan(&item.ReleaseID, &item.StudentID, &item.SubmissionID, &item.TotalScore, &item.MaxScore, &item.Status, &item.SnapshotHash); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) questions(ctx context.Context, tenantID, releaseID, submissionID string) ([]ReleaseQuestion, error) {
+	query := `SELECT release_id::text, submission_id::text, question_id::text, question_no, final_grade_id::text, score::float8, max_score::float8, source_type, COALESCE(source_id::text, ''), student_explanation FROM score_release_question WHERE tenant_id = $1 AND release_id = $2::uuid`
+	args := []any{tenantID, releaseID}
+	if submissionID != "" {
+		query += " AND submission_id = $3::uuid"
+		args = append(args, submissionID)
+	}
+	query += " ORDER BY submission_id, question_no, question_id"
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ReleaseQuestion{}
+	for rows.Next() {
+		var item ReleaseQuestion
+		var raw []byte
+		if err := rows.Scan(&item.ReleaseID, &item.SubmissionID, &item.QuestionID, &item.QuestionNo, &item.FinalGradeID, &item.Score, &item.MaxScore, &item.SourceType, &item.SourceID, &raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &item.Explanation); err != nil {
+			return nil, err
+		}
+		item.Explanation.RubricSummary = append([]string(nil), item.Explanation.RubricSummary...)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) releaseFactsTx(ctx context.Context, tx *sql.Tx, tenantID, releaseID string) ([]SubmissionFact, error) {
+	rows, err := tx.QueryContext(ctx, `
+SELECT item.student_id::text, item.submission_id::text, item.total_score::float8, item.max_score::float8, item.status,
+       question.question_id::text, question.question_no, question.final_grade_id::text,
+       question.score::float8, question.max_score::float8, question.source_type,
+       COALESCE(question.source_id::text, ''), question.student_explanation
+FROM score_release_item item
+JOIN score_release_question question
+  ON question.tenant_id = item.tenant_id AND question.release_id = item.release_id AND question.submission_id = item.submission_id
+WHERE item.tenant_id = $1 AND item.release_id = $2::uuid
+ORDER BY item.submission_id, question.question_no, question.question_id
+`, tenantID, releaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bySubmission := map[string]SubmissionFact{}
+	order := []string{}
+	for rows.Next() {
+		var studentID sql.NullString
+		var fact SubmissionFact
+		var question QuestionFact
+		var explanation []byte
+		if err := rows.Scan(&studentID, &fact.SubmissionID, &fact.TotalScore, &fact.MaxScore, &fact.Status,
+			&question.QuestionID, &question.QuestionNo, &question.FinalGradeID, &question.Score, &question.MaxScore,
+			&question.SourceType, &question.SourceID, &explanation); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(explanation, &question.Explanation); err != nil {
+			return nil, err
+		}
+		fact.StudentID = studentID.String
+		if existing, exists := bySubmission[fact.SubmissionID]; exists {
+			existing.Questions = append(existing.Questions, question)
+			bySubmission[fact.SubmissionID] = existing
+		} else {
+			fact.Questions = []QuestionFact{question}
+			bySubmission[fact.SubmissionID] = fact
+			order = append(order, fact.SubmissionID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	facts := make([]SubmissionFact, 0, len(order))
+	for _, submissionID := range order {
+		facts = append(facts, bySubmission[submissionID])
+	}
+	return facts, nil
+}
+
+func applyRegradeChanges(facts []SubmissionFact, input CreateRegradeInput) bool {
+	changes := make(map[string]RegradeChange, len(input.Changes))
+	for _, change := range input.Changes {
+		changes[change.SubmissionID+"\x00"+change.QuestionID] = change
+	}
+	matched := 0
+	for factIndex := range facts {
+		fact := &facts[factIndex]
+		for questionIndex := range fact.Questions {
+			question := &fact.Questions[questionIndex]
+			change, found := changes[fact.SubmissionID+"\x00"+question.QuestionID]
+			if !found {
+				continue
+			}
+			if question.QuestionID != input.QuestionID || math.Abs(question.MaxScore-change.MaxScore) > 0.000001 {
+				return false
+			}
+			question.Score, question.SourceType, question.SourceID = change.Score, "single_review", change.ReviewedGradeID
+			matched++
+		}
+		fact.TotalScore = 0
+		for _, question := range fact.Questions {
+			fact.TotalScore += question.Score
+		}
+		if fact.TotalScore > fact.MaxScore+0.000001 {
+			return false
+		}
+	}
+	return matched == len(changes)
+}
+
+func (s *PostgresStore) gateTx(ctx context.Context, tx *sql.Tx, tenantID, examID, releaseID string, dashboard []GateIssue) (Gate, error) {
+	gate := emptyGate(s.now().UTC())
+	checks := []struct{ code, message, route, query string }{
+		{"unfinished_review_tasks", "there are unfinished review tasks", "review", `SELECT COUNT(*) FROM review_task WHERE tenant_id = $1 AND exam_id = $2::uuid AND deleted_at IS NULL AND status NOT IN ('submitted', 'completed')`},
+		{"unfinished_arbitration_tasks", "there are unresolved arbitration tasks", "arbitration", `SELECT COUNT(*) FROM arbitration_task WHERE tenant_id = $1 AND exam_id = $2::uuid AND deleted_at IS NULL AND status <> 'submitted'`},
+		{"ocr_failed_unhandled", "there are failed OCR tasks", "processing", `SELECT COUNT(*) FROM ocr_task ot JOIN submission sub ON sub.tenant_id = ot.tenant_id AND sub.id = ot.submission_id AND sub.deleted_at IS NULL WHERE ot.tenant_id = $1 AND sub.exam_id = $2::uuid AND ot.deleted_at IS NULL AND ot.status = 'failed'`},
+		{"missing_final_grades", "there are answer segments without final grades", "review", `SELECT COUNT(*) FROM answer_segment seg WHERE seg.tenant_id = $1 AND seg.deleted_at IS NULL AND EXISTS (SELECT 1 FROM submission sub WHERE sub.tenant_id = seg.tenant_id AND sub.id = seg.submission_id AND sub.exam_id = $2::uuid AND sub.deleted_at IS NULL) AND NOT EXISTS (SELECT 1 FROM final_grade fg WHERE fg.tenant_id = seg.tenant_id AND fg.answer_segment_id = seg.id AND fg.deleted_at IS NULL)`},
+		{"missing_submission_unresolved", "expected students have no matched submission", "capture", `WITH roster AS (SELECT DISTINCT st.id FROM exam_class ec JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id LEFT JOIN exam_student_attendance ea ON ea.tenant_id = ec.tenant_id AND ea.exam_id = ec.exam_id AND ea.student_id = st.id AND ea.deleted_at IS NULL WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active' AND COALESCE(ea.status, 'expected') <> 'absent') SELECT COUNT(*) FROM roster r WHERE NOT EXISTS (SELECT 1 FROM submission sub WHERE sub.tenant_id = $1 AND sub.exam_id = $2::uuid AND sub.student_id = r.id AND sub.deleted_at IS NULL)`},
+		{"unidentified_submission", "submissions are not uniquely matched to an expected student", "capture", `WITH roster AS (SELECT DISTINCT st.id FROM exam_class ec JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'), counts AS (SELECT student_id, COUNT(*) AS count FROM submission WHERE tenant_id = $1 AND exam_id = $2::uuid AND deleted_at IS NULL GROUP BY student_id) SELECT COUNT(*) FROM submission sub LEFT JOIN counts c ON c.student_id = sub.student_id LEFT JOIN exam_student_attendance ea ON ea.tenant_id = sub.tenant_id AND ea.exam_id = sub.exam_id AND ea.student_id = sub.student_id AND ea.deleted_at IS NULL WHERE sub.tenant_id = $1 AND sub.exam_id = $2::uuid AND sub.deleted_at IS NULL AND (sub.student_id IS NULL OR NOT EXISTS (SELECT 1 FROM roster r WHERE r.id = sub.student_id) OR COALESCE(ea.status, 'expected') = 'absent' OR COALESCE(c.count, 0) > 1)`},
+		{"missing_pages_unresolved", "matched submissions have unresolved missing or rejected pages", "capture", `SELECT COUNT(*) FROM submission sub WHERE sub.tenant_id = $1 AND sub.exam_id = $2::uuid AND sub.deleted_at IS NULL AND (sub.actual_page_count < sub.expected_page_count OR sub.quality_status = 'failed' OR sub.status = 'rejected')`},
+		{"no_submission_grades", "there are no submission grades to release", "grades", `SELECT CASE WHEN EXISTS (SELECT 1 FROM submission_grade WHERE tenant_id = $1 AND exam_id = $2::uuid AND deleted_at IS NULL) THEN 0 ELSE 1 END`},
+		{"grades_not_confirmed", "there are grades not confirmed for release", "grades", `SELECT COUNT(*) FROM submission_grade WHERE tenant_id = $1 AND exam_id = $2::uuid AND deleted_at IS NULL AND status NOT IN ('confirmed', 'published', 'locked')`},
+		{"score_integrity_mismatch", "submission total does not match final-grade total", "grades", `SELECT COUNT(*) FROM submission_grade sg LEFT JOIN LATERAL (SELECT COALESCE(SUM(fg.score), 0)::float8 AS total FROM final_grade fg WHERE fg.tenant_id = sg.tenant_id AND fg.exam_id = sg.exam_id AND fg.submission_id = sg.submission_id AND fg.deleted_at IS NULL) fg ON true WHERE sg.tenant_id = $1 AND sg.exam_id = $2::uuid AND sg.deleted_at IS NULL AND abs(sg.total_score::float8 - fg.total) > 0.000001`},
+	}
+	for _, check := range checks {
+		count, err := scalar(ctx, tx, check.query, tenantID, examID)
+		if err != nil {
+			return Gate{}, err
+		}
+		if count > 0 {
+			addIssue(&gate, GateIssue{Code: check.code, Message: check.message, Blocking: true, Count: count, ActionRoute: check.route})
+		}
+	}
+	if releaseID != "" {
+		checks := []struct{ code, message, query string }{
+			{"release_snapshot_incomplete", "release contains an item without question facts", `SELECT COUNT(*) FROM score_release_item item WHERE item.tenant_id = $1 AND item.release_id = $2::uuid AND NOT EXISTS (SELECT 1 FROM score_release_question question WHERE question.tenant_id = item.tenant_id AND question.release_id = item.release_id AND question.submission_id = item.submission_id)`},
+			{"release_snapshot_incomplete", "release snapshot does not reconcile to its question scores", `SELECT COUNT(*) FROM score_release_item item LEFT JOIN LATERAL (SELECT COALESCE(SUM(question.score), 0)::float8 AS total FROM score_release_question question WHERE question.tenant_id = item.tenant_id AND question.release_id = item.release_id AND question.submission_id = item.submission_id) questions ON true WHERE item.tenant_id = $1 AND item.release_id = $2::uuid AND abs(item.total_score::float8 - questions.total) > 0.000001`},
+		}
+		for _, check := range checks {
+			count, err := scalar(ctx, tx, check.query, tenantID, releaseID)
+			if err != nil {
+				return Gate{}, err
+			}
+			if count > 0 {
+				addIssue(&gate, GateIssue{Code: check.code, Message: check.message, Blocking: true, Count: count, ActionRoute: "grades"})
+			}
+		}
+	}
+	for _, issue := range dashboard {
+		addIssue(&gate, issue)
+	}
+	gate.Passed = len(gate.Blocking) == 0
+	return gate, nil
+}
+
+func (s *PostgresStore) dashboardIssues(ctx context.Context, tenantID, examID string) ([]GateIssue, error) {
+	if s.dashboard == nil {
+		return nil, nil
+	}
+	dashboard, err := s.dashboard.Get(ctx, tenantID, examID)
+	if err != nil {
+		return nil, fmt.Errorf("release quality dashboard: %w", err)
+	}
+	issues := make([]GateIssue, 0, len(dashboard.Blocking)+len(dashboard.Warnings))
+	riskByQuestion := make(map[string]string, len(dashboard.Questions))
+	for _, question := range dashboard.Questions {
+		riskByQuestion[question.Question.ID] = question.Question.RiskTier
+	}
+	for _, finding := range dashboard.Blocking {
+		issues = append(issues, GateIssue{Code: finding.Code, Message: finding.Reason, Blocking: true, Count: 1, ActionRoute: "quality"})
+	}
+	for _, finding := range dashboard.Warnings {
+		// Incomplete backmark is explicitly a release blocker. Other warnings
+		// remain visible for routine low-risk exams. R3 is intentionally
+		// fail-closed for the Gold/calibration/Seed evidence chain; a warning
+		// there is not a releaseable quality state.
+		blocking := finding.Code == "backmark_pending" || (riskByQuestion[finding.QuestionID] == "R3" && r3EvidenceRequired(finding.Code))
+		issues = append(issues, GateIssue{Code: finding.Code, Message: finding.Reason, Blocking: blocking, Count: 1, ActionRoute: "quality"})
+	}
+	return issues, nil
+}
+
+func r3EvidenceRequired(code string) bool {
+	return strings.HasPrefix(code, "gold_") || strings.HasPrefix(code, "calibration_") || strings.HasPrefix(code, "seed_") || code == "answer_group_sampling_pending"
+}
+
+func releaseDiff(current, base Detail) Diff {
+	result := Diff{BaseReleaseID: base.Release.ID, ReleaseID: current.Release.ID, Items: []DiffItem{}, Questions: []DiffQuestion{}}
+	baseItems, currentItems := indexItems(base.Items), indexItems(current.Items)
+	for submissionID, item := range currentItems {
+		previous, exists := baseItems[submissionID]
+		if !exists || math.Abs(item.TotalScore-previous.TotalScore) > 0.000001 {
+			result.Items = append(result.Items, DiffItem{SubmissionID: submissionID, OldTotal: previous.TotalScore, NewTotal: item.TotalScore})
+		}
+	}
+	baseQuestions, currentQuestions := indexQuestions(base.Questions), indexQuestions(current.Questions)
+	for key, question := range currentQuestions {
+		previous, exists := baseQuestions[key]
+		if !exists || math.Abs(question.Score-previous.Score) > 0.000001 {
+			result.Questions = append(result.Questions, DiffQuestion{SubmissionID: question.SubmissionID, QuestionID: question.QuestionID, OldScore: previous.Score, NewScore: question.Score})
+		}
+	}
+	sort.Slice(result.Items, func(i, j int) bool { return result.Items[i].SubmissionID < result.Items[j].SubmissionID })
+	sort.Slice(result.Questions, func(i, j int) bool {
+		if result.Questions[i].SubmissionID == result.Questions[j].SubmissionID {
+			return result.Questions[i].QuestionID < result.Questions[j].QuestionID
+		}
+		return result.Questions[i].SubmissionID < result.Questions[j].SubmissionID
+	})
+	result.AffectedCount = len(result.Items)
+	return result
+}
+
+const releaseColumns = `SELECT id::text, tenant_id::text, exam_id::text, version, source, reason, status, idempotency_key, visibility_policy, appeal_window, gate_snapshot, COALESCE(source_release_id::text, ''), COALESCE(supersedes_release_id::text, ''), created_by::text, created_at, COALESCE(published_by::text, ''), published_at`
+const releaseReturning = `id::text, tenant_id::text, exam_id::text, version, source, reason, status, idempotency_key, visibility_policy, appeal_window, gate_snapshot, COALESCE(source_release_id::text, ''), COALESCE(supersedes_release_id::text, ''), created_by::text, created_at, COALESCE(published_by::text, ''), published_at`
+
+type releaseScanner interface{ Scan(...any) error }
+
+func scanRelease(row releaseScanner) (Release, error) {
+	var release Release
+	var visibility, window, gate []byte
+	var publishedBy string
+	if err := row.Scan(&release.ID, &release.TenantID, &release.ExamID, &release.Version, &release.Source, &release.Reason, &release.Status, &release.IdempotencyKey, &visibility, &window, &gate, &release.SourceReleaseID, &release.SupersedesReleaseID, &release.CreatedBy, &release.CreatedAt, &publishedBy, &release.PublishedAt); err != nil {
+		return Release{}, err
+	}
+	if err := json.Unmarshal(visibility, &release.VisibilityPolicy); err != nil {
+		return Release{}, err
+	}
+	if err := json.Unmarshal(window, &release.AppealWindow); err != nil {
+		return Release{}, err
+	}
+	if err := json.Unmarshal(gate, &release.GateSnapshot); err != nil {
+		return Release{}, err
+	}
+	release.PublishedBy = publishedBy
+	if release.GateSnapshot.Counts == nil {
+		release.GateSnapshot = emptyGate(release.CreatedAt)
+	}
+	return release, nil
+}
+
+func lockExam(ctx context.Context, tx *sql.Tx, tenantID, examID string) error {
+	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, tenantID, examID)
+	return err
+}
+func scalar(ctx context.Context, tx *sql.Tx, query, tenantID, id string) (int, error) {
+	var count int
+	err := tx.QueryRowContext(ctx, query, tenantID, id).Scan(&count)
+	return count, err
+}
+
+func (result StudentResult) QuestionsIsVisible() bool { return result.Questions != nil }

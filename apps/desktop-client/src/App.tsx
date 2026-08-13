@@ -8,6 +8,7 @@ import {
   Form,
   Input,
   InputNumber,
+  Modal,
   Progress,
   Select,
   Space,
@@ -36,10 +37,10 @@ import {
 import { motion } from "framer-motion";
 import { getCurrentUser, login } from "./api/auth";
 import { DesktopApiClient, normalizeBaseUrl } from "./api/client";
-import { listExams } from "./api/exams";
-import { uploadFileWithProgress } from "./api/files";
+import { listCaptureBatches, listExams, type CaptureBatch } from "./api/exams";
 import { listReviewTasks } from "./api/review";
-import { addSubmissionPage, runSubmissionQualityCheck } from "./api/submissions";
+import { runSubmissionQualityCheck } from "./api/submissions";
+import { resumeCaptureUpload } from "./api/captureUploads";
 import { OfflineWorkbench } from "./components/OfflineWorkbench";
 import {
   appendLocalLog,
@@ -54,7 +55,27 @@ import {
   saveStoredCredentials,
   type StoredDesktopCredentials
 } from "./lib/localRuntime";
-import { readOfflineDraftEnvelopes } from "./lib/offlineStore";
+import { listOfflineDraftEnvelopes, readOfflineDraftEnvelopes } from "./lib/offlineStore";
+import {
+	archiveDurableScanQueueItems,
+  hasDurableDesktopStore,
+  listDurableScanQueue,
+  loadDurableSpoolFile,
+  persistDurableScanQueueItem,
+	spoolScanAsset
+} from "./lib/durableStore";
+import {
+  inspectScannerSample,
+  listScannerDevices,
+  listScannerProfiles,
+  runScannerPreflight,
+  saveScannerProfile,
+  scannerIntegrationStatus,
+  type ScannerDevice,
+  type ScannerIntegrationStatus,
+  type ScannerPreflightResult,
+  type ScannerProfile
+} from "./lib/scannerProfile";
 import type {
   AuthUser,
   CapabilityProbe,
@@ -73,7 +94,10 @@ import type {
 const defaultServer = "http://127.0.0.1:8080";
 const scanQueueStorageKey = "edugrade.desktop.scan_queue";
 const maxUploadBytes = 104857600;
-const allowedUploadExtensions = [".pdf", ".png", ".jpg", ".jpeg"];
+// Keep the workstation's local admission rule aligned with the capture
+// upload contract. TIFF is a normal scanner output and must not be shown as
+// selectable only to fail before it enters the encrypted spool.
+const allowedUploadExtensions = [".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"];
 
 const navItems: { key: WorkspaceKey; label: string; icon: React.ReactNode }[] = [
   { key: "connect", label: "连接登录", icon: <LogIn size={18} /> },
@@ -100,6 +124,7 @@ const queueStatusLabels: Record<SyncQueueItem["status"], string> = {
   uploading: "uploading",
   succeeded: "succeeded",
   failed: "failed",
+  conflict: "需要处理",
   not_configured: "未配置/待接入"
 };
 
@@ -126,14 +151,34 @@ function App() {
   const [serviceStatus, setServiceStatus] = useState<SystemStatus | null>(null);
   const [isCheckingServiceStatus, setIsCheckingServiceStatus] = useState(false);
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
-  const [queue, setQueue] = useState<SyncQueueItem[]>(() => readPersistedScanQueue());
+  const [queue, setQueue] = useState<SyncQueueItem[]>(() => (hasDurableDesktopStore() ? [] : readPersistedScanQueue()));
+  const [offlineDraftCount, setOfflineDraftCount] = useState(() => readOfflineDraftEnvelopes().length);
   const [logs, setLogs] = useState<LocalLogEntry[]>(() => readLocalLogs());
   const [exams, setExams] = useState<Exam[]>([]);
   const [selectedExamId, setSelectedExamId] = useState("");
   const [examError, setExamError] = useState<string | null>(null);
   const [isLoadingExams, setIsLoadingExams] = useState(false);
   const [scanSubmissionId, setScanSubmissionId] = useState("");
+  const [captureBatchId, setCaptureBatchId] = useState("");
+  const [captureBatches, setCaptureBatches] = useState<CaptureBatch[]>([]);
+  const [isLoadingCaptureBatches, setIsLoadingCaptureBatches] = useState(false);
   const [scanStartPage, setScanStartPage] = useState(1);
+  const [scannerProfiles, setScannerProfiles] = useState<ScannerProfile[]>([]);
+  const [selectedScannerProfileId, setSelectedScannerProfileId] = useState("");
+  const [scannerPreflight, setScannerPreflight] = useState<ScannerPreflightResult | null>(null);
+  const [scannerIntegration, setScannerIntegration] = useState<ScannerIntegrationStatus | null>(null);
+  const [scannerPreflightError, setScannerPreflightError] = useState<string | null>(null);
+  const [isCheckingScannerPreflight, setIsCheckingScannerPreflight] = useState(false);
+  const [expectedPaperSize, setExpectedPaperSize] = useState<ScannerProfile["paperSize"]>("A4");
+  const [expectedTemplatePreset, setExpectedTemplatePreset] = useState("");
+  const [expectedDuplex, setExpectedDuplex] = useState(false);
+  const [expectedDpi, setExpectedDpi] = useState<number>(300);
+  const [isScannerProfileModalOpen, setIsScannerProfileModalOpen] = useState(false);
+  const [scannerDevices, setScannerDevices] = useState<ScannerDevice[]>([]);
+  const [isLoadingScannerDevices, setIsLoadingScannerDevices] = useState(false);
+  const [isSavingScannerProfile, setIsSavingScannerProfile] = useState(false);
+  const [scannerProfileName, setScannerProfileName] = useState("");
+  const [scannerDeviceFingerprint, setScannerDeviceFingerprint] = useState("");
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [qualityResult, setQualityResult] = useState<SubmissionQualityResult | null>(null);
   const [qualityError, setQualityError] = useState<string | null>(null);
@@ -142,6 +187,8 @@ function App() {
   const fileBufferRef = useRef(new Map<string, File>());
   const uploadInFlightRef = useRef(new Set<string>());
   const queueRef = useRef(queue);
+  const durablePersistenceRef = useRef<Promise<void>>(Promise.resolve());
+  const captureBatchLoadRef = useRef(0);
   const autoLoginStartedRef = useRef(false);
 
   const client = useMemo(
@@ -154,12 +201,18 @@ function App() {
   );
 
   const updateQueue = useCallback((updater: (current: SyncQueueItem[]) => SyncQueueItem[]) => {
-    setQueue((current) => {
-      const next = updater(current);
-      queueRef.current = next;
+    const next = updater(queueRef.current);
+    queueRef.current = next;
+    setQueue(next);
+    if (hasDurableDesktopStore()) {
+      durablePersistenceRef.current = durablePersistenceRef.current
+        .catch(() => undefined)
+        .then(() => Promise.all(next.filter((item) => item.kind === "scan_upload").map((item) => persistDurableScanQueueItem(item))))
+        .then(() => undefined)
+        .catch((error) => console.warn("durable scan queue persistence failed", error));
+    } else {
       persistScanQueue(next);
-      return next;
-    });
+    }
   }, []);
 
   const refreshLogs = useCallback(() => setLogs(readLocalLogs()), []);
@@ -190,8 +243,35 @@ function App() {
   }, [logEvent, refreshCapabilities]);
 
   useEffect(() => {
+    if (hasDurableDesktopStore()) {
+      void listDurableScanQueue()
+        .then((items) => {
+          queueRef.current = items;
+          setQueue(items);
+        })
+        .catch((error) => setDiagnosticError(error instanceof Error ? error.message : "本地耐久队列无法恢复"));
+    }
+    void listOfflineDraftEnvelopes().then((drafts) => setOfflineDraftCount(drafts.length)).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     queueRef.current = queue;
   }, [queue]);
+
+  useEffect(() => {
+    if (workspace === "scan" && isTauriRuntime()) {
+      void handleLoadScannerProfiles();
+    }
+  }, [workspace]);
+
+  // `handleLoadExams` may select the first accessible exam automatically.
+  // Load its real, resumable capture batches as well, so the operator never
+  // has to discover or copy an internal UUID in the normal scan workflow.
+  useEffect(() => {
+    if (workspace === "scan" && token && selectedExamId) {
+      void handleLoadCaptureBatches(selectedExamId);
+    }
+  }, [workspace, token, selectedExamId]);
 
   useEffect(() => () => {
     for (const item of queueRef.current) {
@@ -390,9 +470,141 @@ function App() {
     }
   };
 
+  const handleLoadCaptureBatches = async (examID = selectedExamId) => {
+    const requestID = ++captureBatchLoadRef.current;
+    if (!examID) {
+      setCaptureBatches([]);
+      return;
+    }
+    setIsLoadingCaptureBatches(true);
+    try {
+      const result = await listCaptureBatches(client, examID);
+      if (requestID !== captureBatchLoadRef.current) return;
+      const usable = result.batches.filter((batch) => batch.status !== "completed" && batch.status !== "cancelled");
+      setCaptureBatches(usable);
+      if (usable.some((batch) => batch.id === captureBatchId)) {
+        return;
+      }
+      setCaptureBatchId(usable[0]?.id ?? "");
+      await logEvent("info", "capture batches loaded for scan workstation", `${usable.length} usable batches`);
+    } catch (error) {
+      if (requestID !== captureBatchLoadRef.current) return;
+      const message = error instanceof Error ? error.message : "采集批次读取失败";
+      setCaptureBatches([]);
+      setExamError(message);
+      await logEvent("warning", "capture batch list load failed", message);
+    } finally {
+      if (requestID === captureBatchLoadRef.current) {
+        setIsLoadingCaptureBatches(false);
+      }
+    }
+  };
+
+  const handleLoadScannerProfiles = async () => {
+    if (!isTauriRuntime()) return;
+    try {
+      const [profiles, integration] = await Promise.all([listScannerProfiles(), scannerIntegrationStatus()]);
+      setScannerProfiles(profiles);
+      setScannerIntegration(integration);
+      if (!selectedScannerProfileId && profiles[0]) {
+        setSelectedScannerProfileId(profiles[0].id);
+      }
+    } catch (error) {
+      setScannerPreflightError(error instanceof Error ? error.message : "扫描设备 Profile 无法读取");
+    }
+  };
+
+  const handleOpenScannerProfileSetup = async () => {
+    if (!isTauriRuntime()) return;
+    setScannerPreflightError(null);
+    setScannerProfileName(scannerProfileName || `扫描站 ${expectedPaperSize} ${expectedDpi} DPI`);
+    setIsLoadingScannerDevices(true);
+    try {
+      const devices = await listScannerDevices();
+      setScannerDevices(devices);
+      if (!scannerDeviceFingerprint && devices[0]) {
+        setScannerDeviceFingerprint(devices[0].fingerprint);
+      }
+      setIsScannerProfileModalOpen(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法读取 Windows 扫描设备。";
+      setScannerPreflightError(message);
+      await logEvent("warning", "scanner device inventory failed", message);
+    } finally {
+      setIsLoadingScannerDevices(false);
+    }
+  };
+
+  const handleSaveScannerProfile = async () => {
+    const name = scannerProfileName.trim();
+    const templatePreset = expectedTemplatePreset.trim();
+    if (!name || !scannerDeviceFingerprint || !templatePreset) {
+      setScannerPreflightError("请填写档案名称，选择可用扫描设备，并填写锁定答题卡模板标识。");
+      return;
+    }
+    setIsSavingScannerProfile(true);
+    setScannerPreflightError(null);
+    try {
+      const profile = await saveScannerProfile({
+        name,
+        deviceFingerprint: scannerDeviceFingerprint,
+        dpi: expectedDpi,
+        duplex: expectedDuplex,
+        colorMode: "grayscale",
+        paperSize: expectedPaperSize,
+        autoRotate: true,
+        compression: "jpeg",
+        templatePreset
+      });
+      setScannerProfiles((current) => [profile, ...current.filter((item) => item.id !== profile.id)]);
+      setSelectedScannerProfileId(profile.id);
+      setScannerPreflight(null);
+      setIsScannerProfileModalOpen(false);
+      await logEvent("info", "scanner profile saved", profile.name);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "扫描设备档案保存失败。";
+      setScannerPreflightError(message);
+      await logEvent("warning", "scanner profile save failed", message);
+    } finally {
+      setIsSavingScannerProfile(false);
+    }
+  };
+
+  const handleScannerPreflight = async () => {
+    if (!isTauriRuntime()) return;
+    if (!selectedScannerProfileId || !expectedTemplatePreset.trim()) {
+      setScannerPreflightError("请选择扫描设备 Profile，并填写锁定答题卡模板的 Profile 标识。");
+      return;
+    }
+    setScannerPreflightError(null);
+    setIsCheckingScannerPreflight(true);
+    try {
+      const result = await runScannerPreflight({
+        profileId: selectedScannerProfileId,
+        expectedPaperSize,
+        expectedTemplatePreset: expectedTemplatePreset.trim(),
+        expectedDuplex,
+        expectedDpi,
+        networkAvailable: isOnline
+      });
+      setScannerPreflight(result);
+      await logEvent("info", "scanner preflight completed", result.readyToScan ? "ready" : "blocked");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "扫描前检查失败";
+      setScannerPreflightError(message);
+      await logEvent("warning", "scanner preflight failed", message);
+    } finally {
+      setIsCheckingScannerPreflight(false);
+    }
+  };
+
   const handleFileSelection = async (files: FileList | null) => {
     const selected = files ? Array.from(files) : [];
     if (!selected.length) {
+      return;
+    }
+    if (isTauriRuntime() && !scannerPreflight?.readyToScan) {
+      setDiagnosticError("请先完成通过的扫描前检查，再将答题卡加入本地耐久队列。");
       return;
     }
     const selectedExam = exams.find((exam) => exam.id === selectedExamId);
@@ -400,8 +612,38 @@ function App() {
     const startPage = scanStartPage || 1;
     const nextItems: SyncQueueItem[] = [];
     for (const [index, file] of selected.entries()) {
-      const qualityChecks = await inspectScanFile(file);
+      const scannerChecks = isTauriRuntime() && scannerPreflight
+        ? await inspectScannerSample(file, scannerPreflight.profile)
+        : [];
+      const qualityChecks = [
+        ...(await inspectScanFile(file)),
+        ...scannerChecks
+      ];
       const failedQuality = qualityChecks.some((check) => check.status === "failed");
+      if (hasDurableDesktopStore()) {
+        try {
+          const durableItem = await spoolScanAsset({
+            file,
+            examId: selectedExamId || undefined,
+            captureBatchId: captureBatchId.trim() || undefined,
+            submissionId: submissionId || undefined,
+            pageNo: startPage + index,
+            qualityChecks
+          });
+          fileBufferRef.current.set(durableItem.id, file);
+          nextItems.push({
+            ...durableItem,
+            status: failedQuality ? "failed" : durableItem.status,
+            detail: failedQuality ? "本地质量检查未通过，原件已安全保留" : durableItem.detail,
+            previewUrl: previewUrlForFile(file),
+            qualityChecks
+          });
+        } catch (error) {
+          await logEvent("error", "scan asset durable spool failed", error instanceof Error ? error.message : String(error));
+          setDiagnosticError(error instanceof Error ? error.message : "扫描原件无法写入耐久本地存储，已停止加入上传队列");
+        }
+        continue;
+      }
       const recovered = queueRef.current.find(
         (item) => item.requiresReselect && item.fileName === file.name && item.fileSize === file.size && item.kind === "scan_upload"
       );
@@ -482,10 +724,10 @@ function App() {
         );
         return;
       }
-      if (!item.submissionId || !item.pageNo || !item.examId) {
+      if (!item.examId || !item.captureBatchId || !item.idempotencyKey) {
         updateQueue((current) =>
           current.map((candidate) =>
-            candidate.id === id ? { ...candidate, status: "failed", detail: "缺少考试、submission 或页码上下文", updatedAt: new Date().toISOString() } : candidate
+            candidate.id === id ? { ...candidate, status: "failed", detail: "缺少考试、采集批次或幂等键，不能启动可恢复上传", updatedAt: new Date().toISOString() } : candidate
           )
         );
         return;
@@ -498,8 +740,19 @@ function App() {
         );
         return;
       }
-      const file = fileBufferRef.current.get(id);
-      if (!file && !item.fileAssetId) {
+      let file = fileBufferRef.current.get(id);
+      if (!file && item.localAssetId && hasDurableDesktopStore()) {
+        try {
+          file = await loadDurableSpoolFile(item.localAssetId);
+          fileBufferRef.current.set(id, file);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "本地加密扫描原件无法恢复";
+          updateQueue((current) => current.map((candidate) => candidate.id === id ? { ...candidate, status: "failed", detail: message, updatedAt: new Date().toISOString() } : candidate));
+          await logEvent("error", "durable spool recovery failed", message);
+          return;
+        }
+      }
+      if (!file) {
         updateQueue((current) =>
           current.map((candidate) =>
             candidate.id === id
@@ -522,42 +775,49 @@ function App() {
         )
       );
       try {
-        let fileAssetId = item.fileAssetId;
-        let serverStatus = item.serverStatus;
-        if (!fileAssetId && file) {
-          const result = await uploadFileWithProgress(
-            client,
+        const completed = await resumeCaptureUpload(
+          client,
+          {
             file,
-            {
-              owner_type: "answer_page",
-              owner_id: item.submissionId,
-              submission_id: item.submissionId,
-              exam_id: item.examId
-            },
-            (progress) => {
-              updateQueue((current) => current.map((candidate) => (candidate.id === id ? { ...candidate, progress, updatedAt: new Date().toISOString() } : candidate)));
+            exam: item.examId,
+            batch: item.captureBatchId,
+            idempotency_key: item.idempotencyKey
+          },
+          async (progress) => {
+            const currentItem = queueRef.current.find((candidate) => candidate.id === id);
+            if (!currentItem) {
+              throw new Error("本地耐久队列记录已丢失，已停止继续上传");
             }
-          );
-          fileAssetId = result.file.id;
-          serverStatus = `file_asset 已登记：${result.file.id}`;
-          updateQueue((current) =>
-            current.map((candidate) =>
-              candidate.id === id
-                ? {
-                    ...candidate,
-                    fileAssetId,
-                    serverStatus,
-                    detail: "文件已上传，正在关联 submission page",
-                    updatedAt: new Date().toISOString()
-                  }
-                : candidate
-            )
-          );
+            const nextItem: SyncQueueItem = {
+              ...currentItem,
+              status: progress.status === "completed" ? "succeeded" : "uploading",
+              progress: progress.totalBytes ? Math.round((progress.confirmedOffset / progress.totalBytes) * 100) : 0,
+              confirmedOffset: progress.confirmedOffset,
+              remoteUploadId: progress.remoteUploadId,
+              fileAssetId: progress.fileAssetId ?? currentItem.fileAssetId,
+              serverStatus: progress.captureFileId ? `采集文件 ${progress.captureFileId}` : `上传会话 ${progress.remoteUploadId}`,
+              detail: progress.status === "completed" ? "服务端已确认采集文件" : `已确认 ${progress.confirmedOffset} / ${progress.totalBytes} 字节`,
+              updatedAt: new Date().toISOString()
+            };
+            updateQueue((current) => current.map((candidate) => candidate.id === id ? nextItem : candidate));
+            if (hasDurableDesktopStore()) {
+              const persisted = durablePersistenceRef.current
+                .catch(() => undefined)
+                .then(() => persistDurableScanQueueItem(nextItem));
+              durablePersistenceRef.current = persisted.catch((error) => console.warn("durable scan progress persistence failed", error));
+              await persisted;
+            }
+          }
+        );
+        if (completed.status !== "completed") {
+          updateQueue((current) => current.map((candidate) => candidate.id === id ? {
+            ...candidate,
+            status: "pending",
+            detail: `服务端状态为 ${completed.status}，将在下次同步继续确认`,
+            updatedAt: new Date().toISOString()
+          } : candidate));
+          return;
         }
-        const page = await addSubmissionPage(client, item.submissionId, {
-          file_asset_id: fileAssetId!,
-          page_no: item.pageNo
-        });
         updateQueue((current) =>
           current.map((candidate) =>
             candidate.id === id
@@ -565,16 +825,18 @@ function App() {
                   ...candidate,
                   status: "succeeded",
                   progress: 100,
-                  fileAssetId,
-                  serverStatus: `submission page ${page.page.page_no} 已关联，状态 ${page.page.status}`,
-                  detail: "服务端已接收文件并关联答卷页",
+                  fileAssetId: completed.file_asset_id ?? candidate.fileAssetId,
+                  remoteUploadId: completed.remote_upload_id,
+                  confirmedOffset: completed.confirmed_offset,
+                  serverStatus: completed.capture_file_id ? `采集文件 ${completed.capture_file_id}` : `上传会话 ${completed.remote_upload_id} 已确认`,
+                  detail: "服务端已确认采集文件；本地加密原件按保留策略继续保存",
                   updatedAt: new Date().toISOString()
                 }
               : candidate
           )
         );
         fileBufferRef.current.delete(id);
-        await logEvent("info", "scan queue item uploaded", `${item.fileName ?? item.title} -> ${fileAssetId}`);
+        await logEvent("info", "scan queue item uploaded", `${item.fileName ?? item.title} -> ${completed.capture_file_id ?? completed.remote_upload_id}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : "上传失败";
         updateQueue((current) =>
@@ -654,7 +916,20 @@ function App() {
     }
   };
 
-  const clearSucceededQueueItems = () => {
+  const clearSucceededQueueItems = async () => {
+    const succeededIds = queueRef.current
+      .filter((item) => item.kind === "scan_upload" && item.status === "succeeded")
+      .map((item) => item.localAssetId ?? item.id);
+    if (hasDurableDesktopStore() && succeededIds.length) {
+      try {
+        await archiveDurableScanQueueItems(succeededIds);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "本地已确认扫描件无法归档";
+        setDiagnosticError(message);
+        await logEvent("warning", "durable scan archive failed", message);
+        return;
+      }
+    }
     updateQueue((current) => {
       for (const item of current) {
         if (item.status !== "succeeded") continue;
@@ -853,16 +1128,104 @@ function App() {
     const scanItems = queue.filter((item) => item.kind === "scan_upload");
     const readyCount = scanItems.filter((item) => item.status === "pending").length;
     const failedCount = scanItems.filter((item) => item.status === "failed").length;
+    const scannerReady = !isTauriRuntime() || scannerPreflight?.readyToScan === true;
     return (
       <div className="workspace-grid scan-workstation">
         <section className="panel full">
           <SectionHead
             icon={<UploadCloud size={20} />}
             title="扫描工作站"
-            description="选择考试和 submission 后批量选择 PDF/图片；真实扫描仪驱动未配置/待接入。"
+            description="先完成扫描设备预检，再把 PDF/图片写入本地加密队列；断网不影响继续采集。"
             action={<Tag color={isOnline ? "success" : "error"}>{isOnline ? "在线" : "离线，上传暂停"}</Tag>}
           />
-          <Alert type="info" showIcon message="真实扫描仪：未配置/待接入。本页只处理文件选择上传，不模拟扫描仪。" />
+          {isTauriRuntime() ? (
+            <div className="scanner-preflight">
+              <Alert
+                type={scannerPreflight?.readyToScan ? "success" : "info"}
+                showIcon
+                message={scannerPreflight?.readyToScan ? "扫描前检查已通过" : "请先确认扫描设备与锁定答题卡模板"}
+                description={scannerIntegration?.detail ?? "WIA 仅用于发现 Windows 已安装的扫描设备；直接采集需完成现场设备验证。"}
+              />
+              <Form layout="vertical" className="scan-context-form">
+                <Form.Item label="扫描设备 Profile">
+                  <Select
+                    value={selectedScannerProfileId || undefined}
+                    placeholder="选择已保存的扫描设备 Profile"
+                    onChange={(value) => {
+                      const profile = scannerProfiles.find((item) => item.id === value);
+                      setSelectedScannerProfileId(value);
+                      if (profile) {
+                        setExpectedPaperSize(profile.paperSize);
+                        setExpectedTemplatePreset(profile.templatePreset);
+                        setExpectedDuplex(profile.duplex);
+                        setExpectedDpi(profile.dpi);
+                      }
+                      setScannerPreflight(null);
+                    }}
+                    options={scannerProfiles.map((profile) => ({ value: profile.id, label: `${profile.name} · ${profile.dpi} DPI · ${profile.paperSize}` }))}
+                  />
+                </Form.Item>
+                <Form.Item label="锁定答题卡模板 Profile">
+                  <Input value={expectedTemplatePreset} onChange={(event) => { setExpectedTemplatePreset(event.target.value); setScannerPreflight(null); }} placeholder="填写本批答题卡模板的 Profile 标识" />
+                </Form.Item>
+                <Form.Item label="模板纸张">
+                  <Select value={expectedPaperSize} onChange={(value) => { setExpectedPaperSize(value); setScannerPreflight(null); }} options={["A3", "A4", "A5", "Letter", "Legal"].map((value) => ({ value, label: value }))} />
+                </Form.Item>
+                <Form.Item label="模板 DPI">
+                  <InputNumber min={150} max={1200} value={expectedDpi} onChange={(value) => { setExpectedDpi(value ?? 300); setScannerPreflight(null); }} />
+                </Form.Item>
+                <Form.Item label="模板双面">
+                  <Checkbox checked={expectedDuplex} onChange={(event) => { setExpectedDuplex(event.target.checked); setScannerPreflight(null); }}>双面扫描</Checkbox>
+                </Form.Item>
+              </Form>
+              <Space wrap>
+                <Button icon={<Stethoscope size={16} />} loading={isCheckingScannerPreflight} onClick={() => void handleScannerPreflight()}>运行扫描前检查</Button>
+                <Button loading={isLoadingScannerDevices} onClick={() => void handleOpenScannerProfileSetup()}>新建扫描档案</Button>
+                <Button icon={<RefreshCw size={16} />} onClick={() => void handleLoadScannerProfiles()}>刷新设备 Profile</Button>
+              </Space>
+              {scannerPreflightError && <Alert className="section-alert" type="error" showIcon message={scannerPreflightError} />}
+              {scannerPreflight && (
+                <div className="quality-checks">
+                  {scannerPreflight.checks.map((check) => <Tooltip key={check.key} title={check.detail}><Tag color={check.status === "passed" ? "success" : check.status === "failed" ? "error" : "warning"}>{check.label}</Tag></Tooltip>)}
+                </div>
+              )}
+            </div>
+          ) : (
+            <Alert type="info" showIcon message="浏览器开发模式不提供扫描设备能力；请使用 Windows 桌面扫描站完成现场采集。" />
+          )}
+          <Modal
+            title="新建扫描档案"
+            open={isScannerProfileModalOpen}
+            confirmLoading={isSavingScannerProfile}
+            okText="保存并使用"
+            cancelText="取消"
+            onCancel={() => setIsScannerProfileModalOpen(false)}
+            onOk={() => void handleSaveScannerProfile()}
+          >
+            <p className="muted">档案只保存本机设备指纹与采集参数；不上传设备序列号，也不代表已通过真实设备验收。</p>
+            <Form layout="vertical">
+              <Form.Item label="档案名称" required>
+                <Input value={scannerProfileName} onChange={(event) => setScannerProfileName(event.target.value)} placeholder="例如：教务处扫描站 A4 双面" />
+              </Form.Item>
+              <Form.Item label="Windows 已发现的扫描设备" required>
+                <Select
+                  value={scannerDeviceFingerprint || undefined}
+                  placeholder="选择设备"
+                  options={scannerDevices.map((device) => ({ value: device.fingerprint, label: `${device.displayName} / ${device.driverStatus}` }))}
+                  onChange={setScannerDeviceFingerprint}
+                  notFoundContent="未发现可用设备；请确认驱动、连接和 Windows WIA 服务。"
+                />
+              </Form.Item>
+              <Form.Item label="答题卡模板标识" required>
+                <Input value={expectedTemplatePreset} onChange={(event) => setExpectedTemplatePreset(event.target.value)} placeholder="与本次采集批次的模板一致" />
+              </Form.Item>
+              <Space wrap>
+                <Form.Item label="纸张"><Select value={expectedPaperSize} onChange={setExpectedPaperSize} options={["A3", "A4", "A5", "Letter", "Legal"].map((value) => ({ value, label: value }))} /></Form.Item>
+                <Form.Item label="DPI"><InputNumber min={150} max={1200} value={expectedDpi} onChange={(value) => setExpectedDpi(value ?? 300)} /></Form.Item>
+                <Form.Item label="双面"><Checkbox checked={expectedDuplex} onChange={(event) => setExpectedDuplex(event.target.checked)}>双面扫描</Checkbox></Form.Item>
+              </Space>
+            </Form>
+          </Modal>
           <div className="scan-toolbar">
             <Form layout="vertical" className="scan-context-form">
               <Form.Item label="考试">
@@ -872,7 +1235,11 @@ function App() {
                     placeholder={token ? "选择真实考试" : "登录后加载考试"}
                     loading={isLoadingExams}
                     disabled={!token}
-                    onChange={setSelectedExamId}
+                    onChange={(examID) => {
+                      setSelectedExamId(examID);
+                      setCaptureBatchId("");
+                      setCaptureBatches([]);
+                    }}
                     options={exams.map((exam) => ({
                       value: exam.id,
                       label: `${exam.name} / ${exam.subject} / ${exam.status}`
@@ -883,8 +1250,38 @@ function App() {
                   </Button>
                 </Space.Compact>
               </Form.Item>
-              <Form.Item label="Submission ID">
-                <Input value={scanSubmissionId} onChange={(event) => setScanSubmissionId(event.target.value)} placeholder="submission uuid" />
+              <Form.Item label="Submission ID（可选，仅用于旧流程的人工关联）">
+                <Input value={scanSubmissionId} onChange={(event) => setScanSubmissionId(event.target.value)} placeholder="无需逐份填写；服务端按采集批次处理" />
+              </Form.Item>
+              <Form.Item label="采集批次">
+                <Space.Compact block>
+                  <Select
+                    value={captureBatchId || undefined}
+                    placeholder={selectedExamId ? "选择可继续上传的采集批次" : "请先选择考试"}
+                    loading={isLoadingCaptureBatches}
+                    disabled={!selectedExamId}
+                    onChange={setCaptureBatchId}
+                    options={captureBatches.map((batch) => ({
+                      value: batch.id,
+                      label: `${batch.name} · ${batch.status} · ${batch.file_count} 个文件`
+                    }))}
+                  />
+                  <Button
+                    icon={<RefreshCw size={16} />}
+                    disabled={!selectedExamId}
+                    loading={isLoadingCaptureBatches}
+                    onClick={() => void handleLoadCaptureBatches()}
+                  >
+                    刷新
+                  </Button>
+                </Space.Compact>
+                <Input
+                  className="scan-batch-manual-input"
+                  value={captureBatchId}
+                  onChange={(event) => setCaptureBatchId(event.target.value.trim())}
+                  placeholder="列表不可用时可手工输入 capture batch UUID（兼容旧流程）"
+                  aria-label="手工输入采集批次 UUID"
+                />
               </Form.Item>
               <Form.Item label="起始页码">
                 <InputNumber min={1} value={scanStartPage} onChange={(value) => setScanStartPage(value ?? 1)} />
@@ -895,14 +1292,14 @@ function App() {
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept=".pdf,.png,.jpg,.jpeg"
+                accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff"
                 onChange={(event) => {
                   void handleFileSelection(event.target.files);
                   event.target.value = "";
                 }}
               />
-              <Button icon={<FileUp size={16} />} disabled={!selectedExamId || !scanSubmissionId.trim()} onClick={() => fileInputRef.current?.click()}>
-                批量选择 PDF/图片
+              <Button icon={<FileUp size={16} />} disabled={!selectedExamId || !captureBatchId.trim() || !scannerReady} onClick={() => fileInputRef.current?.click()}>
+                批量选择 PDF/图片（含 TIFF）
               </Button>
               <Button type="primary" icon={<UploadCloud size={16} />} disabled={!token || !isOnline || readyCount === 0} onClick={() => void uploadQueueItems("pending")}>
                 上传 pending
@@ -910,14 +1307,14 @@ function App() {
               <Button icon={<RotateCcw size={16} />} disabled={!token || !isOnline || failedCount === 0} onClick={() => void uploadQueueItems("failed")}>
                 重试 failed
               </Button>
-              <Button danger disabled={!scanItems.some((item) => item.status === "succeeded")} onClick={clearSucceededQueueItems}>
-                清空 succeeded
+              <Button danger disabled={!scanItems.some((item) => item.status === "succeeded")} onClick={() => void clearSucceededQueueItems()}>
+                归档已确认项
               </Button>
             </div>
           </div>
           {examError && <Alert className="section-alert" type="error" message={examError} showIcon />}
           {!token && <Alert className="section-alert" type="warning" message="未登录：不会读取考试，也不会上传文件。" showIcon />}
-          {!selectedExamId && token && <p className="muted">请先选择真实考试；客户端不会创建假考试上下文。</p>}
+          {(!selectedExamId || !captureBatchId.trim()) && token && <p className="muted">请先选择真实考试和可继续上传的采集批次；客户端不会创建假考试上下文。</p>}
           {selectedExam && <p className="muted">当前考试：{selectedExam.name} / {selectedExam.subject} / {selectedExam.status}</p>}
         </section>
 
@@ -985,7 +1382,6 @@ function App() {
 
   function renderDiagnostics() {
     const scanItems = queue.filter((item) => item.kind === "scan_upload");
-    const offlineDrafts = readOfflineDraftEnvelopes();
     const recentErrors = logs.filter((entry) => entry.level === "error").slice(0, 5);
     const pendingUploads = scanItems.filter((item) => item.status === "pending" || item.status === "uploading").length;
     const failedUploads = scanItems.filter((item) => item.status === "failed").length;
@@ -1074,8 +1470,8 @@ function App() {
             </div>
             <div>
               <span>离线草稿</span>
-              <strong>{offlineDrafts.length}</strong>
-              <small>加密草稿 envelope</small>
+              <strong>{offlineDraftCount}</strong>
+              <small>{hasDurableDesktopStore() ? "加密 SQLite 草稿" : "浏览器开发草稿"}</small>
             </div>
             <div>
               <span>待上传</span>
@@ -1263,7 +1659,7 @@ function ScanQueueTable(props: { items: SyncQueueItem[]; onRetry: (id: string) =
           {(checks ?? []).map((check) => (
             <Tooltip key={check.key} title={check.detail}>
               <Tag color={check.status === "passed" ? "success" : check.status === "failed" ? "error" : "warning"}>
-                {check.label}: {check.status === "passed" ? "通过" : check.status === "failed" ? "失败" : "未配置/待接入"}
+                {check.label}: {check.status === "passed" ? "通过" : check.status === "warning" ? "请关注" : check.status === "failed" ? "失败" : "未配置/待接入"}
               </Tag>
             </Tooltip>
           ))}
@@ -1378,7 +1774,7 @@ async function inspectScanFile(file: File): Promise<ScanQualityCheck[]> {
       detail: "PDF 页数解析未配置/待接入；当前以后端 submission 质量门禁为准"
     }
   ];
-  if (file.type.startsWith("image/")) {
+  if (file.type.startsWith("image/") && extension !== ".tif" && extension !== ".tiff") {
     const resolution = await readImageResolution(file);
     checks.push({
       key: "resolution",
@@ -1391,7 +1787,9 @@ async function inspectScanFile(file: File): Promise<ScanQualityCheck[]> {
       key: "resolution",
       label: "分辨率",
       status: "not_configured",
-      detail: "PDF/非图片分辨率检测未配置/待接入"
+      detail: extension === ".tif" || extension === ".tiff"
+        ? "TIFF 本机分辨率解码未配置；已交由扫描样张预检和服务端质量门禁处理"
+        : "PDF/非图片分辨率检测未配置/待接入"
     });
   }
   return checks;
@@ -1433,6 +1831,9 @@ function inferContentType(filename: string) {
   }
   if (extension === ".jpg" || extension === ".jpeg") {
     return "image/jpeg";
+  }
+  if (extension === ".tif" || extension === ".tiff") {
+    return "image/tiff";
   }
   return "application/octet-stream";
 }

@@ -8,6 +8,8 @@ import (
 
 var _ WorkbenchStore = (*MemoryStore)(nil)
 
+const memoryTaskClaimTTL = 30 * time.Minute
+
 func (s *MemoryStore) ClaimNextTask(_ context.Context, tenantID, reviewerID string, input NextTaskInput, options ClaimTaskOptions) (ReviewTask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -47,8 +49,10 @@ func (s *MemoryStore) ClaimNextTask(_ context.Context, tenantID, reviewerID stri
 	}
 	task.AssignedTo = reviewerID
 	task.Revision++
-	task.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	task.UpdatedAt = now
 	s.tasks[key(tenantID, task.ID)] = task
+	s.claims[key(tenantID, task.ID)] = memoryTaskClaim{OwnerID: reviewerID, ClaimedAt: now, ExpiresAt: now.Add(memoryTaskClaimTTL)}
 	return cloneTask(task), nil
 }
 
@@ -81,8 +85,15 @@ func (s *MemoryStore) RenewTaskClaim(_ context.Context, tenantID, taskID, review
 	if !ok || task.AssignedTo != reviewerID || !isClaimableAssignedStatus(task.Status) {
 		return ErrForbidden
 	}
-	task.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	task.UpdatedAt = now
 	s.tasks[key(tenantID, taskID)] = task
+	claim, claimed := s.claims[key(tenantID, taskID)]
+	if !claimed || claim.OwnerID != reviewerID {
+		claim = memoryTaskClaim{OwnerID: reviewerID, ClaimedAt: now}
+	}
+	claim.ExpiresAt = now.Add(memoryTaskClaimTTL)
+	s.claims[key(tenantID, taskID)] = claim
 	return nil
 }
 
@@ -99,6 +110,7 @@ func (s *MemoryStore) ReleaseTaskClaim(_ context.Context, tenantID, taskID, revi
 	task.UpdatedAt = time.Now().UTC()
 	task.Revision++
 	s.tasks[key(tenantID, taskID)] = task
+	delete(s.claims, key(tenantID, taskID))
 	return cloneTask(task), nil
 }
 

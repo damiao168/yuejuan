@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"edugrade-enterprise/services/api-gateway/internal/assessment"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
 )
 
@@ -17,16 +18,17 @@ var (
 )
 
 type Context struct {
-	ExamID           string            `json:"exam_id"`
-	SubmissionID     string            `json:"submission_id"`
-	AnswerSegmentID  string            `json:"answer_segment_id"`
-	AnonymousCode    string            `json:"anonymous_code"`
-	Question         paper.Question    `json:"question"`
-	Rubric           paper.Rubric      `json:"rubric"`
-	RawAnswer        string            `json:"raw_answer"`
-	OCRText          string            `json:"ocr_text"`
-	AISuggestion     map[string]any    `json:"ai_suggestion"`
-	AutomationResult *AutomationResult `json:"automation_result,omitempty"`
+	ExamID             string                          `json:"exam_id"`
+	SubmissionID       string                          `json:"submission_id"`
+	AnswerSegmentID    string                          `json:"answer_segment_id"`
+	AnonymousCode      string                          `json:"anonymous_code"`
+	AssessmentSnapshot assessment.ExamQuestionSnapshot `json:"assessment_snapshot"`
+	Question           paper.Question                  `json:"question"`
+	Rubric             paper.Rubric                    `json:"rubric"`
+	RawAnswer          string                          `json:"raw_answer"`
+	OCRText            string                          `json:"ocr_text"`
+	AISuggestion       map[string]any                  `json:"ai_suggestion"`
+	AutomationResult   *AutomationResult               `json:"automation_result,omitempty"`
 }
 
 // AutomationResult exposes only the task-scoped recognition and rule-grading
@@ -120,8 +122,9 @@ type SubmitGradeInput struct {
 }
 
 type ReturnTaskInput struct {
-	Reason           string `json:"reason"`
-	ExpectedRevision int64  `json:"expected_revision"`
+	Reason             string `json:"reason"`
+	ExpectedRevision   int64  `json:"expected_revision"`
+	MustOwnActiveClaim bool   `json:"-"`
 }
 
 type ReviewDraft struct {
@@ -261,6 +264,10 @@ type DoubleMarkSession struct {
 type DoubleMarkSessionFilter struct {
 	Status          string
 	AnswerSegmentID string
+	// ExamID and QuestionID keep aggregate consumers from reading every
+	// double-mark session in a tenant and filtering in application memory.
+	ExamID     string
+	QuestionID string
 }
 
 type CreateArbitrationTaskInput struct {

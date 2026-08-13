@@ -1,4 +1,12 @@
 import type { OfflineDraftRecord, OfflineSyncStatus } from "../types";
+import {
+  hasDurableDesktopStore,
+  listDurableDraftEnvelopes,
+  loadDurableDraft,
+  purgeExpiredDurableDrafts,
+  saveDurableDraft,
+  updateDurableDraftStatus
+} from "./durableStore";
 
 const offlineStoreKey = "edugrade.desktop.offline_drafts";
 const encoder = new TextEncoder();
@@ -18,7 +26,16 @@ export interface OfflineDraftEnvelope {
   expiresAt: string;
   syncStatus: OfflineSyncStatus;
   syncMessage?: string;
-  encrypted: EncryptedPayload;
+  /** Browser-development fallback only; native envelopes never expose ciphertext to WebView. */
+  encrypted?: EncryptedPayload;
+}
+
+/** Loads durable Tauri metadata, or the explicit encrypted browser-dev fallback. */
+export async function listOfflineDraftEnvelopes(): Promise<OfflineDraftEnvelope[]> {
+  if (hasDurableDesktopStore()) {
+    return listDurableDraftEnvelopes();
+  }
+  return readOfflineDraftEnvelopes();
 }
 
 export function readOfflineDraftEnvelopes(): OfflineDraftEnvelope[] {
@@ -34,7 +51,12 @@ export function readOfflineDraftEnvelopes(): OfflineDraftEnvelope[] {
   }
 }
 
-export async function saveOfflineDraft(record: OfflineDraftRecord, passphrase: string) {
+export async function saveOfflineDraft(record: OfflineDraftRecord, passphrase?: string) {
+  if (hasDurableDesktopStore()) {
+    await saveDurableDraft(record);
+    return;
+  }
+  requireBrowserPassphrase(passphrase);
   const encrypted = await encryptJson(record, passphrase);
   const envelopes = readOfflineDraftEnvelopes().filter((item) => item.taskId !== record.taskId);
   const next: OfflineDraftEnvelope = {
@@ -49,15 +71,23 @@ export async function saveOfflineDraft(record: OfflineDraftRecord, passphrase: s
   writeOfflineDraftEnvelopes([next, ...envelopes].slice(0, 200));
 }
 
-export async function loadOfflineDraft(taskId: string, passphrase: string) {
+export async function loadOfflineDraft(taskId: string, passphrase?: string) {
+  if (hasDurableDesktopStore()) {
+    return loadDurableDraft(taskId);
+  }
+  requireBrowserPassphrase(passphrase);
   const envelope = readOfflineDraftEnvelopes().find((item) => item.taskId === taskId);
-  if (!envelope) {
+  if (!envelope?.encrypted) {
     return null;
   }
   return decryptJson<OfflineDraftRecord>(envelope.encrypted, passphrase);
 }
 
-export function updateOfflineDraftStatus(taskId: string, patch: { syncStatus: OfflineSyncStatus; syncMessage?: string }) {
+export async function updateOfflineDraftStatus(taskId: string, patch: { syncStatus: OfflineSyncStatus; syncMessage?: string }) {
+  if (hasDurableDesktopStore()) {
+    await updateDurableDraftStatus(taskId, patch);
+    return;
+  }
   const envelopes = readOfflineDraftEnvelopes().map((item) =>
     item.taskId === taskId
       ? {
@@ -71,7 +101,10 @@ export function updateOfflineDraftStatus(taskId: string, patch: { syncStatus: Of
   writeOfflineDraftEnvelopes(envelopes);
 }
 
-export function purgeExpiredOfflineDrafts(now = new Date()) {
+export async function purgeExpiredOfflineDrafts(now = new Date()) {
+  if (hasDurableDesktopStore()) {
+    return purgeExpiredDurableDrafts(now);
+  }
   const before = readOfflineDraftEnvelopes();
   const after = before.filter((item) => {
     const expiresAt = new Date(item.expiresAt);
@@ -79,6 +112,12 @@ export function purgeExpiredOfflineDrafts(now = new Date()) {
   });
   writeOfflineDraftEnvelopes(after);
   return before.length - after.length;
+}
+
+function requireBrowserPassphrase(passphrase: string | undefined): asserts passphrase is string {
+  if (!passphrase || passphrase.trim().length < 8) {
+    throw new Error("浏览器开发模式需要至少 8 位离线密钥；生产桌面端使用 Windows 受保护主密钥。");
+  }
 }
 
 async function encryptJson(value: unknown, passphrase: string): Promise<EncryptedPayload> {

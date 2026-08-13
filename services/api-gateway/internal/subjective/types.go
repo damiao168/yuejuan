@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"edugrade-enterprise/services/api-gateway/internal/aieligibility"
+	"edugrade-enterprise/services/api-gateway/internal/assessment"
 	"edugrade-enterprise/services/api-gateway/internal/grading"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
 )
@@ -44,30 +46,36 @@ type GradeRequest struct {
 }
 
 type Context struct {
-	SegmentID       string
-	AnswerVersion   string
-	Subject         string
-	GradeLevel      string
-	Question        paper.Question
-	Rubric          paper.Rubric
-	AnswerText      string
-	AnswerImageRef  map[string]any
-	OCRConfidence   *float64
-	AnswerCreatedAt time.Time
+	SegmentID          string
+	AssessmentSnapshot assessment.ExamQuestionSnapshot
+	AnswerVersion      string
+	Subject            string
+	GradeLevel         string
+	Question           paper.Question
+	Rubric             paper.Rubric
+	AnswerText         string
+	AnswerImageRef     map[string]any
+	OCRConfidence      *float64
+	AnswerCreatedAt    time.Time
 }
 
 type AdapterInput struct {
-	RequestID      string         `json:"request_id"`
-	SegmentID      string         `json:"answer_segment_id"`
-	Subject        string         `json:"subject"`
-	GradeLevel     string         `json:"grade_level"`
-	Question       paper.Question `json:"question"`
-	Rubric         paper.Rubric   `json:"rubric"`
-	AnswerText     string         `json:"answer_text"`
-	AnswerImageRef map[string]any `json:"answer_image_ref"`
-	OCRConfidence  *float64       `json:"ocr_confidence,omitempty"`
-	ModelPolicy    ModelPolicy    `json:"model_policy"`
-	PromptGuard    PromptGuard    `json:"prompt_guard"`
+	RequestID          string                          `json:"request_id"`
+	SegmentID          string                          `json:"answer_segment_id"`
+	Subject            string                          `json:"subject"`
+	GradeLevel         string                          `json:"grade_level"`
+	Question           paper.Question                  `json:"question"`
+	Rubric             paper.Rubric                    `json:"rubric"`
+	AnswerText         string                          `json:"answer_text"`
+	AnswerImageRef     map[string]any                  `json:"answer_image_ref"`
+	OCRConfidence      *float64                        `json:"ocr_confidence,omitempty"`
+	AssessmentSnapshot assessment.ExamQuestionSnapshot `json:"assessment_snapshot"`
+	ModelPolicy        ModelPolicy                     `json:"model_policy"`
+	PromptGuard        PromptGuard                     `json:"prompt_guard"`
+	// OutputConstraint is produced by the admission gate.  It travels with the
+	// request to every adapter so a provider cannot reinterpret an admitted
+	// call as authority to issue an independently final score.
+	OutputConstraint aieligibility.OutputConstraint `json:"output_constraint"`
 }
 
 type PromptGuard struct {

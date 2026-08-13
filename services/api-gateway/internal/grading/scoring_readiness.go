@@ -27,6 +27,7 @@ type scoringReadinessQueryer interface {
 
 type scoringReadinessCounts struct {
 	questions         int
+	snapshots         int
 	segments          int
 	processable       int
 	missingMetadata   int
@@ -110,6 +111,8 @@ segment_facts AS (
 SELECT
   (SELECT count(*)::int FROM question
    WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND deleted_at IS NULL),
+  (SELECT count(*)::int FROM exam_question_snapshot
+   WHERE tenant_id=$1::uuid AND exam_id=$2::uuid),
   count(*)::int,
   count(*) FILTER (WHERE processable)::int,
   count(*) FILTER (WHERE processable AND missing_metadata)::int,
@@ -128,6 +131,7 @@ SELECT
 FROM segment_facts
 `, tenantID, examID).Scan(
 		&counts.questions,
+		&counts.snapshots,
 		&counts.segments,
 		&counts.processable,
 		&counts.missingMetadata,
@@ -173,6 +177,17 @@ func buildScoringReadiness(status string, activeRun *ScoringRun, counts scoringR
 				false: "尚未配置题目，不能启动阅卷。",
 			}[counts.questions > 0],
 			Count: counts.questions,
+		},
+		{
+			Code:     "assessment_snapshots_complete",
+			Label:    "Assessment snapshots",
+			Passed:   counts.questions > 0 && counts.snapshots == counts.questions,
+			Severity: "blocker",
+			Message: map[bool]string{
+				true:  "Every configured question has an immutable assessment snapshot.",
+				false: fmt.Sprintf("%d configured questions are missing assessment snapshots.", max(counts.questions-counts.snapshots, 0)),
+			}[counts.questions > 0 && counts.snapshots == counts.questions],
+			Count: max(counts.questions-counts.snapshots, 0),
 		},
 		{
 			Code:     "answer_segments_present",

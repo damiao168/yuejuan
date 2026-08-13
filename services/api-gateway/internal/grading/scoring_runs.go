@@ -85,6 +85,7 @@ type ScoringRunItem struct {
 	QuestionID            string             `json:"question_id"`
 	QuestionNo            string             `json:"question_no"`
 	QuestionType          string             `json:"question_type"`
+	AssessmentSnapshotID  string             `json:"assessment_snapshot_id"`
 	AnonymousCode         string             `json:"anonymous_code"`
 	NormalizedBBox        map[string]float64 `json:"normalized_bbox"`
 	State                 string             `json:"state"`
@@ -417,7 +418,7 @@ ON CONFLICT (tenant_id,answer_segment_id,source) WHERE status IN ('pending','ass
 			if _, err = tx.ExecContext(ctx, `UPDATE answer_candidate SET is_current=false WHERE tenant_id=$1::uuid AND answer_segment_id=$2::uuid AND is_current`, tenantID, segment.id); err != nil {
 				return ScoringRun{}, err
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO answer_candidate(tenant_id,answer_segment_id,scoring_run_id,source,payload,display_text,confidence,decision,evidence,engine_version,profile_version,input_hash,is_current,created_by) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::jsonb,$6,NULLIF($7,0),$8,jsonb_build_object('answer_segment_answer_id',$9::text),'rule-input-v1','rule-input-v1',$10,true,$11::uuid)`, tenantID, segment.id, runID, source, segment.answerPayload, segment.answerText, confidence, decision, segment.answerID, "sha256:"+strings.ReplaceAll(segment.answerID, "-", ""), actorID)
+			_, err = tx.ExecContext(ctx, `INSERT INTO answer_candidate(tenant_id,answer_segment_id,scoring_run_id,exam_question_snapshot_id,source,payload,display_text,confidence,decision,evidence,engine_version,profile_version,input_hash,is_current,created_by) VALUES($1::uuid,$2::uuid,$3::uuid,(SELECT eqs.id FROM answer_segment snapshot_seg JOIN question snapshot_q ON snapshot_q.tenant_id=snapshot_seg.tenant_id AND snapshot_q.id=snapshot_seg.question_id JOIN exam_question_snapshot eqs ON eqs.tenant_id=snapshot_q.tenant_id AND eqs.exam_id=snapshot_q.exam_id AND eqs.question_id=snapshot_q.id WHERE snapshot_seg.tenant_id=$1::uuid AND snapshot_seg.id=$2::uuid),$4,$5::jsonb,$6,NULLIF($7,0),$8,jsonb_build_object('answer_segment_answer_id',$9::text),'rule-input-v1','rule-input-v1',$10,true,$11::uuid)`, tenantID, segment.id, runID, source, segment.answerPayload, segment.answerText, confidence, decision, segment.answerID, "sha256:"+strings.ReplaceAll(segment.answerID, "-", ""), actorID)
 			if err != nil {
 				return ScoringRun{}, err
 			}
@@ -645,7 +646,7 @@ func (s *PostgresStore) GetScoringRunDetail(ctx context.Context, tenantID, runID
 	rows, err := s.db.QueryContext(ctx, `
 SELECT seg.id::text,seg.submission_id::text,seg.submission_page_id::text,sp.page_no,
   COALESCE(pr.registered_file_asset_id,sp.normalized_file_asset_id,sp.file_asset_id)::text,
-  q.id::text,q.question_no,q.question_type,COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),seg.normalized_bbox,
+  q.id::text,q.question_no,q.question_type,eqs.id::text,COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),seg.normalized_bbox,
   COALESCE(ac.source,''),COALESCE(ac.display_text,''),COALESCE(ac.decision,''),ac.confidence::float8,
   COALESCE(ak.standard_answer,'null'::jsonb),COALESCE(sr.rule_type,''),g.score::float8,g.max_score::float8,COALESCE(g.source,''),
   COALESCE(o.id::text,''),COALESCE(o.status,''),COALESCE(o.runtime_task_id::text,''),COALESCE(wt.status,''),COALESCE(o.error_code,''),
@@ -655,6 +656,7 @@ JOIN submission sub ON sub.tenant_id=seg.tenant_id AND sub.id=seg.submission_id 
 JOIN submission_page sp ON sp.tenant_id=seg.tenant_id AND sp.id=seg.submission_page_id AND sp.deleted_at IS NULL
 LEFT JOIN page_registration_run pr ON pr.tenant_id=seg.tenant_id AND pr.id=seg.registration_run_id AND pr.deleted_at IS NULL
 JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id AND q.deleted_at IS NULL
+JOIN exam_question_snapshot eqs ON eqs.tenant_id=q.tenant_id AND eqs.exam_id=q.exam_id AND eqs.question_id=q.id
 LEFT JOIN omr_run o ON o.tenant_id=seg.tenant_id AND o.scoring_run_id=$3::uuid AND o.answer_segment_id=seg.id AND o.deleted_at IS NULL
 LEFT JOIN agent_worker_task wt ON wt.tenant_id=seg.tenant_id AND wt.id=o.runtime_task_id
 LEFT JOIN LATERAL (
@@ -713,7 +715,7 @@ func (s *PostgresStore) GetExamAutomationResults(ctx context.Context, tenantID, 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT seg.id::text,seg.submission_id::text,seg.submission_page_id::text,sp.page_no,
   COALESCE(pr.registered_file_asset_id,sp.normalized_file_asset_id,sp.file_asset_id)::text,
-  q.id::text,q.question_no,q.question_type,COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),seg.normalized_bbox,
+  q.id::text,q.question_no,q.question_type,eqs.id::text,COALESCE(NULLIF(sub.candidate_no,''),seg.id::text),seg.normalized_bbox,
   COALESCE(NULLIF(ac.source,''),ans.source,''),COALESCE(NULLIF(ac.display_text,''),ans.answer_text,''),
   COALESCE(NULLIF(ac.decision,''),CASE WHEN ans.id IS NOT NULL THEN 'confirmed' ELSE '' END),COALESCE(ac.confidence,ans.confidence)::float8,
   COALESCE(ak.standard_answer,'null'::jsonb),COALESCE(sr.rule_type,q.question_type),
@@ -728,6 +730,7 @@ JOIN submission sub ON sub.tenant_id=seg.tenant_id AND sub.id=seg.submission_id 
 JOIN submission_page sp ON sp.tenant_id=seg.tenant_id AND sp.id=seg.submission_page_id AND sp.deleted_at IS NULL
 LEFT JOIN page_registration_run pr ON pr.tenant_id=seg.tenant_id AND pr.id=seg.registration_run_id AND pr.deleted_at IS NULL
 JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id AND q.deleted_at IS NULL
+JOIN exam_question_snapshot eqs ON eqs.tenant_id=q.tenant_id AND eqs.exam_id=q.exam_id AND eqs.question_id=q.id
 LEFT JOIN LATERAL (
   SELECT id,source,display_text,decision,confidence FROM answer_candidate
   WHERE tenant_id=seg.tenant_id AND answer_segment_id=seg.id AND is_current AND deleted_at IS NULL
@@ -791,7 +794,7 @@ func scanScoringRunItem(row ruleScanner, runStatus string) (ScoringRunItem, erro
 	var normalizedBBoxRaw, standardAnswerRaw []byte
 	var gradeID string
 	if err := row.Scan(&item.AnswerSegmentID, &item.SubmissionID, &item.SubmissionPageID, &item.PageNo, &item.PageFileAssetID,
-		&item.QuestionID, &item.QuestionNo, &item.QuestionType, &item.AnonymousCode, &normalizedBBoxRaw,
+		&item.QuestionID, &item.QuestionNo, &item.QuestionType, &item.AssessmentSnapshotID, &item.AnonymousCode, &normalizedBBoxRaw,
 		&item.RecognitionSource, &item.RecognizedAnswer, &item.RecognitionDecision, &recognitionConfidence,
 		&standardAnswerRaw, &item.RuleType, &score, &maxScore, &item.GradeSource,
 		&item.OMRRunID, &item.State, &item.RuntimeTaskID, &item.RuntimeStatus, &item.ErrorCode,
@@ -1191,7 +1194,7 @@ RETURNING o.answer_segment_id::text,o.scoring_run_id::text`, tenantID, id, input
 		decision = "confirmed"
 	}
 	var candidateID string
-	err = tx.QueryRowContext(ctx, `INSERT INTO answer_candidate(tenant_id,answer_segment_id,scoring_run_id,source,payload,display_text,confidence,decision,evidence,engine_version,profile_version,input_hash,is_current,created_by) SELECT $1::uuid,$2::uuid,$3::uuid,'omr',jsonb_build_object('answers',$4::jsonb),$5,$6,$7,$8::jsonb,'opencv-omr-v1',$9,seg.crop_sha256,true,$10::uuid FROM answer_segment seg WHERE seg.tenant_id=$1::uuid AND seg.id=$2::uuid RETURNING id::text`, tenantID, segmentID, scoringRunID, selected, answerText, input.Confidence, decision, evidence, expectedProfileVersion, actorID).Scan(&candidateID)
+	err = tx.QueryRowContext(ctx, `INSERT INTO answer_candidate(tenant_id,answer_segment_id,scoring_run_id,exam_question_snapshot_id,source,payload,display_text,confidence,decision,evidence,engine_version,profile_version,input_hash,is_current,created_by) SELECT $1::uuid,$2::uuid,$3::uuid,eqs.id,'omr',jsonb_build_object('answers',$4::jsonb),$5,$6,$7,$8::jsonb,'opencv-omr-v1',$9,seg.crop_sha256,true,$10::uuid FROM answer_segment seg JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id JOIN exam_question_snapshot eqs ON eqs.tenant_id=q.tenant_id AND eqs.exam_id=q.exam_id AND eqs.question_id=q.id WHERE seg.tenant_id=$1::uuid AND seg.id=$2::uuid RETURNING id::text`, tenantID, segmentID, scoringRunID, selected, answerText, input.Confidence, decision, evidence, expectedProfileVersion, actorID).Scan(&candidateID)
 	if err != nil {
 		return OMRRun{}, nil, err
 	}
@@ -1400,8 +1403,8 @@ FOR UPDATE OF seg,ac`, tenantID, segmentID, candidateID).Scan(&examID, &submissi
 			return QuestionGrade{}, err
 		}
 	}
-	row := tx.QueryRowContext(ctx, `INSERT INTO question_grade(tenant_id,exam_id,submission_id,question_id,answer_segment_id,scoring_run_id,answer_candidate_id,scoring_rule_id,source,status,score,max_score,evidence,version,supersedes_id,is_current,confirmed_by)
-VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,NULLIF($6,'')::uuid,$7::uuid,$8::uuid,'rule_confirmed','confirmed',$9,$10,$11::jsonb,(SELECT COALESCE(MAX(version),0)+1 FROM question_grade WHERE tenant_id=$1::uuid AND answer_segment_id=$5::uuid),NULLIF($12,'')::uuid,true,$13::uuid)
+	row := tx.QueryRowContext(ctx, `INSERT INTO question_grade(tenant_id,exam_id,submission_id,question_id,answer_segment_id,scoring_run_id,exam_question_snapshot_id,answer_candidate_id,scoring_rule_id,source,status,score,max_score,evidence,version,supersedes_id,is_current,confirmed_by)
+VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,NULLIF($6,'')::uuid,(SELECT id FROM exam_question_snapshot WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND question_id=$4::uuid),$7::uuid,$8::uuid,'rule_confirmed','confirmed',$9,$10,$11::jsonb,(SELECT COALESCE(MAX(version),0)+1 FROM question_grade WHERE tenant_id=$1::uuid AND answer_segment_id=$5::uuid),NULLIF($12,'')::uuid,true,$13::uuid)
 RETURNING id::text,answer_segment_id::text,question_id::text,score::float8,max_score::float8,source,version,evidence,created_at`, tenantID, examID, submissionID, questionID, segmentID, scoringRunID, candidateID, ruleID, grade.SuggestedScore, grade.MaxScore, evidence, priorID, actorID)
 	var out QuestionGrade
 	var evidenceRaw []byte
@@ -1495,8 +1498,8 @@ FOR UPDATE OF seg`, tenantID, segmentID).Scan(&examID, &submissionID, &questionI
 			return QuestionGrade{}, err
 		}
 	}
-	row := tx.QueryRowContext(ctx, `INSERT INTO question_grade(tenant_id,exam_id,submission_id,question_id,answer_segment_id,scoring_run_id,answer_candidate_id,scoring_rule_id,source,status,score,max_score,evidence,version,supersedes_id,is_current,confirmed_by)
-VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,NULLIF($6,'')::uuid,$7::uuid,$8::uuid,'rule_confirmed','confirmed',$9,$10,$11::jsonb,(SELECT COALESCE(MAX(version),0)+1 FROM question_grade WHERE tenant_id=$1::uuid AND answer_segment_id=$5::uuid),NULLIF($12,'')::uuid,true,$13::uuid)
+	row := tx.QueryRowContext(ctx, `INSERT INTO question_grade(tenant_id,exam_id,submission_id,question_id,answer_segment_id,scoring_run_id,exam_question_snapshot_id,answer_candidate_id,scoring_rule_id,source,status,score,max_score,evidence,version,supersedes_id,is_current,confirmed_by)
+VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,NULLIF($6,'')::uuid,(SELECT id FROM exam_question_snapshot WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND question_id=$4::uuid),$7::uuid,$8::uuid,'rule_confirmed','confirmed',$9,$10,$11::jsonb,(SELECT COALESCE(MAX(version),0)+1 FROM question_grade WHERE tenant_id=$1::uuid AND answer_segment_id=$5::uuid),NULLIF($12,'')::uuid,true,$13::uuid)
 RETURNING id::text,answer_segment_id::text,question_id::text,score::float8,max_score::float8,source,version,evidence,created_at`, tenantID, examID, submissionID, questionID, segmentID, runID, candidateID, ruleID, grade.SuggestedScore, grade.MaxScore, evidence, priorID, actorID)
 	var out QuestionGrade
 	var evidenceRaw []byte

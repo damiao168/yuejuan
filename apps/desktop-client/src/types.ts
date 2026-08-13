@@ -234,9 +234,9 @@ export interface SubmissionQualityResult {
 
 export type WorkspaceKey = "connect" | "tasks" | "scan" | "offline" | "sync" | "diagnostics" | "logs";
 
-export type QueueStatus = "pending" | "uploading" | "succeeded" | "failed" | "not_configured";
+export type QueueStatus = "pending" | "uploading" | "succeeded" | "failed" | "conflict" | "not_configured";
 
-export type ScanQualityStatus = "passed" | "failed" | "not_configured";
+export type ScanQualityStatus = "passed" | "warning" | "failed" | "not_configured";
 
 export interface ScanQualityCheck {
   key: string;
@@ -254,6 +254,7 @@ export interface SyncQueueItem {
   detail: string;
   updatedAt: string;
   examId?: string;
+  captureBatchId?: string;
   examName?: string;
   submissionId?: string;
   pageNo?: number;
@@ -265,6 +266,13 @@ export interface SyncQueueItem {
   serverStatus?: string;
   requiresReselect?: boolean;
   qualityChecks?: ScanQualityCheck[];
+  /** Native SQLite/spool identity. It is never a filesystem path. */
+  localAssetId?: string;
+  /** Stable upload identity, derived from the asset hash and answer-page context. */
+  idempotencyKey?: string;
+  retryCount?: number;
+  confirmedOffset?: number;
+  remoteUploadId?: string;
 }
 
 export type CapabilityStatus = "ready" | "not_configured" | "browser_fallback" | "unavailable";

@@ -15,7 +15,7 @@ const workspace = read(
   "model-governance",
   "ModelEvaluationWorkspace.tsx"
 );
-const app = read("apps", "web-admin", "src", "App.tsx");
+const appShell = read("apps", "web-admin", "src", "AppShell.tsx");
 const server = read("services", "api-gateway", "internal", "server", "server.go");
 const story = read("docs", "stories", "STORY-061-multi-provider-native-model-governance.md");
 
@@ -44,7 +44,7 @@ for (const invariant of [
   assert.ok(workspace.includes(invariant), `evaluation workspace missing product invariant: ${invariant}`);
 }
 
-assert.ok(app.includes('["model:evaluation:manage"]'), "evaluation mutations must be permission gated");
+assert.ok(appShell.includes('["model:evaluation:manage"]'), "evaluation mutations must be permission gated");
 assert.ok(workspace.includes("canManage && selectedRun.status"), "lifecycle controls must be permission and state gated");
 assert.ok(workspace.includes("至少需要两个候选，并且必须包含本地基线"), "completion readiness must explain the local baseline gate");
 assert.equal(workspace.includes("/promote"), false, "STORY-061C2 must not expose promotion");

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"edugrade-enterprise/services/api-gateway/internal/aieligibility"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
 )
 
@@ -44,6 +45,10 @@ func TestHTTPAdapterSendsGovernedIdentityFreeContract(t *testing.T) {
 	}
 	if received["subject"] != "chinese" || received["grade_level"] != "junior_middle" {
 		t.Fatalf("missing capability context: %#v", received)
+	}
+	constraint, ok := received["output_constraint"].(map[string]any)
+	if !ok || constraint["criteria_evidence_only"] != true || constraint["allow_model_final_score"] != false || constraint["final_score_authority"] != "server_rubric_or_human_confirmation" {
+		t.Fatalf("grading request must carry the server-owned score boundary: %#v", received["output_constraint"])
 	}
 	if output.SuggestedScore != 4 || output.Confidence != 0 || !output.NeedsHumanReview || output.Mock {
 		t.Fatalf("unexpected output: %#v", output)
@@ -194,6 +199,9 @@ func validHTTPAdapterInput() AdapterInput {
 		AnswerImageRef: map[string]any{"student_name": "must not leak"},
 		OCRConfidence:  &confidence,
 		PromptGuard:    PromptGuard{StudentAnswerIsUntrusted: true, Signals: []string{}},
+		OutputConstraint: aieligibility.OutputConstraint{
+			CriteriaEvidenceOnly: true, AllowModelFinalScore: false, FinalScoreAuthority: "server_rubric_or_human_confirmation",
+		},
 	}
 }
 

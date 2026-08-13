@@ -141,6 +141,76 @@ export async function installApiMocks(
         }]
       });
     }
+    if (path === "/api/v1/exams/exam-1/workspace") {
+      return json(route, {
+        workspace: {
+          exam_id: "exam-1",
+          exam_name: "2026 春季数学期中考试",
+          exam_status: "collecting",
+          revision: 3,
+          stage: "capture",
+          stages: [
+            { key: "prepare", label: "开考准备", state: "completed", action_route: "/exams/exam-1/settings" },
+            { key: "capture", label: "答卷导入", state: "current", action_route: "/exams/exam-1/capture" },
+            { key: "grading", label: "阅卷", state: "pending", action_route: "/exams/exam-1/grading" },
+            { key: "quality", label: "复核与异常", state: "pending", action_route: "/exams/exam-1/quality" },
+            { key: "results", label: "成绩与报告", state: "pending", action_route: "/exams/exam-1/scores" }
+          ],
+          stage_progress: [
+            { stage: "prepare", status: "completed", completed: 5, total: 5, unit: "项", summary: "已通过 5 / 5 项开考检查" },
+            { stage: "capture", status: "current", completed: 6, unit: "份", summary: "已导入 6 份答卷" },
+            { stage: "grading", status: "pending", completed: 0, total: 107, unit: "个任务", summary: "尚未开始阅卷" },
+            { stage: "quality", status: "pending", completed: 0, total: 3, unit: "个任务", summary: "尚未开始人工复核" },
+            { stage: "results", status: "pending", summary: "成绩尚未发布" }
+          ],
+          blockers: [{
+            code: "failed_submissions",
+            title: "答卷处理失败",
+            message: "1 份答卷处理失败，会阻断后续阅卷",
+            severity: "blocker",
+            action_label: "查看并重试",
+            action_route: "/exams/exam-1/capture"
+          }],
+          warnings: [{
+            code: "quality_issues",
+            title: "图像质量需要关注",
+            message: "1 份答卷存在图像质量问题",
+            severity: "warning",
+            action_label: "查看异常",
+            action_route: "/exams/exam-1/capture"
+          }],
+          counts: {
+            paper_count: 1,
+            question_count: 19,
+            submission_count: 6,
+            failed_submission_count: 1,
+            quality_issue_submission_count: 1,
+            unmatched_submission_count: 0,
+            pending_review_count: 107,
+            pending_arbitration_count: 3
+          },
+          next_actions: [{
+            code: "failed_submissions",
+            label: "查看并重试",
+            description: "答卷处理失败",
+            route: "/exams/exam-1/capture",
+            priority: "high"
+          }],
+          risk_tier: "R2",
+          subject_summary: {
+            code: "math",
+            label: "数学",
+            total_score: 150,
+            question_count: 19,
+            configured_question_count: 19,
+            frozen_question_count: 19,
+            risk_tier_source: "snapshot",
+            question_types: { single_choice: 10, extended_response: 9 }
+          },
+          updated_at: "2026-08-12T08:00:00Z"
+        }
+      });
+    }
     if (/^\/api\/v1\/exams\/[^/]+\/submissions$/.test(path)) return json(route, { submissions: [] });
     if (path === "/api/v1/ocr/tasks") return json(route, { tasks: [] });
 

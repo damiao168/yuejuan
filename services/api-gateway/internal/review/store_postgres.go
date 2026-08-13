@@ -189,10 +189,10 @@ FOR UPDATE
 	selections, _ := json.Marshal(input.RubricSelections)
 	grade, err := scanGrade(tx.QueryRowContext(ctx, `
 INSERT INTO human_grade (
-  tenant_id, review_task_id, answer_segment_id, reviewer_id, score, max_score,
+  tenant_id, review_task_id, answer_segment_id, exam_question_snapshot_id, reviewer_id, score, max_score,
   rubric_selections, comments, private_note, student_feedback, reason, grade_round, ai_grade_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, '')::uuid)
+VALUES ($1, $2, $3, (SELECT eqs.id FROM answer_segment seg JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id JOIN exam_question_snapshot eqs ON eqs.tenant_id=q.tenant_id AND eqs.exam_id=q.exam_id AND eqs.question_id=q.id WHERE seg.tenant_id=$1::uuid AND seg.id=$3::uuid), $4, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, '')::uuid)
 RETURNING id::text, tenant_id::text, review_task_id::text, answer_segment_id::text, reviewer_id::text,
   score::float8, max_score::float8, rubric_selections, comments, private_note, student_feedback,
   reason, grade_round, COALESCE(ai_grade_id::text, ''), created_at
@@ -223,10 +223,10 @@ RETURNING id::text, tenant_id::text, review_task_id::text, answer_segment_id::te
 			}
 		}
 		err = tx.QueryRowContext(ctx, `
-INSERT INTO question_grade(tenant_id,exam_id,submission_id,question_id,answer_segment_id,scoring_run_id,review_task_id,source,status,score,max_score,evidence,version,supersedes_id,is_current,confirmed_by)
-SELECT rt.tenant_id,rt.exam_id,rt.submission_id,rt.question_id,rt.answer_segment_id,rt.scoring_run_id,rt.id,'human','confirmed',$3,$4,$5::jsonb,
+INSERT INTO question_grade(tenant_id,exam_id,submission_id,question_id,answer_segment_id,scoring_run_id,exam_question_snapshot_id,review_task_id,source,status,score,max_score,evidence,version,supersedes_id,is_current,confirmed_by)
+SELECT rt.tenant_id,rt.exam_id,rt.submission_id,rt.question_id,rt.answer_segment_id,rt.scoring_run_id,eqs.id,rt.id,'human','confirmed',$3,$4,$5::jsonb,
   (SELECT COALESCE(MAX(version),0)+1 FROM question_grade WHERE tenant_id=$1::uuid AND answer_segment_id=rt.answer_segment_id),NULLIF($6,'')::uuid,true,$7::uuid
-FROM review_task rt WHERE rt.tenant_id=$1::uuid AND rt.id=$2::uuid
+FROM review_task rt JOIN exam_question_snapshot eqs ON eqs.tenant_id=rt.tenant_id AND eqs.exam_id=rt.exam_id AND eqs.question_id=rt.question_id WHERE rt.tenant_id=$1::uuid AND rt.id=$2::uuid
 RETURNING id::text`, tenantID, task.ID, input.Score, taskContext.Question.Score, evidence, priorID, reviewerID).Scan(&questionGradeID)
 		if err != nil {
 			return SubmitResult{}, err
@@ -273,7 +273,7 @@ FROM review_task rt WHERE rt.tenant_id=$1::uuid AND rt.id=$2::uuid AND rt.scorin
 	}, nil
 }
 
-func (s *PostgresStore) ReturnTask(ctx context.Context, tenantID string, id string, _ string, input ReturnTaskInput) (ReviewTask, error) {
+func (s *PostgresStore) ReturnTask(ctx context.Context, tenantID string, id string, actorID string, input ReturnTaskInput) (ReviewTask, error) {
 	input.Reason = stringsTrim(input.Reason)
 	if input.Reason == "" || input.ExpectedRevision <= 0 {
 		return ReviewTask{}, ErrInvalidInput
@@ -298,12 +298,21 @@ FOR UPDATE
 	if task.Revision != input.ExpectedRevision {
 		return ReviewTask{}, ErrRevisionConflict
 	}
-	task, err = scanTask(tx.QueryRowContext(ctx, `
+	updateQuery := `
 UPDATE review_task
 SET status = 'returned', return_reason = $3, revision = revision + 1, updated_at = now()
 WHERE tenant_id = $1 AND id::text = $2 AND revision = $4 AND deleted_at IS NULL
-RETURNING `+reviewTaskColumns+`
-`, tenantID, id, input.Reason, input.ExpectedRevision))
+	`
+	args := []any{tenantID, id, input.Reason, input.ExpectedRevision}
+	if input.MustOwnActiveClaim {
+		updateQuery += ` AND assigned_to = $5::uuid AND claim_expires_at > now()`
+		args = append(args, actorID)
+	}
+	updateQuery += ` RETURNING ` + reviewTaskColumns
+	task, err = scanTask(tx.QueryRowContext(ctx, updateQuery, args...))
+	if input.MustOwnActiveClaim && errors.Is(err, ErrNotFound) {
+		return ReviewTask{}, ErrForbidden
+	}
 	if err != nil {
 		return ReviewTask{}, err
 	}
@@ -488,10 +497,12 @@ SELECT id::text, tenant_id::text, exam_id::text, question_id::text, question_no,
   created_by::text, created_at, updated_at
 FROM double_mark_session
 WHERE tenant_id = $1 AND deleted_at IS NULL
-  AND ($2 = '' OR status = $2)
-  AND ($3 = '' OR answer_segment_id::text = $3)
+   AND ($2 = '' OR status = $2)
+   AND ($3 = '' OR answer_segment_id::text = $3)
+   AND ($4 = '' OR exam_id::text = $4)
+   AND ($5 = '' OR question_id::text = $5)
 ORDER BY created_at DESC
-`, tenantID, filter.Status, filter.AnswerSegmentID)
+	`, tenantID, filter.Status, filter.AnswerSegmentID, filter.ExamID, filter.QuestionID)
 	if err != nil {
 		return nil, err
 	}
@@ -749,6 +760,7 @@ SELECT
   sub.id::text,
   COALESCE(NULLIF(sub.candidate_no, ''), seg.id::text),
   seg.id::text,
+  to_jsonb(eqs),
   q.id::text, q.tenant_id::text, q.exam_id::text, COALESCE(q.exam_paper_id::text, ''),
   q.question_no, q.question_type, q.score::float8, COALESCE(q.stem, ''),
   q.knowledge_points, q.answer_area, q.sort_order, q.status,
@@ -760,6 +772,7 @@ SELECT
 FROM answer_segment seg
 JOIN submission sub ON sub.tenant_id = seg.tenant_id AND sub.id = seg.submission_id
 JOIN question q ON q.tenant_id = seg.tenant_id AND q.id = seg.question_id
+JOIN exam_question_snapshot eqs ON eqs.tenant_id = q.tenant_id AND eqs.exam_id = q.exam_id AND eqs.question_id = q.id
 LEFT JOIN LATERAL (
   SELECT id, question_id, status, max_score, points, deductions, examples, rubric_version_id
   FROM question_rubric
@@ -816,6 +829,7 @@ LEFT JOIN LATERAL (
 WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL AND sub.deleted_at IS NULL
 `, tenantID, segmentID)
 	var out Context
+	var snapshotRaw []byte
 	var question paper.Question
 	var kpRaw, areaRaw []byte
 	var rubric paper.Rubric
@@ -827,6 +841,7 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL AND su
 		&out.SubmissionID,
 		&out.AnonymousCode,
 		&out.AnswerSegmentID,
+		&snapshotRaw,
 		&question.ID,
 		&question.TenantID,
 		&question.ExamID,
@@ -856,6 +871,9 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL AND su
 		}
 		return Context{}, err
 	}
+	if err := decodeJSONB(snapshotRaw, &out.AssessmentSnapshot, "exam_question_snapshot"); err != nil {
+		return Context{}, err
+	}
 	if err := decodeJSONB(kpRaw, &question.KnowledgePoints, "question.knowledge_points"); err != nil {
 		return Context{}, err
 	}
@@ -871,6 +889,9 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL AND su
 	if err := decodeJSONB(examplesRaw, &rubric.Examples, "rubric.examples"); err != nil {
 		return Context{}, err
 	}
+	if frozen, ok := frozenRubric(out.AssessmentSnapshot.RubricSnapshot, question.ID); ok {
+		rubric = frozen
+	}
 	if answerSource == "ocr_text" {
 		out.OCRText = out.RawAnswer
 	}
@@ -885,6 +906,22 @@ WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL AND su
 	out.Question = question
 	out.Rubric = rubric
 	return out, nil
+}
+
+func frozenRubric(snapshot map[string]any, questionID string) (paper.Rubric, bool) {
+	if len(snapshot) == 0 {
+		return paper.Rubric{}, false
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return paper.Rubric{}, false
+	}
+	var rubric paper.Rubric
+	if err := json.Unmarshal(raw, &rubric); err != nil {
+		return paper.Rubric{}, false
+	}
+	rubric.QuestionID = questionID
+	return rubric, rubric.ID != "" || rubric.Version != "" || len(rubric.Points) > 0
 }
 
 func loadAutomationResult(ctx context.Context, q queryer, tenantID, segmentID string) (*AutomationResult, error) {

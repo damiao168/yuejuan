@@ -27,6 +27,12 @@ jobs:
             lab/package-lock.json
       - run: npm ci
       - run: npm ci --prefix lab
+      - name: Generate OpenAPI SDK and reject stale generated files
+        run: |
+          npm run generate:sdk
+          git diff --exit-code -- packages/sdk/src/generated
+      - name: Reject unapproved breaking OpenAPI changes
+        run: npm run check:openapi-breaking
       - run: npm audit --audit-level=high
       - run: npm --prefix lab audit --audit-level=high
       - run: npm run typecheck

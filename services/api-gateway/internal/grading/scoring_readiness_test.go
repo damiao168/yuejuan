@@ -8,7 +8,7 @@ import (
 func TestBuildScoringReadinessBlocksIncompleteSegmentsAndActiveRun(t *testing.T) {
 	run := &ScoringRun{ID: "run-1", Status: "needs_review"}
 	result := buildScoringReadiness("collecting", run, scoringReadinessCounts{
-		questions: 3, segments: 12, processable: 11, automatic: 8, missingAutomation: 2,
+		questions: 3, snapshots: 3, segments: 12, processable: 11, automatic: 8, missingAutomation: 2,
 	})
 	if result.Ready {
 		t.Fatal("incomplete segments and an active run must block scoring")
@@ -33,7 +33,7 @@ func TestBuildScoringReadinessBlocksIncompleteSegmentsAndActiveRun(t *testing.T)
 
 func TestBuildScoringReadinessAllowsManualReviewCandidates(t *testing.T) {
 	result := buildScoringReadiness("grading", nil, scoringReadinessCounts{
-		questions: 2, segments: 10, processable: 10, automatic: 4,
+		questions: 2, snapshots: 2, segments: 10, processable: 10, automatic: 4,
 	})
 	if !result.Ready {
 		t.Fatalf("manual review candidates must not block a complete scoring batch: %#v", result)
@@ -45,7 +45,7 @@ func TestBuildScoringReadinessAllowsManualReviewCandidates(t *testing.T) {
 
 func TestBuildScoringReadinessBlocksMissingTemplateMetadata(t *testing.T) {
 	result := buildScoringReadiness("processing", nil, scoringReadinessCounts{
-		questions: 1, segments: 5, processable: 5, missingMetadata: 2, automatic: 3,
+		questions: 1, snapshots: 1, segments: 5, processable: 5, missingMetadata: 2, automatic: 3,
 	})
 	if result.Ready || result.ReadySegments != 3 {
 		t.Fatalf("missing template metadata must block partial scoring: %#v", result)

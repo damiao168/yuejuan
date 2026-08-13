@@ -41,6 +41,7 @@ import {
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
+import { AssessmentProfileEditor } from "../components/features/assessment/AssessmentProfileEditor";
 import type { StatusTone } from "../types";
 
 const questionTypeOptions = [
@@ -151,10 +152,12 @@ function pointTotal(points: RubricPoint[]) {
 
 export function PaperRubricPage({
   canManage,
+  canManageAssessment,
   initialExamId = "",
   onExamChanged
 }: {
   canManage: boolean;
+  canManageAssessment: boolean;
   initialExamId?: string;
   onExamChanged?: () => void;
 }) {
@@ -840,6 +843,15 @@ export function PaperRubricPage({
                   </Form.Item>
                 ) : null}
               </Form>
+
+              <AssessmentProfileEditor
+                examId={selectedExam.id}
+                examSubject={selectedExam.subject}
+                examStatus={selectedExam.status}
+                question={selectedQuestion}
+                canManage={canManageAssessment}
+                onChanged={onExamChanged}
+              />
 
               {selectedQuestion && objectiveRuleType ? <section className="scoring-rule-editor">
                 <div className="section-head">

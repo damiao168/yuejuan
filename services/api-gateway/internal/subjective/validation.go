@@ -124,6 +124,21 @@ func ValidateOutput(output AdapterOutput, ctx Context) error {
 	return nil
 }
 
+// DeriveSuggestedScore deliberately ignores the model's score field after
+// schema validation and recomputes it from accepted frozen-Rubric point
+// observations. The model classifies criteria and supplies evidence; it does
+// not author a final score.
+func DeriveSuggestedScore(output *AdapterOutput) {
+	if output == nil {
+		return
+	}
+	var total float64
+	for _, point := range output.MatchedPoints {
+		total += point.Score
+	}
+	output.SuggestedScore = total
+}
+
 type gradingEvidenceLink struct {
 	rubricPointID string
 }

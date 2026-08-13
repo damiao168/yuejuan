@@ -15,6 +15,7 @@ type MemoryStore struct {
 	next          int
 	contexts      map[string]Context
 	tasks         map[string]ReviewTask
+	claims        map[string]memoryTaskClaim
 	drafts        map[string]ReviewDraft
 	grades        map[string][]HumanGrade
 	policies      map[string]DoubleMarkPolicy
@@ -29,6 +30,7 @@ func NewMemoryStore() *MemoryStore {
 		next:          1,
 		contexts:      map[string]Context{},
 		tasks:         map[string]ReviewTask{},
+		claims:        map[string]memoryTaskClaim{},
 		drafts:        map[string]ReviewDraft{},
 		grades:        map[string][]HumanGrade{},
 		policies:      map[string]DoubleMarkPolicy{},
@@ -138,6 +140,7 @@ func (s *MemoryStore) AssignTask(_ context.Context, tenantID string, id string, 
 	task.AssignedTo = input.AssignedTo
 	task.Status = "assigned"
 	task.ReturnReason = ""
+	delete(s.claims, key(tenantID, id))
 	task.Revision++
 	task.UpdatedAt = time.Now().UTC()
 	s.tasks[key(tenantID, id)] = task
@@ -170,12 +173,19 @@ func (s *MemoryStore) BatchAssignTasks(_ context.Context, tenantID string, _ str
 		task.AssignedTo = input.AssignedTo
 		task.Status = "assigned"
 		task.ReturnReason = ""
+		delete(s.claims, key(tenantID, id))
 		task.Revision++
 		task.UpdatedAt = now
 		s.tasks[key(tenantID, id)] = task
 		out = append(out, cloneTask(task))
 	}
 	return out, nil
+}
+
+type memoryTaskClaim struct {
+	OwnerID   string
+	ClaimedAt time.Time
+	ExpiresAt time.Time
 }
 
 func (s *MemoryStore) SubmitGrade(_ context.Context, tenantID string, id string, reviewerID string, input SubmitGradeInput) (SubmitResult, error) {
@@ -240,7 +250,7 @@ func (s *MemoryStore) SubmitGrade(_ context.Context, tenantID string, id string,
 	}, nil
 }
 
-func (s *MemoryStore) ReturnTask(_ context.Context, tenantID string, id string, _ string, input ReturnTaskInput) (ReviewTask, error) {
+func (s *MemoryStore) ReturnTask(_ context.Context, tenantID string, id string, actorID string, input ReturnTaskInput) (ReviewTask, error) {
 	input.Reason = strings.TrimSpace(input.Reason)
 	if input.Reason == "" || input.ExpectedRevision <= 0 {
 		return ReviewTask{}, ErrInvalidInput
@@ -250,6 +260,12 @@ func (s *MemoryStore) ReturnTask(_ context.Context, tenantID string, id string, 
 	task, ok := s.tasks[key(tenantID, id)]
 	if !ok {
 		return ReviewTask{}, ErrNotFound
+	}
+	if input.MustOwnActiveClaim {
+		claim, claimed := s.claims[key(tenantID, id)]
+		if task.AssignedTo != actorID || !claimed || claim.OwnerID != actorID || !claim.ExpiresAt.After(time.Now().UTC()) {
+			return ReviewTask{}, ErrForbidden
+		}
 	}
 	if !canReturnTask(task.Status) {
 		return ReviewTask{}, ErrInvalidTransition
@@ -397,6 +413,12 @@ func (s *MemoryStore) ListDoubleMarkSessions(_ context.Context, tenantID string,
 			continue
 		}
 		if filter.AnswerSegmentID != "" && session.AnswerSegmentID != filter.AnswerSegmentID {
+			continue
+		}
+		if filter.ExamID != "" && session.ExamID != filter.ExamID {
+			continue
+		}
+		if filter.QuestionID != "" && session.QuestionID != filter.QuestionID {
 			continue
 		}
 		out = append(out, cloneSession(session))
@@ -895,7 +917,7 @@ func canReturnTask(status string) bool {
 
 func validSource(source string) bool {
 	switch source {
-	case "ai_low_confidence", "ocr_low_confidence", "subjective_default_review", "evidence_verification_failed", "double_mark_required", "score_anomaly", "manual_sample":
+	case "ai_low_confidence", "ocr_low_confidence", "subjective_default_review", "evidence_verification_failed", "double_mark_required", "score_anomaly", "manual_sample", "ai_human_disagreement":
 		return true
 	default:
 		return false

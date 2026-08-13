@@ -1,0 +1,162 @@
+.review-annotation-workspace {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.review-annotation-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-tool-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.review-save-state {
+  color: #5f6b7a;
+  font-size: 13px;
+}
+
+.review-save-state--saved {
+  color: #237804;
+}
+
+.review-save-state--conflict,
+.review-save-state--error {
+  color: #ad4e00;
+}
+
+.review-annotation-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  align-items: start;
+  gap: 16px;
+}
+
+.review-annotation-canvas {
+  position: relative;
+  min-width: 0;
+  overflow: auto;
+  background: #eef1f4;
+  line-height: 0;
+  user-select: none;
+  touch-action: none;
+}
+
+.review-annotation-canvas--note,
+.review-annotation-canvas--rectangle {
+  cursor: crosshair;
+}
+
+.review-annotation-canvas > img {
+  display: block;
+  width: 100%;
+  height: auto;
+  pointer-events: none;
+}
+
+.review-annotation-overlay,
+.student-annotation-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.review-annotation-mark {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 2px solid #cf1322;
+  border-radius: 2px;
+  background: rgb(207 19 34 / 8%);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.review-annotation-mark:hover,
+.review-annotation-mark.is-selected {
+  outline: 3px solid rgb(22 119 255 / 24%);
+  outline-offset: 2px;
+}
+
+.review-annotation-mark--point {
+  width: 14px !important;
+  height: 14px !important;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: #cf1322;
+  box-shadow: 0 0 0 2px #cf1322;
+  transform: translate(-50%, -50%);
+}
+
+.review-annotation-inspector {
+  min-height: 220px;
+  padding-left: 16px;
+  border-left: 1px solid #e5e8eb;
+}
+
+.review-annotation-editor,
+.review-template-form {
+  display: grid;
+  gap: 12px;
+}
+
+.review-annotation-editor-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.review-annotation-editor label {
+  display: grid;
+  gap: 6px;
+  color: #445064;
+  font-size: 13px;
+}
+
+.review-template-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.review-template-list {
+  margin-top: 24px;
+  border-top: 1px solid #e5e8eb;
+}
+
+.review-annotation-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  gap: 10px;
+  color: #5f6b7a;
+}
+
+@media (max-width: 900px) {
+  .review-annotation-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .review-annotation-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .review-annotation-inspector {
+    padding-top: 16px;
+    padding-left: 0;
+    border-top: 1px solid #e5e8eb;
+    border-left: 0;
+  }
+}

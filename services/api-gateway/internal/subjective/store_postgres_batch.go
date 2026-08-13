@@ -30,7 +30,7 @@ WITH requested AS (
   FROM jsonb_array_elements_text($2::jsonb) WITH ORDINALITY
 )
 SELECT
-  seg.id::text, seg.submission_page_id::text, seg.bbox,
+  seg.id::text, to_jsonb(eqs), seg.submission_page_id::text, seg.bbox,
   e.subject, COALESCE(cohort.grade_level, ''),
   q.id::text, q.tenant_id::text, q.exam_id::text, COALESCE(q.exam_paper_id::text, ''),
   q.question_no, q.question_type, q.score::float8, COALESCE(q.stem, ''),
@@ -42,6 +42,7 @@ SELECT
 FROM requested
 JOIN answer_segment seg ON seg.id = requested.segment_id
 JOIN question q ON q.tenant_id = seg.tenant_id AND q.id = seg.question_id
+JOIN exam_question_snapshot eqs ON eqs.tenant_id = q.tenant_id AND eqs.exam_id = q.exam_id AND eqs.question_id = q.id
 JOIN exam e ON e.tenant_id = q.tenant_id AND e.id = q.exam_id AND e.deleted_at IS NULL
 LEFT JOIN LATERAL (
   SELECT CASE
@@ -100,6 +101,7 @@ type contextRowsScanner interface {
 
 func scanBatchContext(row contextRowsScanner) (Context, error) {
 	var out Context
+	var snapshotRaw []byte
 	var submissionPageID string
 	var bboxRaw, knowledgePointsRaw, answerAreaRaw []byte
 	var question paper.Question
@@ -110,6 +112,7 @@ func scanBatchContext(row contextRowsScanner) (Context, error) {
 	var answerCreated sql.NullTime
 	if err := row.Scan(
 		&out.SegmentID,
+		&snapshotRaw,
 		&submissionPageID,
 		&bboxRaw,
 		&out.Subject,
@@ -144,6 +147,11 @@ func scanBatchContext(row contextRowsScanner) (Context, error) {
 		}
 		return Context{}, err
 	}
+	if err := json.Unmarshal(snapshotRaw, &out.AssessmentSnapshot); err != nil {
+		return Context{}, err
+	}
+	out.Subject = string(out.AssessmentSnapshot.SubjectCode)
+	out.GradeLevel = string(out.AssessmentSnapshot.EducationStage)
 	if !IsSupportedQuestionType(question.QuestionType) {
 		return Context{}, ErrUnsupportedQuestionType
 	}
@@ -157,6 +165,9 @@ func scanBatchContext(row contextRowsScanner) (Context, error) {
 	_ = json.Unmarshal(pointsRaw, &rubric.Points)
 	_ = json.Unmarshal(deductionsRaw, &rubric.Deductions)
 	_ = json.Unmarshal(examplesRaw, &rubric.Examples)
+	if frozen, ok := rubricFromAssessmentSnapshot(out.AssessmentSnapshot.RubricSnapshot, question.ID); ok {
+		rubric = frozen
+	}
 	if answerID == "" {
 		return Context{}, ErrAnswerMissing
 	}
