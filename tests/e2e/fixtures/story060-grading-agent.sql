@@ -76,6 +76,59 @@ BEGIN
   WHERE tenant_id = tenant_uuid
     AND id = '00000000-0000-0000-0000-000000000604';
 
+  -- Admit this deterministic protocol-emulator run through the same A14-A16
+  -- evidence gates as production. These are isolated integration facts, not
+  -- claims about real model quality.
+  INSERT INTO ai_eligibility_policy (
+    id, tenant_id, subject_code, education_stage, archetype_code, risk_tier,
+    min_ocr_quality, min_parser_quality, min_eval_n, max_severe_error_rate,
+    allowed_modes_json, version, status
+  ) VALUES (
+    '00000000-0000-0000-0000-000000000616', tenant_uuid, 'chinese', 'junior',
+    'short_constructed', 'R2', 0.8, 0.8, 1, 0.1, '["AI_ASSIST"]', 1, 'active'
+  );
+
+  INSERT INTO grading_evaluation_run (
+    id, tenant_id, run_key, display_name, model_reference, prompt_version,
+    rubric_version, dataset_reference, dataset_sha256, status, created_by
+  ) VALUES (
+    '00000000-0000-0000-0000-000000000617', tenant_uuid,
+    'story060-protocol-evaluation', 'STORY-060 protocol emulator evaluation',
+    'Qwen/Qwen3-4B-GGUF:Q4_K_M', 'subjective-governed-structured-v3', 'rubric-v3',
+    'story060-protocol-fixture', repeat('0', 64), 'draft', actor_uuid
+  );
+
+  INSERT INTO grading_evaluation_observation (
+    id, tenant_id, run_id, response_key, response_fingerprint, reference_kind,
+    subject, archetype, ocr_quality, answer_length, rubric_complexity,
+    reference_score, model_score, max_score, reference_score_band
+  ) VALUES (
+    '00000000-0000-0000-0000-000000000618', tenant_uuid,
+    '00000000-0000-0000-0000-000000000617', 'story060-response-1', repeat('1', 64),
+    'human_adjudicated', 'chinese', 'short_constructed', 'high', 'short', 'low',
+    4, 4, 4, 'full'
+  );
+
+  UPDATE grading_evaluation_run
+  SET status = 'completed', completed_at = now()
+  WHERE tenant_id = tenant_uuid
+    AND id = '00000000-0000-0000-0000-000000000617';
+
+  INSERT INTO model_calibration (
+    id, tenant_id, calibration_key, evaluation_run_id, model_reference,
+    prompt_version, rubric_version, subject_code, archetype_code, slice_key,
+    method, status, calibration_n, artifact_uri, artifact_sha256, artifact_json,
+    created_by, completed_at, approved_at, approved_by
+  ) VALUES (
+    '00000000-0000-0000-0000-000000000619', tenant_uuid,
+    'story060-protocol-calibration', '00000000-0000-0000-0000-000000000617',
+    'Qwen/Qwen3-4B-GGUF:Q4_K_M', 'subjective-governed-structured-v3', 'rubric-v3',
+    'chinese', 'short_constructed', 'all', 'isotonic', 'approved', 1,
+    'fixture://story060/protocol-calibration', repeat('2', 64),
+    '{"schema_version":1,"method":"isotonic","bins":[{"min_raw_confidence":0,"max_raw_confidence":1,"calibrated_confidence":0.9,"sample_count":1,"correct_count":1}],"metrics":{"sample_count":1,"brier_score":0.01,"expected_calibration_error":0.1,"middle_score_sample_count":0},"risk_coverage_curve":[{"threshold":0,"coverage":1,"sample_count":1,"empirical_risk":0,"severe_error_rate":0}]}',
+    actor_uuid, now(), now(), actor_uuid
+  );
+
   INSERT INTO submission (
     id, tenant_id, exam_id, candidate_no, source_type, status, expected_page_count,
     actual_page_count, quality_status, quality_issues, collected_by
@@ -99,6 +152,16 @@ BEGIN
   VALUES (
     '00000000-0000-0000-0000-000000000613', tenant_uuid, '00000000-0000-0000-0000-000000000611',
     '00000000-0000-0000-0000-000000000612', 1, 'accepted', '[]', 'passed'
+  );
+
+  INSERT INTO submission_page_processing_state (
+    tenant_id, page_id, submission_id, exam_id, current_stage, blocking,
+    parser_quality_json
+  ) VALUES (
+    tenant_uuid, '00000000-0000-0000-0000-000000000613',
+    '00000000-0000-0000-0000-000000000611',
+    '00000000-0000-0000-0000-000000000604', 'READY', false,
+    '{"text_quality":0.96}'
   );
 
   INSERT INTO answer_segment (

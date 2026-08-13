@@ -36,6 +36,16 @@ CREATE INDEX idx_sample_id ON sample (id);
 	}
 }
 
+func TestE2ESplitSQLStatementsIgnoresSemicolonsInLineComments(t *testing.T) {
+	statements := e2eSplitSQLStatements("-- first clause; second clause\nCREATE TABLE sample (id INT);\n-- trailing; note\nCREATE INDEX idx_sample_id ON sample (id);")
+	if len(statements) != 2 {
+		t.Fatalf("expected 2 SQL statements, got %d: %#v", len(statements), statements)
+	}
+	if !strings.Contains(statements[0], "CREATE TABLE") || !strings.Contains(statements[1], "CREATE INDEX") {
+		t.Fatalf("line comments split executable SQL: %#v", statements)
+	}
+}
+
 func TestStory050ImageQualityMigrationContainsRequiredSchema(t *testing.T) {
 	path := filepath.Join("..", "..", "migrations", "000022_story050_image_quality_run.sql")
 	raw, err := os.ReadFile(path)

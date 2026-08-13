@@ -395,6 +395,13 @@ func e2eSplitSQLStatements(sqlText string) []string {
 			i++
 			continue
 		}
+		if ch == '-' && i+1 < len(sqlText) && sqlText[i+1] == '-' {
+			for i < len(sqlText) && sqlText[i] != '\n' {
+				current.WriteByte(sqlText[i])
+				i++
+			}
+			continue
+		}
 		if ch == '$' {
 			if tag, ok := e2eDollarQuoteTag(sqlText[i:]); ok {
 				dollarQuoteTag = tag
