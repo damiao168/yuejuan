@@ -40,8 +40,8 @@ const checks = [
   },
   {
     name: "exam workspace",
-    file: "apps/web-admin/src/pages/ExamWorkspacePage.tsx",
-    includes: ["WorkspaceStageRail", "stage_progress", "examId", "当前下一步", "WorkspaceNoticeList"]
+    file: "apps/web-admin/src/features/exams/workspace/ExamWorkspaceLayout.tsx",
+    includes: ["WorkspaceStageRail", "stage_progress", "data.exam_id", "当前下一步", "RiskBanner"]
   },
   {
     name: "URL exam context",

@@ -20,7 +20,7 @@ BEGIN
   VALUES ('00000000-0000-0000-0000-000000000603', tenant_uuid, '00000000-0000-0000-0000-000000000601', '00000000-0000-0000-0000-000000000602', 'Synthetic Class', 'S060-C1', 'active');
 
   INSERT INTO exam (id, tenant_id, school_id, name, subject, exam_type, total_score, status, grading_mode, appeal_enabled, publish_policy, created_by)
-  VALUES ('00000000-0000-0000-0000-000000000604', tenant_uuid, '00000000-0000-0000-0000-000000000601', 'STORY-060 Synthetic Chinese Exam', 'chinese', 'formal_exam', 4, 'grading', 'ai_assisted', true, 'after_admin_approval', actor_uuid);
+  VALUES ('00000000-0000-0000-0000-000000000604', tenant_uuid, '00000000-0000-0000-0000-000000000601', 'STORY-060 Synthetic Chinese Exam', 'chinese', 'formal_exam', 4, 'draft', 'ai_assisted', true, 'after_admin_approval', actor_uuid);
 
   INSERT INTO exam_class (id, tenant_id, exam_id, class_id)
   VALUES ('00000000-0000-0000-0000-000000000605', tenant_uuid, '00000000-0000-0000-0000-000000000604', '00000000-0000-0000-0000-000000000603');
@@ -63,6 +63,18 @@ BEGIN
     '[{"id":"p1","description":"指出主人公对家乡有责任感","score":2,"required":true},{"id":"p2","description":"指出主人公希望帮助孩子继续读书","score":2,"required":true}]',
     '[]', '[]', actor_uuid, actor_uuid, now()
   );
+
+  -- Follow the production lifecycle so STORY-A01 can create and freeze the
+  -- assessment profile before grading facts are seeded.
+  UPDATE exam
+  SET status = 'ready', updated_at = now()
+  WHERE tenant_id = tenant_uuid
+    AND id = '00000000-0000-0000-0000-000000000604';
+
+  UPDATE exam
+  SET status = 'grading', updated_at = now()
+  WHERE tenant_id = tenant_uuid
+    AND id = '00000000-0000-0000-0000-000000000604';
 
   INSERT INTO submission (
     id, tenant_id, exam_id, candidate_no, source_type, status, expected_page_count,
