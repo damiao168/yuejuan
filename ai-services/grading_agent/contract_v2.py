@@ -46,6 +46,7 @@ _REQUEST_FIELDS = {
     "rubric",
     "model_policy",
     "prompt_guard",
+    "output_constraint",
     "media_evidence",
 }
 _MEDIA_FIELDS = {

@@ -20,7 +20,8 @@
     "prompt_version",
     "rubric",
     "model_policy",
-    "prompt_guard"
+    "prompt_guard",
+    "output_constraint"
   ],
   "properties": {
     "schema_version": {"const": "grading-agent-v1"},
@@ -58,6 +59,19 @@
         "student_answer_is_untrusted": {"const": true},
         "suspected_injection": {"type": "boolean"},
         "signals": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 128}}
+      }
+    },
+    "output_constraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["criteria_evidence_only", "allow_model_final_score", "final_score_authority"],
+      "properties": {
+        "criteria_evidence_only": {"const": true},
+        "allow_model_final_score": {"const": false},
+        "final_score_authority": {
+          "type": "string",
+          "enum": ["server_rubric_or_human_confirmation", "server_rubric_and_deterministic_rule", "human_review"]
+        }
       }
     }
   },

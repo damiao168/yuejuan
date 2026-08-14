@@ -143,6 +143,7 @@ class PromptRegistry:
                 "max_score": grading_request["max_score"],
             },
             "rubric": grading_request["rubric"],
+            "output_constraint": grading_request["output_constraint"],
             "untrusted_student_answer": grading_request["answer_text"],
             "ocr_confidence": grading_request["ocr_confidence"],
         }

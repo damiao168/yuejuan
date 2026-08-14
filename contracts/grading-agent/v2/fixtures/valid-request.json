@@ -53,6 +53,11 @@
     "suspected_injection": false,
     "signals": []
   },
+  "output_constraint": {
+    "criteria_evidence_only": true,
+    "allow_model_final_score": false,
+    "final_score_authority": "server_rubric_or_human_confirmation"
+  },
   "media_evidence": {
     "kind": "answer_segment_crop",
     "encoding": "base64",

@@ -49,6 +49,12 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(AgentError, "forbidden"):
             validate_request(request)
 
+    def test_model_final_score_authority_is_rejected(self):
+        request = valid_request()
+        request["output_constraint"]["allow_model_final_score"] = True
+        with self.assertRaisesRegex(AgentError, "deny model final-score authority"):
+            validate_request(request)
+
     def test_unapproved_capability_fails_closed(self):
         request = valid_request()
         request["subject"] = "math"

@@ -58,6 +58,7 @@ _REQUEST_FIELDS = {
     "rubric",
     "model_policy",
     "prompt_guard",
+    "output_constraint",
 }
 _FORBIDDEN_REQUEST_FIELDS = {
     "tenant_id",
@@ -131,6 +132,7 @@ def validate_request(payload):
 
     _validate_model_policy(payload["model_policy"], request_id)
     _validate_prompt_guard(payload["prompt_guard"], request_id)
+    _validate_output_constraint(payload["output_constraint"], request_id)
     _validate_rubric(payload["rubric"], payload, request_id)
     return payload
 
@@ -155,6 +157,25 @@ def _validate_prompt_guard(guard, request_id):
         _fail("prompt_guard.signals must be a bounded array", request_id)
     for index, signal in enumerate(guard["signals"]):
         _string(signal, f"prompt_guard.signals[{index}]", request_id)
+
+
+def _validate_output_constraint(constraint, request_id):
+    expected = {
+        "criteria_evidence_only",
+        "allow_model_final_score",
+        "final_score_authority",
+    }
+    _exact_fields(constraint, expected, "output_constraint", request_id)
+    if constraint["criteria_evidence_only"] is not True:
+        _fail("output_constraint must require criteria and evidence", request_id)
+    if constraint["allow_model_final_score"] is not False:
+        _fail("output_constraint must deny model final-score authority", request_id)
+    if constraint["final_score_authority"] not in {
+        "server_rubric_or_human_confirmation",
+        "server_rubric_and_deterministic_rule",
+        "human_review",
+    }:
+        _fail("output_constraint final score authority is unsupported", request_id)
 
 
 def _validate_rubric(rubric, request, request_id):

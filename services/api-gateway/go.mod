@@ -2,7 +2,7 @@ module edugrade-enterprise/services/api-gateway
 
 go 1.25.12
 
-toolchain go1.26.5
+toolchain go1.26.6
 
 require (
 	github.com/google/uuid v1.6.0
