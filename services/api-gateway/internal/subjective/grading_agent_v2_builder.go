@@ -51,23 +51,24 @@ func (r *BuiltGradingAgentV2Request) Clear() {
 }
 
 type gradingAgentV2Request struct {
-	SchemaVersion   string                      `json:"schema_version"`
-	RequestID       string                      `json:"request_id"`
-	Subject         string                      `json:"subject"`
-	GradeLevel      string                      `json:"grade_level"`
-	QuestionID      string                      `json:"question_id"`
-	AnswerSegmentID string                      `json:"answer_segment_id"`
-	QuestionType    string                      `json:"question_type"`
-	QuestionText    string                      `json:"question_text"`
-	MaxScore        float64                     `json:"max_score"`
-	AnswerText      string                      `json:"answer_text"`
-	OCRConfidence   float64                     `json:"ocr_confidence"`
-	RubricVersion   string                      `json:"rubric_version"`
-	PromptVersion   string                      `json:"prompt_version"`
-	Rubric          gradingAgentRubric          `json:"rubric"`
-	ModelPolicy     gradingAgentModelPolicy     `json:"model_policy"`
-	PromptGuard     gradingAgentPromptGuard     `json:"prompt_guard"`
-	MediaEvidence   gradingAgentV2MediaEvidence `json:"media_evidence"`
+	SchemaVersion    string                       `json:"schema_version"`
+	RequestID        string                       `json:"request_id"`
+	Subject          string                       `json:"subject"`
+	GradeLevel       string                       `json:"grade_level"`
+	QuestionID       string                       `json:"question_id"`
+	AnswerSegmentID  string                       `json:"answer_segment_id"`
+	QuestionType     string                       `json:"question_type"`
+	QuestionText     string                       `json:"question_text"`
+	MaxScore         float64                      `json:"max_score"`
+	AnswerText       string                       `json:"answer_text"`
+	OCRConfidence    float64                      `json:"ocr_confidence"`
+	RubricVersion    string                       `json:"rubric_version"`
+	PromptVersion    string                       `json:"prompt_version"`
+	Rubric           gradingAgentRubric           `json:"rubric"`
+	ModelPolicy      gradingAgentModelPolicy      `json:"model_policy"`
+	PromptGuard      gradingAgentPromptGuard      `json:"prompt_guard"`
+	OutputConstraint gradingAgentOutputConstraint `json:"output_constraint"`
+	MediaEvidence    gradingAgentV2MediaEvidence  `json:"media_evidence"`
 }
 
 type gradingAgentV2MediaEvidence struct {
@@ -84,23 +85,24 @@ type gradingAgentV2MediaEvidence struct {
 }
 
 type gradingAgentV2DigestRequest struct {
-	SchemaVersion   string                       `json:"schema_version"`
-	RequestID       string                       `json:"request_id"`
-	Subject         string                       `json:"subject"`
-	GradeLevel      string                       `json:"grade_level"`
-	QuestionID      string                       `json:"question_id"`
-	AnswerSegmentID string                       `json:"answer_segment_id"`
-	QuestionType    string                       `json:"question_type"`
-	QuestionText    string                       `json:"question_text"`
-	MaxScore        float64                      `json:"max_score"`
-	AnswerText      string                       `json:"answer_text"`
-	OCRConfidence   float64                      `json:"ocr_confidence"`
-	RubricVersion   string                       `json:"rubric_version"`
-	PromptVersion   string                       `json:"prompt_version"`
-	Rubric          gradingAgentRubric           `json:"rubric"`
-	ModelPolicy     gradingAgentModelPolicy      `json:"model_policy"`
-	PromptGuard     gradingAgentPromptGuard      `json:"prompt_guard"`
-	MediaEvidence   gradingAgentV2DigestEvidence `json:"media_evidence"`
+	SchemaVersion    string                       `json:"schema_version"`
+	RequestID        string                       `json:"request_id"`
+	Subject          string                       `json:"subject"`
+	GradeLevel       string                       `json:"grade_level"`
+	QuestionID       string                       `json:"question_id"`
+	AnswerSegmentID  string                       `json:"answer_segment_id"`
+	QuestionType     string                       `json:"question_type"`
+	QuestionText     string                       `json:"question_text"`
+	MaxScore         float64                      `json:"max_score"`
+	AnswerText       string                       `json:"answer_text"`
+	OCRConfidence    float64                      `json:"ocr_confidence"`
+	RubricVersion    string                       `json:"rubric_version"`
+	PromptVersion    string                       `json:"prompt_version"`
+	Rubric           gradingAgentRubric           `json:"rubric"`
+	ModelPolicy      gradingAgentModelPolicy      `json:"model_policy"`
+	PromptGuard      gradingAgentPromptGuard      `json:"prompt_guard"`
+	OutputConstraint gradingAgentOutputConstraint `json:"output_constraint"`
+	MediaEvidence    gradingAgentV2DigestEvidence `json:"media_evidence"`
 }
 
 type gradingAgentV2DigestEvidence struct {
@@ -184,6 +186,10 @@ func BuildGradingAgentV2Request(
 	}
 	if len(input.PromptGuard.Signals) > 32 {
 		return BuiltGradingAgentV2Request{}, &GradingAgentError{Code: "grading_v2_prompt_guard_invalid"}
+	}
+	if !input.OutputConstraint.CriteriaEvidenceOnly || input.OutputConstraint.AllowModelFinalScore ||
+		input.OutputConstraint.FinalScoreAuthority != "server_rubric_or_human_confirmation" {
+		return BuiltGradingAgentV2Request{}, &GradingAgentError{Code: "grading_v2_output_constraint_invalid"}
 	}
 	for _, signal := range input.PromptGuard.Signals {
 		if !boundedNonBlank(signal, 128) {
@@ -275,6 +281,11 @@ func BuildGradingAgentV2Request(
 			SuspectedInjection:       input.PromptGuard.SuspectedInjection,
 			Signals:                  nonNilStrings(input.PromptGuard.Signals),
 		},
+		OutputConstraint: gradingAgentOutputConstraint{
+			CriteriaEvidenceOnly: true,
+			AllowModelFinalScore: false,
+			FinalScoreAuthority:  input.OutputConstraint.FinalScoreAuthority,
+		},
 		MediaEvidence: media,
 	}
 	body, err := json.Marshal(request)
@@ -363,22 +374,23 @@ func computeGradingAgentV2BindingHash(
 func gradingAgentV2IdempotencyDigest(request gradingAgentV2Request) (string, error) {
 	media := request.MediaEvidence
 	safe := gradingAgentV2DigestRequest{
-		SchemaVersion:   request.SchemaVersion,
-		RequestID:       request.RequestID,
-		Subject:         request.Subject,
-		GradeLevel:      request.GradeLevel,
-		QuestionID:      request.QuestionID,
-		AnswerSegmentID: request.AnswerSegmentID,
-		QuestionType:    request.QuestionType,
-		QuestionText:    request.QuestionText,
-		MaxScore:        request.MaxScore,
-		AnswerText:      request.AnswerText,
-		OCRConfidence:   request.OCRConfidence,
-		RubricVersion:   request.RubricVersion,
-		PromptVersion:   request.PromptVersion,
-		Rubric:          request.Rubric,
-		ModelPolicy:     request.ModelPolicy,
-		PromptGuard:     request.PromptGuard,
+		SchemaVersion:    request.SchemaVersion,
+		RequestID:        request.RequestID,
+		Subject:          request.Subject,
+		GradeLevel:       request.GradeLevel,
+		QuestionID:       request.QuestionID,
+		AnswerSegmentID:  request.AnswerSegmentID,
+		QuestionType:     request.QuestionType,
+		QuestionText:     request.QuestionText,
+		MaxScore:         request.MaxScore,
+		AnswerText:       request.AnswerText,
+		OCRConfidence:    request.OCRConfidence,
+		RubricVersion:    request.RubricVersion,
+		PromptVersion:    request.PromptVersion,
+		Rubric:           request.Rubric,
+		ModelPolicy:      request.ModelPolicy,
+		PromptGuard:      request.PromptGuard,
+		OutputConstraint: request.OutputConstraint,
 		MediaEvidence: gradingAgentV2DigestEvidence{
 			Kind:           media.Kind,
 			Encoding:       media.Encoding,

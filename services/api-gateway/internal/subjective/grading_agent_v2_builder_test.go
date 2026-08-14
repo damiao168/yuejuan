@@ -54,6 +54,11 @@ func TestBuildGradingAgentV2RequestBuildsOneBoundedAttestedCrop(t *testing.T) {
 		request["answer_segment_id"] != input.SegmentID {
 		t.Fatalf("v2 request binding is incomplete: %#v", request)
 	}
+	constraint, ok := request["output_constraint"].(map[string]any)
+	if !ok || constraint["criteria_evidence_only"] != true || constraint["allow_model_final_score"] != false ||
+		constraint["final_score_authority"] != "server_rubric_or_human_confirmation" {
+		t.Fatalf("v2 request lost its server-owned score boundary: %#v", request["output_constraint"])
+	}
 	media, ok := request["media_evidence"].(map[string]any)
 	if !ok {
 		t.Fatalf("media evidence missing: %#v", request["media_evidence"])
