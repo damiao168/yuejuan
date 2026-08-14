@@ -111,7 +111,7 @@ func validateGradingAgentV2RequestFixture(request map[string]any) error {
 		request,
 		"schema_version", "request_id", "subject", "grade_level", "question_id", "answer_segment_id",
 		"question_type", "question_text", "max_score", "answer_text", "ocr_confidence", "rubric_version",
-		"prompt_version", "rubric", "model_policy", "prompt_guard", "media_evidence",
+		"prompt_version", "rubric", "model_policy", "prompt_guard", "output_constraint", "media_evidence",
 	); err != nil {
 		return err
 	}
@@ -125,6 +125,17 @@ func validateGradingAgentV2RequestFixture(request map[string]any) error {
 		if _, exists := request[forbidden]; exists {
 			return fmt.Errorf("request leaks forbidden field %s", forbidden)
 		}
+	}
+	constraint, ok := request["output_constraint"].(map[string]any)
+	if !ok {
+		return errors.New("output_constraint must be an object")
+	}
+	if err := exactV2Fields(constraint, "criteria_evidence_only", "allow_model_final_score", "final_score_authority"); err != nil {
+		return err
+	}
+	if constraint["criteria_evidence_only"] != true || constraint["allow_model_final_score"] != false ||
+		constraint["final_score_authority"] != "server_rubric_or_human_confirmation" {
+		return errors.New("output_constraint must preserve server-owned final-score authority")
 	}
 
 	media, ok := request["media_evidence"].(map[string]any)
