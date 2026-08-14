@@ -255,7 +255,7 @@ func e2eCreateStory056AcceptanceFixtureWithOMRProfile(t *testing.T, db *sql.DB, 
 	}), http.StatusCreated)
 
 	exam := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams", adminToken, story056JSON(t, map[string]any{
-		"school_id": schoolID, "name": "高一综合能力测试", "subject": "综合", "exam_type": "unit_test", "total_score": 3,
+		"school_id": schoolID, "name": "高一物理能力测试", "subject": "physics", "exam_type": "unit_test", "total_score": 3,
 		"grading_mode": "auto_objective_only", "appeal_enabled": true, "publish_policy": "manual_after_confirmation", "class_ids": []string{classID},
 	}), http.StatusCreated)["exam"].(map[string]any)
 	examID := e2eString(t, exam, "id")

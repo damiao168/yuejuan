@@ -83,7 +83,7 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	studentToken := e2eLoginWithTenant(t, router, "demo", "student", "ChangeMe123!")
 	otherStudentToken := e2eLoginWithTenant(t, router, "demo", otherUsername, "ChangeMe123!")
 
-	examResp := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams", adminToken, `{"school_id":"`+schoolID+`","name":"Story 041 Synthetic Exam","subject":"Science","exam_type":"midterm","total_score":5,"grading_mode":"ai_assisted","appeal_enabled":true,"publish_policy":"manual_after_confirmation","class_ids":["`+classID+`"]}`, http.StatusCreated)["exam"].(map[string]any)
+	examResp := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams", adminToken, `{"school_id":"`+schoolID+`","name":"Story 041 Synthetic Exam","subject":"physics","exam_type":"midterm","total_score":5,"grading_mode":"ai_assisted","appeal_enabled":true,"publish_policy":"manual_after_confirmation","class_ids":["`+classID+`"]}`, http.StatusCreated)["exam"].(map[string]any)
 	examID := e2eString(t, examResp, "id")
 	paperFileID := e2eUploadSyntheticPDF(t, router, adminToken, "story041-paper-"+suffix+".pdf", "%PDF-1.4\n% story 041 synthetic paper "+suffix+"\n")
 	paperResp := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/papers", adminToken, `{"file_asset_id":"`+paperFileID+`"}`, http.StatusCreated)["paper"].(map[string]any)

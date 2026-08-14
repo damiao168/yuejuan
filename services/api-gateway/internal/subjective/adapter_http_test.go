@@ -158,6 +158,28 @@ func TestHTTPAdapterFailsBeforeNetworkWhenGradeLevelMissing(t *testing.T) {
 	}
 }
 
+func TestHTTPAdapterMapsCanonicalAssessmentVocabularyToAgentContract(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		writeAgentSuccess(t, w, received["request_id"].(string))
+	}))
+	defer server.Close()
+
+	input := validHTTPAdapterInput()
+	input.Subject = "mathematics"
+	input.GradeLevel = "junior"
+	if _, err := testHTTPAdapter(server.URL, 0).Grade(context.Background(), input); err != nil {
+		t.Fatalf("grade through canonical vocabulary bridge: %v", err)
+	}
+	if received["subject"] != "math" || received["grade_level"] != "junior_middle" {
+		t.Fatalf("agent request did not receive mapped protocol values: %#v", received)
+	}
+}
+
 func testHTTPAdapter(baseURL string, retries int) *HTTPAdapter {
 	return NewHTTPAdapter(HTTPAdapterConfig{
 		BaseURL:       baseURL,

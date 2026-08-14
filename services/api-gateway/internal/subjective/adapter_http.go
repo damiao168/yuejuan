@@ -194,8 +194,8 @@ func (a *HTTPAdapter) buildRequest(requestID string, input AdapterInput) (gradin
 	return gradingAgentRequest{
 		SchemaVersion:   gradingAgentSchemaVersion,
 		RequestID:       requestID,
-		Subject:         strings.ToLower(strings.TrimSpace(input.Subject)),
-		GradeLevel:      strings.ToLower(strings.TrimSpace(input.GradeLevel)),
+		Subject:         gradingAgentSubject(input.Subject),
+		GradeLevel:      gradingAgentGradeLevel(input.GradeLevel),
 		QuestionID:      input.Question.ID,
 		AnswerSegmentID: input.SegmentID,
 		QuestionType:    input.Question.QuestionType,
@@ -233,6 +233,28 @@ func (a *HTTPAdapter) buildRequest(requestID string, input AdapterInput) (gradin
 			FinalScoreAuthority:  input.OutputConstraint.FinalScoreAuthority,
 		},
 	}, nil
+}
+
+// The governed assessment domain uses canonical cross-product values while
+// the currently approved local grading-agent contract retains its original
+// compact vocabulary. Keep that protocol compatibility at the boundary only;
+// stored assessment facts must remain canonical.
+func gradingAgentSubject(subject string) string {
+	switch strings.ToLower(strings.TrimSpace(subject)) {
+	case "mathematics":
+		return "math"
+	case "ethics_politics":
+		return "politics"
+	default:
+		return strings.ToLower(strings.TrimSpace(subject))
+	}
+}
+
+func gradingAgentGradeLevel(stage string) string {
+	if strings.EqualFold(strings.TrimSpace(stage), "junior") {
+		return "junior_middle"
+	}
+	return strings.ToLower(strings.TrimSpace(stage))
 }
 
 func (a *HTTPAdapter) request(ctx context.Context, requestID string, body []byte) (gradingAgentResponse, error) {

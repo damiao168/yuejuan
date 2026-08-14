@@ -77,7 +77,7 @@ func TestCoreWorkflowE2EWithSyntheticMemoryStores(t *testing.T) {
 		t.Fatalf("synthetic student id should be preserved for UUID-based submission tests, got %s", got)
 	}
 
-	examBody := `{"school_id":"` + schoolID + `","name":"Synthetic Midterm","subject":"Science","exam_type":"midterm","total_score":5,"grading_mode":"ai_assisted","appeal_enabled":true,"publish_policy":"manual_after_confirmation","class_ids":["` + classID + `"]}`
+	examBody := `{"school_id":"` + schoolID + `","name":"Synthetic Midterm","subject":"physics","exam_type":"midterm","total_score":5,"grading_mode":"ai_assisted","appeal_enabled":true,"publish_policy":"manual_after_confirmation","class_ids":["` + classID + `"]}`
 	examResp := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/exams", adminToken, examBody, http.StatusCreated)["exam"].(map[string]any)
 	examID := e2eString(t, examResp, "id")
 	if examResp["status"] != "draft" {
