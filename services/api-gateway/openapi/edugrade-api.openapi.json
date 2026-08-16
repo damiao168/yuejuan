@@ -5563,6 +5563,47 @@
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
         "responses": { "200": { "description": "Resolved incident", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GradingQualityIncidentResponse" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
       }
+    },
+    "/api/v1/math-answer-segments/{segmentId}/understanding": {
+      "get": {
+        "operationId": "getMathUnderstanding",
+        "parameters": [{ "name": "segmentId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Versioned mathematical evidence for assigned review work", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MathUnderstandingResponse" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      }
+    },
+    "/api/v1/math-understanding/{artifactId}/corrections": {
+      "get": {
+        "operationId": "listMathUnderstandingCorrections",
+        "parameters": [{ "name": "artifactId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Append-only teacher corrections", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MathCorrectionListResponse" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      },
+      "post": {
+        "operationId": "createMathUnderstandingCorrection",
+        "parameters": [{ "name": "artifactId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateMathCorrectionRequest" } } } },
+        "responses": { "201": { "description": "Correction recorded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MathCorrectionResponse" } } } }, "400": { "description": "Invalid correction", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "409": { "description": "Artifact changed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      }
+    },
+    "/api/v1/math-understanding/training-export": {
+      "get": {
+        "operationId": "exportMathUnderstandingCorrections",
+        "parameters": [{ "name": "subject", "in": "query", "required": true, "schema": { "type": "string", "enum": ["mathematics", "physics", "chemistry"] } }, { "$ref": "#/components/parameters/Limit" }],
+        "responses": { "200": { "description": "De-identified correction samples", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MathTrainingExportResponse" } } } }, "400": { "description": "Invalid subject", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/v1/math-pilot-gates": {
+      "get": {
+        "operationId": "listMathPilotGates",
+        "parameters": [{ "name": "subject", "in": "query", "schema": { "type": "string", "enum": ["mathematics", "physics", "chemistry"] } }, { "$ref": "#/components/parameters/Limit" }],
+        "responses": { "200": { "description": "Append-only pilot gate evidence", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MathPilotGateListResponse" } } } }, "400": { "description": "Invalid subject", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/api/v1/math-pilot-gates/evaluate": {
+      "post": {
+        "operationId": "evaluateMathPilotGate",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EvaluateMathPilotGateRequest" } } } },
+        "responses": { "201": { "description": "Pilot gate evidence recorded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MathPilotGateResponse" } } } }, "400": { "description": "Invalid evidence or policy", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
     }
   },
   "components": {
@@ -5731,6 +5772,25 @@
       }
     },
     "schemas": {
+      "MathUnderstandingArtifact": {
+        "type": "object", "additionalProperties": true,
+        "required": ["id", "subject_code", "answer_segment_id", "exam_question_snapshot_id", "version", "engine_version", "blocks", "formulas", "solution_graph", "verifications", "rubric_evidence", "created_at"],
+        "properties": { "id": { "type": "string" }, "subject_code": { "type": "string", "enum": ["mathematics", "physics", "chemistry"] }, "answer_segment_id": { "type": "string" }, "exam_question_snapshot_id": { "type": "string" }, "version": { "type": "integer" }, "input_hash": { "type": "string" }, "engine_version": { "type": "string" }, "blocks": { "type": "array", "items": { "type": "object", "additionalProperties": true } }, "formulas": { "type": "array", "items": { "type": "object", "additionalProperties": true } }, "relations": { "type": "array", "items": { "type": "object", "additionalProperties": true } }, "solution_graph": { "type": "object", "additionalProperties": true }, "verifications": { "type": "array", "items": { "type": "object", "additionalProperties": true } }, "rubric_evidence": { "type": "array", "items": { "type": "object", "additionalProperties": true } }, "created_at": { "type": "string", "format": "date-time" } }
+      },
+      "MathCorrectionOperation": { "type": "object", "additionalProperties": false, "required": ["type", "target_id", "payload"], "properties": { "type": { "type": "string", "enum": ["move_step", "connect_edge", "delete_edge", "restore_block", "correct_formula", "merge_blocks", "split_step"] }, "target_id": { "type": "string" }, "payload": { "type": "object", "additionalProperties": true } } },
+      "CreateMathCorrectionRequest": { "type": "object", "additionalProperties": false, "required": ["expected_artifact_version", "operations", "corrected_contract", "reason"], "properties": { "expected_artifact_version": { "type": "integer", "minimum": 1 }, "operations": { "type": "array", "minItems": 1, "items": { "$ref": "#/components/schemas/MathCorrectionOperation" } }, "corrected_contract": { "type": "object", "additionalProperties": true }, "reason": { "type": "string", "maxLength": 1000 } } },
+      "MathCorrection": { "type": "object", "additionalProperties": true, "required": ["id", "artifact_id", "answer_segment_id", "revision", "operations", "corrected_contract", "reason", "created_at"], "properties": { "id": { "type": "string" }, "artifact_id": { "type": "string" }, "answer_segment_id": { "type": "string" }, "revision": { "type": "integer" }, "operations": { "type": "array", "items": { "$ref": "#/components/schemas/MathCorrectionOperation" } }, "corrected_contract": { "type": "object", "additionalProperties": true }, "reason": { "type": "string" }, "created_at": { "type": "string", "format": "date-time" } } },
+      "MathUnderstandingResponse": { "type": "object", "additionalProperties": false, "required": ["artifact", "corrections"], "properties": { "artifact": { "$ref": "#/components/schemas/MathUnderstandingArtifact" }, "corrections": { "type": "array", "items": { "$ref": "#/components/schemas/MathCorrection" } } } },
+      "MathCorrectionListResponse": { "type": "object", "additionalProperties": false, "required": ["corrections"], "properties": { "corrections": { "type": "array", "items": { "$ref": "#/components/schemas/MathCorrection" } } } },
+      "MathCorrectionResponse": { "type": "object", "additionalProperties": false, "required": ["correction"], "properties": { "correction": { "$ref": "#/components/schemas/MathCorrection" } } },
+      "MathTrainingExportResponse": { "type": "object", "additionalProperties": false, "required": ["samples"], "properties": { "samples": { "type": "array", "items": { "type": "object", "additionalProperties": true } } } },
+      "MathPilotMetrics": { "type": "object", "additionalProperties": false, "required": ["formula_exact_rate", "ast_exact_rate", "spatial_relation_f1", "solution_graph_edge_f1", "equivalence_precision", "rubric_evidence_precision", "unsafe_suggestion_rate", "risky_case_recall", "sample_count"], "properties": { "formula_exact_rate": { "type": "number", "minimum": 0, "maximum": 1 }, "ast_exact_rate": { "type": "number", "minimum": 0, "maximum": 1 }, "spatial_relation_f1": { "type": "number", "minimum": 0, "maximum": 1 }, "solution_graph_edge_f1": { "type": "number", "minimum": 0, "maximum": 1 }, "equivalence_precision": { "type": "number", "minimum": 0, "maximum": 1 }, "rubric_evidence_precision": { "type": "number", "minimum": 0, "maximum": 1 }, "unsafe_suggestion_rate": { "type": "number", "minimum": 0, "maximum": 1 }, "risky_case_recall": { "type": "number", "minimum": 0, "maximum": 1 }, "sample_count": { "type": "integer", "minimum": 0 } } },
+      "MathPilotPolicy": { "type": "object", "additionalProperties": false, "required": ["minimum_samples", "minimum_formula_exact", "minimum_ast_exact", "minimum_spatial_f1", "minimum_graph_f1", "minimum_equivalence_precision", "minimum_rubric_precision", "maximum_unsafe_suggestion_rate", "minimum_risky_case_recall"], "properties": { "minimum_samples": { "type": "integer", "minimum": 1 }, "minimum_formula_exact": { "type": "number", "minimum": 0, "maximum": 1 }, "minimum_ast_exact": { "type": "number", "minimum": 0, "maximum": 1 }, "minimum_spatial_f1": { "type": "number", "minimum": 0, "maximum": 1 }, "minimum_graph_f1": { "type": "number", "minimum": 0, "maximum": 1 }, "minimum_equivalence_precision": { "type": "number", "minimum": 0, "maximum": 1 }, "minimum_rubric_precision": { "type": "number", "minimum": 0, "maximum": 1 }, "maximum_unsafe_suggestion_rate": { "type": "number", "minimum": 0, "maximum": 1 }, "minimum_risky_case_recall": { "type": "number", "minimum": 0, "maximum": 1 } } },
+      "MathPilotGateDecision": { "type": "object", "additionalProperties": false, "required": ["passed", "blockers", "scope"], "properties": { "passed": { "type": "boolean" }, "blockers": { "type": "array", "items": { "type": "string" } }, "scope": { "type": "string", "const": "teacher_suggestion_only" } } },
+      "MathPilotGateEvaluation": { "type": "object", "additionalProperties": false, "required": ["id", "tenant_id", "subject_code", "benchmark_ref", "metrics", "policy", "decision", "evaluated_by", "created_at"], "properties": { "id": { "type": "string" }, "tenant_id": { "type": "string" }, "subject_code": { "type": "string", "enum": ["mathematics", "physics", "chemistry"] }, "benchmark_ref": { "type": "string" }, "metrics": { "$ref": "#/components/schemas/MathPilotMetrics" }, "policy": { "$ref": "#/components/schemas/MathPilotPolicy" }, "decision": { "$ref": "#/components/schemas/MathPilotGateDecision" }, "evaluated_by": { "type": "string" }, "created_at": { "type": "string", "format": "date-time" } } },
+      "EvaluateMathPilotGateRequest": { "type": "object", "additionalProperties": false, "required": ["subject_code", "benchmark_ref", "metrics", "policy"], "properties": { "subject_code": { "type": "string", "enum": ["mathematics", "physics", "chemistry"] }, "benchmark_ref": { "type": "string", "minLength": 1, "maxLength": 512 }, "metrics": { "$ref": "#/components/schemas/MathPilotMetrics" }, "policy": { "$ref": "#/components/schemas/MathPilotPolicy" } } },
+      "MathPilotGateResponse": { "type": "object", "additionalProperties": false, "required": ["evaluation"], "properties": { "evaluation": { "$ref": "#/components/schemas/MathPilotGateEvaluation" } } },
+      "MathPilotGateListResponse": { "type": "object", "additionalProperties": false, "required": ["evaluations"], "properties": { "evaluations": { "type": "array", "items": { "$ref": "#/components/schemas/MathPilotGateEvaluation" } } } },
       "ErrorResponse": {
         "type": "object",
         "required": [

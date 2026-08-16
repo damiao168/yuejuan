@@ -262,6 +262,9 @@ func (s *PostgresStore) CreateRubric(ctx context.Context, tenantID string, quest
 	} else if ok && latest.Status == "locked" {
 		return Rubric{}, ErrRubricLocked
 	}
+	if !ValidRubricEvidenceRequirements(input.Points) {
+		return Rubric{}, ErrInvalidInput
+	}
 	if !scoreEqual(SumRubricPoints(input.Points), question.Score) || !scoreEqual(input.MaxScore, question.Score) {
 		return Rubric{}, ErrRubricMismatch
 	}

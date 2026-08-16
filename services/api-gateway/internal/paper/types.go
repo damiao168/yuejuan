@@ -96,10 +96,18 @@ type UpdateQuestionInput struct {
 }
 
 type RubricPoint struct {
-	ID          string  `json:"id"`
-	Description string  `json:"description"`
-	Score       float64 `json:"score"`
-	Required    bool    `json:"required"`
+	ID                   string                `json:"id"`
+	Description          string                `json:"description"`
+	Score                float64               `json:"score"`
+	Required             bool                  `json:"required"`
+	EvidenceRequirements []EvidenceRequirement `json:"evidence_requirements,omitempty"`
+}
+
+type EvidenceRequirement struct {
+	Type     string                `json:"type"`
+	Target   string                `json:"target,omitempty"`
+	Minimum  int                   `json:"minimum,omitempty"`
+	Children []EvidenceRequirement `json:"children,omitempty"`
 }
 
 type Rubric struct {

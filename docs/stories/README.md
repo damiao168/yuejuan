@@ -136,6 +136,20 @@
 | STORY-A25 | [Scanner Integration 与设备 Profile](STORY-A25-scanner-profile.md) | Implemented |
 | STORY-A26 | [统一 Processing State 与异常中心](STORY-A26-processing-state.md) | Implemented |
 
+## 数学答卷理解专项
+
+| Story | 名称 | 状态 |
+| --- | --- | --- |
+| STORY-MATH-00 | [数学答卷理解契约与 MathBench](STORY-MATH-00-contract-benchmark.md) | Implemented（底座） |
+| STORY-MATH-01 | [公式识别路由](STORY-MATH-01-formula-router.md) | Implemented / Model Evidence Pending |
+| STORY-MATH-02 | [公式结构与受限 AST](STORY-MATH-02-formula-ast.md) | Implemented |
+| STORY-MATH-03 | [空间关系图](STORY-MATH-03-spatial-graph.md) | Implemented / Learned Model Pending |
+| STORY-MATH-04 | [符号验证服务](STORY-MATH-04-symbolic-verification.md) | Implemented |
+| STORY-MATH-05 | [解题过程图](STORY-MATH-05-solution-graph.md) | Implemented / Learned Model Pending |
+| STORY-MATH-06 | [Rubric 数学证据](STORY-MATH-06-rubric-evidence.md) | Implemented |
+| STORY-MATH-07 | [教师数学证据工作台](STORY-MATH-07-evidence-workbench.md) | Implemented |
+| STORY-MATH-08 | [分层试点门禁](STORY-MATH-08-pilot-gates.md) | Implemented / Real Gate Evidence Pending |
+
 ## 编号语义说明（2026-07-26）
 
 `docs/deployment/production-readiness-roadmap.md` 中 V1.0 总控计划的 STORY-057～059（主观题 AI/质量中心/学生端）与实际实施的 STORY-057～059（lab 智能体接入三部曲）存在历史错位。**以本索引为准**：057～059 已被 lab 接入线占用并完成；总控计划中对应的能力（阅卷质量中心、学生端/申诉/报告）顺延至 STORY-061 之后重新编号。规划文档中引用旧编号处以本表为准，不再回改历史文档。

@@ -3,6 +3,14 @@
 import type { ApiTransport } from "../runtime";
 import { appendQuery, fillPath } from "../runtime";
 import type {
+  CreateMathCorrectionRequest,
+  MathUnderstandingResponse,
+  MathCorrectionListResponse,
+  MathCorrectionResponse,
+  MathTrainingExportResponse,
+  EvaluateMathPilotGateRequest,
+  MathPilotGateResponse,
+  MathPilotGateListResponse,
   ExamWorkspaceResponse,
   ExamPage,
   SubmissionPage,
@@ -290,6 +298,12 @@ export interface operations {
   "recomputeGraderDrift": { args: { path: { "examId": string; "questionId": string; }; body?: RecomputeGraderDriftRequest; signal?: AbortSignal; }; response: RecomputeGraderDriftResponse; };
   "listGradingQualityIncidents": { args: { query?: { "exam_id"?: string; "question_id"?: string; "grader_id"?: string; "status"?: "open" | "acknowledged" | "resolved"; "limit"?: number; }; signal?: AbortSignal; }; response: GradingQualityIncidentListResponse; };
   "resolveGradingQualityIncident": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: GradingQualityIncidentResponse; };
+  "getMathUnderstanding": { args: { path: { "segmentId": string; }; signal?: AbortSignal; }; response: MathUnderstandingResponse; };
+  "listMathUnderstandingCorrections": { args: { path: { "artifactId": string; }; signal?: AbortSignal; }; response: MathCorrectionListResponse; };
+  "createMathUnderstandingCorrection": { args: { path: { "artifactId": string; }; body: CreateMathCorrectionRequest; signal?: AbortSignal; }; response: MathCorrectionResponse; };
+  "exportMathUnderstandingCorrections": { args: { query: { "subject": "mathematics" | "physics" | "chemistry"; "limit"?: number; }; signal?: AbortSignal; }; response: MathTrainingExportResponse; };
+  "listMathPilotGates": { args: { query?: { "subject"?: "mathematics" | "physics" | "chemistry"; "limit"?: number; }; signal?: AbortSignal; }; response: MathPilotGateListResponse; };
+  "evaluateMathPilotGate": { args: { body: EvaluateMathPilotGateRequest; signal?: AbortSignal; }; response: MathPilotGateResponse; };
 }
 
 export class EduGradeApi {
@@ -978,5 +992,35 @@ export class EduGradeApi {
   resolveGradingQualityIncident(args: operations["resolveGradingQualityIncident"]["args"]): Promise<operations["resolveGradingQualityIncident"]["response"]> {
     const requestPath = fillPath("/api/v1/grading-quality-incidents/{id}/resolve", args.path);
     return this.transport.request(requestPath, { method: "POST", signal: args.signal });
+  }
+
+  getMathUnderstanding(args: operations["getMathUnderstanding"]["args"]): Promise<operations["getMathUnderstanding"]["response"]> {
+    const requestPath = fillPath("/api/v1/math-answer-segments/{segmentId}/understanding", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  listMathUnderstandingCorrections(args: operations["listMathUnderstandingCorrections"]["args"]): Promise<operations["listMathUnderstandingCorrections"]["response"]> {
+    const requestPath = fillPath("/api/v1/math-understanding/{artifactId}/corrections", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  createMathUnderstandingCorrection(args: operations["createMathUnderstandingCorrection"]["args"]): Promise<operations["createMathUnderstandingCorrection"]["response"]> {
+    const requestPath = fillPath("/api/v1/math-understanding/{artifactId}/corrections", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  exportMathUnderstandingCorrections(args: operations["exportMathUnderstandingCorrections"]["args"]): Promise<operations["exportMathUnderstandingCorrections"]["response"]> {
+    const requestPath = appendQuery("/api/v1/math-understanding/training-export", args.query);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  listMathPilotGates(args: operations["listMathPilotGates"]["args"] = {}): Promise<operations["listMathPilotGates"]["response"]> {
+    const requestPath = appendQuery("/api/v1/math-pilot-gates", args.query);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  evaluateMathPilotGate(args: operations["evaluateMathPilotGate"]["args"]): Promise<operations["evaluateMathPilotGate"]["response"]> {
+    const requestPath = "/api/v1/math-pilot-gates/evaluate";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
   }
 }

@@ -31,6 +31,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/idempotency"
 	"edugrade-enterprise/services/api-gateway/internal/imagequality"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/mathunderstanding"
 	"edugrade-enterprise/services/api-gateway/internal/middleware"
 	"edugrade-enterprise/services/api-gateway/internal/modelcalibration"
 	"edugrade-enterprise/services/api-gateway/internal/modelgovernance"
@@ -153,6 +154,9 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 	modelCalibrationStore := modelcalibration.NewPostgresStore(postgresDB)
 	aiDisagreementStore := aidisagreement.NewPostgresStore(postgresDB)
 	idempotencyStore := idempotency.NewPostgresStore(postgresDB)
+	mathUnderstandingStore := mathunderstanding.NewPostgresStore(postgresDB)
+	mathCorrectionStore := mathunderstanding.NewPostgresCorrectionStore(postgresDB, mathUnderstandingStore)
+	mathPilotGateStore := mathunderstanding.NewPostgresPilotGateStore(postgresDB)
 	qualityCalibrationService := calibration.NewService(calibrationStore, goldPaperStore)
 	qualitySeedService := seedquality.NewService(seedQualityStore, goldPaperStore, qualityCalibrationService, assessmentStore)
 	qualityDriftService := graderdrift.NewService(graderDriftStore, qualitySeedService, qualityCalibrationService)
@@ -278,7 +282,7 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 	})
 
 	loginLimiter := auth.NewRedisLoginFailureLimiter(redisChecker.Client(), cfg.Auth.LoginFailureLimit, cfg.Auth.LoginFailureWindow)
-	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, reviewAnnotationStore, goldPaperStore, calibrationStore, answerGroupStore, backmarkStore, regradeStore, graderDriftStore, seedQualityStore, scoreStore, scoreReleaseStore, releaseGateStore, studentPortalStore, appealStore, publishedQuestionAppealStore, reportStore, captureStore, captureUploadStore, processingStore, modelGovernanceStore, assessmentStore, eligibilityStore, gradingEvaluationStore, modelCalibrationStore, aiDisagreementStore, idempotencyStore, fileReconciler, loginLimiter, metricsRegistry, qualityDashboardService)
+	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, reviewAnnotationStore, goldPaperStore, calibrationStore, answerGroupStore, backmarkStore, regradeStore, graderDriftStore, seedQualityStore, scoreStore, scoreReleaseStore, releaseGateStore, studentPortalStore, appealStore, publishedQuestionAppealStore, reportStore, captureStore, captureUploadStore, processingStore, modelGovernanceStore, assessmentStore, eligibilityStore, gradingEvaluationStore, modelCalibrationStore, aiDisagreementStore, idempotencyStore, mathUnderstandingStore, mathCorrectionStore, mathPilotGateStore, fileReconciler, loginLimiter, metricsRegistry, qualityDashboardService)
 	cleanup := func() {
 		for i := len(cleanups) - 1; i >= 0; i-- {
 			_ = cleanups[i]()
@@ -367,6 +371,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	var modelCalibrationStore modelcalibration.Store = modelcalibration.NewMemoryStore()
 	var aiDisagreementStore aidisagreement.Store = aidisagreement.NewMemoryStore()
 	var idempotencyStore idempotency.Store = idempotency.NewMemoryStore()
+	var mathUnderstandingStore mathunderstanding.Store = mathunderstanding.NewMemoryStore()
+	var mathCorrectionStore mathunderstanding.CorrectionStore = mathunderstanding.NewMemoryCorrectionStore(mathUnderstandingStore)
+	var mathPilotGateStore mathunderstanding.PilotGateStore = mathunderstanding.NewMemoryPilotGateStore()
 	for _, optionalStore := range optionalStores {
 		switch store := optionalStore.(type) {
 		case imagequality.Store:
@@ -497,6 +504,18 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 			if store != nil {
 				idempotencyStore = store
 			}
+		case mathunderstanding.Store:
+			if store != nil {
+				mathUnderstandingStore = store
+			}
+		case mathunderstanding.CorrectionStore:
+			if store != nil {
+				mathCorrectionStore = store
+			}
+		case mathunderstanding.PilotGateStore:
+			if store != nil {
+				mathPilotGateStore = store
+			}
 		case *qualitydashboard.Service:
 			if store != nil {
 				qualityDashboardService = store
@@ -601,6 +620,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 		cfg.AIService.Timeout,
 	))
 	assessmentHandler := assessment.NewHandler(assessmentStore, authStore)
+	mathUnderstandingHandler := mathunderstanding.NewHandler(mathUnderstandingStore, mathCorrectionStore, mathPilotGateStore, reviewStore, authStore)
 	workspaceHandler := workspace.NewHandler(workspace.Dependencies{
 		Exams: examStore, Papers: paperStore, Submissions: submissionStore, Reviews: reviewStore, Assessments: assessmentStore, Processing: processingService,
 	})
@@ -850,6 +870,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("GET /api/v1/exams/{examId}/questions/{questionId}/assessment-profile", requireAssessmentRead(withScopedExam(assessmentHandler.GetQuestionConfig)))
 	mux.Handle("PUT /api/v1/exams/{examId}/questions/{questionId}/assessment-profile", requireExamManage(withScopedExam(assessmentHandler.ConfigureQuestion)))
 	mux.Handle("GET /api/v1/exams/{examId}/questions/{questionId}/assessment-snapshot", requireAssessmentRead(withScopedExam(assessmentHandler.GetQuestionSnapshot)))
+	mathunderstanding.RegisterRoutes(mux, mathUnderstandingHandler, requireReviewWork, requireReviewManage)
 	mux.Handle("GET /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(withScopedExam(paperHandler.ListTemplates)))
 	mux.Handle("POST /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(withScopedExam(paperHandler.CreateTemplate)))
 	mux.Handle("PATCH /api/v1/answer-sheet-templates/{id}", requireExamManage(paperHandler.UpdateTemplate))

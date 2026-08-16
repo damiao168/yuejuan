@@ -34,6 +34,7 @@ import {
   type PaperVersion,
   type Question,
   type QuestionPayload,
+  type RubricEvidenceRequirement,
   type RubricPoint,
   type ScoringRule,
   type ValidationResult
@@ -42,6 +43,7 @@ import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import { AssessmentProfileEditor } from "../components/features/assessment/AssessmentProfileEditor";
+import { isFormulaEvidenceSubject } from "../features/grading/workbench/mathEvidenceSubjects";
 import type { StatusTone } from "../types";
 
 const questionTypeOptions = [
@@ -72,6 +74,16 @@ const paperStatusMeta: Record<string, { label: string; tone: StatusTone }> = {
 };
 
 const toleranceQuestionTypes = ["numeric", "formula", "calculation"];
+
+const formulaEvidenceQuestionTypes = new Set(["formula", "calculation", "numeric"]);
+
+const formulaEvidenceOptions: { label: string; value: RubricEvidenceRequirement["type"] }[] = [
+  { label: "关键等价变形成立", value: "valid_transformation" },
+  { label: "最终结果经核验", value: "final_result" },
+  { label: "出现指定概念", value: "concept" },
+  { label: "单位正确", value: "unit" },
+  { label: "定义域／取值条件", value: "domain" }
+];
 
 interface QuestionFormValues {
   exam_paper_id?: string;
@@ -150,6 +162,10 @@ function pointTotal(points: RubricPoint[]) {
   return points.reduce((sum, point) => sum + (Number(point.score) || 0), 0);
 }
 
+function formulaEvidenceEnabled(subject: string | undefined, questionType: string | undefined) {
+  return isFormulaEvidenceSubject(subject) && formulaEvidenceQuestionTypes.has(questionType ?? "");
+}
+
 export function PaperRubricPage({
   canManage,
   canManageAssessment,
@@ -195,6 +211,7 @@ export function PaperRubricPage({
   const selectedLocked = selectedQuestion?.rubric?.status === "locked";
   const questionDisabled = !canManage || selectedLocked;
   const showTolerance = toleranceQuestionTypes.includes(watchedQuestionType ?? "");
+  const showFormulaEvidence = formulaEvidenceEnabled(selectedExam?.subject, selectedQuestion?.question_type);
   const objectiveRuleType = selectedQuestion && ["single_choice", "true_false", "multiple_choice", "fill_blank", "numeric"].includes(selectedQuestion.question_type) ? selectedQuestion.question_type : "";
   const draftScoringRule = scoringRules.find((rule) => rule.status === "draft");
   const publishedScoringRule = scoringRules.find((rule) => rule.status === "published");
@@ -426,6 +443,66 @@ export function PaperRubricPage({
         <Switch checked={point.required} disabled={questionDisabled} onChange={(checked) => updatePoint(index, { required: checked })} />
       )
     },
+    ...(showFormulaEvidence
+      ? [
+          {
+            title: "识别证据（仅供教师参考）",
+            width: 380,
+            render: (_: unknown, point: RubricPoint, index: number) => {
+              const requirements = point.evidence_requirements ?? [];
+              return (
+                <Space direction="vertical" size={6} className="full-width-control">
+                  {requirements.map((requirement, requirementIndex) => (
+                    <Space key={`${requirement.type}-${requirementIndex}`} wrap size={6}>
+                      <Select
+                        value={requirement.type}
+                        options={formulaEvidenceOptions}
+                        disabled={questionDisabled}
+                        className="rubric-evidence-type-select"
+                        onChange={(type: RubricEvidenceRequirement["type"]) =>
+                          updateEvidenceRequirement(index, requirementIndex, {
+                            type,
+                            target: type === "concept" || type === "unit" || type === "domain" ? requirement.target ?? "" : undefined,
+                            minimum: undefined,
+                            children: undefined
+                          })
+                        }
+                      />
+                      {requirement.type === "concept" || requirement.type === "unit" || requirement.type === "domain" ? (
+                        <Input
+                          value={requirement.target}
+                          disabled={questionDisabled}
+                          placeholder={requirement.type === "concept" ? "例如：配方法" : requirement.type === "unit" ? "例如：m/s" : "例如：x ≥ 0"}
+                          className="rubric-evidence-target-input"
+                          onChange={(event) => updateEvidenceRequirement(index, requirementIndex, { target: event.target.value })}
+                        />
+                      ) : null}
+                      <Button
+                        type="text"
+                        danger
+                        size="small"
+                        aria-label="删除识别证据"
+                        disabled={questionDisabled}
+                        icon={<Trash2 size={14} />}
+                        onClick={() => removeEvidenceRequirement(index, requirementIndex)}
+                      />
+                    </Space>
+                  ))}
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<Plus size={14} />}
+                    disabled={questionDisabled}
+                    onClick={() => addEvidenceRequirement(index)}
+                  >
+                    添加识别证据
+                  </Button>
+                </Space>
+              );
+            }
+          } satisfies TableColumnsType<RubricPoint>[number]
+        ]
+      : []),
     {
       title: "操作",
       width: 90,
@@ -437,6 +514,27 @@ export function PaperRubricPage({
 
   function updatePoint(index: number, patch: Partial<RubricPoint>) {
     setRubricPoints((current) => current.map((point, currentIndex) => (currentIndex === index ? { ...point, ...patch } : point)));
+  }
+
+  function addEvidenceRequirement(pointIndex: number) {
+    updatePoint(pointIndex, {
+      evidence_requirements: [
+        ...(rubricPoints[pointIndex]?.evidence_requirements ?? []),
+        { type: "valid_transformation" }
+      ]
+    });
+  }
+
+  function updateEvidenceRequirement(pointIndex: number, requirementIndex: number, patch: Partial<RubricEvidenceRequirement>) {
+    const requirements = rubricPoints[pointIndex]?.evidence_requirements ?? [];
+    updatePoint(pointIndex, {
+      evidence_requirements: requirements.map((requirement, index) => (index === requirementIndex ? { ...requirement, ...patch } : requirement))
+    });
+  }
+
+  function removeEvidenceRequirement(pointIndex: number, requirementIndex: number) {
+    const requirements = rubricPoints[pointIndex]?.evidence_requirements ?? [];
+    updatePoint(pointIndex, { evidence_requirements: requirements.filter((_, index) => index !== requirementIndex) });
   }
 
   function removePoint(index: number) {
@@ -904,6 +1002,14 @@ export function PaperRubricPage({
                   </Space>
                 </div>
                 {scoreMismatch ? <Alert type="error" showIcon message="评分细则分值不匹配" description="采分点总分必须等于题目分值，调整后才能保存。" /> : null}
+                {showFormulaEvidence ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="公式与步骤证据只作阅卷提示"
+                    description="系统只会为数学、物理、化学的公式类题目生成这些证据；不会自动给分，最终分数仍由规则或教师确认。"
+                  />
+                ) : null}
                 <ResponsiveTable<RubricPoint> rowKey="id" dataSource={rubricPoints} columns={rubricColumns} pagination={false} size="middle" />
                 <div className="form-grid rubric-json-grid">
                   <label>

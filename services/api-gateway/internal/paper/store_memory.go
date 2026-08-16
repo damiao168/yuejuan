@@ -211,6 +211,9 @@ func (s *MemoryStore) CreateRubric(_ context.Context, tenantID string, questionI
 	if len(existing) > 0 && existing[len(existing)-1].Status == "locked" {
 		return Rubric{}, ErrRubricLocked
 	}
+	if !ValidRubricEvidenceRequirements(input.Points) {
+		return Rubric{}, ErrInvalidInput
+	}
 	if !scoreEqual(SumRubricPoints(input.Points), question.Score) || !scoreEqual(input.MaxScore, question.Score) {
 		return Rubric{}, ErrRubricMismatch
 	}

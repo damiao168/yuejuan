@@ -196,7 +196,7 @@ services:
         BUILD_TIME: ${EDUGRADE_BUILD_TIME:-unknown}
         IMAGE_DIGEST: ${EDUGRADE_IMAGE_DIGEST:-unknown}
         RELEASE_ID: ${EDUGRADE_RELEASE_ID:-local}
-        SCHEMA_VERSION: ${EDUGRADE_SCHEMA_VERSION:-000096}
+        SCHEMA_VERSION: ${EDUGRADE_SCHEMA_VERSION:-000099}
     image: edugrade/api-gateway:${EDUGRADE_IMAGE_TAG:-local}
     container_name: edugrade-api-gateway
     environment:
@@ -441,6 +441,30 @@ services:
     depends_on:
       api-gateway:
         condition: service_healthy
+    logging: *default-logging
+    restart: unless-stopped
+
+  math-verification-worker:
+    build:
+      context: ../..
+      dockerfile: services/math-verification-worker/Dockerfile
+      args:
+        MATH_PYTHON_IMAGE: ${EDUGRADE_MATH_PYTHON_IMAGE:-python:3.11.15-slim-trixie}
+    image: edugrade/math-verification-worker:${EDUGRADE_IMAGE_TAG:-local}
+    container_name: edugrade-math-verification-worker
+    profiles: ["math"]
+    environment:
+      EDUGRADE_MATH_VERIFY_TOKEN: ${EDUGRADE_AI_SERVICE_TOKEN}
+      EDUGRADE_MATH_VERIFY_PORT: 8092
+      EDUGRADE_MATH_VERIFY_TIMEOUT_SECONDS: ${EDUGRADE_MATH_VERIFY_TIMEOUT_SECONDS:-3}
+    expose: ["8092"]
+    mem_limit: ${EDUGRADE_MATH_VERIFY_MEM_LIMIT:-1g}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/healthz', timeout=2).read()"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     logging: *default-logging
     restart: unless-stopped
 

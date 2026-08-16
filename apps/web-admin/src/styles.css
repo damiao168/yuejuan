@@ -3964,6 +3964,98 @@ select {
   gap: 4px;
 }
 
+.math-evidence-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 96%, var(--primary) 4%);
+}
+
+.math-evidence-head,
+.math-evidence-meta,
+.math-formula-label,
+.math-step-row,
+.math-evidence-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.math-evidence-head h3,
+.math-evidence-head p {
+  margin: 0;
+}
+
+.math-evidence-head p,
+.math-evidence-meta,
+.math-formula-label span,
+.math-edge-summary,
+.math-evidence-actions span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.math-evidence-body,
+.math-step-list,
+.math-rubric-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.math-formula-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.32fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.math-formula-label {
+  justify-content: flex-start;
+}
+
+.math-step-row,
+.math-rubric-evidence > div {
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.math-edge-row,
+.math-crossed-block {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--primary);
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.math-step-row span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.math-rubric-evidence > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.math-evidence-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
 .score-panel {
   min-height: 0;
   overflow: hidden;
@@ -5993,6 +6085,14 @@ select {
 
 .rubric-status-select {
   width: 132px;
+}
+
+.rubric-evidence-type-select {
+  min-width: 156px;
+}
+
+.rubric-evidence-target-input {
+  width: 150px;
 }
 
 .rubric-json-grid label {

@@ -1,0 +1,251 @@
+{
+  "schema_version": "math-bench-v1",
+  "dataset": "synthetic",
+  "sample_count": 55,
+  "metrics": {
+    "formula_exact_accuracy": 0.9285714285714286,
+    "ast_exact_accuracy": 0.9642857142857143,
+    "symbols_precision": 0.9885386819484241,
+    "symbols_recall": 0.9885386819484241,
+    "symbols_f1": 0.988538681948424,
+    "relations_precision": 0.75,
+    "relations_recall": 0.9230769230769231,
+    "relations_f1": 0.8275862068965517,
+    "steps_precision": 0.9798657718120806,
+    "steps_recall": 0.9605263157894737,
+    "steps_f1": 0.9700996677740865,
+    "edges_precision": 0.9690721649484536,
+    "edges_recall": 0.9690721649484536,
+    "edges_f1": 0.9690721649484536,
+    "rubric_evidence_precision": 0.9538461538461539,
+    "rubric_evidence_recall": 0.9538461538461539,
+    "rubric_evidence_f1": 0.9538461538461539,
+    "equivalence_precision": 0.9454545454545454,
+    "equivalence_recall": 0.9454545454545454,
+    "equivalence_f1": 0.9454545454545454,
+    "unsafe_suggestion_rate": 0.06521739130434782,
+    "risky_case_recall": 0.6666666666666666
+  },
+  "samples": [
+    {
+      "sample_id": "synthetic-equation-001",
+      "original": "../../synthetic/fujian-2024-junior-math-v1/answer-sheets/SIM-FJ2024-001-page-1.png"
+    },
+    {
+      "sample_id": "synthetic-fraction-stacked-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-fraction-stacked-001.png"
+    },
+    {
+      "sample_id": "synthetic-fraction-stacked-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-fraction-stacked-002.png"
+    },
+    {
+      "sample_id": "synthetic-fraction-stacked-003",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-fraction-stacked-003.png"
+    },
+    {
+      "sample_id": "synthetic-fraction-inline-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-fraction-inline-001.png"
+    },
+    {
+      "sample_id": "synthetic-fraction-inline-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-fraction-inline-002.png"
+    },
+    {
+      "sample_id": "synthetic-radical-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-radical-001.png"
+    },
+    {
+      "sample_id": "synthetic-radical-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-radical-002.png"
+    },
+    {
+      "sample_id": "synthetic-exponent-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-exponent-001.png"
+    },
+    {
+      "sample_id": "synthetic-exponent-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-exponent-002.png"
+    },
+    {
+      "sample_id": "synthetic-subscript-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-subscript-001.png"
+    },
+    {
+      "sample_id": "synthetic-subscript-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-subscript-002.png"
+    },
+    {
+      "sample_id": "synthetic-system-of-equations-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-system-of-equations-001.png"
+    },
+    {
+      "sample_id": "synthetic-system-of-equations-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-system-of-equations-002.png"
+    },
+    {
+      "sample_id": "synthetic-inequality-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-inequality-001.png"
+    },
+    {
+      "sample_id": "synthetic-inequality-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-inequality-002.png"
+    },
+    {
+      "sample_id": "synthetic-absolute-value-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-absolute-value-001.png"
+    },
+    {
+      "sample_id": "synthetic-absolute-value-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-absolute-value-002.png"
+    },
+    {
+      "sample_id": "synthetic-trigonometric-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-trigonometric-001.png"
+    },
+    {
+      "sample_id": "synthetic-trigonometric-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-trigonometric-002.png"
+    },
+    {
+      "sample_id": "synthetic-geometry-symbol-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-geometry-symbol-001.png"
+    },
+    {
+      "sample_id": "synthetic-geometry-symbol-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-geometry-symbol-002.png"
+    },
+    {
+      "sample_id": "synthetic-vector-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-vector-001.png"
+    },
+    {
+      "sample_id": "synthetic-vector-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-vector-002.png"
+    },
+    {
+      "sample_id": "synthetic-limit-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-limit-001.png"
+    },
+    {
+      "sample_id": "synthetic-limit-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-limit-002.png"
+    },
+    {
+      "sample_id": "synthetic-summation-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-summation-001.png"
+    },
+    {
+      "sample_id": "synthetic-summation-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-summation-002.png"
+    },
+    {
+      "sample_id": "synthetic-integral-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-integral-001.png"
+    },
+    {
+      "sample_id": "synthetic-integral-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-integral-002.png"
+    },
+    {
+      "sample_id": "synthetic-matrix-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-matrix-001.png"
+    },
+    {
+      "sample_id": "synthetic-matrix-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-matrix-002.png"
+    },
+    {
+      "sample_id": "synthetic-chinese-mixed-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-chinese-mixed-001.png"
+    },
+    {
+      "sample_id": "synthetic-chinese-mixed-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-chinese-mixed-002.png"
+    },
+    {
+      "sample_id": "synthetic-horizontal-step-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-horizontal-step-001.png"
+    },
+    {
+      "sample_id": "synthetic-horizontal-step-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-horizontal-step-002.png"
+    },
+    {
+      "sample_id": "synthetic-vertical-step-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-vertical-step-001.png"
+    },
+    {
+      "sample_id": "synthetic-vertical-step-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-vertical-step-002.png"
+    },
+    {
+      "sample_id": "synthetic-two-column-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-two-column-001.png"
+    },
+    {
+      "sample_id": "synthetic-two-column-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-two-column-002.png"
+    },
+    {
+      "sample_id": "synthetic-insert-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-insert-001.png"
+    },
+    {
+      "sample_id": "synthetic-insert-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-insert-002.png"
+    },
+    {
+      "sample_id": "synthetic-crossed-out-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-crossed-out-001.png"
+    },
+    {
+      "sample_id": "synthetic-crossed-out-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-crossed-out-002.png"
+    },
+    {
+      "sample_id": "synthetic-scratch-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-scratch-001.png"
+    },
+    {
+      "sample_id": "synthetic-scratch-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-scratch-002.png"
+    },
+    {
+      "sample_id": "synthetic-low-quality-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-low-quality-001.png"
+    },
+    {
+      "sample_id": "synthetic-low-quality-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-low-quality-002.png"
+    },
+    {
+      "sample_id": "synthetic-low-quality-003",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-low-quality-003.png"
+    },
+    {
+      "sample_id": "synthetic-alternative-method-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-alternative-method-001.png"
+    },
+    {
+      "sample_id": "synthetic-alternative-method-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-alternative-method-002.png"
+    },
+    {
+      "sample_id": "synthetic-alternative-method-003",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-alternative-method-003.png"
+    },
+    {
+      "sample_id": "synthetic-solution-chain-001",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-solution-chain-001.png"
+    },
+    {
+      "sample_id": "synthetic-solution-chain-002",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-solution-chain-002.png"
+    },
+    {
+      "sample_id": "synthetic-solution-chain-003",
+      "original": "../../synthetic/math-recognition-synthetic-v2/pages/synthetic-solution-chain-003.png"
+    }
+  ]
+}

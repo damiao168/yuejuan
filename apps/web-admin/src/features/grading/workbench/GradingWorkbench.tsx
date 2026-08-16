@@ -92,6 +92,7 @@ import { ReviewContextInspector } from "./ReviewContextInspector";
 import { questionFromContext, requiresExplicitSecondOpinion, secondOpinionMetadata } from "./reviewContext";
 import { gradingShortcutIntent } from "./keyboardShortcuts";
 import { SharedScoreControl } from "../SharedScoreControl";
+import { MathEvidenceInspector } from "./MathEvidenceInspector";
 import { CalibrationDrawer } from "../../calibration";
 import {
   GoldPaperManagerDrawer,
@@ -2244,6 +2245,12 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
 
               <aside className="grading-inspector">
                 <ReviewContextInspector key={ctx.task.id} context={ctx.reviewContext} />
+                <MathEvidenceInspector
+                  key={`math-${ctx.task.id}`}
+                  segmentId={ctx.task.answer_segment_id}
+                  subjectCode={ctx.reviewContext.subject_tool_hints.subject_code}
+                  disabled={!canEditDraft}
+                />
                 {!requiresExplicitSecondOpinion(ctx.reviewContext) ? renderAutomationSummary() : null}
                 {selectedGrade ? renderEvidence() : null}
                 {renderEvidenceJob()}

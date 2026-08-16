@@ -38,6 +38,14 @@ export interface RubricPoint {
   description: string;
   score: number;
   required: boolean;
+  evidence_requirements?: RubricEvidenceRequirement[];
+}
+
+export interface RubricEvidenceRequirement {
+  type: "all_of" | "any_of" | "at_least" | "valid_transformation" | "final_result" | "concept" | "unit" | "domain";
+  target?: string;
+  minimum?: number;
+  children?: RubricEvidenceRequirement[];
 }
 
 export interface ScoringRule {

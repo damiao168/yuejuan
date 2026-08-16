@@ -1,5 +1,35 @@
 // Generated from services/api-gateway/openapi/edugrade-api.openapi.json. DO NOT EDIT.
 
+export type MathUnderstandingArtifact = ({ "id": string; "subject_code": "mathematics" | "physics" | "chemistry"; "answer_segment_id": string; "exam_question_snapshot_id": string; "version": number; "input_hash"?: string; "engine_version": string; "blocks": Array<Record<string, unknown>>; "formulas": Array<Record<string, unknown>>; "relations"?: Array<Record<string, unknown>>; "solution_graph": Record<string, unknown>; "verifications": Array<Record<string, unknown>>; "rubric_evidence": Array<Record<string, unknown>>; "created_at": string; } & Record<string, unknown>);
+
+export type MathCorrectionOperation = { "type": "move_step" | "connect_edge" | "delete_edge" | "restore_block" | "correct_formula" | "merge_blocks" | "split_step"; "target_id": string; "payload": Record<string, unknown>; };
+
+export type CreateMathCorrectionRequest = { "expected_artifact_version": number; "operations": Array<MathCorrectionOperation>; "corrected_contract": Record<string, unknown>; "reason": string; };
+
+export type MathCorrection = ({ "id": string; "artifact_id": string; "answer_segment_id": string; "revision": number; "operations": Array<MathCorrectionOperation>; "corrected_contract": Record<string, unknown>; "reason": string; "created_at": string; } & Record<string, unknown>);
+
+export type MathUnderstandingResponse = { "artifact": MathUnderstandingArtifact; "corrections": Array<MathCorrection>; };
+
+export type MathCorrectionListResponse = { "corrections": Array<MathCorrection>; };
+
+export type MathCorrectionResponse = { "correction": MathCorrection; };
+
+export type MathTrainingExportResponse = { "samples": Array<Record<string, unknown>>; };
+
+export type MathPilotMetrics = { "formula_exact_rate": number; "ast_exact_rate": number; "spatial_relation_f1": number; "solution_graph_edge_f1": number; "equivalence_precision": number; "rubric_evidence_precision": number; "unsafe_suggestion_rate": number; "risky_case_recall": number; "sample_count": number; };
+
+export type MathPilotPolicy = { "minimum_samples": number; "minimum_formula_exact": number; "minimum_ast_exact": number; "minimum_spatial_f1": number; "minimum_graph_f1": number; "minimum_equivalence_precision": number; "minimum_rubric_precision": number; "maximum_unsafe_suggestion_rate": number; "minimum_risky_case_recall": number; };
+
+export type MathPilotGateDecision = { "passed": boolean; "blockers": Array<string>; "scope": "teacher_suggestion_only"; };
+
+export type MathPilotGateEvaluation = { "id": string; "tenant_id": string; "subject_code": "mathematics" | "physics" | "chemistry"; "benchmark_ref": string; "metrics": MathPilotMetrics; "policy": MathPilotPolicy; "decision": MathPilotGateDecision; "evaluated_by": string; "created_at": string; };
+
+export type EvaluateMathPilotGateRequest = { "subject_code": "mathematics" | "physics" | "chemistry"; "benchmark_ref": string; "metrics": MathPilotMetrics; "policy": MathPilotPolicy; };
+
+export type MathPilotGateResponse = { "evaluation": MathPilotGateEvaluation; };
+
+export type MathPilotGateListResponse = { "evaluations": Array<MathPilotGateEvaluation>; };
+
 export type ErrorResponse = { "request_id"?: string; "trace_id"?: string; "field_errors"?: (Record<string, never> & Record<string, Array<string>>); "conflict_revision"?: number; "error": { "code": string; "message": string; }; };
 
 export type CursorPageMeta = { "next_cursor": string; "has_more": boolean; };
@@ -616,6 +646,21 @@ export type ProcessingRetryResponse = { "task": ProcessingWorkerTask; };
 
 export interface components {
   schemas: {
+    "MathUnderstandingArtifact": MathUnderstandingArtifact;
+    "MathCorrectionOperation": MathCorrectionOperation;
+    "CreateMathCorrectionRequest": CreateMathCorrectionRequest;
+    "MathCorrection": MathCorrection;
+    "MathUnderstandingResponse": MathUnderstandingResponse;
+    "MathCorrectionListResponse": MathCorrectionListResponse;
+    "MathCorrectionResponse": MathCorrectionResponse;
+    "MathTrainingExportResponse": MathTrainingExportResponse;
+    "MathPilotMetrics": MathPilotMetrics;
+    "MathPilotPolicy": MathPilotPolicy;
+    "MathPilotGateDecision": MathPilotGateDecision;
+    "MathPilotGateEvaluation": MathPilotGateEvaluation;
+    "EvaluateMathPilotGateRequest": EvaluateMathPilotGateRequest;
+    "MathPilotGateResponse": MathPilotGateResponse;
+    "MathPilotGateListResponse": MathPilotGateListResponse;
     "ErrorResponse": ErrorResponse;
     "CursorPageMeta": CursorPageMeta;
     "ExamWorkspaceStage": ExamWorkspaceStage;

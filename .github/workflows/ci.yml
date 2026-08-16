@@ -145,6 +145,7 @@ jobs:
             services/image-quality-worker/pyproject.toml
             services/page-processing-worker/pyproject.toml
             services/subjective-grading-worker/pyproject.toml
+            services/math-verification-worker/pyproject.toml
       - run: python -m pip install --upgrade pip==26.1.2 setuptools==83.0.0
       - run: >-
           python -m pip install pytest==9.1.1 pip-audit==2.10.1 ruff==0.16.0
@@ -152,6 +153,7 @@ jobs:
           -e services/image-quality-worker
           -e services/page-processing-worker
           -e services/subjective-grading-worker
+          -e services/math-verification-worker
       - run: python -m pip check
       - name: Audit installed third-party Python packages
         run: |
@@ -161,7 +163,7 @@ jobs:
             exit 1
           fi
           python -m pip_audit --strict -r "${RUNNER_TEMP}/audit-requirements.txt"
-      - run: ruff check ai-services services/image-quality-worker services/ocr-worker services/page-processing-worker services/subjective-grading-worker
+      - run: ruff check ai-services services/image-quality-worker services/ocr-worker services/page-processing-worker services/subjective-grading-worker services/math-verification-worker lab/evals/math-recognition
       - name: OCR worker tests
         run: python -m pytest -q services/ocr-worker/tests
       - name: Image quality worker tests
@@ -170,6 +172,10 @@ jobs:
         run: python -m pytest -q services/page-processing-worker/tests
       - name: Subjective grading worker tests
         run: python -m pytest -q services/subjective-grading-worker/tests
+      - name: Math verification worker tests
+        run: python -m pytest -q services/math-verification-worker/tests
+      - name: MathBench contract tests
+        run: python -m pytest -q lab/evals/math-recognition/test_math_bench.py
       - run: PYTHONPATH=ai-services python -m unittest discover -s ai-services/tests -p 'test_*.py'
       - run: python -m pytest -q tests/ai-evaluation
 
@@ -187,6 +193,7 @@ jobs:
           --profile quality
           --profile processing
           --profile subjective-grading
+          --profile math
           --profile observability
           config -q
       - name: Build and validate subjective grading worker image
