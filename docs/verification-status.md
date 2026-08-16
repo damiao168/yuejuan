@@ -1,6 +1,6 @@
 # EduGrade 当前能力与验证状态
 
-更新日期：2026-08-14
+更新日期：2026-08-16
 适用范围：当前工作树（含尚未提交的 A01–A26 实现）；不是对 GitHub `main` 或学校生产环境的声明。
 
 本文件只记录代码、自动验证和明确的外部边界。它不把 Mock、协议模拟器、静态检查或本机构建写成真实设备、真实模型质量或学校现场验收。
@@ -67,6 +67,8 @@
 MATH-00～08 的软件底座已接线：版本化数学工件、现有 OCR Worker 的公式路由、受限 AST、空间关系图、内网符号验证、Solution DAG、现有 Rubric Point 数学证据、教师校正工作台及追加式分层 Pilot Gate。公式模型调用范围严格限制为数学、物理、化学；语文、历史、政治、地理等文科和当前未校准的生物不调用公式模型。当前只有合成 smoke fixture，没有真实 HMER/结构模型准确率、分学科门禁或学校试点证据；任何门禁结果最多允许 `teacher_suggestion_only`，不得开启自动最终评分。逐项边界见 [`docs/stories/README.md`](stories/README.md) 的 MATH 专项索引。
 
 2026-08-14 定向验证：数学领域/试点门禁/现有 Rubric 与服务器路由 Go 测试通过；OCR 路由、受限 Parser、符号验证和 MathBench 共 15 项 Python 测试通过；Python Ruff、Web TypeScript、OpenAPI 生成 SDK 与 SDK 类型检查通过。真实 PP-FormulaNet/UniMERNet、真实脱敏答卷与教师现场操作未验证。
+
+2026-08-16 定向验证与入库：Go（mathunderstanding/apicontract/paper/server）、Python（OCR 路由、符号验证、MathBench 契约）、Web 类型检查、MathEvidenceInspector 定向 Vitest、`generate:sdk`（无新增 diff）、`check:openapi-breaking`、SDK 类型检查、Ruff 与 `git diff --check` 全部通过；MATH-00～08 全部改动已随 `9ea52c8` 提交。MathBench 由单条 smoke 扩充为 55 个确定性合成样本、25 个类别全覆盖（`generate_synthetic_fixtures.py` 可幂等再生成），产出 synthetic-v2 基线报告（`reports/synthetic-v2.json`，`dataset: synthetic`）。该组数字仅为 harness 自校验基线，证明各指标路径有区分度，不代表任何真实模型准确率；真实 MathBench 仍需脱敏答卷与真实模型运行。
 
 - 新增“已实现”必须同时列出代码接线、验证入口和未覆盖边界。
 - Mock、stub、合成数据和外部模型协议模拟器必须显式标识，不得写成真实模型或现场结果。
