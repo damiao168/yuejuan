@@ -15,13 +15,16 @@ ARG BUILD_TIME
 ARG IMAGE_DIGEST
 ARG RELEASE_ID
 ARG SCHEMA_VERSION
+# Optional module proxy override for restricted-network builds; empty keeps
+# the official default.
+ARG GOPROXY=""
 
 WORKDIR /src
 COPY services/api-gateway/go.mod services/api-gateway/go.sum ./
-RUN go mod download
+RUN GOPROXY=${GOPROXY:-https://proxy.golang.org,direct} go mod download
 
 COPY services/api-gateway/ ./
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+RUN GOPROXY=${GOPROXY:-https://proxy.golang.org,direct} CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags "-s -w \
       -X edugrade-enterprise/services/api-gateway/internal/buildinfo.Version=${APP_VERSION} \
       -X edugrade-enterprise/services/api-gateway/internal/buildinfo.GitSHA=${GIT_SHA} \
