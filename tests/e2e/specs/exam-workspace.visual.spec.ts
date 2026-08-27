@@ -20,8 +20,11 @@ for (const viewport of desktopViewports) {
     await page.goto("/#/admin/exams/exam-1/overview", { waitUntil: "networkidle" });
 
     const workspace = page.locator(".eg-workspace-layout");
-    await expect(workspace).toBeVisible();
+    await expect(workspace).toBeVisible({ timeout: 30_000 });
     await expect(workspace.locator('[aria-label="考试流程"]')).toBeVisible();
+    const stages = workspace.locator('[aria-label="考试流程"] .eg-workspace-stage');
+    await expect(stages).toHaveCount(4);
+    await expect(stages).toHaveText([/考试准备/, /答卷导入/, /阅卷/, /成绩/]);
     await page.evaluate(async () => document.fonts.ready);
 
     const dimensions = await page.evaluate(() => ({

@@ -32,6 +32,38 @@ MODEL_RISK_FLAGS = [
 ]
 
 
+def _map_model_http_error(exc, request_id, provider="local model"):
+    if exc.code in {400, 422}:
+        return AgentError(
+            "model_request_rejected",
+            f"{provider} rejected the request with HTTP {exc.code}",
+            status=502,
+            request_id=request_id,
+        )
+    if exc.code in {401, 403}:
+        return AgentError(
+            "model_auth_failed",
+            f"{provider} authentication failed with HTTP {exc.code}",
+            status=502,
+            request_id=request_id,
+        )
+    if exc.code == 429:
+        return AgentError(
+            "model_rate_limited",
+            f"{provider} rate limit was reached",
+            status=503,
+            retryable=True,
+            request_id=request_id,
+        )
+    return AgentError(
+        "model_unavailable" if exc.code >= 500 else "model_request_rejected",
+        f"{provider} returned HTTP {exc.code}",
+        status=503 if exc.code >= 500 else 502,
+        retryable=exc.code >= 500,
+        request_id=request_id,
+    )
+
+
 def grading_output_schema(grading_request):
     point_ids = [point["id"] for point in grading_request["rubric"]["points"]]
     point_id = {"type": "string", "enum": point_ids}
@@ -351,13 +383,7 @@ class LocalLlamaCppAdapter:
                 request_id=request_id,
             ) from exc
         except urlerror.HTTPError as exc:
-            raise AgentError(
-                "model_unavailable",
-                f"local model returned HTTP {exc.code}",
-                status=503,
-                retryable=exc.code >= 500,
-                request_id=request_id,
-            ) from exc
+            raise _map_model_http_error(exc, request_id) from exc
         except (urlerror.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
             raise AgentError(
                 "model_unavailable",
@@ -387,7 +413,11 @@ class LocalLlamaCppAdapter:
             return self._parse_content(response, request_id)
         except AgentError:
             raise
-        except (TimeoutError, urlerror.URLError, urlerror.HTTPError, OSError, ValueError, json.JSONDecodeError) as exc:
+        except TimeoutError as exc:
+            raise AgentError("model_timeout", "document parsing model request timed out", status=504, retryable=True, request_id=request_id) from exc
+        except urlerror.HTTPError as exc:
+            raise _map_model_http_error(exc, request_id) from exc
+        except (urlerror.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
             raise AgentError("model_unavailable", "document parsing model request failed", status=503, retryable=True, request_id=request_id) from exc
 
     def _parse_content(self, response, request_id):
@@ -522,6 +552,11 @@ class DashScopeNativeAdapter:
             return content if isinstance(content, dict) else json.loads(content)
         except AgentError:
             raise
+        except urlerror.HTTPError as exc:
+            error_payload = self._read_error_payload(exc)
+            mapped = map_dashscope_error(exc.code, error_payload)
+            mapped.request_id = mapped.request_id or request_id
+            raise mapped from exc
         except (KeyError, IndexError, TypeError, TimeoutError, urlerror.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
             raise AgentError("model_unavailable", "document parsing model request failed", status=503, retryable=True, request_id=request_id) from exc
 

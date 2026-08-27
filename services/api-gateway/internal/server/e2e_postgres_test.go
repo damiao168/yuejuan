@@ -91,9 +91,16 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	question := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/questions", adminToken, `{"exam_paper_id":"`+paperID+`","question_no":"Q1","question_type":"short_answer","score":5,"stem":"Story 041 synthetic short answer","knowledge_points":["story041"],"answer_area":{"page":1,"x":0.1,"y":0.2,"w":0.6,"h":0.2},"sort_order":1}`, http.StatusCreated)["question"].(map[string]any)
 	questionID := e2eString(t, question, "id")
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/questions/"+questionID+"/rubric", adminToken, `{"status":"approved","max_score":5,"points":[{"id":"p1","description":"story041 synthetic rubric point","score":5,"required":true}],"deductions":[],"examples":[]}`, http.StatusCreated)
-	profiles := e2eGetJSON(t, router, "/api/v1/assessment/subject-profiles?stage=senior&subject=biology", adminToken, http.StatusOK)["subject_profiles"].([]any)
+	biologyProfiles := e2eGetJSON(t, router, "/api/v1/assessment/subject-profiles?stage=senior&subject=biology", adminToken, http.StatusOK)["subject_profiles"].([]any)
+	if len(biologyProfiles) != 1 {
+		t.Fatalf("expected one senior biology assessment profile for the cross-subject rejection check, got %#v", biologyProfiles)
+	}
+	biologyProfileID := e2eString(t, biologyProfiles[0].(map[string]any), "id")
+	e2ePostJSON(t, router, http.MethodPut, "/api/v1/exams/"+examID+"/questions/"+questionID+"/assessment-profile", adminToken, `{"subject_profile_id":"`+biologyProfileID+`","archetype_code":"short_constructed","allowed_evidence_types":["text_span","concept"],"risk_tier":"R2","scoring_policy":{"mode":"AI_ASSIST","require_evidence":true,"human_review_below_confidence":true},"expected_revision":0}`, http.StatusBadRequest)
+
+	profiles := e2eGetJSON(t, router, "/api/v1/assessment/subject-profiles?stage=senior&subject=physics", adminToken, http.StatusOK)["subject_profiles"].([]any)
 	if len(profiles) != 1 {
-		t.Fatalf("expected one senior biology assessment profile, got %#v", profiles)
+		t.Fatalf("expected one senior physics assessment profile, got %#v", profiles)
 	}
 	profileID := e2eString(t, profiles[0].(map[string]any), "id")
 	e2ePostJSON(t, router, http.MethodPut, "/api/v1/exams/"+examID+"/questions/"+questionID+"/assessment-profile", adminToken, `{"subject_profile_id":"`+profileID+`","archetype_code":"short_constructed","allowed_evidence_types":["text_span","concept"],"risk_tier":"R2","scoring_policy":{"mode":"AI_ASSIST","require_evidence":true,"human_review_below_confidence":true},"expected_revision":0}`, http.StatusOK)
@@ -101,7 +108,7 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 		t.Fatalf("freeze assessment snapshot for PostgreSQL workflow: %v", err)
 	}
 	snapshot := e2eGetJSON(t, router, "/api/v1/exams/"+examID+"/questions/"+questionID+"/assessment-snapshot", adminToken, http.StatusOK)["assessment_snapshot"].(map[string]any)
-	if e2eString(t, snapshot, "subject_code") != "biology" || e2eString(t, snapshot, "archetype_code") != "short_constructed" {
+	if e2eString(t, snapshot, "subject_code") != "physics" || e2eString(t, snapshot, "archetype_code") != "short_constructed" {
 		t.Fatalf("grading must use the frozen assessment snapshot: %#v", snapshot)
 	}
 	validation := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/validate-paper-config", adminToken, `{}`, http.StatusOK)["result"].(map[string]any)

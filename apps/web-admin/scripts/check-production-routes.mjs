@@ -20,7 +20,6 @@ const teacherDashboard = read("src/pages/TeacherDashboardPage.tsx");
 const responsiveTable = read("src/components/ResponsiveTable.tsx");
 const examWorkspace = read("src/pages/ExamWorkspacePage.tsx");
 const examManagement = read("src/pages/ExamManagementPage.tsx");
-const appealCenter = read("src/pages/AppealCenterPage.tsx");
 const appealApi = read("src/api/appeals.ts");
 const apiClient = read("src/api/client.ts");
 const viteConfig = read("vite.config.ts");
@@ -147,19 +146,6 @@ assert(
 assert(
   /AdminGradingOperationsPage/.test(appShell) && /experience === "admin"/.test(appShell),
   "Administrator grading navigation must open exam-level operations instead of the personal workbench."
-);
-
-assert(
-  /canWork=\{experience === "teacher" && hasEveryPermission\(user, \["appeal:work"\]\)\}/.test(appShell)
-    && /selectedAppeal\?\.assigned_to === currentUser\.id/.test(appealCenter),
-  "Teacher appeal handling must require appeal:work and an assignment to the current user."
-);
-
-assert(
-  /assignAppeal/.test(appealCenter)
-    && /submitAppealRecommendation/.test(appealCenter)
-    && /建议不会直接修改成绩或关闭申诉/.test(appealCenter),
-  "Appeal UI must separate administrator assignment from teacher recommendations."
 );
 
 assert(

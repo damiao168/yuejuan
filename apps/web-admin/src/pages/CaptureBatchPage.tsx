@@ -441,6 +441,7 @@ export function CaptureBatchPage({
         const result = await getCaptureBatch(batchId);
         if (requestId !== detailRequestRef.current) return;
         setDetail(result);
+		if (!quiet && (result.batch.failed_count > 0 || result.pages.some((item) => ["needs_review", "quality_rejected", "failed"].includes(item.status)))) setActiveTab("issues");
 		setProcessingSummaries(Object.fromEntries(result.processing_summaries.map((item) => [item.submission_id, item])));
         setBatches((current) =>
           current.map((item) =>
@@ -969,8 +970,8 @@ export function CaptureBatchPage({
     <div className="capture-batch-page">
       <section className="page-heading">
         <div>
-          <h1>答卷采集批次</h1>
-          <p>上传扫描文件，系统自动拆页并匹配学生；完成后到『处理』页查看识别进度。</p>
+          <h1>答卷导入</h1>
+          <p>上传扫描文件并优先处理学生匹配、图像质量和处理失败问题。</p>
         </div>
         <Space>
           <Button
@@ -1103,8 +1104,23 @@ export function CaptureBatchPage({
                   onChange={setActiveTab}
                   items={[
                     {
+                      key: "issues",
+                      label: `需要处理 (${issuePages.length + detail.batch.failed_count})`,
+                      children: issuePages.length || detail.batch.failed_count > 0 ? (
+                        <div className="capture-issue-queue">
+                          {detail.files.filter((file) => file.status === "failed").map((file) => (
+                            <div className="capture-file-issue" key={file.id}>
+                              <div><strong>{file.original_name}</strong><span title={file.error_code || undefined}>文件处理失败：{(file.error_code && errorLabels[file.error_code]) || "请重新导入正确的文件"}</span></div>
+                              <Space><Button icon={<RefreshCw size={15} />} loading={actioning} disabled={!batchCanManage} onClick={() => void startProcessing()}>重试原文件</Button><Button icon={<FileUp size={15} />} disabled={!batchCanManage} onClick={() => { setActiveTab("files"); message.info("可重新导入修复后的同一文件，系统会保留原失败记录"); }}>上传修复文件</Button></Space>
+                            </div>
+                          ))}
+                          {issuePages.length > 0 ? <ResponsiveTable rowKey="id" columns={pageColumns} dataSource={issuePages} pagination={false} size="small" /> : null}
+                        </div>
+                      ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有需要人工处理的页面" />,
+                    },
+                    {
                       key: "files",
-                      label: "文件与页面",
+                      label: "全部文件与页面",
                       children: (
                         <div className="capture-detail-stack">
                           <ResponsiveTable
@@ -1214,35 +1230,6 @@ export function CaptureBatchPage({
                         />
                       ) : (
                         <Empty description="暂无匹配数据" />
-                      ),
-                    },
-                    {
-                      key: "issues",
-                      label: `处理问题 (${issuePages.length + detail.batch.failed_count})`,
-                      children: issuePages.length || detail.batch.failed_count > 0 ? (
-                        <div className="capture-issue-queue">
-                          {detail.files.filter((file) => file.status === "failed").map((file) => (
-                            <div className="capture-file-issue" key={file.id}>
-                              <div><strong>{file.original_name}</strong><span title={file.error_code || undefined}>文件处理失败：{(file.error_code && errorLabels[file.error_code]) || "请重新导入正确的文件"}</span></div>
-                              <Space>
-                                <Button icon={<RefreshCw size={15} />} loading={actioning} disabled={!batchCanManage} onClick={() => void startProcessing()}>重试原文件</Button>
-                                <Button icon={<FileUp size={15} />} disabled={!batchCanManage} onClick={() => { setActiveTab("files"); message.info("可重新导入修复后的同一文件，系统会保留原失败记录"); }}>上传修复文件</Button>
-                              </Space>
-                            </div>
-                          ))}
-                          {issuePages.length > 0 && <ResponsiveTable
-                            rowKey="id"
-                            columns={pageColumns}
-                            dataSource={issuePages}
-                            pagination={false}
-                            size="small"
-                          />}
-                        </div>
-                      ) : (
-                        <Empty
-                          image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          description="当前没有需要人工处理的页面"
-                        />
                       ),
                     },
                   ]}

@@ -185,7 +185,7 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
         <div className="dashboard-update">
           <span>最后更新 {new Date(data.updated_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}</span>
           <Button type="text" size="small" aria-label="刷新工作台" icon={<RefreshCw size={15} />} loading={loading} onClick={() => void load()} />
-          {canCreateExam ? <Button type="primary" icon={<Plus size={16} />} onClick={() => onNavigate("/exams?create=1")}>新建考试</Button> : null}
+          {canCreateExam ? <Button type="primary" icon={<Plus size={16} />} onClick={() => onNavigate("/exams/new")}>新建考试</Button> : null}
         </div>
       </motion.section>
 
@@ -236,8 +236,8 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
             <div className="section-head"><div><h2>成员管理</h2><p>维护考试所需的基础数据</p></div></div>
             <div className="dashboard-link-list">
               <button type="button" onClick={() => onNavigate("/members/students")}><UsersRound size={17} /><span><strong>学生管理</strong><small>维护学生名册与状态</small></span><ArrowRight size={15} /></button>
-              <button type="button" onClick={() => onNavigate("/organization/setup")}><GraduationCap size={17} /><span><strong>年级与班级</strong><small>设置考试学生范围</small></span><ArrowRight size={15} /></button>
-              <button type="button" onClick={() => onNavigate("/organization/setup")}><UserCog size={17} /><span><strong>教师与阅卷人员</strong><small>维护人员账号</small></span><ArrowRight size={15} /></button>
+              <button type="button" onClick={() => onNavigate("/members/classes")}><GraduationCap size={17} /><span><strong>年级与班级</strong><small>设置考试学生范围</small></span><ArrowRight size={15} /></button>
+              <button type="button" onClick={() => onNavigate("/members/teachers")}><UserCog size={17} /><span><strong>教师与阅卷人员</strong><small>维护人员账号</small></span><ArrowRight size={15} /></button>
             </div>
           </section>
 

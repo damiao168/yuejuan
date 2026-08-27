@@ -5,9 +5,10 @@ import {
   subjectFixtures
 } from "../fixtures/gradingWorkbenchMocks";
 
-test("阅卷教师可用键盘连续完成 20 份跨学科夹具，并在刷新后恢复服务端草稿", async ({ page }) => {
+test("阅卷教师先理解异常原因，再用键盘连续完成 20 份跨学科任务", async ({ page }) => {
   test.setTimeout(60_000);
   const state = createGradingWorkbenchMockState(20);
+  state.tasks[0].source = "ai_low_confidence";
   await installGradingWorkbenchMocks(page, state);
   await page.goto("/#/teacher/grading", { waitUntil: "domcontentloaded" });
 
@@ -15,8 +16,11 @@ test("阅卷教师可用键盘连续完成 20 份跨学科夹具，并在刷新�
   const submit = page.getByRole("button", { name: "提交并下一份" });
   await expect(score).toBeVisible();
   await expect(page.locator(".answer-panel")).toContainText("fixture-01");
+  await expect(page.getByText("为什么需要我处理？")).toBeVisible();
+  await expect(page.getByText("系统评分把握不足", { exact: true })).toBeVisible();
+  await expect(page.getByText("系统无法可靠判断本题，请结合标准答案和采分点人工确认。", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "领取任务" }).click();
+  await page.getByRole("button", { name: "开始处理" }).click();
   await expect.poll(() => state.claims).toEqual(["review-task-01"]);
 
   // A focused input must retain its own keyboard semantics: neither a digit

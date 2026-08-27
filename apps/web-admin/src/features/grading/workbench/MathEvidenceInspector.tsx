@@ -36,6 +36,7 @@ export interface MathEvidenceInspectorProps {
 }
 
 export function MathEvidenceInspector({ segmentId, subjectCode, disabled = false }: MathEvidenceInspectorProps) {
+  const [expanded, setExpanded] = useState(false);
   const [data, setData] = useState<MathUnderstandingResponse | null>(null);
   const [formulaDrafts, setFormulaDrafts] = useState<Record<string, string>>({});
   const [blockDrafts, setBlockDrafts] = useState<JsonRecord[]>([]);
@@ -97,6 +98,7 @@ export function MathEvidenceInspector({ segmentId, subjectCode, disabled = false
   };
 
   useEffect(() => {
+    setExpanded(false);
     setData(null);
     setFormulaDrafts({});
     setBlockDrafts([]);
@@ -113,6 +115,7 @@ export function MathEvidenceInspector({ segmentId, subjectCode, disabled = false
     const original = text(formula.canonical_latex) || text(formula.raw_latex);
     return id && formulaDrafts[id] !== undefined && formulaDrafts[id].trim() !== original.trim();
   });
+  const attentionCount = formulas.filter((formula) => number(formula.confidence) < 0.7).length + steps.filter((step) => number(step.confidence) < 0.7).length;
 
   const save = async () => {
     if (!artifact || changedFormulas.length + pendingOperations.length === 0) return;
@@ -237,8 +240,9 @@ export function MathEvidenceInspector({ segmentId, subjectCode, disabled = false
       {error ? <Alert type="warning" showIcon message={error} /> : null}
       {loading && !data ? <Spin size="small" /> : null}
       {!loading && !data ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无线性化公式证据，按原答题图阅卷" /> : null}
-      {artifact ? (
-        <div className="math-evidence-body">
+      {artifact ? (<>
+        <div className="math-evidence-summary"><span>{formulas.length} 个公式 · {steps.length} 个步骤</span><strong>{attentionCount ? `${attentionCount} 项识别需要确认` : "未发现需要人工校正的公式问题"}</strong><Button size="small" onClick={() => setExpanded((value) => !value)}>{expanded ? "收起详情" : attentionCount ? "查看问题" : "查看详情"}</Button></div>
+        {expanded ? <div className="math-evidence-body">
           <div className="math-evidence-meta">
             <Tag>{subjectCode === "mathematics" ? "数学" : subjectCode === "physics" ? "物理" : "化学"}</Tag>
             <span>识别版本 {artifact.version}</span>
@@ -313,8 +317,8 @@ export function MathEvidenceInspector({ segmentId, subjectCode, disabled = false
             </Button>
             <span>校正记录只进入训练证据，不直接改分。</span>
           </Space>
-        </div>
-      ) : null}
+        </div> : null}
+      </>) : null}
     </section>
   );
 }

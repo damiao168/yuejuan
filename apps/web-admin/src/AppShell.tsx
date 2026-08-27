@@ -7,6 +7,7 @@ import { getCurrentUser, login as loginWithPassword, logout as logoutSession } f
 import { listSchools } from "./api/org";
 import { ApiClientError } from "./api/client";
 import { hasAnyPermission, hasEveryPermission, sessionFromAuthUser, type SessionUser } from "./auth/session";
+import { canWorkTeacherAppeals } from "./auth/capabilities";
 import { clearAllReviewDraftFallbacks, clearReviewDraftFallbacks } from "./auth/reviewDraftFallback";
 import { clearLegacyRememberedLogin } from "./auth/loginSecurity";
 import { AppLayout } from "./components/AppLayout";
@@ -33,6 +34,7 @@ const AuditLogPage = lazy(() => import("./pages/AuditLogPage").then((module) => 
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
 const TeacherDashboardPage = lazy(() => import("./pages/TeacherDashboardPage").then((module) => ({ default: module.TeacherDashboardPage })));
 const ExamManagementPage = lazy(() => import("./pages/ExamManagementPage").then((module) => ({ default: module.ExamManagementPage })));
+const CreateExamPage = lazy(() => import("./features/exams/create/CreateExamPage").then((module) => ({ default: module.CreateExamPage })));
 const GradingWorkbenchPage = lazy(() => import("./pages/GradingWorkbenchPage").then((module) => ({ default: module.GradingWorkbenchPage })));
 const AdminGradingOperationsPage = lazy(() => import("./pages/AdminGradingOperationsPage").then((module) => ({ default: module.AdminGradingOperationsPage })));
 const LearningReportsPage = lazy(() => import("./pages/LearningReportsPage").then((module) => ({ default: module.LearningReportsPage })));
@@ -40,6 +42,8 @@ const ModelGovernancePage = lazy(() => import("./pages/ModelGovernancePage").the
 const SubjectiveGradingBatchPage = lazy(() => import("./pages/SubjectiveGradingBatchPage").then((module) => ({ default: module.SubjectiveGradingBatchPage })));
 const OrganizationSetupPage = lazy(() => import("./pages/OrganizationSetupPage").then((module) => ({ default: module.OrganizationSetupPage })));
 const StudentManagementPage = lazy(() => import("./pages/StudentManagementPage").then((module) => ({ default: module.StudentManagementPage })));
+const ClassManagementPage = lazy(() => import("./features/members/classes/ClassManagementPage").then((module) => ({ default: module.ClassManagementPage })));
+const TeacherManagementPage = lazy(() => import("./features/members/teachers/TeacherManagementPage").then((module) => ({ default: module.TeacherManagementPage })));
 const PlatformSchoolsPage = lazy(() => import("./pages/PlatformSchoolsPage").then((module) => ({ default: module.PlatformSchoolsPage })));
 const ExamWorkspacePage = lazy(() => import("./pages/ExamWorkspacePage").then((module) => ({ default: module.ExamWorkspacePage })));
 const AnswerSheetTemplatePage = lazy(() => import("./pages/AnswerSheetTemplatePage").then((module) => ({ default: module.AnswerSheetTemplatePage })));
@@ -206,13 +210,13 @@ export function AppShell() {
       case "processing":
         return <SubmissionCapturePage canManage={hasEveryPermission(user, ["submission:manage", "file:manage", "ocr:manage", "segment:manage"])} canReadStudentNames={hasEveryPermission(user, ["org:manage"])} initialExamId={examId} />;
       case "grading":
-        return <GradingWorkbenchPage canWork={hasAnyPermission(user, ["review:manage", "review:work"])} canManageTasks={experience === "admin" && hasEveryPermission(user, ["review:manage"])} canViewOriginalImage={experience === "admin"} canGrade={experience === "admin" && hasEveryPermission(user, ["grading:manage"])} canVerifyEvidence={experience === "admin" && hasEveryPermission(user, ["evidence:manage"])} canReturn={experience === "admin" ? hasEveryPermission(user, ["review:manage"]) : hasEveryPermission(user, ["review:work"])} currentUserId={user.id} initialExamId={examId} personalScope={experience === "teacher"} />;
+        return <GradingWorkbenchPage canWork={hasEveryPermission(user, ["review:work"])} canManageTasks={experience === "admin" && hasEveryPermission(user, ["review:manage"])} canViewOriginalImage={experience === "admin"} canGrade={experience === "admin" && hasEveryPermission(user, ["grading:manage"])} canVerifyEvidence={experience === "admin" && hasEveryPermission(user, ["evidence:manage"])} canReturn={hasEveryPermission(user, ["review:work"])} currentUserId={user.id} initialExamId={examId} personalScope={experience === "teacher"} />;
       case "quality":
         return <QualityDashboardPage examId={examId} canManage={experience === "admin" && hasEveryPermission(user, ["review:manage"])} />;
       case "scores":
         return <ScoreManagementPage mode={experience} canManage={experience === "admin" && hasEveryPermission(user, ["score:manage", "exam:manage", "submission:manage"])} canReadStudentNames={experience === "admin" && hasEveryPermission(user, ["org:manage"])} canReadAudit={experience === "admin" && hasEveryPermission(user, ["audit:read"])} initialExamId={examId} />;
       case "appeals":
-        return <AppealCenterPage mode={experience} canRead={hasEveryPermission(user, ["appeal:read"])} canManage={experience === "admin" && hasEveryPermission(user, ["appeal:manage"])} canWork={experience === "teacher" && hasEveryPermission(user, ["appeal:work"])} canReadAudit={experience === "admin" && hasEveryPermission(user, ["audit:read"])} canReadIdentities={experience === "admin" && hasEveryPermission(user, ["org:manage"])} canReadExams={hasEveryPermission(user, ["exam:manage"])} currentUser={user} initialExamId={examId} />;
+        return <AppealCenterPage mode={experience} canRead={hasEveryPermission(user, ["appeal:read"])} canManage={experience === "admin" && hasEveryPermission(user, ["appeal:manage"])} canWork={canWorkTeacherAppeals(user, experience)} canReadAudit={experience === "admin" && hasEveryPermission(user, ["audit:read"])} canReadIdentities={experience === "admin" && hasEveryPermission(user, ["org:manage"])} canReadExams={hasEveryPermission(user, ["exam:manage"])} currentUser={user} initialExamId={examId} />;
       case "reports":
         return <LearningReportsPage canRead={hasEveryPermission(user, ["report:read"])} canExport={hasEveryPermission(user, ["report:export"])} initialExamId={examId} />;
       default:
@@ -231,6 +235,8 @@ export function AppShell() {
       experience === "admin" ? <DashboardPage user={user} onNavigate={navigate} /> : <TeacherDashboardPage user={user} onNavigate={navigate} />
     ) : examWorkspace ? (
       <ExamWorkspacePage examId={examWorkspace.examId} section={examWorkspace.section} experience={experience} currentUser={user} moduleContent={workspaceModule} onNavigate={navigate} />
+    ) : route.path === "/exams/new" ? (
+      <CreateExamPage user={user} onNavigate={navigate} />
     ) : route.path === "/exams" ? (
       <ExamManagementPage
         key={path}
@@ -238,12 +244,16 @@ export function AppShell() {
         canManage={experience === "admin" && hasEveryPermission(user, ["exam:manage"])}
         currentUser={user}
         onOpenWorkspace={(examId) => navigate(`/exams/${encodeURIComponent(examId)}/overview`)}
-        onConfigureExam={(examId) => navigate(`/exams/${encodeURIComponent(examId)}/paper`)}
+        onCreateExam={() => navigate("/exams/new")}
       />
     ) : route.path === "/organization/setup" ? (
       <OrganizationSetupPage onNavigate={navigate} />
     ) : route.path === "/members/students" ? (
       <StudentManagementPage />
+    ) : route.path === "/members/classes" ? (
+      <ClassManagementPage />
+    ) : route.path === "/members/teachers" ? (
+      <TeacherManagementPage />
     ) : route.path === "/platform/schools" ? (
       <PlatformSchoolsPage />
     ) : route.path === "/papers" ? (
@@ -289,7 +299,7 @@ export function AppShell() {
         mode={experience}
         canRead={hasEveryPermission(user, ["appeal:read"])}
         canManage={experience === "admin" && hasEveryPermission(user, ["appeal:manage"])}
-        canWork={experience === "teacher" && hasEveryPermission(user, ["appeal:work"])}
+        canWork={canWorkTeacherAppeals(user, experience)}
         canReadAudit={experience === "admin" && hasEveryPermission(user, ["audit:read"])}
         canReadIdentities={experience === "admin" && hasEveryPermission(user, ["org:manage"])}
         canReadExams={hasEveryPermission(user, ["exam:manage"])}

@@ -1,0 +1,73 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, App, Button, Form, Input, Modal, Select } from "antd";
+import type { TableColumnsType } from "antd";
+import { Plus, RefreshCw } from "lucide-react";
+import { bindTeacherClass, listClasses, listGrades, type Grade, type SchoolClass } from "../../../api/org";
+import { createManagedUser, listAssignableRoles, listManagedUsers, type AssignableRole, type ManagedUser } from "../../../api/users";
+import { ErrorState, LoadingState } from "../../../components/PageState";
+import { ResponsiveTable } from "../../../components/ResponsiveTable";
+import { StatusTag } from "../../../components/StatusTag";
+
+const roleLabels: Record<string, string> = {
+  tenant_admin: "学校管理员",
+  school_admin: "学校管理员",
+  teacher: "学科教师",
+  grader: "阅卷教师",
+  arbitrator: "复核教师"
+};
+
+export function TeacherManagementPage() {
+  const { message } = App.useApp();
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [roles, setRoles] = useState<AssignableRole[]>([]);
+  const [grades, setGrades] = useState<Grade[]>([]);
+  const [classes, setClasses] = useState<SchoolClass[]>([]);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true); setError("");
+    try {
+      const [userResult, roleResult, gradeResult, classResult] = await Promise.all([listManagedUsers({ limit: 200 }), listAssignableRoles(), listGrades(), listClasses()]);
+      setUsers(userResult.users.filter((user) => user.roles.some((role) => roleLabels[role])));
+      setRoles(roleResult.roles.filter((role) => roleLabels[role.code]));
+      setGrades(gradeResult.grades);
+      setClasses(classResult.classes);
+    } catch (loadError) { setError(loadError instanceof Error ? loadError.message : "教师与阅卷人员加载失败"); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const visible = useMemo(() => users.filter((user) => `${user.display_name} ${user.username}`.toLowerCase().includes(query.trim().toLowerCase())), [query, users]);
+  const columns: TableColumnsType<ManagedUser> = [
+    { title: "姓名", dataIndex: "display_name", width: 160 },
+    { title: "登录账号", dataIndex: "username", width: 180 },
+    { title: "业务角色", dataIndex: "roles", render: (items: string[]) => items.map((item) => roleLabels[item]).filter(Boolean).join("、") || "-" },
+    { title: "任教学科", width: 130, render: () => <span className="muted-cell">尚未配置</span> },
+    { title: "年级 / 班级范围", width: 180, render: () => <span className="muted-cell">暂无读取接口</span> },
+    { title: "状态", dataIndex: "status", width: 100, render: (status: string) => <StatusTag tone={status === "active" ? "success" : "neutral"}>{status === "active" ? "启用" : "停用"}</StatusTag> }
+  ];
+
+  async function submit(values: { username: string; display_name: string; password: string; role_code: string; class_ids?: string[] }) {
+    setSaving(true);
+    try {
+      const result = await createManagedUser({ username: values.username, display_name: values.display_name, password: values.password, role_code: values.role_code });
+      await Promise.all((values.class_ids ?? []).map((classId) => bindTeacherClass(classId, result.user.id)));
+      message.success(values.class_ids?.length ? "人员账号已创建并绑定班级" : "人员账号已创建");
+      setOpen(false); await load();
+    } catch (saveError) { message.error(saveError instanceof Error ? saveError.message : "创建人员账号失败"); }
+    finally { setSaving(false); }
+  }
+
+  if (loading && !users.length) return <LoadingState label="正在加载教师与阅卷人员" />;
+  if (error && !users.length) return <ErrorState message={error} onRetry={() => void load()} />;
+  return <div className="member-management-page">
+    <section className="member-management-heading"><div><h1>教师与阅卷人员</h1><p>维护教师账号及其学校业务角色，不直接暴露技术权限代码。</p></div><div><Button icon={<RefreshCw size={15} />} loading={loading} onClick={() => void load()}>刷新</Button><Button type="primary" icon={<Plus size={15} />} onClick={() => setOpen(true)}>新增人员</Button></div></section>
+    <Alert type="info" showIcon message="当前接口支持创建单一角色账号和绑定班级；任教学科、组合角色、班级绑定读取、编辑与停用接口仍需后端补齐。" />
+    <section className="member-table-section"><div className="member-management-filters"><Input.Search allowClear value={query} placeholder="搜索姓名或账号" onChange={(event) => setQuery(event.target.value)} /><span>共 {visible.length} 人</span></div><ResponsiveTable rowKey="id" size="small" columns={columns} dataSource={visible} pagination={{ pageSize: 20 }} scroll={{ x: 930 }} /></section>
+    <Modal title="新增教师或阅卷人员" open={open} footer={null} destroyOnHidden onCancel={() => setOpen(false)}><Form layout="vertical" onFinish={(values) => void submit(values)}><div className="form-grid compact-form-grid"><Form.Item name="display_name" label="姓名" rules={[{ required: true, message: "请输入姓名" }]}><Input /></Form.Item><Form.Item name="username" label="登录账号" rules={[{ required: true, message: "请输入登录账号" }]}><Input autoComplete="off" /></Form.Item><Form.Item name="role_code" label="业务角色" rules={[{ required: true, message: "请选择业务角色" }]}><Select options={roles.map((role) => ({ value: role.code, label: roleLabels[role.code] ?? role.name }))} /></Form.Item><Form.Item name="password" label="初始密码" extra="至少 12 位，并包含大小写字母、数字和符号。" rules={[{ required: true, message: "请输入初始密码" }]}><Input.Password autoComplete="new-password" /></Form.Item></div><Form.Item name="class_ids" label="关联班级（可选）"><Select mode="multiple" optionFilterProp="label" options={classes.map((item) => ({ value: item.id, label: `${grades.find((grade) => grade.id === item.grade_id)?.name ?? "未分年级"} · ${item.name}` }))} /></Form.Item><Button type="primary" htmlType="submit" loading={saving}>创建人员</Button></Form></Modal>
+  </div>;
+}

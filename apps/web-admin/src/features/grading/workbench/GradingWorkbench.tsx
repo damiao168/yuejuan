@@ -185,16 +185,29 @@ const taskFilterOptions: { label: string; value: TaskFilter }[] = [
 ];
 
 const sourceLabels: Record<string, string> = {
-  ai_low_confidence: "AI 把握不足",
-  ocr_low_confidence: "识别把握不足",
-  subjective_default_review: "主观题复核",
-  evidence_verification_failed: "证据校验失败",
-  double_mark_required: "双评任务",
-  score_anomaly: "分数异常",
+  ai_low_confidence: "系统评分把握不足",
+  ocr_low_confidence: "手写内容识别不确定",
+  subjective_default_review: "主观题需要教师确认",
+  evidence_verification_failed: "未找到足够评分依据",
+  double_mark_required: "需要第二位教师独立评分",
+  score_anomaly: "评分结果与同类答案差异较大",
   manual_sample: "人工抽检",
-  omr_ambiguous: "涂卡结果待确认",
-  rule_review_required: "规则评分待确认",
-  grading_failure: "评分处理失败"
+  omr_ambiguous: "客观题识别存在歧义",
+  rule_review_required: "规则评分需要确认",
+  grading_failure: "自动评分失败"
+};
+
+const sourceDescriptions: Record<string, string> = {
+  ai_low_confidence: "系统无法可靠判断本题，请结合标准答案和采分点人工确认。",
+  ocr_low_confidence: "识别结果可能与学生原始作答不一致，请优先核对答题图。",
+  subjective_default_review: "本题按阅卷策略进入人工确认，请依据评分细则给分。",
+  evidence_verification_failed: "系统建议缺少可核验的采分依据，请检查学生答案与评分细则。",
+  double_mark_required: "本题需要独立完成第二次评分，避免受首次评分影响。",
+  score_anomaly: "本题评分与相近答案差异较大，请复核最终得分。",
+  manual_sample: "本题由抽样复核策略选中，用于检查自动评分质量。",
+  omr_ambiguous: "涂卡结果无法唯一确定，请对照原始答题图确认选项。",
+  rule_review_required: "规则未能自动确认结果，请人工判断答案是否满足得分条件。",
+  grading_failure: "自动评分未能完成，请直接按评分细则人工处理。"
 };
 
 const taskStatusLabels: Record<string, string> = {
@@ -517,6 +530,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
   const { message } = App.useApp();
   const hasSession = true;
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("active");
+  const [queueScope, setQueueScope] = useState<"mine" | "all">(canWork ? "mine" : "all");
   const [keyword, setKeyword] = useState("");
   const [tasks, setTasks] = useState<ReviewTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState("");
@@ -729,8 +743,10 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     setLoadingTasks(true);
     setTaskError(null);
     try {
+      const teacherScope = personalScope ? { assigned_to: currentUserId } : {};
+      const personalQueue = personalScope || (canManageTasks && canWork && queueScope === "mine");
       const result = await listReviewTasks({
-        ...(personalScope ? { assigned_to: currentUserId } : {}),
+        ...(personalQueue ? { assigned_to: currentUserId } : teacherScope),
         ...(initialExamId ? { exam_id: initialExamId } : {}),
         limit: 50
       });
@@ -752,14 +768,15 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     } finally {
       if (requestId === taskListRequestRef.current) setLoadingTasks(false);
     }
-  }, [currentUserId, initialExamId, personalScope]);
+  }, [canManageTasks, canWork, currentUserId, initialExamId, personalScope, queueScope]);
 
   const loadMoreTasks = useCallback(async () => {
     if (!hasMoreTasks || !nextTaskCursor || loadingMoreTasks) return;
     setLoadingMoreTasks(true);
     try {
+      const personalQueue = personalScope || (canManageTasks && canWork && queueScope === "mine");
       const result = await listReviewTasks({
-        ...(personalScope ? { assigned_to: currentUserId } : {}),
+        ...(personalQueue ? { assigned_to: currentUserId } : {}),
         ...(initialExamId ? { exam_id: initialExamId } : {}),
         limit: 50,
         cursor: nextTaskCursor
@@ -775,7 +792,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     } finally {
       setLoadingMoreTasks(false);
     }
-  }, [currentUserId, hasMoreTasks, initialExamId, loadingMoreTasks, message, nextTaskCursor, personalScope]);
+  }, [canManageTasks, canWork, currentUserId, hasMoreTasks, initialExamId, loadingMoreTasks, message, nextTaskCursor, personalScope, queueScope]);
 
   const loadGraders = useCallback(async () => {
     if (!canManageTasks) {
@@ -2042,7 +2059,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
           </Button>
           {!canManageTasks ? <BackmarkQueue canWork={canWork} /> : null}
           {!canManageTasks ? <RegradeQueue canWork={canWork} /> : null}
-          {!canManageTasks ? <Button type="primary" icon={<BadgeCheck size={16} />} loading={actioning === "claim-task"} disabled={!canWork} onClick={() => void claimTask()}>领取任务</Button> : null}
+          {canWork && (!canManageTasks || queueScope === "mine") ? <Button type="primary" icon={<BadgeCheck size={16} />} loading={actioning === "claim-task"} onClick={() => void claimTask()}>开始处理</Button> : null}
           <Tooltip title="把这份答卷放回队列，稍后可继续，草稿会保留">
             <Button icon={<LogOut size={16} />} disabled={!ownsSelectedTask} loading={actioning === "release"} onClick={() => void releaseCurrentTask()}>
               暂放
@@ -2053,7 +2070,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
 
       {draftSaveStatus === "conflict" ? <Alert type="error" showIcon message="草稿已被其他会话更新" description="为防止覆盖他人修改，自动保存已暂停。重新载入任务后再应用本地修改。" action={<Button onClick={() => void loadContext(selectedTaskId)}>重新载入</Button>} /> : draftSaveStatus === "offline" ? <Alert type="warning" showIcon message="当前离线，草稿已保存在本机" description="恢复网络后会按版本号同步；提交或退出后会清理本机草稿。" /> : draftSaveStatus === "error" ? <Alert type="warning" showIcon message="草稿暂未保存到服务端" description="本机保留了短期草稿；检查网络后系统会再次尝试保存。" /> : draftSaveStatus === "readonly" ? <Alert type="info" showIcon message="管理员只读检查" description="管理员可查看材料、分配和管理任务；评分草稿与最终提交只能由被分配的阅卷员完成。" /> : null}
 
-      {canManageTasks ? (
+      {canManageTasks && queueScope === "all" ? (
         <section className="reviewer-progress-panel" aria-label="阅卷员进度">
           <div className="reviewer-progress-head">
             <div>
@@ -2083,11 +2100,12 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
       <section className="grading-workspace">
         <aside className="grading-task-rail">
           <section className="grading-taskbar">
+            {canManageTasks && canWork ? <Segmented value={queueScope} options={[{ label: "待我处理", value: "mine" }, { label: "全部任务", value: "all" }]} onChange={(value) => setQueueScope(value as "mine" | "all")} /> : null}
             <Select className="toolbar-select" value={taskFilter} options={taskFilterOptions} onChange={setTaskFilter} />
             <Input prefix={<Search size={16} />} placeholder="搜索任务" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
             <span className="muted">{filteredTasks.length} / {tasks.length}</span>
           </section>
-          {canManageTasks ? (
+          {canManageTasks && queueScope === "all" ? (
             <section className="grading-assignment-bar" aria-label="分配阅卷任务">
               <div className="grading-assignment-select-all">
                 <Checkbox
@@ -2157,7 +2175,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
                     ) : null}
                     <div className="grading-task-primary">
                       <strong>{task.anonymous_code || "暂无匿名码"}</strong>
-                      <span title={sourceLabels[task.source] ? undefined : task.source}>{task.question_no} · {sourceLabels[task.source] ?? "其他来源"}{canManageTasks && task.assigned_to ? ` · ${graderNames[task.assigned_to] ?? "已分配"}` : ""}</span>
+                      <span title={sourceLabels[task.source] ? undefined : task.source}>{task.question_no} · 需要人工确认：{sourceLabels[task.source] ?? "其他原因"}{canManageTasks && task.assigned_to ? ` · ${graderNames[task.assigned_to] ?? "已分配"}` : ""}</span>
                     </div>
                     <div className="grading-task-status">
                       <StatusTag tone={taskTone(task.status)}>{taskStatusLabels[task.status] ?? "未知状态"}</StatusTag>
@@ -2190,6 +2208,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
         ) : (
           <main className="grading-main">
             {ctx.warnings.length > 0 ? <Alert type="warning" showIcon message="AI 辅助不可用" description={ctx.warnings.join("；")} /> : null}
+            <section className="grading-reason-banner"><div><span>为什么需要我处理？</span><strong>{sourceLabels[ctx.task.source] ?? "本题需要人工确认"}</strong><p>{ctx.warnings[0] ?? sourceDescriptions[ctx.task.source] ?? "请结合学生原始答案和评分细则完成确认。"}</p></div>{selectedGrade ? <div><span>系统建议</span><strong>{selectedGrade.suggested_score} / {selectedGrade.max_score}</strong></div> : null}</section>
 
             <section className="grading-panels">
               <section className="answer-panel">

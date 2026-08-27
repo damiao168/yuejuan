@@ -114,13 +114,18 @@ func ValidateFileType(filename string, declaredContentType string, sniffedConten
 	}
 	declaredContentType = strings.ToLower(strings.TrimSpace(declaredContentType))
 	sniffedContentType = strings.ToLower(strings.TrimSpace(sniffedContentType))
-	if allowedTypes[declaredContentType] {
-		return declaredContentType, nil
+	// Browsers and generic multipart clients commonly send this placeholder;
+	// it carries no trustworthy type information, so defer to server sniffing.
+	if declaredContentType == "application/octet-stream" {
+		declaredContentType = ""
 	}
-	if allowedTypes[sniffedContentType] {
-		return sniffedContentType, nil
+	if !allowedTypes[sniffedContentType] {
+		return "", ErrInvalidFile
 	}
-	return "", ErrInvalidFile
+	if declaredContentType != "" && !allowedTypes[declaredContentType] {
+		return "", ErrInvalidFile
+	}
+	return sniffedContentType, nil
 }
 
 func BuildStorageKey(tenantID string, hashSHA256 string, filename string) (string, error) {

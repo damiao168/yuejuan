@@ -9,6 +9,7 @@ import {
   FileText,
   Gauge,
   Gavel,
+  GraduationCap,
   Home,
   Inbox,
   Layers3,
@@ -18,6 +19,7 @@ import {
   ServerCog,
   Settings,
   Sparkles,
+  UserCog,
   Users
 } from "lucide-react";
 import type { ViewKey } from "../types";
@@ -70,6 +72,11 @@ const productionRouteDefinitions: AppRoute[] = [
     key: "exams", path: "/exams", title: "考试管理", group: "考试组织", icon: <ClipboardCheck size={18} />, permissions: ["exam:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
     workspaces: ["school_admin", "exam_owner"], experiences: { admin: { title: "考试列表", group: "考试管理" } }
+  },
+  {
+    key: "examCreate", path: "/exams/new", title: "新建考试", group: "考试组织", icon: <ClipboardCheck size={18} />, permissions: ["exam:manage"], navigation: false, mock: false, productionReady: true,
+    excludedRoles: ["platform_admin"],
+    workspaces: ["school_admin", "exam_owner"], experiences: { admin: { title: "新建考试", group: "考试管理" } }
   },
   {
     key: "papers", path: "/papers", title: "试卷管理", group: "考试组织", icon: <FileText size={18} />, permissions: ["exam:manage", "file:manage"], navigation: false, mock: false, productionReady: true,
@@ -129,6 +136,16 @@ const productionRouteDefinitions: AppRoute[] = [
     key: "membersStudents", path: "/members/students", title: "学生管理", group: "学校管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
     workspaces: ["school_admin"], experiences: { admin: { title: "学生管理", group: "学校管理" } }
+  },
+  {
+    key: "membersClasses", path: "/members/classes", title: "年级与班级", group: "学校管理", icon: <GraduationCap size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
+    excludedRoles: ["platform_admin"],
+    workspaces: ["school_admin"], experiences: { admin: { title: "年级与班级", group: "学校管理" } }
+  },
+  {
+    key: "membersTeachers", path: "/members/teachers", title: "教师与阅卷人员", group: "学校管理", icon: <UserCog size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
+    excludedRoles: ["platform_admin"],
+    workspaces: ["school_admin"], experiences: { admin: { title: "教师与阅卷人员", group: "学校管理" } }
   },
   {
     key: "organization", path: "/organization/setup", title: "学校初始化", group: "学校管理", icon: <Settings size={18} />, permissions: ["org:manage"], navigation: false, mock: false, productionReady: true,

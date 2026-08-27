@@ -207,6 +207,7 @@ class GradingAgentApplication:
             "model_output_invalid",
             "evidence_verification_failed",
             "model_unavailable",
+            "model_rate_limited",
         } and (error.retryable or error.code in {"model_output_invalid", "evidence_verification_failed"})
 
     def _purge_cache(self):

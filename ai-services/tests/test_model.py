@@ -3,7 +3,9 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from urllib import error as urlerror
 
+from grading_agent.errors import AgentError
 from grading_agent.model import (
     LocalLlamaCppAdapter,
     PromptRegistry,
@@ -48,6 +50,29 @@ class ModelAdapterTests(unittest.TestCase):
             "rubric_point_id"
         ]["enum"]
         self.assertEqual(point_enum, ["p1", "p2"])
+
+    def test_local_model_maps_request_rejection_without_claiming_unavailability(self):
+        def transport(_url, _payload, _headers, _timeout):
+            raise urlerror.HTTPError("http://model", 400, "bad request", {}, None)
+
+        adapter = LocalLlamaCppAdapter(settings(), transport=transport)
+        with self.assertRaises(AgentError) as raised:
+            adapter.request(valid_request())
+
+        self.assertEqual(raised.exception.code, "model_request_rejected")
+        self.assertEqual(raised.exception.status, 502)
+        self.assertFalse(raised.exception.retryable)
+
+    def test_local_model_maps_rate_limit_as_retryable(self):
+        def transport(_url, _payload, _headers, _timeout):
+            raise urlerror.HTTPError("http://model", 429, "rate limited", {}, None)
+
+        adapter = LocalLlamaCppAdapter(settings(), transport=transport)
+        with self.assertRaises(AgentError) as raised:
+            adapter.request(valid_request())
+
+        self.assertEqual(raised.exception.code, "model_rate_limited")
+        self.assertTrue(raised.exception.retryable)
 
     def test_prompt_registry_rejects_unversioned_content_change(self):
         source = Path(settings().prompt_root)

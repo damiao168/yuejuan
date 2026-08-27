@@ -14,6 +14,7 @@ import { examStatusLabels, examStatusTone } from "../../../constants/examStatus"
 import type { SessionUser } from "../../../auth/session";
 import type { ProductExperience } from "../../../router/experience";
 import type { ExamWorkspaceProjection } from "../../../api/workspace";
+import { currentExamBusinessStage, examBusinessStages, sectionBusinessStage } from "./businessStages";
 
 const sectionNames: Record<string, string> = {
   overview: "考试概览",
@@ -84,7 +85,9 @@ export function ExamWorkspaceLayout({
 }) {
   const primaryAction = data.next_actions[0];
   const currentSectionName = sectionNames[section] ?? "考试工作区";
-  const currentStage = data.stages.find((stage) => stage.key === data.stage);
+  const businessStages = useMemo(() => examBusinessStages(data), [data]);
+  const currentStage = useMemo(() => currentExamBusinessStage(data), [data]);
+  const showPreparationReturn = sectionBusinessStage[section] === "preparation" && !["overview", "settings"].includes(section);
   return (
     <WorkspaceLayout
       header={
@@ -111,9 +114,9 @@ export function ExamWorkspaceLayout({
           </Space>
         </header>
       }
-      stageRail={<WorkspaceStageRail stages={data.stages.map((stage) => ({ ...stage, summary: data.stage_progress.find((progress) => progress.stage === stage.key)?.summary }))} onNavigate={onNavigate} />}
+      stageRail={<WorkspaceStageRail stages={businessStages} onNavigate={onNavigate} />}
     >
-      {section === "overview" ? <Overview data={data} onNavigate={onNavigate} /> : moduleContent ?? (
+      {section === "overview" ? <Overview data={data} onNavigate={onNavigate} /> : moduleContent ? <div className="exam-workspace-module">{showPreparationReturn ? <Button className="exam-module-return" type="link" icon={<ArrowLeft size={15} />} onClick={() => onNavigate(`/exams/${encodeURIComponent(data.exam_id)}/settings`)}>返回考试准备</Button> : null}{moduleContent}</div> : (
         <main className="eg-workspace-panel eg-workspace-section-empty">
           <div><span>考试工作区</span><h2>{currentSectionName}</h2><p>该环节暂时没有独立页面，请从阶段导航选择可用入口。</p></div>
           <Button onClick={() => onNavigate(`/exams/${encodeURIComponent(data.exam_id)}/overview`)}>返回概览</Button>

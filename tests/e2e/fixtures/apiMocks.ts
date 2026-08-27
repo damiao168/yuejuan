@@ -10,6 +10,7 @@ const rolePermissions: Record<TestRole, string[]> = {
     "ocr:manage",
     "segment:manage",
     "review:manage",
+    "review:work",
     "arbitration:manage",
     "score:manage",
     "report:read",
@@ -154,11 +155,13 @@ export async function installApiMocks(
     }
 
     if (path === "/api/v1/schools") {
-      return json(route, { schools: [{ id: "school-1", tenant_id: "tenant-school", name: "示范学校", code: "DEMO" }] });
+      return json(route, { schools: [{ id: "school-1", tenant_id: "tenant-school", name: "示范学校", code: "DEMO", status: "active" }] });
     }
-    if (path === "/api/v1/grades") return json(route, { grades: [{ id: "grade-1", school_id: "school-1", name: "高二", code: "G11", academic_year: "2026-2027", level_no: 11 }] });
-    if (path === "/api/v1/classes") return json(route, { classes: [{ id: "class-1", school_id: "school-1", grade_id: "grade-1", name: "高二（1）班", code: "G11-01" }] });
-    if (path === "/api/v1/students") return json(route, { students: [] });
+    if (path === "/api/v1/grades") return json(route, { grades: [{ id: "grade-1", school_id: "school-1", name: "高二", code: "G11", academic_year: "2026-2027", level_no: 11, status: "active" }] });
+    if (path === "/api/v1/classes") return json(route, { classes: [{ id: "class-1", school_id: "school-1", grade_id: "grade-1", name: "高二（1）班", code: "G11-01", status: "active" }] });
+    if (path === "/api/v1/students") return json(route, { students: [{ id: "student-1", school_id: "school-1", class_id: "class-1", name: "陈同学", student_no: "S001", status: "active" }, { id: "student-2", school_id: "school-1", class_id: "class-1", name: "林同学", student_no: "S002", status: "active" }], has_more: false });
+    if (path === "/api/v1/users") return json(route, { users: [{ id: "user-school_admin", username: "school_admin", display_name: "学校管理员", status: "active", roles: ["school_admin"] }, { id: "grader-1", username: "math_grader", display_name: "数学阅卷老师", status: "active", roles: ["grader"] }], has_more: false });
+    if (path === "/api/v1/roles") return json(route, { roles: [{ code: "teacher", name: "教师", scope_type: "school" }, { code: "grader", name: "阅卷员", scope_type: "exam_task" }, { code: "arbitrator", name: "仲裁员", scope_type: "exam_task" }] });
     if (path === "/api/v1/ocr/availability") {
       return json(route, {
         generated_at: "2026-08-02T07:06:00Z",
@@ -174,6 +177,9 @@ export async function installApiMocks(
     }
 
     if (path === "/api/v1/exams") {
+      if (route.request().method() === "POST") {
+        return json(route, { exam: { id: "exam-created", school_id: "school-1", name: "2026-2027学年高二期中考试", subject: "math", exam_type: "midterm_exam", total_score: 150, status: "draft", grading_mode: "ai_assisted", appeal_enabled: true, publish_policy: "after_admin_approval", class_ids: ["class-1"] } });
+      }
       return json(route, {
         exams: [{
           id: "exam-1",

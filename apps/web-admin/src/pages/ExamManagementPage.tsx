@@ -16,12 +16,11 @@ import {
   type SelectProps,
   type TableColumnsType
 } from "antd";
-import { Archive, Eye, FileClock, LayoutDashboard, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Search } from "lucide-react";
+import { Archive, Eye, FileClock, LayoutDashboard, MoreHorizontal, Pencil, RefreshCw, Save, Search } from "lucide-react";
 import { ApiClientError } from "../api/client";
 import type { SessionUser } from "../auth/session";
 import {
   archiveExam,
-  createExam,
   getExam,
   listExams,
   updateExam,
@@ -127,7 +126,7 @@ function formatTime(value?: string) {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("zh-CN", { hour12: false });
 }
 
-export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspace, onConfigureExam }: { mode: ProductExperience; canManage: boolean; currentUser: SessionUser; onOpenWorkspace: (examId: string) => void; onConfigureExam?: (examId: string) => void }) {
+export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspace, onCreateExam }: { mode: ProductExperience; canManage: boolean; currentUser: SessionUser; onOpenWorkspace: (examId: string) => void; onCreateExam: () => void }) {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<ExamFormValues>();
   const watchedSchoolId = Form.useWatch("school_id", form);
@@ -142,9 +141,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [drawer, setDrawer] = useState<{ mode: "create" | "edit"; exam?: Exam } | null>(() => (
-    hashQueryParam("create") === "1" ? { mode: "create" } : null
-  ));
+  const [drawer, setDrawer] = useState<{ mode: "edit"; exam: Exam } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailExam, setDetailExam] = useState<Exam | null>(null);
@@ -189,29 +186,17 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
     if (!drawer) {
       return;
     }
-    if (drawer.mode === "create") {
-      form.setFieldsValue({
-        appeal_enabled: true,
-        publish_policy: "after_admin_approval",
-        grading_mode: "ai_assisted",
-        total_score: 100,
-        class_ids: []
-      });
-      return;
-    }
-    if (drawer.exam) {
-      form.setFieldsValue({
-        school_id: drawer.exam.school_id,
-        name: drawer.exam.name,
-        subject: drawer.exam.subject,
-        exam_type: drawer.exam.exam_type,
-        total_score: drawer.exam.total_score,
-        grading_mode: drawer.exam.grading_mode,
-        appeal_enabled: drawer.exam.appeal_enabled,
-        publish_policy: drawer.exam.publish_policy,
-        class_ids: drawer.exam.class_ids
-      });
-    }
+    form.setFieldsValue({
+      school_id: drawer.exam.school_id,
+      name: drawer.exam.name,
+      subject: drawer.exam.subject,
+      exam_type: drawer.exam.exam_type,
+      total_score: drawer.exam.total_score,
+      grading_mode: drawer.exam.grading_mode,
+      appeal_enabled: drawer.exam.appeal_enabled,
+      publish_policy: drawer.exam.publish_policy,
+      class_ids: drawer.exam.class_ids
+    });
   }, [drawer, form]);
 
   const schoolById = useMemo(() => new Map(schools.map((school) => [school.id, school])), [schools]);
@@ -302,16 +287,9 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
     };
     setSubmitting(true);
     try {
-      if (drawer?.mode === "edit" && drawer.exam) {
+      if (drawer?.exam) {
         await updateExam(drawer.exam.id, { ...payload, expected_revision: drawer.exam.revision });
         message.success("考试已更新");
-      } else {
-        const result = await createExam(payload);
-        message.success("考试已创建，请上传完整试卷并配置答案");
-        setDrawer(null);
-        await loadData();
-        (onConfigureExam ?? onOpenWorkspace)(result.exam.id);
-        return;
       }
       setDrawer(null);
       await loadData();
@@ -389,10 +367,10 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
     },
     { title: "总分", dataIndex: "total_score", width: 65, align: "right" },
     { title: "状态", dataIndex: "status", width: 105, render: (value: string) => <StatusTag tone={examStatusTone(value)}>{examStatusLabels[value] ?? "未知状态"}</StatusTag> },
-    { title: "阅卷模式", dataIndex: "grading_mode", width: 165, render: (value: string) => <span className="exam-mode-text">{labelFrom(gradingModeOptions, value)}</span> },
+    { title: "阅卷方式", dataIndex: "grading_mode", width: 125, ellipsis: true, render: (value: string) => <span className="exam-mode-text">{labelFrom(gradingModeOptions, value)}</span> },
     {
       title: "创建信息",
-      width: 165,
+      width: 140,
       render: (_, exam) => (
         <div className="exam-created-cell">
           <strong>{exam.created_by === currentUser.id ? currentUser.name : "本校管理员"}</strong>
@@ -402,7 +380,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
     },
     {
       title: "操作",
-      width: 250,
+      width: 130,
       render: (_, exam) => {
         const next = nextStatus(exam.status);
         const locked = isLocked(exam.status);
@@ -416,7 +394,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
         ];
         return (
           <Space className="table-actions exam-table-actions" size={6}>
-            <Button size="small" type="primary" ghost icon={<LayoutDashboard size={14} />} onClick={() => onOpenWorkspace(exam.id)}>
+            <Button size="small" icon={<LayoutDashboard size={14} />} onClick={() => onOpenWorkspace(exam.id)}>
               工作区
             </Button>
             <Dropdown
@@ -439,7 +417,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
     }
   ];
 
-  const formDisabled = !canWrite || (drawer?.mode === "edit" && drawer.exam ? isLocked(drawer.exam.status) : false);
+  const formDisabled = !canWrite || (drawer?.exam ? isLocked(drawer.exam.status) : false);
 
   return (
     <div className="page-stack">
@@ -452,7 +430,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
           <Button icon={<RefreshCw size={16} />} onClick={() => void loadData()} loading={loading}>
             刷新
           </Button>
-          {canWrite ? <Button type="primary" icon={<Plus size={16} />} onClick={() => setDrawer({ mode: "create" })}>
+          {canWrite ? <Button type="primary" onClick={onCreateExam}>
             新建考试
           </Button> : null}
         </Space>
@@ -507,14 +485,14 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
             columns={columns}
             pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (total) => `共 ${total} 场考试` }}
             locale={{ emptyText: <EmptyState title="暂无考试" description={canWrite ? "没有符合条件的考试。试试调整筛选条件，或点击右上角“新建考试”。" : "没有符合条件的考试，请联系管理员为你授权。"} /> }}
-            size="middle"
+            size="small"
             className="exam-management-table"
           />
         </section>
       )}
 
       <Drawer
-        title={drawer?.mode === "edit" ? "编辑考试" : "新建考试"}
+        title="编辑考试"
         open={Boolean(drawer)}
         onClose={() => setDrawer(null)}
         width={720}
@@ -522,16 +500,15 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
         extra={
           <Space>
             <Button type="primary" icon={<Save size={16} />} loading={submitting} disabled={formDisabled} onClick={() => void submitForm()}>
-              {drawer?.mode === "edit" ? "保存" : "创建并配置试卷"}
+              保存
             </Button>
           </Space>
         }
       >
-        {formDisabled && drawer?.mode === "edit" ? (
+        {formDisabled && drawer?.exam ? (
           <Alert type="info" showIcon message="当前考试状态不允许编辑核心配置" className="drawer-alert" />
         ) : null}
         <Form form={form} layout="vertical" disabled={formDisabled} preserve={false}>
-          {drawer?.mode === "create" ? <p className="exam-create-guidance">先填写考试基本信息。创建后直接进入试卷与答案配置，不在这里堆放阅卷参数。</p> : null}
           <div className="form-grid">
             <Form.Item label="考试名称" name="name" rules={[{ required: true, message: "请输入考试名称" }]}>
               <Input placeholder="高二物理期末考试" />
@@ -559,7 +536,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
           >
             <Select mode="multiple" options={classOptions} placeholder="按年级选择班级" optionFilterProp="label" />
           </Form.Item>
-          <details className="exam-create-advanced" open={drawer?.mode === "edit"}>
+          <details className="exam-create-advanced" open>
             <summary>阅卷与发布设置</summary>
             <div className="form-grid">
               <Form.Item

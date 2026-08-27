@@ -5,9 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"time"
+
+	"edugrade-enterprise/services/api-gateway/internal/logger"
 )
+
+var sessionTouchFailureLogger = logger.New(os.Stderr, "error")
 
 type PostgresStore struct {
 	db *sql.DB
@@ -125,12 +130,15 @@ GROUP BY u.id, t.code
 	if user.Status != "active" {
 		return User{}, ErrUnauthenticated
 	}
-	_, _ = s.db.ExecContext(ctx, `
+	cutoff := now.Add(-5 * time.Minute)
+	if _, err := s.db.ExecContext(ctx, `
 UPDATE auth_session
 SET last_seen_at = $2, updated_at = $2
 WHERE token_hash = $1
-  AND last_seen_at < $2 - interval '5 minutes'
-`, tokenHash, now)
+  AND last_seen_at < $3
+`, tokenHash, now, cutoff); err != nil {
+		sessionTouchFailureLogger.Warn(ctx, "auth_session_touch_failed", map[string]any{"error": err.Error()})
+	}
 	return user, nil
 }
 

@@ -118,6 +118,13 @@ export async function createClass(payload: Pick<SchoolClass, "school_id" | "grad
   });
 }
 
+export async function bindTeacherClass(classId: string, teacherId: string) {
+  return apiClient.request<{ status: string }>(`/api/v1/classes/${encodeURIComponent(classId)}/teachers`, {
+    method: "POST",
+    body: JSON.stringify({ teacher_id: teacherId })
+  });
+}
+
 export async function listStudents(filter: { classId?: string; ids?: string[]; q?: string; limit?: number; cursor?: string } = {}) {
   const query = buildQueryString({ class_id: filter.classId, ids: filter.ids, q: filter.q, limit: filter.limit, cursor: filter.cursor });
   return apiClient.request<{ students: Student[]; next_cursor: string; has_more: boolean }>(`/api/v1/students${query}`);

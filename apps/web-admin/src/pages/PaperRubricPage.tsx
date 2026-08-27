@@ -1018,7 +1018,7 @@ export function PaperRubricPage({
                 <Form.Item label="题干" name="stem">
                   <Input.TextArea rows={3} />
                 </Form.Item>
-                <Form.Item label="答题区域位置" required>
+                <details className="paper-advanced-settings"><summary>高级题目设置</summary><Form.Item label="答题区域位置" required>
                   <div className="form-grid">
                     <Form.Item label="所在页码" name="answer_area_page" rules={[{ required: true, message: "请输入所在页码" }]}>
                       <InputNumber min={1} precision={0} className="full-width-control" />
@@ -1037,11 +1037,11 @@ export function PaperRubricPage({
                     </Form.Item>
                   </div>
                   <p className="muted">也可以在「答题卡模板」中拖拽框选，更直观。</p>
-                </Form.Item>
+                </Form.Item></details>
                 <Form.Item label="标准答案" name="standard_answer" rules={[{ required: true, message: "请输入标准答案" }]}>
                   <Input.TextArea rows={3} />
                 </Form.Item>
-                <Form.Item label="等价答案" name="equivalent_answers">
+                <details className="paper-advanced-settings"><summary>高级答案设置</summary><Form.Item label="等价答案" name="equivalent_answers">
                   <Select mode="tags" placeholder="输入后回车" />
                 </Form.Item>
                 {showTolerance ? (
@@ -1055,19 +1055,19 @@ export function PaperRubricPage({
                       </Form.Item>
                     </div>
                   </Form.Item>
-                ) : null}
+                ) : null}</details>
               </Form>
 
-              <AssessmentProfileEditor
+              <details className="paper-advanced-settings"><summary>高级评分配置</summary><AssessmentProfileEditor
                 examId={selectedExam.id}
                 examSubject={selectedExam.subject}
                 examStatus={selectedExam.status}
                 question={selectedQuestion}
                 canManage={canManageAssessment}
                 onChanged={onExamChanged}
-              />
+              /></details>
 
-              {selectedQuestion && objectiveRuleType ? <section className="scoring-rule-editor">
+              {selectedQuestion && objectiveRuleType ? <details className="paper-advanced-settings"><summary>客观题评分规则</summary><section className="scoring-rule-editor">
                 <div className="section-head">
                   <div>
                     <h2>客观题评分规则</h2>
@@ -1096,7 +1096,7 @@ export function PaperRubricPage({
                   <label><span>单位必须填写</span><Switch checked={Boolean(scoringRuleConfig.unit_required)} onChange={(value) => setRuleConfig("unit_required", value)} /></label>
                 </div> : null}
                 {["single_choice", "true_false"].includes(objectiveRuleType) ? <Alert type="info" showIcon message="使用标准答案精确判定" description="空白、多涂、擦除或识别把握不足的答卷不会自动判零分，将转入人工确认。" /> : null}
-              </section> : null}
+              </section></details> : null}
 
               <div className="rubric-editor">
                 <div className="section-head">
@@ -1126,8 +1126,8 @@ export function PaperRubricPage({
                     description="系统只会为数学、物理、化学的公式类题目生成这些证据；不会自动给分，最终分数仍由规则或教师确认。"
                   />
                 ) : null}
-                <ResponsiveTable<RubricPoint> rowKey="id" dataSource={rubricPoints} columns={rubricColumns} pagination={false} size="middle" />
-                <div className="form-grid rubric-json-grid">
+                <ResponsiveTable<RubricPoint> rowKey="id" dataSource={rubricPoints} columns={rubricColumns} pagination={false} size="small" />
+                <details className="paper-advanced-settings"><summary>高级评分数据</summary><div className="form-grid rubric-json-grid">
                   <label>
                     <span>扣分点（JSON 格式，选填）</span>
                     <Input.TextArea
@@ -1150,7 +1150,7 @@ export function PaperRubricPage({
                       onChange={(event) => setExamplesJson(event.target.value)}
                     />
                   </label>
-                </div>
+                </div></details>
               </div>
             </section>
           </section> : null}

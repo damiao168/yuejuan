@@ -1,6 +1,7 @@
 export type ViewKey =
   | "dashboard"
   | "exams"
+  | "examCreate"
   | "papers"
   | "capture"
   | "grading"
@@ -18,6 +19,8 @@ export type ViewKey =
   | "audit"
   | "organization"
   | "membersStudents"
+  | "membersClasses"
+  | "membersTeachers"
   | "platformSchools"
   | "sessions"
   | "examWorkspace";

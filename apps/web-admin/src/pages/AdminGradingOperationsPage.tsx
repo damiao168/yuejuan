@@ -27,11 +27,11 @@ const runStatusLabels: Record<string, string> = {
 
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
-    console.warn("阅卷运营请求失败", error.status, error.code);
+    console.warn("阅卷请求失败", error.status, error.code);
     return error.message || "操作失败，请稍后重试";
   }
   if (error instanceof Error && error.message) return error.message;
-  return "阅卷运营数据加载失败";
+  return "阅卷数据加载失败";
 }
 
 function completion(summary?: ScoringSummary) {
@@ -91,15 +91,15 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
     return result;
   }, { active: 0, queued: 0, review: 0, failed: 0 }), [operations]);
 
-  if (!operations.length && loading) return <LoadingState label="正在加载阅卷运营状态" />;
+  if (!operations.length && loading) return <LoadingState label="正在加载阅卷状态" />;
   if (!operations.length && error) return <ErrorState message={error} onRetry={() => void load()} />;
 
   return (
     <div className="page-stack admin-grading-operations">
       <section className="page-heading">
         <div>
-          <h1>自动阅卷</h1>
-          <p>查看每场考试的处理进度，异常题目会自动进入人工复核。</p>
+          <h1>阅卷</h1>
+          <p>查看正在进行的考试和需要人工处理的评分任务。</p>
         </div>
         <Button icon={<RefreshCw size={16} />} loading={loading} onClick={() => void load()}>刷新</Button>
       </section>
@@ -117,11 +117,11 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
         />
       ) : null}
 
-      <section className="operations-metrics" aria-label="阅卷运营摘要">
+      <section className="operations-metrics" aria-label="阅卷摘要">
         <div><span>阅卷中考试</span><strong>{metrics.active}</strong></div>
-        <div><span>队列待处理</span><strong>{metrics.queued}</strong></div>
-        <div><span>待人工复核</span><strong>{metrics.review}</strong></div>
-        <div className={metrics.failed ? "danger" : ""}><span>评分失败</span><strong>{metrics.failed}</strong></div>
+        <div><span>等待处理</span><strong>{metrics.queued}</strong></div>
+        <div><span>待人工处理</span><strong>{metrics.review}</strong></div>
+        <div className={metrics.failed ? "danger" : ""}><span>处理失败</span><strong>{metrics.failed}</strong></div>
       </section>
 
       <section className="operations-filter">
@@ -129,7 +129,7 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
         <span>{filtered.length} 场进行中考试</span>
       </section>
 
-      <section className="operations-list" aria-label="考试阅卷运营列表">
+      <section className="operations-list" aria-label="考试阅卷列表">
         {filtered.length ? filtered.map(({ exam, summary }) => {
           const run = summary?.run;
           const progress = completion(summary);
@@ -156,7 +156,7 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
               </div>
               <div className="operations-actions">
                 {needsAttention > 0 ? <span className="operations-warning"><CircleAlert size={15} />{needsAttention} 项需处理</span> : <span className="operations-ok"><ShieldCheck size={15} />无阻断项</span>}
-                <Button type="primary" onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/grading`)}>查看自动阅卷<ArrowRight size={16} /></Button>
+                <Button onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/grading`)}>{needsAttention > 0 ? "处理异常" : run ? "查看进度" : "进入考试"}<ArrowRight size={16} /></Button>
               </div>
             </article>
           );
