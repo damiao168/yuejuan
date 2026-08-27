@@ -70,10 +70,12 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(prompt["prompt_version"], self.settings.prompt_version)
         self.assertFalse(prompt["mutable_at_runtime"])
         self.assertEqual(len(prompt["bundle_sha256"]), 64)
-        self.assertEqual(
-            {item["key"] for item in prompt["components"]},
-            {"base", "short_answer", "calculation", "essay", "discussion", "structured"},
-        )
+        component_keys = {item["key"] for item in prompt["components"]}
+        self.assertIn("base", component_keys)
+        self.assertIn("structured", component_keys)
+        self.assertIn("subject.chinese.essay", component_keys)
+        self.assertIn("subject.math.calculation", component_keys)
+        self.assertNotIn("calculation", component_keys)
 
 
 if __name__ == "__main__":

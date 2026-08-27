@@ -16,7 +16,7 @@ func TestHTTPRuntimePromptSourceReadsAuthenticatedRuntimeSnapshot(t *testing.T) 
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"prompt":{"prompt_version":"subjective-v2","bundle_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","components":[{"key":"base","filename":"base.md","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","content":"Return JSON only."},{"key":"short_answer","filename":"short.md","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","content":"Short answer."},{"key":"calculation","filename":"calculation.md","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","content":"Calculation."},{"key":"essay","filename":"essay.md","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","content":"Essay."},{"key":"discussion","filename":"discussion.md","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","content":"Discussion."},{"key":"structured","filename":"structured.md","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","content":"Structured."}],"activation_mode":"deployment_manifest","mutable_at_runtime":false}}`))
+		_, _ = w.Write([]byte(`{"prompt":{"prompt_version":"subjective-v5","bundle_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","components":[{"key":"base","filename":"base.md","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","content":"Common rules."},{"key":"subject.math.calculation","filename":"subjects/math/calculation.md","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","content":"Mathematics calculation."},{"key":"structured","filename":"structured.md","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","content":"Structured."}],"activation_mode":"deployment_manifest","mutable_at_runtime":false}}`))
 	}))
 	defer server.Close()
 
@@ -25,7 +25,7 @@ func TestHTTPRuntimePromptSourceReadsAuthenticatedRuntimeSnapshot(t *testing.T) 
 	if err != nil {
 		t.Fatalf("read runtime prompt: %v", err)
 	}
-	if prompt.PromptVersion != "subjective-v2" || len(prompt.Components) != 6 || prompt.Components[0].Content != "Return JSON only." {
+	if prompt.PromptVersion != "subjective-v5" || len(prompt.Components) != 3 || prompt.Components[1].Key != "subject.math.calculation" {
 		t.Fatalf("unexpected prompt snapshot: %#v", prompt)
 	}
 }

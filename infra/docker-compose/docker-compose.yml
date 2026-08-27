@@ -109,14 +109,16 @@ services:
     command:
       - |
         lock_log="$$(mktemp)"
-        psql "$${EDUGRADE_POSTGRES_DSN}" -Atc "SELECT pg_advisory_lock(19770428061); SELECT 'edugrade_migration_lock_acquired'; SELECT pg_sleep(86400)" >"$${lock_log}" 2>&1 &
+        lock_app="edugrade-migrate-$${HOSTNAME}"
+        PGAPPNAME="$${lock_app}" psql "$${EDUGRADE_POSTGRES_DSN}" -Atc "SELECT pg_advisory_lock(19770428061); SELECT pg_sleep(86400)" >"$${lock_log}" 2>&1 &
         lock_pid="$$!"
         cleanup_lock() { kill "$${lock_pid}" 2>/dev/null || true; wait "$${lock_pid}" 2>/dev/null || true; rm -f "$${lock_log}"; }
         trap cleanup_lock EXIT INT TERM
         acquired=false
         for attempt in $$(seq 1 120); do
-          if grep -q edugrade_migration_lock_acquired "$${lock_log}"; then acquired=true; break; fi
           if ! kill -0 "$${lock_pid}" 2>/dev/null; then cat "$${lock_log}" >&2; exit 44; fi
+          lock_granted="$$(PGAPPNAME=edugrade-migrate-probe psql "$${EDUGRADE_POSTGRES_DSN}" -Atc "SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE l.locktype = 'advisory' AND l.granted AND a.application_name = '$${lock_app}')")"
+          if [ "$${lock_granted}" = "t" ]; then acquired=true; break; fi
           sleep 1
         done
         if [ "$${acquired}" != "true" ]; then echo "timed out acquiring migration advisory lock" >&2; exit 44; fi
@@ -196,7 +198,7 @@ services:
         BUILD_TIME: ${EDUGRADE_BUILD_TIME:-unknown}
         IMAGE_DIGEST: ${EDUGRADE_IMAGE_DIGEST:-unknown}
         RELEASE_ID: ${EDUGRADE_RELEASE_ID:-local}
-        SCHEMA_VERSION: ${EDUGRADE_SCHEMA_VERSION:-000099}
+        SCHEMA_VERSION: ${EDUGRADE_SCHEMA_VERSION:-000102}
         GOPROXY: ${EDUGRADE_GO_PROXY:-}
     image: edugrade/api-gateway:${EDUGRADE_IMAGE_TAG:-local}
     container_name: edugrade-api-gateway
@@ -384,11 +386,56 @@ services:
       EDUGRADE_OCR_LEASE_SECONDS: ${EDUGRADE_OCR_LEASE_SECONDS:-300}
       EDUGRADE_OCR_HEARTBEAT_INTERVAL: ${EDUGRADE_OCR_HEARTBEAT_INTERVAL:-10}
       EDUGRADE_OCR_HEARTBEAT_TIMEOUT: ${EDUGRADE_OCR_HEARTBEAT_TIMEOUT:-3}
+      EDUGRADE_OCR_RUNTIME_ENABLED: "true"
+      EDUGRADE_MATH_RUNTIME_ENABLED: "false"
+      EDUGRADE_MATH_VERIFY_BASE_URL: http://math-verification-worker:8092
+      EDUGRADE_MATH_VERIFY_TOKEN: ${EDUGRADE_AI_SERVICE_TOKEN}
+      EDUGRADE_FORMULA_MODEL_VERSION: ${EDUGRADE_FORMULA_MODEL_VERSION:-PP-FormulaNet_plus-M}
     mem_limit: ${EDUGRADE_OCR_WORKER_MEM_LIMIT:-4g}
     volumes:
       - ocr_model_cache:/home/ocr-worker/.paddlex
     depends_on:
       api-gateway:
+        condition: service_healthy
+      math-verification-worker:
+        condition: service_healthy
+    logging: *default-logging
+    restart: unless-stopped
+
+  math-recognition-worker:
+    image: edugrade/ocr-worker:${EDUGRADE_IMAGE_TAG:-local}
+    container_name: edugrade-math-recognition-worker
+    profiles: ["ocr"]
+    environment:
+      EDUGRADE_API_BASE_URL: http://api-gateway:8080
+      EDUGRADE_OCR_WORKER_TENANT_CODE: ${EDUGRADE_OCR_WORKER_TENANT_CODE}
+      EDUGRADE_OCR_WORKER_USERNAME: ${EDUGRADE_OCR_WORKER_USERNAME}
+      EDUGRADE_OCR_WORKER_PASSWORD: ${EDUGRADE_OCR_WORKER_PASSWORD}
+      EDUGRADE_OCR_ENGINE: ${EDUGRADE_OCR_ENGINE}
+      EDUGRADE_OCR_ENGINE_VERSION: ${EDUGRADE_OCR_ENGINE_VERSION}
+      EDUGRADE_OCR_MODEL_VERSION: ${EDUGRADE_OCR_MODEL_VERSION}
+      EDUGRADE_OCR_MIN_CONFIDENCE: ${EDUGRADE_OCR_MIN_CONFIDENCE}
+      EDUGRADE_OCR_POLL_INTERVAL: ${EDUGRADE_OCR_POLL_INTERVAL}
+      EDUGRADE_OCR_BATCH_SIZE: 1
+      EDUGRADE_OCR_DEVICE: ${EDUGRADE_OCR_DEVICE}
+      EDUGRADE_OCR_PREPROCESS_PROFILE: ${EDUGRADE_OCR_PREPROCESS_PROFILE}
+      EDUGRADE_OCR_WORKER_ID: math-recognition-worker-1
+      EDUGRADE_OCR_LEASE_SECONDS: ${EDUGRADE_OCR_LEASE_SECONDS:-300}
+      EDUGRADE_OCR_HEARTBEAT_INTERVAL: ${EDUGRADE_OCR_HEARTBEAT_INTERVAL:-10}
+      EDUGRADE_OCR_HEARTBEAT_TIMEOUT: ${EDUGRADE_OCR_HEARTBEAT_TIMEOUT:-3}
+      EDUGRADE_OCR_RUNTIME_ENABLED: "false"
+      EDUGRADE_MATH_RUNTIME_ENABLED: ${EDUGRADE_MATH_RUNTIME_ENABLED:-true}
+      EDUGRADE_MATH_VERIFY_BASE_URL: http://math-verification-worker:8092
+      EDUGRADE_MATH_VERIFY_TOKEN: ${EDUGRADE_AI_SERVICE_TOKEN}
+      EDUGRADE_FORMULA_MODEL_VERSION: ${EDUGRADE_FORMULA_MODEL_VERSION:-PP-FormulaNet_plus-M}
+    mem_limit: ${EDUGRADE_MATH_RECOGNITION_WORKER_MEM_LIMIT:-4g}
+    cpus: ${EDUGRADE_MATH_RECOGNITION_WORKER_CPU_LIMIT:-4.0}
+    volumes:
+      - ocr_model_cache:/home/ocr-worker/.paddlex
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+      math-verification-worker:
         condition: service_healthy
     logging: *default-logging
     restart: unless-stopped
@@ -453,7 +500,7 @@ services:
         MATH_PYTHON_IMAGE: ${EDUGRADE_MATH_PYTHON_IMAGE:-python:3.11.15-slim-trixie}
     image: edugrade/math-verification-worker:${EDUGRADE_IMAGE_TAG:-local}
     container_name: edugrade-math-verification-worker
-    profiles: ["math"]
+    profiles: ["math", "ocr"]
     environment:
       EDUGRADE_MATH_VERIFY_TOKEN: ${EDUGRADE_AI_SERVICE_TOKEN}
       EDUGRADE_MATH_VERIFY_PORT: 8092

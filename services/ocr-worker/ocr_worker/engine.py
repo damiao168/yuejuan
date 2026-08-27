@@ -27,6 +27,10 @@ class OCREngine(Protocol):
 
 
 _PADDLE_MODEL_PROFILES = {
+    "ppocr-v5-mobile": {
+        "text_detection_model_name": "PP-OCRv5_mobile_det",
+        "text_recognition_model_name": "PP-OCRv5_mobile_rec",
+    },
     "ppocr-v5-server": {
         "text_detection_model_name": "PP-OCRv5_server_det",
         "text_recognition_model_name": "PP-OCRv5_server_rec",
@@ -41,7 +45,7 @@ _READINESS_PROBE_IMAGE = base64.b64decode(
 
 
 class PaddleOCREngine:
-    def __init__(self, *, device: str = "cpu", model_version: str = "ppocr-v5-server") -> None:
+    def __init__(self, *, device: str = "cpu", model_version: str = "ppocr-v5-mobile") -> None:
         normalized_device = device.strip().lower()
         if normalized_device != "cpu":
             raise ValueError("the packaged paddlepaddle runtime supports only EDUGRADE_OCR_DEVICE=cpu")

@@ -19,9 +19,12 @@ import { ApiClientError } from "../api/client";
 import { listExams, type Exam } from "../api/exams";
 import {
   createQuestion,
+  createPaperImport,
   createRubric,
   createScoringRule,
   deleteQuestion,
+  applyPaperImport,
+  listPaperImports,
   listPapers,
   listQuestions,
   listScoringRules,
@@ -32,6 +35,7 @@ import {
   uploadFile,
   validatePaperConfig,
   type PaperVersion,
+  type PaperImportJob,
   type Question,
   type QuestionPayload,
   type RubricEvidenceRequirement,
@@ -183,6 +187,7 @@ export function PaperRubricPage({
   const [exams, setExams] = useState<Exam[]>([]);
   const [selectedExamId, setSelectedExamId] = useState(initialExamId);
   const [papers, setPapers] = useState<PaperVersion[]>([]);
+  const [paperImports, setPaperImports] = useState<PaperImportJob[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<"create" | "edit">("create");
@@ -194,6 +199,7 @@ export function PaperRubricPage({
   const [savingQuestion, setSavingQuestion] = useState(false);
   const [savingRubric, setSavingRubric] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [parsing, setParsing] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [rubricStatus, setRubricStatus] = useState("draft");
   const [rubricPoints, setRubricPoints] = useState<RubricPoint[]>([]);
@@ -202,6 +208,7 @@ export function PaperRubricPage({
   const [scoringRules, setScoringRules] = useState<ScoringRule[]>([]);
   const [scoringRuleConfig, setScoringRuleConfig] = useState<Record<string, unknown>>({});
   const [savingScoringRule, setSavingScoringRule] = useState(false);
+  const [showQuestionEditor, setShowQuestionEditor] = useState(false);
 
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
   const selectedQuestion = useMemo(
@@ -244,9 +251,10 @@ export function PaperRubricPage({
     setConfigLoading(true);
     setConfigError(null);
     try {
-      const [paperResult, questionResult] = await Promise.all([listPapers(examId), listQuestions(examId)]);
+      const [paperResult, questionResult, importResult] = await Promise.all([listPapers(examId), listQuestions(examId), listPaperImports(examId)]);
       if (requestId !== configRequestRef.current) return;
       setPapers(paperResult.papers);
+      setPaperImports(importResult.imports);
       setQuestions(questionResult.questions);
       setValidation(null);
       setEditorMode((current) => {
@@ -547,8 +555,18 @@ export function PaperRubricPage({
 
   const uploadProps: UploadProps = {
     showUploadList: false,
+    accept: ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     beforeUpload: (file) => {
       void handleUpload(file);
+      return false;
+    }
+  };
+
+  const answerUploadProps: UploadProps = {
+    showUploadList: false,
+    accept: ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    beforeUpload: (file) => {
+      void handleAnswerUpload(file);
       return false;
     }
   };
@@ -569,6 +587,53 @@ export function PaperRubricPage({
       message.error(formatError(currentError));
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleAnswerUpload(file: File) {
+    const paper = papers[0];
+    if (!selectedExam || !paper) {
+      message.error("请先上传完整试卷，再上传标准答案");
+      return;
+    }
+    if (questions.length > 0) {
+      message.warning("当前考试已有题目，自动导入不会覆盖；请继续使用逐题校对");
+      return;
+    }
+    setParsing(true);
+    try {
+      const upload = await uploadFile(file, { owner_type: "import", owner_id: selectedExam.id, exam_id: selectedExam.id, school_id: selectedExam.school_id });
+      const result = await createPaperImport(selectedExam.id, {
+        exam_paper_id: paper.id,
+        paper_file_asset_id: paper.file_asset_id,
+        answer_file_asset_id: upload.file.id,
+        subject: selectedExam.subject
+      });
+      if (result.import.status === "failed") {
+        message.error(result.import.issues[0] || "试卷与答案解析失败");
+      } else {
+        message.success(`已识别 ${result.import.questions.length} 道题，请核对后确认`);
+      }
+      await loadConfig(selectedExam.id);
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  async function confirmPaperImport(job: PaperImportJob) {
+    if (!selectedExam) return;
+    setParsing(true);
+    try {
+      await applyPaperImport(job.id);
+      message.success("题目、标准答案和评分点已写入当前考试");
+      await loadConfig(selectedExam.id);
+      onExamChanged?.();
+    } catch (currentError) {
+      message.error(formatError(currentError));
+    } finally {
+      setParsing(false);
     }
   }
 
@@ -712,6 +777,7 @@ export function PaperRubricPage({
   }
 
   const scoreMismatch = selectedQuestion ? Math.abs(pointTotal(rubricPoints) - selectedQuestion.score) > 0.0001 : false;
+  const latestPaperImport = paperImports[0];
   const editorVisible = !loading && !error && Boolean(selectedExam) && !configLoading && !configError;
 
   return (
@@ -720,9 +786,9 @@ export function PaperRubricPage({
       <section className="page-heading">
         <div>
           <Space>
-            <h1>试卷管理</h1>
+            <h1>试卷与答案</h1>
           </Space>
-          <p>上传试卷、配置题目、维护标准答案和评分细则。</p>
+          <p>上传完整试卷，核对题目、标准答案和评分细则。</p>
         </div>
         <Space wrap>
           <Button icon={<RefreshCw size={16} />} onClick={() => void loadExams()} loading={loading}>
@@ -746,7 +812,12 @@ export function PaperRubricPage({
           />
           <Upload {...uploadProps}>
             <Button icon={<FileUp size={16} />} disabled={!canManage || !selectedExam} loading={uploading}>
-              上传试卷文件
+              上传整份试卷（PDF/Word）
+            </Button>
+          </Upload>
+          <Upload {...answerUploadProps}>
+            <Button icon={<FileUp size={16} />} disabled={!canManage || !selectedExam || papers.length === 0 || questions.length > 0} loading={parsing}>
+              上传标准答案并自动拆题
             </Button>
           </Upload>
           {selectedExam ? <span className="muted">当前考试总分：{selectedExam.total_score}</span> : null}
@@ -771,11 +842,11 @@ export function PaperRubricPage({
         <ErrorState message={configError} onRetry={() => void loadConfig(selectedExam.id)} />
       ) : (
         <>
-          <section className="workspace-section">
+          <section className="workspace-section paper-source-files">
             <div className="section-head">
               <div>
-                <h2>试卷文件</h2>
-                <p>{papers.length} 个版本</p>
+                <h2>源文件</h2>
+                <p>{papers.length ? `已上传 ${papers.length} 个版本` : "请先上传完整试卷"}</p>
               </div>
             </div>
             <ResponsiveTable<PaperVersion>
@@ -787,6 +858,40 @@ export function PaperRubricPage({
               locale={{ emptyText: <EmptyState title="暂无试卷文件" description="上传试卷文件后，版本记录会显示在这里。" /> }}
             />
           </section>
+
+          {latestPaperImport ? (
+            <section className="workspace-section paper-import-review">
+              <div className="section-head">
+                <div>
+                  <h2>自动识别结果</h2>
+                  <p>
+                    {latestPaperImport.status === "review_required"
+                      ? `识别 ${latestPaperImport.questions.length} 道题，确认后写入题目、答案和评分点`
+                      : latestPaperImport.status === "applied"
+                        ? "已确认并写入当前考试"
+                        : latestPaperImport.status === "failed"
+                          ? latestPaperImport.issues[0] || "识别失败"
+                          : "正在识别试卷结构与标准答案"}
+                  </p>
+                </div>
+                {latestPaperImport.status === "review_required" ? (
+                  <Button type="primary" loading={parsing} onClick={() => void confirmPaperImport(latestPaperImport)}>
+                    确认导入
+                  </Button>
+                ) : null}
+              </div>
+              {latestPaperImport.status === "review_required" ? (
+                <div className="paper-import-facts">
+                  <span><strong>{latestPaperImport.questions.length}</strong> 道题</span>
+                  <span><strong>{latestPaperImport.questions.filter((item) => item.confidence < 0.8 || item.issues.length > 0).length}</strong> 项需重点核对</span>
+                  <span><strong>{latestPaperImport.questions.reduce((sum, item) => sum + item.score, 0)}</strong> 分</span>
+                </div>
+              ) : null}
+              {latestPaperImport.issues.length ? (
+                <Alert type={latestPaperImport.status === "failed" ? "error" : "warning"} showIcon message="需要处理" description={latestPaperImport.issues.join("；")} />
+              ) : null}
+            </section>
+          ) : null}
 
           {validation ? (
             <Alert
@@ -809,7 +914,18 @@ export function PaperRubricPage({
             />
           ) : null}
 
-          <section className="paper-workbench">
+          <section className="workspace-section paper-question-summary">
+            <div>
+              <strong>{questions.length}</strong>
+              <span>道题目</span>
+              <small>{questions.filter((question) => question.answer_key).length} 道已配置标准答案</small>
+            </div>
+            <Button onClick={() => setShowQuestionEditor((current) => !current)}>
+              {showQuestionEditor ? "收起逐题校对" : questions.length ? "逐题校对" : "手动补充题目"}
+            </Button>
+          </section>
+
+          {showQuestionEditor ? <section className="paper-workbench">
             <aside className="workspace-section question-list-panel">
               <div className="section-head">
                 <div>
@@ -1037,7 +1153,7 @@ export function PaperRubricPage({
                 </div>
               </div>
             </section>
-          </section>
+          </section> : null}
         </>
       )}
     </div>

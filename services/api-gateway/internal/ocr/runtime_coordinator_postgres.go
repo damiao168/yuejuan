@@ -23,7 +23,7 @@ func (c *postgresRuntimeCoordinator) CreateTask(ctx context.Context, tenantID, s
 	if err != nil {
 		return Task{}, err
 	}
-	if _, err = workerruntime.CreateTaskInTx(ctx, tx, tenantID, actorID, runtimeCreateInput(task)); err != nil {
+	if _, err = workerruntime.CreateTaskInTx(ctx, tx, tenantID, actorID, runtimeCreateInput(task, input.SourceFileAssetIDs...)); err != nil {
 		return Task{}, err
 	}
 	return task, tx.Commit()

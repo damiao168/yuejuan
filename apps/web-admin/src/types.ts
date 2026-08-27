@@ -17,6 +17,7 @@ export type ViewKey =
   | "subjectiveGradingBatches"
   | "audit"
   | "organization"
+  | "membersStudents"
   | "platformSchools"
   | "sessions"
   | "examWorkspace";

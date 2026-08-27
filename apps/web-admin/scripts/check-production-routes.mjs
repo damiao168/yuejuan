@@ -173,13 +173,14 @@ assert(
 );
 
 assert(
-  /responsive-record-list/.test(responsiveTable) && /flexibleColumns/.test(responsiveTable),
-  "Wide tables must have a vertical record mode and flexible desktop columns."
+  /responsive-record-list/.test(responsiveTable)
+    && /columns=\{columns\}/.test(responsiveTable)
+    && /scroll=\{scroll\}/.test(responsiveTable)
+    && /size=\{tableProps\.size \?\? ["']small["']\}/.test(responsiveTable),
+  "Wide tables must keep their desktop width, fixed-column, ellipsis, scroll, and compact-size contracts."
 );
 
 const allUiSource = sourceFiles("src").join("\n");
-assert(!/scroll=\{\{\s*x\s*:/.test(allUiSource), "Production tables must not enable horizontal scrolling.");
-assert(!/overflow-x:\s*(?:auto|scroll|hidden|clip)/.test(styles), "CSS must not create or conceal horizontal overflow.");
 
 assert(
   /\.immersive-workspace \.grading-inspector\s*\{[\s\S]*?overflow-y:\s*auto;/.test(styles)

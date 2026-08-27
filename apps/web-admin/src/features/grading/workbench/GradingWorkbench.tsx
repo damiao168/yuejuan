@@ -1858,10 +1858,10 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     <div className="grading-shell">
       {initialExamId && canGrade ? <section className="grading-overview">
         <div className="grading-overview-head">
-          <div><h2>评分进度</h2><p>系统只自动确认证据完整且规则明确的答案，其余进入人工队列。</p></div>
+          <div><h2>自动阅卷</h2><p>查看整张答题卡、识别结果和题目得分；异常题目进入人工复核。</p></div>
           <Space wrap>
             <Button icon={<RefreshCw size={15} />} loading={scoringLoading} onClick={() => void loadScoringSummary()}>刷新</Button>
-            <Button icon={<Eye size={15} />} loading={actioning === "scoring-detail"} onClick={() => void showScoringRunDetail()}>阅卷监控</Button>
+            <Button type={scoringSummary?.run ? "primary" : "default"} icon={<Eye size={15} />} loading={actioning === "scoring-detail"} onClick={() => void showScoringRunDetail()}>逐卷查看</Button>
             {canManageTasks ? <Button icon={<Award size={15} />} onClick={() => setGoldPaperManagerOpen(true)}>标准卷</Button> : null}
             {canManageTasks && (ctx?.task.question_id || scoringSummary?.questions[0]?.question_id) ? <Button icon={<BadgeCheck size={15} />} onClick={() => setCalibrationQuestionId(ctx?.task.question_id || scoringSummary?.questions[0]?.question_id || "")}>阅卷校准</Button> : null}
             {scoringSummary?.run && scoringSummary.run.failed_count > 0 ? <Button icon={<RotateCcw size={15} />} loading={actioning === "retry-scoring"} onClick={() => void retryFailedScoring()}>重新处理失败项</Button> : null}
@@ -1928,7 +1928,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
       </section> : null}
       <OcrWorkerAlert enabled={canWork} />
       <Drawer
-        title="阅卷监控"
+        title="自动阅卷 · 逐卷查看"
         width="min(1680px, 98vw)"
         open={scoringDetailOpen}
         onClose={() => setScoringDetailOpen(false)}

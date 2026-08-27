@@ -298,12 +298,12 @@ function annotationTypeLabel(type: StudentQuestionAnnotation["type"]) {
 }
 
 const appealReasonLabels: Record<string, string> = {
-  recognition_error: "文字识别有误",
-  missing_step_credit: "过程分未计入",
-  rubric_disagreement: "对评分要点有异议",
-  calculation_error: "分数计算有误",
-  annotation_issue: "批注或反馈问题",
-  other: "其他"
+  recognition_error: "答题内容识别不完整",
+  missing_step_credit: "作答步骤疑似漏评",
+  rubric_disagreement: "评分标准适用有异议",
+  calculation_error: "得分记录或合计有误",
+  annotation_issue: "批注与实际扣分不一致",
+  other: "其他明确评分问题"
 };
 
 function QuestionAppealForm({ examID, releaseID, releaseVersion, question, allowedReasonCodes, onSubmitted }: {
@@ -320,10 +320,18 @@ function QuestionAppealForm({ examID, releaseID, releaseVersion, question, allow
   const [selectedRegion, setSelectedRegion] = useState<SelectedAppealRegion | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [submitted, setSubmitted] = useState(false);
+  const [existingAppeal, setExistingAppeal] = useState<StudentQuestionAppeal | null>(null);
 
-  if (submitted) {
-    return <div className="question-appeal-confirmation" role="status">已提交本题复核申请。处理进度会显示在页面下方。</div>;
+  useEffect(() => {
+    let active = true;
+    void listQuestionAppeals(examID).then((response) => {
+      if (active) setExistingAppeal(response.appeals.find((appeal) => appeal.source_release_id === releaseID && appeal.question_id === question.question_id) ?? null);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [examID, question.question_id, releaseID]);
+
+  if (existingAppeal) {
+    return <div className="question-appeal-confirmation" role="status"><strong>{appealStatusLabel(existingAppeal.status)}</strong><span>本题已提交过复核申请，不能重复提交。处理结果会显示在页面下方。</span></div>;
   }
   if (availableReasons.length === 0) {
     return null;
@@ -333,14 +341,14 @@ function QuestionAppealForm({ examID, releaseID, releaseVersion, question, allow
     setSubmitting(true);
     setError("");
     try {
-      await createQuestionAppeal(examID, {
+      const response = await createQuestionAppeal(examID, {
         source_release_id: releaseID,
         question_id: question.question_id,
         reason_code: reasonCode,
         reason: reason.trim(),
         ...(selectedRegion ? { selected_region: selectedRegion } : {})
       });
-      setSubmitted(true);
+      setExistingAppeal(response.appeal);
       onSubmitted();
     } catch (failure) {
       setError(friendlyError(failure));
@@ -350,16 +358,16 @@ function QuestionAppealForm({ examID, releaseID, releaseVersion, question, allow
   };
   return <form className="question-appeal-form" onSubmit={submit}>
     <h3>申请复核</h3>
-    <p>将以当前已发布的第 {releaseVersion} 版题目得分为依据，不会直接修改成绩。</p>
+    <p>每道题只能提交一次。学校将按第 {releaseVersion} 版成绩核对原卷和评分标准。</p>
     <AppealRegionSelector
       imageURL={studentQuestionAnswerImageURL(examID, question.question_id)}
       value={selectedRegion}
       onChange={setSelectedRegion}
     />
     <label>复核原因<select value={reasonCode} onChange={(event) => setReasonCode(event.target.value)}>{availableReasons.map((code) => <option key={code} value={code}>{appealReasonLabels[code]}</option>)}</select></label>
-    <label>说明<textarea required maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="请说明需要复核的具体内容" /></label>
+    <label>具体说明<textarea required minLength={10} maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="请具体说明哪一步、哪一评分点或哪段识别内容需要复核（10—500字）" /></label>
     {error ? <p className="detail-error" role="alert">{error}</p> : null}
-    <button className="secondary-button" type="submit" disabled={submitting || reason.trim().length === 0}>{submitting ? "正在提交…" : "提交本题复核"}</button>
+    <button className="secondary-button" type="submit" disabled={submitting || reason.trim().length < 10}>{submitting ? "正在提交…" : "确认提交（仅一次）"}</button>
   </form>;
 }
 
@@ -458,7 +466,15 @@ function appealStatusLabel(status: string) {
 }
 
 function EmptyState() {
-  return <div className="empty-state"><h2>暂未有已发布成绩</h2><p>老师发布成绩后，会自动出现在这里。</p></div>;
+  return <div className="empty-state">
+    <p className="empty-state-kicker">当前状态</p>
+    <h2>学校尚未发布你的成绩</h2>
+    <p>成绩由学校正式发布后会自动出现在这里，不需要重复提交或刷新。</p>
+    <ul>
+      <li>如果老师还未通知发布，请等待学校完成阅卷与成绩确认。</li>
+      <li>如果已经收到发布通知但仍看不到，请联系学校管理员核对学号绑定。</li>
+    </ul>
+  </div>;
 }
 
 function ErrorNotice({ message, onRetry, onBack }: { message: string; onRetry: () => void; onBack?: () => void }) {
@@ -468,6 +484,7 @@ function ErrorNotice({ message, onRetry, onBack }: { message: string; onRetry: (
 function friendlyError(reason: unknown) {
   if (reason instanceof PortalApiError) {
     if (reason.status === 401) return "登录状态已失效，请重新登录。";
+    if (reason.status === 403 && reason.code === "student_score_scope_required") return "学生账号尚未关联本人学籍，请联系学校管理员核对账号与学号。";
     if (reason.status === 403) return "你无权查看此内容。";
     if (reason.status === 404) return "学校尚未发布这场考试的成绩。";
   }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 type MemoryStore struct {
@@ -15,6 +16,7 @@ type MemoryStore struct {
 	rubrics    map[string][]Rubric
 	templates  map[string]AnswerSheetTemplate
 	readiness  map[string]ReadinessResult
+	imports    map[string]PaperImportJob
 	examState  map[string]memoryExamState
 }
 
@@ -34,8 +36,103 @@ func NewMemoryStore() *MemoryStore {
 		rubrics:    map[string][]Rubric{},
 		templates:  map[string]AnswerSheetTemplate{},
 		readiness:  map[string]ReadinessResult{},
+		imports:    map[string]PaperImportJob{},
 		examState:  map[string]memoryExamState{},
 	}
+}
+
+func (s *MemoryStore) CreatePaperImport(_ context.Context, tenantID, examID, userID string, input CreatePaperImportInput) (PaperImportJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.papers[input.ExamPaperID]
+	if !ok || p.TenantID != tenantID || p.ExamID != examID || input.PaperFileAssetID == "" || input.AnswerFileAssetID == "" {
+		return PaperImportJob{}, ErrInvalidInput
+	}
+	now := time.Now().UTC()
+	job := PaperImportJob{ID: s.id("paper-import"), TenantID: tenantID, ExamID: examID, ExamPaperID: input.ExamPaperID, PaperFileAssetID: input.PaperFileAssetID, AnswerFileAssetID: input.AnswerFileAssetID, Status: "processing", Subject: input.Subject, Questions: []PaperImportDraftQuestion{}, Issues: []string{}, CreatedBy: userID, CreatedAt: now, UpdatedAt: now}
+	s.imports[job.ID] = job
+	return job, nil
+}
+
+func (s *MemoryStore) CompletePaperImport(_ context.Context, tenantID, id string, questions []PaperImportDraftQuestion, issues []string) (PaperImportJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.imports[id]
+	if !ok || job.TenantID != tenantID {
+		return PaperImportJob{}, ErrNotFound
+	}
+	job.Status, job.Questions, job.Issues, job.UpdatedAt = "review_required", questions, issues, time.Now().UTC()
+	s.imports[id] = job
+	return job, nil
+}
+
+func (s *MemoryStore) FailPaperImport(_ context.Context, tenantID, id, code string, issues []string) (PaperImportJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.imports[id]
+	if !ok || job.TenantID != tenantID {
+		return PaperImportJob{}, ErrNotFound
+	}
+	job.Status, job.ErrorCode, job.Issues, job.UpdatedAt = "failed", code, issues, time.Now().UTC()
+	s.imports[id] = job
+	return job, nil
+}
+
+func (s *MemoryStore) GetPaperImport(_ context.Context, tenantID, id string) (PaperImportJob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	job, ok := s.imports[id]
+	if !ok || job.TenantID != tenantID {
+		return PaperImportJob{}, ErrNotFound
+	}
+	return job, nil
+}
+
+func (s *MemoryStore) ListPaperImports(_ context.Context, tenantID, examID string) ([]PaperImportJob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []PaperImportJob{}
+	for _, job := range s.imports {
+		if job.TenantID == tenantID && job.ExamID == examID {
+			out = append(out, job)
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) ApplyPaperImport(_ context.Context, tenantID, id, userID string) (PaperImportJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.imports[id]
+	if !ok || job.TenantID != tenantID {
+		return PaperImportJob{}, ErrNotFound
+	}
+	if job.Status != "review_required" {
+		return PaperImportJob{}, ErrConflict
+	}
+	for i, draft := range job.Questions {
+		if err := validateQuestionInput(draft.QuestionNo, draft.QuestionType, draft.Score); err != nil {
+			return PaperImportJob{}, ErrInvalidInput
+		}
+		if draft.Rubric != nil && (!scoreEqual(SumRubricPoints(draft.Rubric.Points), draft.Score) || !scoreEqual(draft.Rubric.MaxScore, draft.Score)) {
+			return PaperImportJob{}, ErrRubricMismatch
+		}
+		qid := s.id("question")
+		q := Question{ID: qid, TenantID: tenantID, ExamID: job.ExamID, ExamPaperID: job.ExamPaperID, QuestionNo: draft.QuestionNo, QuestionType: draft.QuestionType, Score: draft.Score, Stem: draft.Stem, KnowledgePoints: cloneStrings(draft.KnowledgePoints), AnswerArea: map[string]any{}, SortOrder: i + 1, Status: "active"}
+		if draft.AnswerKey != nil {
+			q.AnswerKey = &AnswerKey{ID: s.id("answer"), QuestionID: qid, AnswerVersion: "v1", StandardAnswer: draft.AnswerKey.StandardAnswer, EquivalentAnswers: draft.AnswerKey.EquivalentAnswers, Tolerance: draft.AnswerKey.Tolerance}
+		}
+		s.questions[qid] = q
+		if draft.Rubric != nil {
+			r := Rubric{ID: s.id("rubric"), QuestionID: qid, Version: "v1", Status: "draft", MaxScore: draft.Rubric.MaxScore, Points: draft.Rubric.Points, Deductions: draft.Rubric.Deductions, Examples: draft.Rubric.Examples}
+			s.rubrics[qid] = []Rubric{r}
+		}
+	}
+	now := time.Now().UTC()
+	job.Status, job.AppliedAt, job.UpdatedAt = "applied", &now, now
+	s.imports[id] = job
+	_ = userID
+	return job, nil
 }
 
 func (s *MemoryStore) SetExamTotal(examID string, total float64) {

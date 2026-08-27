@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .app import GradingAgentApplication
 from .config import Settings
 from .errors import AgentError
+from .paper_parser import PaperParser
 
 
 class GradingAgentHTTPServer(ThreadingHTTPServer):
@@ -53,13 +54,17 @@ class GradingAgentHandler(BaseHTTPRequestHandler):
         self._error(AgentError("invalid_request", "route not found", status=404))
 
     def do_POST(self):
-        if self.path != "/grading/grade":
+        if self.path not in {"/grading/grade", "/paper/parse"}:
             self._error(AgentError("invalid_request", "route not found", status=404))
             return
         try:
             self._authorize()
             payload = self._read_json()
             request_id = payload.get("request_id", "") if isinstance(payload, dict) else ""
+            if self.path == "/paper/parse":
+                parser = PaperParser(self.server.application.model)
+                self._json(200, parser.parse(payload))
+                return
             idempotency_key = self.headers.get("Idempotency-Key", "").strip()
             if not idempotency_key:
                 raise AgentError(
@@ -103,7 +108,8 @@ class GradingAgentHandler(BaseHTTPRequestHandler):
             length = int(raw_length)
         except ValueError as exc:
             raise AgentError("invalid_request", "Content-Length is required", status=411) from exc
-        if length <= 0 or length > self.server.application.settings.max_request_bytes:
+        max_bytes = max(self.server.application.settings.max_request_bytes, 2_000_000) if self.path == "/paper/parse" else self.server.application.settings.max_request_bytes
+        if length <= 0 or length > max_bytes:
             raise AgentError("invalid_request", "request body size is invalid", status=413)
         body = self.rfile.read(length)
         try:

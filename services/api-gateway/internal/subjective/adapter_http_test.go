@@ -187,7 +187,7 @@ func testHTTPAdapter(baseURL string, retries int) *HTTPAdapter {
 		Timeout:       2 * time.Second,
 		MaxRetries:    retries,
 		ModelVersion:  "Qwen/Qwen3-4B-GGUF:Q4_K_M",
-		PromptVersion: "subjective-governed-structured-v3",
+		PromptVersion: "subjective-governed-cn-subject-routing-v5",
 		MinConfidence: 0.8,
 	})
 }
@@ -253,7 +253,7 @@ func writeAgentSuccess(t *testing.T, w http.ResponseWriter, requestID string) {
 		"student_feedback":   "待教师复核。",
 		"teacher_note":       "本地模型置信度尚未校准。",
 		"model_version":      "Qwen/Qwen3-4B-GGUF:Q4_K_M",
-		"prompt_version":     "subjective-governed-structured-v3",
+		"prompt_version":     "subjective-governed-cn-subject-routing-v5",
 		"rubric_version":     "rubric-v3",
 		"capability_profile": "local-pilot-v1",
 		"mock":               false,

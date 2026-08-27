@@ -12,8 +12,68 @@ import (
 )
 
 type Handler struct {
-	store Store
-	audit auth.Store
+	store          Store
+	audit          auth.Store
+	documentImport *DocumentImportService
+}
+
+func (h *Handler) WithDocumentImport(service *DocumentImportService) *Handler {
+	h.documentImport = service
+	return h
+}
+
+func (h *Handler) CreatePaperImport(w http.ResponseWriter, r *http.Request) {
+	if h.documentImport == nil {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "paper_import_unavailable", "试卷解析服务未配置")
+		return
+	}
+	user := mustUser(r)
+	var input CreatePaperImportInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.ExamPaperID == "" || input.PaperFileAssetID == "" || input.AnswerFileAssetID == "" || input.Subject == "" {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_paper_import", "试卷、答案和学科不能为空")
+		return
+	}
+	out, err := h.documentImport.Start(r.Context(), user.TenantID, r.PathValue("examId"), user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.import_created", "paper_import_job", out.ID, "parse complete paper and answer documents")
+	httpx.JSON(w, http.StatusCreated, map[string]any{"import": out})
+}
+
+func (h *Handler) ListPaperImports(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.ListPaperImports(r.Context(), user.TenantID, r.PathValue("examId"))
+	if err != nil {
+		httpx.Error(w, r, 500, "paper_import_list_failed", "试卷解析记录加载失败")
+		return
+	}
+	httpx.JSON(w, 200, map[string]any{"imports": out})
+}
+
+func (h *Handler) GetPaperImport(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.GetPaperImport(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, 200, map[string]any{"import": out})
+}
+
+func (h *Handler) ApplyPaperImport(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.ApplyPaperImport(r.Context(), user.TenantID, r.PathValue("id"), user.ID)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.import_applied", "paper_import_job", out.ID, "apply parsed questions answers and rubrics")
+	httpx.JSON(w, 200, map[string]any{"import": out})
 }
 
 func NewHandler(store Store, audit auth.Store) *Handler {

@@ -160,7 +160,7 @@ export async function updateSubmissionStatus(submissionId: string, status: strin
 export async function createOcrTask(submissionId: string) {
   return apiClient.request<{ task: OcrTask }>(`/api/v1/submissions/${encodeURIComponent(submissionId)}/ocr-tasks`, {
     method: "POST",
-    body: JSON.stringify({ engine: "external_ocr_worker", engine_version: "not_configured", min_confidence: 0.8 })
+    body: JSON.stringify({ engine: "paddleocr", engine_version: "pp-ocrv5", min_confidence: 0.8 })
   });
 }
 

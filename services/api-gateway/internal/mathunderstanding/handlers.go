@@ -8,11 +8,13 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
 	"edugrade-enterprise/services/api-gateway/internal/review"
+	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
 
 type Handler struct {
@@ -21,10 +23,16 @@ type Handler struct {
 	pilotGates  PilotGateStore
 	reviews     review.Store
 	audit       auth.Store
+	runtime     workerruntime.Store
 }
 
 func NewHandler(artifacts Store, corrections CorrectionStore, pilotGates PilotGateStore, reviews review.Store, audit auth.Store) *Handler {
 	return &Handler{artifacts: artifacts, corrections: corrections, pilotGates: pilotGates, reviews: reviews, audit: audit}
+}
+
+func (h *Handler) WithRuntime(runtime workerruntime.Store) *Handler {
+	h.runtime = runtime
+	return h
 }
 
 func RegisterRoutes(mux *http.ServeMux, handler *Handler, requireWork, requireManage func(http.HandlerFunc) http.Handler) {
@@ -34,6 +42,81 @@ func RegisterRoutes(mux *http.ServeMux, handler *Handler, requireWork, requireMa
 	mux.Handle("GET /api/v1/math-understanding/training-export", requireManage(handler.ExportTraining))
 	mux.Handle("GET /api/v1/math-pilot-gates", requireManage(handler.ListPilotGates))
 	mux.Handle("POST /api/v1/math-pilot-gates/evaluate", requireManage(handler.EvaluatePilotGate))
+}
+
+func RegisterRuntimeRoutes(mux *http.ServeMux, handler *Handler, requireWorker func(http.HandlerFunc) http.Handler) {
+	mux.Handle("GET /api/v1/internal/math-understanding/tasks/{taskId}/input", requireWorker(handler.GetRuntimeInput))
+	mux.Handle("POST /api/v1/internal/math-understanding/tasks/{taskId}/complete", requireWorker(handler.CompleteRuntimeTask))
+}
+
+type completeRuntimeRequest struct {
+	LeaseToken string              `json:"lease_token"`
+	DurationMS int                 `json:"duration_ms"`
+	Artifact   CreateArtifactInput `json:"artifact"`
+}
+
+func (h *Handler) GetRuntimeInput(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentMathUser(w, r)
+	if !ok || h.runtime == nil {
+		return
+	}
+	task, err := h.runtime.Get(r.Context(), user.TenantID, r.PathValue("taskId"))
+	if err != nil || task.QueueName != "math-understanding" || task.SourceType != "answer_segment" || task.SourceID == "" {
+		httpx.Error(w, r, http.StatusNotFound, "math_runtime_task_not_found", "math understanding task was not found")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"task": map[string]any{
+			"id": task.ID, "answer_segment_id": task.SourceID,
+			"exam_question_snapshot_id": task.Payload["exam_question_snapshot_id"],
+			"subject_code":              task.Payload["subject_code"], "region_kind": task.Payload["region_kind"],
+			"input_hash": task.Payload["input_hash"],
+		},
+		"image_url": "/api/v1/internal/answer-segments/" + task.SourceID + "/image",
+	})
+}
+
+func (h *Handler) CompleteRuntimeTask(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentMathUser(w, r)
+	if !ok || h.runtime == nil {
+		return
+	}
+	var input completeRuntimeRequest
+	if !decodeMathJSON(w, r, &input) {
+		return
+	}
+	task, err := h.runtime.Get(r.Context(), user.TenantID, r.PathValue("taskId"))
+	if err != nil || task.QueueName != "math-understanding" || task.SourceType != "answer_segment" {
+		httpx.Error(w, r, http.StatusNotFound, "math_runtime_task_not_found", "math understanding task was not found")
+		return
+	}
+	if strings.TrimSpace(input.LeaseToken) == "" || input.DurationMS < 0 || input.Artifact.AnswerSegmentID != task.SourceID ||
+		input.Artifact.ExamQuestionSnapshotID != stringPayload(task.Payload, "exam_question_snapshot_id") ||
+		input.Artifact.SubjectCode != stringPayload(task.Payload, "subject_code") ||
+		input.Artifact.InputHash != stringPayload(task.Payload, "input_hash") {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_math_runtime_result", "math runtime result does not match its immutable task input")
+		return
+	}
+	artifact, err := h.artifacts.CreateArtifact(r.Context(), user.TenantID, input.Artifact)
+	if err != nil {
+		writeMathError(w, r, err)
+		return
+	}
+	_, err = h.runtime.Complete(r.Context(), user.TenantID, task.ID, workerruntime.CompleteInput{
+		LeaseToken: input.LeaseToken, ResultSchemaVersion: "math-understanding-result-v1",
+		Result:     map[string]any{"artifact_id": artifact.ID, "artifact_version": artifact.Version, "input_hash": artifact.InputHash},
+		DurationMS: input.DurationMS,
+	})
+	if err != nil {
+		httpx.Error(w, r, http.StatusConflict, "math_runtime_completion_failed", "math runtime lease is no longer valid")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"artifact": artifact})
+}
+
+func stringPayload(payload map[string]any, key string) string {
+	value, _ := payload[key].(string)
+	return value
 }
 
 type evaluatePilotGateRequest struct {

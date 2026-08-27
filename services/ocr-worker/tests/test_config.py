@@ -21,6 +21,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.lease_seconds, 300)
         self.assertEqual(settings.heartbeat_interval, 10)
         self.assertEqual(settings.heartbeat_timeout, 3)
+        self.assertTrue(settings.ocr_runtime_enabled)
 
     @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_OCR_BATCH_SIZE": "2"}, clear=True)
     def test_batch_size_greater_than_one_fails_before_claim(self):
@@ -49,6 +50,15 @@ class ConfigTests(unittest.TestCase):
     @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_OCR_POLL_INTERVAL": "-1"}, clear=True)
     def test_non_positive_poll_interval_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "POLL_INTERVAL"):
+            load_settings()
+
+    @patch.dict(
+        os.environ,
+        {**BASE_ENV, "EDUGRADE_OCR_RUNTIME_ENABLED": "false", "EDUGRADE_MATH_RUNTIME_ENABLED": "false"},
+        clear=True,
+    )
+    def test_at_least_one_runtime_must_be_enabled(self):
+        with self.assertRaisesRegex(ValueError, "at least one"):
             load_settings()
 
 

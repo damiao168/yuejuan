@@ -26,11 +26,23 @@ SELECT seg.id::text
 FROM answer_segment seg
 JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id AND q.deleted_at IS NULL
 JOIN exam_question_snapshot snap ON snap.tenant_id=q.tenant_id AND snap.exam_id=q.exam_id AND snap.question_id=q.id
-WHERE seg.tenant_id=$1::uuid AND seg.id=$2::uuid AND snap.id=$3::uuid AND snap.subject_code=$4 AND snap.subject_code IN ('mathematics','physics','chemistry') AND seg.deleted_at IS NULL
+WHERE seg.tenant_id=$1::uuid AND seg.id=$2::uuid AND snap.id=$3::uuid
+  AND snap.profile_snapshot_json->>'subject_code'=$4
+  AND snap.profile_snapshot_json->>'subject_code' IN ('mathematics','physics','chemistry')
+  AND seg.deleted_at IS NULL
 	FOR UPDATE OF seg`, tenantID, input.AnswerSegmentID, input.ExamQuestionSnapshotID, input.SubjectCode).Scan(&lockedSegmentID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Artifact{}, ErrInvalidInput
 		}
+		return Artifact{}, err
+	}
+	var existingID string
+	err = tx.QueryRowContext(ctx, `SELECT id::text FROM math_understanding_artifact WHERE tenant_id=$1::uuid AND answer_segment_id=$2::uuid AND input_hash=$3 ORDER BY version DESC LIMIT 1`, tenantID, input.AnswerSegmentID, input.InputHash).Scan(&existingID)
+	if err == nil {
+		_ = tx.Rollback()
+		return s.GetArtifact(ctx, tenantID, existingID)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return Artifact{}, err
 	}
 	var version int64

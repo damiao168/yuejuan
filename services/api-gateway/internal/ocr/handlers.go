@@ -56,6 +56,17 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	if headerKey != "" {
 		input.IdempotencyKey = headerKey
 	}
+	pages, err := h.submissions.ListPages(r.Context(), user.TenantID, submissionID)
+	if err != nil || len(pages) == 0 {
+		writeStoreError(w, r, ErrSubmissionNotReady)
+		return
+	}
+	input.SourceFileAssetIDs = make([]string, 0, len(pages))
+	for _, page := range pages {
+		if fileAssetID := strings.TrimSpace(page.FileAssetID); fileAssetID != "" {
+			input.SourceFileAssetIDs = append(input.SourceFileAssetIDs, fileAssetID)
+		}
+	}
 	var task Task
 	if h.runtime != nil {
 		if h.atomic == nil {

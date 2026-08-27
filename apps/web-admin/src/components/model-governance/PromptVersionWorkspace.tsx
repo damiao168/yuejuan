@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Tag } from "antd";
-import { FileText, LockKeyhole, RefreshCw } from "lucide-react";
+import { BookOpenText, FileText, LockKeyhole, RefreshCw, ShieldCheck } from "lucide-react";
 import { ApiClientError } from "../../api/client";
 import {
   getCurrentRuntimePrompt,
@@ -8,14 +8,45 @@ import {
   type RuntimePromptComponent
 } from "../../api/modelGovernance";
 
-const labels: Record<RuntimePromptComponent["key"], string> = {
+const commonLabels: Record<string, string> = {
   base: "评分总规则",
+  structured: "结构化输出"
+};
+
+const subjectLabels: Record<string, string> = {
+  chinese: "语文",
+  math: "数学",
+  english: "英语",
+  physics: "物理",
+  chemistry: "化学",
+  biology: "生物",
+  history: "历史",
+  politics: "思想政治",
+  geography: "地理",
+  computer_science: "信息技术"
+};
+
+const questionTypeLabels: Record<string, string> = {
   short_answer: "简答题",
   calculation: "计算题",
   essay: "作文题",
-  discussion: "论述题",
-  structured: "结构化输出"
+  discussion: "论述题"
 };
+
+function promptParts(component?: RuntimePromptComponent) {
+  if (!component) return undefined;
+  const parts = component.key.split(".");
+  return parts.length === 3 && parts[0] === "subject"
+    ? { subject: parts[1], questionType: parts[2] }
+    : undefined;
+}
+
+function promptLabel(component?: RuntimePromptComponent) {
+  if (!component) return "系统提示词";
+  const parts = promptParts(component);
+  if (!parts) return commonLabels[component.key] ?? component.key;
+  return `${subjectLabels[parts.subject] ?? parts.subject} · ${questionTypeLabels[parts.questionType] ?? parts.questionType}`;
+}
 
 function promptError(error: unknown) {
   if (error instanceof ApiClientError && error.code === "runtime_prompt_unavailable") {
@@ -26,7 +57,8 @@ function promptError(error: unknown) {
 
 export function PromptVersionWorkspace() {
   const [prompt, setPrompt] = useState<RuntimePrompt>();
-  const [selected, setSelected] = useState<RuntimePromptComponent["key"]>("base");
+  const [selected, setSelected] = useState("base");
+  const [selectedSubject, setSelectedSubject] = useState("chinese");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
 
@@ -56,6 +88,21 @@ export function PromptVersionWorkspace() {
     () => prompt?.components.find((item) => item.key === selected),
     [prompt, selected]
   );
+  const subjectGroups = useMemo(() => {
+    const groups = new Map<string, RuntimePromptComponent[]>();
+    for (const component of prompt?.components ?? []) {
+      const parts = promptParts(component);
+      if (!parts) continue;
+      groups.set(parts.subject, [...(groups.get(parts.subject) ?? []), component]);
+    }
+    return [...groups.entries()];
+  }, [prompt]);
+  const selectedSubjectPrompts = subjectGroups.find(([subject]) => subject === selectedSubject)?.[1] ?? [];
+
+  const selectSubject = (subject: string, components: RuntimePromptComponent[]) => {
+    setSelectedSubject(subject);
+    setSelected(components[0]?.key ?? "base");
+  };
 
   if (error) {
     return (
@@ -77,27 +124,54 @@ export function PromptVersionWorkspace() {
           <strong>{prompt?.prompt_version ?? "读取中"}</strong>
           <code>{prompt?.bundle_sha256.slice(0, 12) ?? "------------"}</code>
         </div>
-        <nav aria-label="系统提示词组成">
-          {prompt?.components.map((component) => (
+        <div className="prompt-common-links" aria-label="公共提示词">
+          {(prompt?.components ?? []).filter((component) => !promptParts(component)).map((component) => (
             <button
               type="button"
               key={component.key}
               className={component.key === selected ? "active" : ""}
               onClick={() => setSelected(component.key)}
             >
-              <FileText size={15} />
-              <span>{labels[component.key]}</span>
+              {component.key === "base" ? <ShieldCheck size={15} /> : <FileText size={15} />}
+              <span>{commonLabels[component.key] ?? component.key}</span>
               <small>{component.filename}</small>
+            </button>
+          ))}
+        </div>
+        <div className="prompt-subject-heading">按学科与题型匹配</div>
+        <nav className="prompt-subject-list" aria-label="学科提示词">
+          {subjectGroups.map(([subject, components]) => (
+            <button
+              type="button"
+              key={subject}
+              className={subject === selectedSubject && promptParts(active ?? components[0]) ? "active" : ""}
+              onClick={() => selectSubject(subject, components)}
+            >
+              <BookOpenText size={15} />
+              <span>{subjectLabels[subject] ?? subject}</span>
+              <small>{components.length} 种题型</small>
             </button>
           ))}
         </nav>
       </aside>
 
       <section className="prompt-version-inspector">
+        {promptParts(active ?? selectedSubjectPrompts[0]) && (
+          <div className="prompt-question-types" aria-label={`${subjectLabels[selectedSubject] ?? selectedSubject}题型`}>
+            {selectedSubjectPrompts.map((component) => {
+              const parts = promptParts(component);
+              return (
+                <button type="button" key={component.key} className={component.key === selected ? "active" : ""} onClick={() => setSelected(component.key)}>
+                  {questionTypeLabels[parts?.questionType ?? ""] ?? parts?.questionType}
+                </button>
+              );
+            })}
+          </div>
+        )}
         <header>
           <div>
             <span className="prompt-version-eyebrow">评分服务实际加载内容</span>
-            <h2>{active ? labels[active.key] : "系统提示词"}</h2>
+            <h2>{promptLabel(active)}</h2>
             <p>{active?.filename ?? "正在读取运行时清单"}</p>
           </div>
           <div className="prompt-version-actions">

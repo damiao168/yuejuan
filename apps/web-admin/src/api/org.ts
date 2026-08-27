@@ -123,6 +123,20 @@ export async function listStudents(filter: { classId?: string; ids?: string[]; q
   return apiClient.request<{ students: Student[]; next_cursor: string; has_more: boolean }>(`/api/v1/students${query}`);
 }
 
+export async function createStudent(payload: Pick<Student, "school_id" | "class_id" | "student_no" | "name"> & Partial<Pick<Student, "gender" | "status">>) {
+  return apiClient.request<{ student: Student }>("/api/v1/students", {
+    method: "POST",
+    body: JSON.stringify({ ...payload, status: payload.status ?? "active" })
+  });
+}
+
+export async function updateStudentStatus(id: string, status: "active" | "inactive") {
+  return apiClient.request<{ student: Student }>(`/api/v1/students/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status })
+  });
+}
+
 export async function importStudentsCSV(csv: string) {
   return apiClient.request<{ result: StudentImportResult }>("/api/v1/students/import-csv", {
     method: "POST",

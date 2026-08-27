@@ -59,10 +59,11 @@ type Result struct {
 }
 
 type CreateTaskInput struct {
-	Engine         string  `json:"engine"`
-	EngineVersion  string  `json:"engine_version"`
-	MinConfidence  float64 `json:"min_confidence"`
-	IdempotencyKey string  `json:"idempotency_key"`
+	Engine             string   `json:"engine"`
+	EngineVersion      string   `json:"engine_version"`
+	MinConfidence      float64  `json:"min_confidence"`
+	IdempotencyKey     string   `json:"idempotency_key"`
+	SourceFileAssetIDs []string `json:"-"`
 }
 
 type ResultInput struct {

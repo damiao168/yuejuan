@@ -44,6 +44,8 @@ button:focus-visible { outline: 3px solid rgba(22, 119, 255, .3); outline-offset
 .inline-status, .empty-state, .error-notice { margin-top: 28px; padding: 24px 0; border-bottom: 1px solid var(--eg-color-border); color: var(--eg-color-muted); }
 .empty-state h2, .error-notice strong { margin: 0 0 6px; color: var(--eg-color-text); font-size: 17px; }
 .empty-state p, .error-notice p { margin: 0; line-height: 1.6; }
+.empty-state .empty-state-kicker { margin-bottom: 7px; color: #175cd3; font-size: 12px; font-weight: 700; }
+.empty-state ul { display: grid; gap: 7px; margin: 16px 0 0; padding-left: 19px; color: #667085; font-size: 13px; line-height: 1.55; }
 .error-notice { color: #a61b24; }
 .error-notice div { display: flex; gap: 14px; align-items: center; margin-top: 14px; }
 
@@ -101,7 +103,8 @@ button:focus-visible { outline: 3px solid rgba(22, 119, 255, .3); outline-offset
 .appeal-region-box { position: absolute; box-sizing: border-box; border: 2px solid #d92d20; background: rgb(217 45 32 / 10%); pointer-events: none; }
 .appeal-region-loading { display: grid; min-height: 96px; place-items: center; color: var(--eg-color-muted); font-size: 13px; }
 .appeal-region-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #344054; font-size: 13px; }
-.question-appeal-confirmation { margin-top: 20px; padding: 12px 14px; border-left: 3px solid #52c41a; color: #237804; background: #f6ffed; font-size: 13px; }
+.question-appeal-confirmation { display: grid; gap: 4px; margin-top: 20px; padding: 12px 14px; border-left: 3px solid #52c41a; color: #237804; background: #f6ffed; font-size: 13px; }
+.question-appeal-confirmation span { color: #475467; line-height: 1.6; }
 
 .appeal-notice { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 38px; padding: 20px 0; border-top: 1px solid var(--eg-color-border); border-bottom: 1px solid var(--eg-color-border); }
 .appeal-notice.open { border-left: 3px solid var(--eg-color-action); padding-left: 14px; }

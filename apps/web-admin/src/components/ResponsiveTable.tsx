@@ -15,14 +15,6 @@ function flattenColumns<T extends object>(columns: TableColumnsType<T>): ColumnT
   });
 }
 
-function flexibleColumns<T extends object>(columns: TableColumnsType<T>): TableColumnsType<T> {
-  return columns.map((column) => {
-    const group = column as ColumnGroupType<T>;
-    if (group.children) return { ...group, children: flexibleColumns(group.children) };
-    return { ...column, width: undefined, minWidth: undefined, fixed: undefined, ellipsis: false } as ColumnType<T>;
-  });
-}
-
 function valueAt(record: object, dataIndex: ColumnType<object>["dataIndex"]): unknown {
   if (dataIndex === undefined) return undefined;
   const path = Array.isArray(dataIndex) ? dataIndex : [dataIndex];
@@ -64,13 +56,12 @@ export function ResponsiveTable<T extends object>({
   className,
   mobilePrimaryCount = 3,
   pagination,
-  scroll: _scroll,
+  scroll,
   ...tableProps
 }: ResponsiveTableProps<T>) {
   const screens = Grid.useBreakpoint();
   const mobile = !screens.lg;
   const flatColumns = useMemo(() => flattenColumns(columns), [columns]);
-  const desktopColumns = useMemo(() => flexibleColumns(columns), [columns]);
   const paginationConfig = pagination === false ? null : (pagination ?? {});
   const [mobilePage, setMobilePage] = useState(paginationConfig?.defaultCurrent ?? 1);
   const [mobilePageSize, setMobilePageSize] = useState(paginationConfig?.defaultPageSize ?? 10);
@@ -116,7 +107,7 @@ export function ResponsiveTable<T extends object>({
     return (
       <Table<T>
         {...tableProps}
-        columns={desktopColumns}
+        columns={columns}
         dataSource={dataSource}
         rowKey={rowKey}
         loading={loading}
@@ -126,6 +117,8 @@ export function ResponsiveTable<T extends object>({
         className={`responsive-desktop-table ${className ?? ""}`.trim()}
         tableLayout="fixed"
         pagination={pagination}
+        scroll={scroll}
+        size={tableProps.size ?? "small"}
       />
     );
   }

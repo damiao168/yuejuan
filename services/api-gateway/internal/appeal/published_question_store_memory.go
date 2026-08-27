@@ -106,6 +106,11 @@ func (s *PublishedQuestionAppealMemoryStore) CreatePublishedQuestionAppeal(_ con
 	if !sourceAppealWindowOpen(source.AppealEnabled, source.AppealOpensAt, source.AppealClosesAt, source.AllowedReasonCodes, input.ReasonCode, s.now().UTC()) {
 		return PublishedQuestionAppeal{}, ErrAppealWindowClosed
 	}
+	for _, existing := range s.appeals {
+		if existing.TenantID == tenantID && existing.StudentID == studentID && existing.SourceReleaseID == input.SourceReleaseID && existing.QuestionID == input.QuestionID {
+			return PublishedQuestionAppeal{}, ErrAppealAlreadyFiled
+		}
+	}
 	now := s.now().UTC()
 	item := PublishedQuestionAppeal{
 		ID:                   s.idLocked("question-appeal"),

@@ -39,6 +39,7 @@ const LearningReportsPage = lazy(() => import("./pages/LearningReportsPage").the
 const ModelGovernancePage = lazy(() => import("./pages/ModelGovernancePage").then((module) => ({ default: module.ModelGovernancePage })));
 const SubjectiveGradingBatchPage = lazy(() => import("./pages/SubjectiveGradingBatchPage").then((module) => ({ default: module.SubjectiveGradingBatchPage })));
 const OrganizationSetupPage = lazy(() => import("./pages/OrganizationSetupPage").then((module) => ({ default: module.OrganizationSetupPage })));
+const StudentManagementPage = lazy(() => import("./pages/StudentManagementPage").then((module) => ({ default: module.StudentManagementPage })));
 const PlatformSchoolsPage = lazy(() => import("./pages/PlatformSchoolsPage").then((module) => ({ default: module.PlatformSchoolsPage })));
 const ExamWorkspacePage = lazy(() => import("./pages/ExamWorkspacePage").then((module) => ({ default: module.ExamWorkspacePage })));
 const AnswerSheetTemplatePage = lazy(() => import("./pages/AnswerSheetTemplatePage").then((module) => ({ default: module.AnswerSheetTemplatePage })));
@@ -231,9 +232,18 @@ export function AppShell() {
     ) : examWorkspace ? (
       <ExamWorkspacePage examId={examWorkspace.examId} section={examWorkspace.section} experience={experience} currentUser={user} moduleContent={workspaceModule} onNavigate={navigate} />
     ) : route.path === "/exams" ? (
-      <ExamManagementPage mode={experience} canManage={experience === "admin" && hasEveryPermission(user, ["exam:manage"])} currentUser={user} onOpenWorkspace={(examId) => navigate(`/exams/${encodeURIComponent(examId)}/overview`)} />
+      <ExamManagementPage
+        key={path}
+        mode={experience}
+        canManage={experience === "admin" && hasEveryPermission(user, ["exam:manage"])}
+        currentUser={user}
+        onOpenWorkspace={(examId) => navigate(`/exams/${encodeURIComponent(examId)}/overview`)}
+        onConfigureExam={(examId) => navigate(`/exams/${encodeURIComponent(examId)}/paper`)}
+      />
     ) : route.path === "/organization/setup" ? (
       <OrganizationSetupPage onNavigate={navigate} />
+    ) : route.path === "/members/students" ? (
+      <StudentManagementPage />
     ) : route.path === "/platform/schools" ? (
       <PlatformSchoolsPage />
     ) : route.path === "/papers" ? (

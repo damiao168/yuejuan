@@ -219,7 +219,7 @@ func Load(envFile string) (Config, error) {
 			Timeout:           getEnvDuration("EDUGRADE_AI_SERVICE_TIMEOUT", 750*time.Second),
 			MaxRetries:        getEnvInt("EDUGRADE_AI_SERVICE_MAX_RETRIES", 0),
 			ModelVersion:      getEnv("EDUGRADE_AI_MODEL_VERSION", "Qwen/Qwen3-4B-GGUF:Q4_K_M"),
-			PromptVersion:     getEnv("EDUGRADE_AI_PROMPT_VERSION", "subjective-governed-structured-v3"),
+			PromptVersion:     getEnv("EDUGRADE_AI_PROMPT_VERSION", "subjective-governed-cn-subject-routing-v5"),
 			MinConfidence:     getEnvFloat("EDUGRADE_AI_MIN_CONFIDENCE", 0.8),
 			ProviderKey:       getEnv("EDUGRADE_AI_PROVIDER_KEY", "local"),
 			DeploymentKey:     getEnv("EDUGRADE_AI_DEPLOYMENT_KEY", "local-qwen3-4b-q4-k-m"),

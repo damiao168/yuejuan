@@ -189,9 +189,9 @@ export function ScoringPaperMonitor({ run, items, loading, onRefresh }: ScoringP
     <div className="scoring-paper-monitor">
       <header className="scoring-monitor-header">
         <div>
-          <span className="scoring-monitor-kicker">实时阅卷监控</span>
+          <span className="scoring-monitor-kicker">逐卷处理记录</span>
           <h3>{run?.status === "needs_review" ? "自动识别完成，等待教师确认" : run?.status === "completed" ? "本批答卷已处理完成" : "正在逐卷识别与评分"}</h3>
-          <p>红色批注定位到原答题区域；“≈”表示 AI 建议分，仍需教师确认。</p>
+          <p>红色批注标记已确认得分；“≈”表示 AI 建议分，需要教师确认。</p>
         </div>
         <div className="scoring-monitor-progress">
           <div><strong>{processed}</strong><span>/ {items.length} 题已识别 · {run?.review_count ?? 0} 题待确认</span></div>

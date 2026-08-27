@@ -79,6 +79,18 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(calls[0]["use_doc_unwarping"])
         self.assertTrue(calls[0]["use_textline_orientation"])
 
+    def test_mobile_profile_uses_lightweight_v5_models(self):
+        calls = []
+
+        class FakePaddleOCR:
+            def __init__(self, **kwargs):
+                calls.append(kwargs)
+
+        _create_paddle_ocr(FakePaddleOCR, model_version="ppocr-v5-mobile", device="cpu")
+
+        self.assertEqual(calls[0]["text_detection_model_name"], "PP-OCRv5_mobile_det")
+        self.assertEqual(calls[0]["text_recognition_model_name"], "PP-OCRv5_mobile_rec")
+
     def test_unknown_model_is_rejected_instead_of_misreported(self):
         with self.assertRaisesRegex(ValueError, "unsupported OCR model version"):
             PaddleOCREngine(model_version="not-a-real-model")

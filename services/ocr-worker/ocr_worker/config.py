@@ -13,7 +13,7 @@ class Settings:
     password: str
     engine: str = "paddleocr"
     engine_version: str = "pp-ocrv5"
-    model_version: str = "ppocr-v5-server"
+    model_version: str = "ppocr-v5-mobile"
     min_confidence: float = 0.8
     poll_interval: float = 5.0
     batch_size: int = 1
@@ -23,6 +23,11 @@ class Settings:
     lease_seconds: int = 300
     heartbeat_interval: float = 10.0
     heartbeat_timeout: float = 3.0
+    ocr_runtime_enabled: bool = True
+    math_runtime_enabled: bool = False
+    math_verify_base_url: str = "http://math-verification-worker:8092"
+    math_verify_token: str = ""
+    formula_model_version: str = "PP-FormulaNet_plus-M"
 
 
 def load_settings() -> Settings:
@@ -33,7 +38,7 @@ def load_settings() -> Settings:
         password=os.environ["EDUGRADE_OCR_WORKER_PASSWORD"],
         engine=os.environ.get("EDUGRADE_OCR_ENGINE", "paddleocr"),
         engine_version=os.environ.get("EDUGRADE_OCR_ENGINE_VERSION", "pp-ocrv5"),
-        model_version=os.environ.get("EDUGRADE_OCR_MODEL_VERSION", "ppocr-v5-server"),
+        model_version=os.environ.get("EDUGRADE_OCR_MODEL_VERSION", "ppocr-v5-mobile"),
         min_confidence=float(os.environ.get("EDUGRADE_OCR_MIN_CONFIDENCE", "0.8")),
         poll_interval=float(os.environ.get("EDUGRADE_OCR_POLL_INTERVAL", "5")),
         batch_size=int(os.environ.get("EDUGRADE_OCR_BATCH_SIZE", "1")),
@@ -43,6 +48,11 @@ def load_settings() -> Settings:
         lease_seconds=int(os.environ.get("EDUGRADE_OCR_LEASE_SECONDS", "300")),
         heartbeat_interval=float(os.environ.get("EDUGRADE_OCR_HEARTBEAT_INTERVAL", "10")),
         heartbeat_timeout=float(os.environ.get("EDUGRADE_OCR_HEARTBEAT_TIMEOUT", "3")),
+        ocr_runtime_enabled=os.environ.get("EDUGRADE_OCR_RUNTIME_ENABLED", "true").lower() in {"1", "true", "yes"},
+        math_runtime_enabled=os.environ.get("EDUGRADE_MATH_RUNTIME_ENABLED", "false").lower() in {"1", "true", "yes"},
+        math_verify_base_url=os.environ.get("EDUGRADE_MATH_VERIFY_BASE_URL", "http://math-verification-worker:8092"),
+        math_verify_token=os.environ.get("EDUGRADE_MATH_VERIFY_TOKEN", ""),
+        formula_model_version=os.environ.get("EDUGRADE_FORMULA_MODEL_VERSION", "PP-FormulaNet_plus-M"),
     )
     _validate_settings(settings)
     return settings
@@ -81,3 +91,12 @@ def _validate_settings(settings: Settings) -> None:
         raise ValueError("EDUGRADE_OCR_HEARTBEAT_INTERVAL must be shorter than the lease")
     if settings.heartbeat_interval + settings.heartbeat_timeout >= settings.lease_seconds:
         raise ValueError("OCR heartbeat interval plus timeout must be shorter than the lease")
+    if not settings.ocr_runtime_enabled and not settings.math_runtime_enabled:
+        raise ValueError("at least one OCR worker runtime must be enabled")
+    if settings.math_runtime_enabled:
+        if not settings.math_verify_base_url.startswith(("http://", "https://")):
+            raise ValueError("EDUGRADE_MATH_VERIFY_BASE_URL must use http or https")
+        if len(settings.math_verify_token) < 32:
+            raise ValueError("EDUGRADE_MATH_VERIFY_TOKEN must contain at least 32 characters")
+        if settings.formula_model_version not in {"PP-FormulaNet_plus-M", "PP-FormulaNet_plus-L"}:
+            raise ValueError("EDUGRADE_FORMULA_MODEL_VERSION is unsupported")

@@ -16,13 +16,18 @@ func RuntimeResult(task Task) map[string]any {
 	}
 }
 
-func runtimeCreateInput(task Task) workerruntime.CreateTaskInput {
+func runtimeCreateInput(task Task, sourceFileAssetIDs ...string) workerruntime.CreateTaskInput {
+	pages := make([]any, 0, len(sourceFileAssetIDs))
+	for _, fileAssetID := range sourceFileAssetIDs {
+		pages = append(pages, map[string]any{"source_file_asset_id": fileAssetID})
+	}
 	return workerruntime.CreateTaskInput{
 		TaskType: "ocr", QueueName: "ocr", SourceType: "ocr_task", SourceID: task.ID,
 		IdempotencyKey: "ocr-task:" + task.ID, PayloadSchemaVersion: "ocr-task.v1",
 		Payload: map[string]any{
 			"ocr_task_id": task.ID, "submission_id": task.SubmissionID,
 			"engine": task.Engine, "engine_version": task.EngineVersion,
+			"pages": pages,
 		},
 		MaxAttempts: 3, RetryBackoffSeconds: 30,
 	}

@@ -127,7 +127,7 @@ function formatTime(value?: string) {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("zh-CN", { hour12: false });
 }
 
-export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspace }: { mode: ProductExperience; canManage: boolean; currentUser: SessionUser; onOpenWorkspace: (examId: string) => void }) {
+export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspace, onConfigureExam }: { mode: ProductExperience; canManage: boolean; currentUser: SessionUser; onOpenWorkspace: (examId: string) => void; onConfigureExam?: (examId: string) => void }) {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<ExamFormValues>();
   const watchedSchoolId = Form.useWatch("school_id", form);
@@ -142,7 +142,9 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [drawer, setDrawer] = useState<{ mode: "create" | "edit"; exam?: Exam } | null>(null);
+  const [drawer, setDrawer] = useState<{ mode: "create" | "edit"; exam?: Exam } | null>(() => (
+    hashQueryParam("create") === "1" ? { mode: "create" } : null
+  ));
   const [submitting, setSubmitting] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailExam, setDetailExam] = useState<Exam | null>(null);
@@ -304,8 +306,12 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
         await updateExam(drawer.exam.id, { ...payload, expected_revision: drawer.exam.revision });
         message.success("考试已更新");
       } else {
-        await createExam(payload);
-        message.success("考试已创建");
+        const result = await createExam(payload);
+        message.success("考试已创建，请上传完整试卷并配置答案");
+        setDrawer(null);
+        await loadData();
+        (onConfigureExam ?? onOpenWorkspace)(result.exam.id);
+        return;
       }
       setDrawer(null);
       await loadData();
@@ -515,9 +521,8 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
         destroyOnClose
         extra={
           <Space>
-            <Button onClick={() => form.resetFields()}>重置</Button>
             <Button type="primary" icon={<Save size={16} />} loading={submitting} disabled={formDisabled} onClick={() => void submitForm()}>
-              保存
+              {drawer?.mode === "edit" ? "保存" : "创建并配置试卷"}
             </Button>
           </Space>
         }
@@ -526,6 +531,7 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
           <Alert type="info" showIcon message="当前考试状态不允许编辑核心配置" className="drawer-alert" />
         ) : null}
         <Form form={form} layout="vertical" disabled={formDisabled} preserve={false}>
+          {drawer?.mode === "create" ? <p className="exam-create-guidance">先填写考试基本信息。创建后直接进入试卷与答案配置，不在这里堆放阅卷参数。</p> : null}
           <div className="form-grid">
             <Form.Item label="考试名称" name="name" rules={[{ required: true, message: "请输入考试名称" }]}>
               <Input placeholder="高二物理期末考试" />
@@ -542,20 +548,6 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
             <Form.Item label="总分" name="total_score" rules={[{ required: true, message: "请输入总分" }]}>
               <InputNumber min={1} max={1000} precision={1} className="full-width-control" />
             </Form.Item>
-            <Form.Item
-              label="阅卷模式"
-              name="grading_mode"
-              rules={[{ required: true, message: "请选择阅卷模式" }]}
-              extra={watchedGradingMode === "double_mark" || watchedGradingMode === "blind_double_mark" ? "双评需在“阅卷”环节为题目逐题开启后才会生效。" : undefined}
-            >
-              <Select options={gradingModeOptions} placeholder="选择阅卷模式" />
-            </Form.Item>
-            <Form.Item label="成绩发布策略" name="publish_policy" rules={[{ required: true, message: "请选择发布策略" }]}>
-              <Select options={publishPolicyOptions} placeholder="选择发布策略" />
-            </Form.Item>
-            <Form.Item label="允许申诉" name="appeal_enabled" valuePropName="checked">
-              <Switch />
-            </Form.Item>
           </div>
           <Form.Item
             label="选择班级"
@@ -567,6 +559,25 @@ export function ExamManagementPage({ mode, canManage, currentUser, onOpenWorkspa
           >
             <Select mode="multiple" options={classOptions} placeholder="按年级选择班级" optionFilterProp="label" />
           </Form.Item>
+          <details className="exam-create-advanced" open={drawer?.mode === "edit"}>
+            <summary>阅卷与发布设置</summary>
+            <div className="form-grid">
+              <Form.Item
+                label="阅卷模式"
+                name="grading_mode"
+                rules={[{ required: true, message: "请选择阅卷模式" }]}
+                extra={watchedGradingMode === "double_mark" || watchedGradingMode === "blind_double_mark" ? "双评需在阅卷环节按题启用。" : undefined}
+              >
+                <Select options={gradingModeOptions} placeholder="选择阅卷模式" />
+              </Form.Item>
+              <Form.Item label="成绩发布策略" name="publish_policy" rules={[{ required: true, message: "请选择发布策略" }]}>
+                <Select options={publishPolicyOptions} placeholder="选择发布策略" />
+              </Form.Item>
+              <Form.Item label="允许成绩申诉" name="appeal_enabled" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+            </div>
+          </details>
         </Form>
       </Drawer>
 

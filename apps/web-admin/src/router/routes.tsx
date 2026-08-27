@@ -126,9 +126,14 @@ const productionRouteDefinitions: AppRoute[] = [
     experiences: { admin: { title: "申诉处理", group: "成绩管理" }, teacher: { title: "学生反馈", group: "教学工作" } }
   },
   {
-    key: "organization", path: "/organization/setup", title: "组织与用户", group: "系统管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
+    key: "membersStudents", path: "/members/students", title: "学生管理", group: "学校管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin"], experiences: { admin: { title: "组织与账号", group: "学校管理" } }
+    workspaces: ["school_admin"], experiences: { admin: { title: "学生管理", group: "学校管理" } }
+  },
+  {
+    key: "organization", path: "/organization/setup", title: "学校初始化", group: "学校管理", icon: <Settings size={18} />, permissions: ["org:manage"], navigation: false, mock: false, productionReady: true,
+    excludedRoles: ["platform_admin"],
+    workspaces: ["school_admin"], experiences: { admin: { title: "学校初始化", group: "学校管理" } }
   },
   {
     key: "modelGovernance", path: "/system/models", title: "模型治理", group: "系统管理", icon: <BrainCircuit size={18} />, permissions: ["model:read"], mock: false, productionReady: true,

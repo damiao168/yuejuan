@@ -156,6 +156,7 @@ const (
 
 var (
 	ErrAppealWindowClosed = errors.New("appeal window is closed")
+	ErrAppealAlreadyFiled = errors.New("appeal already filed for this released question")
 	ErrSourceRelease      = errors.New("appeal source is not a published score release question")
 	ErrResolutionRelease  = errors.New("appeal resolution release is invalid")
 )

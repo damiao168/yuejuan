@@ -283,6 +283,8 @@ func writePublishedQuestionAppealError(w http.ResponseWriter, r *http.Request, e
 		httpx.Error(w, r, http.StatusConflict, "appeal_source_release_invalid", "appeal must target a published release question")
 	case errors.Is(err, ErrAppealWindowClosed):
 		httpx.Error(w, r, http.StatusConflict, "appeal_window_closed", "appeal window is closed for this release")
+	case errors.Is(err, ErrAppealAlreadyFiled):
+		httpx.Error(w, r, http.StatusConflict, "appeal_already_filed", "this released question already has an appeal")
 	case errors.Is(err, ErrResolutionRelease):
 		httpx.Error(w, r, http.StatusConflict, "appeal_resolution_release_invalid", "appeal resolution must link a later published release")
 	case errors.Is(err, ErrForbidden):

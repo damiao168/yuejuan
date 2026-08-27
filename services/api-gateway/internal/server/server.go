@@ -335,7 +335,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	})
 	orgHandler := org.NewHandler(orgStore, authStore)
 	examHandler := exam.NewHandler(examStore, authStore)
-	paperHandler := paper.NewHandler(paperStore, authStore)
+	paperHandler := paper.NewHandler(paperStore, authStore).WithDocumentImport(paper.NewDocumentImportService(paperStore, fileStore, objectStore, cfg.AIService.URL, cfg.AIService.Token, cfg.AIService.Timeout))
 	fileHandler := files.NewHandler(fileStore, objectStore, authStore, cfg.Files).WithReconciliationReader(fileReconciliationReader)
 	submissionHandler := submission.NewHandler(submissionStore, fileStore, authStore)
 	segmentHandler := segment.NewHandler(segmentStore, paperStore, submissionStore, authStore, fileStore, objectStore)
@@ -620,7 +620,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 		cfg.AIService.Timeout,
 	))
 	assessmentHandler := assessment.NewHandler(assessmentStore, authStore)
-	mathUnderstandingHandler := mathunderstanding.NewHandler(mathUnderstandingStore, mathCorrectionStore, mathPilotGateStore, reviewStore, authStore)
+	mathUnderstandingHandler := mathunderstanding.NewHandler(mathUnderstandingStore, mathCorrectionStore, mathPilotGateStore, reviewStore, authStore).WithRuntime(workerRuntimeStore)
 	workspaceHandler := workspace.NewHandler(workspace.Dependencies{
 		Exams: examStore, Papers: paperStore, Submissions: submissionStore, Reviews: reviewStore, Assessments: assessmentStore, Processing: processingService,
 	})
@@ -871,6 +871,9 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("PUT /api/v1/exams/{examId}/questions/{questionId}/assessment-profile", requireExamManage(withScopedExam(assessmentHandler.ConfigureQuestion)))
 	mux.Handle("GET /api/v1/exams/{examId}/questions/{questionId}/assessment-snapshot", requireAssessmentRead(withScopedExam(assessmentHandler.GetQuestionSnapshot)))
 	mathunderstanding.RegisterRoutes(mux, mathUnderstandingHandler, requireReviewWork, requireReviewManage)
+	mathunderstanding.RegisterRuntimeRoutes(mux, mathUnderstandingHandler, func(handler http.HandlerFunc) http.Handler {
+		return requireWorkerExecute(withWorkerTaskScope(handler))
+	})
 	mux.Handle("GET /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(withScopedExam(paperHandler.ListTemplates)))
 	mux.Handle("POST /api/v1/exams/{examId}/answer-sheet-templates", requireExamManage(withScopedExam(paperHandler.CreateTemplate)))
 	mux.Handle("PATCH /api/v1/answer-sheet-templates/{id}", requireExamManage(paperHandler.UpdateTemplate))
@@ -888,6 +891,10 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 
 	mux.Handle("POST /api/v1/exams/{examId}/papers", requireExamManage(withScopedExam(paperHandler.CreatePaper)))
 	mux.Handle("GET /api/v1/exams/{examId}/papers", requireExamManage(withScopedExam(paperHandler.ListPapers)))
+	mux.Handle("POST /api/v1/exams/{examId}/paper-imports", requireExamManage(withScopedExam(paperHandler.CreatePaperImport)))
+	mux.Handle("GET /api/v1/exams/{examId}/paper-imports", requireExamManage(withScopedExam(paperHandler.ListPaperImports)))
+	mux.Handle("GET /api/v1/paper-imports/{id}", requireExamManage(paperHandler.GetPaperImport))
+	mux.Handle("POST /api/v1/paper-imports/{id}/apply", requireExamManage(paperHandler.ApplyPaperImport))
 	mux.Handle("POST /api/v1/exams/{examId}/questions", requireExamManage(withScopedExam(paperHandler.CreateQuestion)))
 	mux.Handle("GET /api/v1/exams/{examId}/questions", requireExamManage(withScopedExam(paperHandler.ListQuestions)))
 	mux.Handle("PATCH /api/v1/questions/{id}", requireExamManage(paperHandler.UpdateQuestion))

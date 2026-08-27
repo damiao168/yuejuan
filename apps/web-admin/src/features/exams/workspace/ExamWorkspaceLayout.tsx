@@ -6,7 +6,6 @@ import {
   WorkspaceMetricStrip,
   ExamStageIndicator,
   QualityIndicator,
-  RiskBanner,
   WorkspaceStageRail,
   type WorkspaceMetric
 } from "@edugrade/ui";
@@ -46,24 +45,19 @@ function Overview({ data, onNavigate }: { data: ExamWorkspaceProjection; onNavig
   return (
     <main className="eg-workspace-overview">
       <WorkspaceMetricStrip metrics={metrics} />
-      <div className="eg-workspace-overview-grid">
-        <section className="eg-workspace-panel">
-          <div className="eg-workspace-panel-heading"><div><span>优先处理</span><h2>当前下一步</h2></div><small>{data.next_actions.length} 项</small></div>
-          <div className="eg-next-actions">
-            {data.next_actions.map((action) => (
-              <button type="button" key={action.code} onClick={() => onNavigate(action.route)}>
-                <div><strong>{action.label}</strong><p>{action.description}</p></div><ArrowRight size={16} />
-              </button>
-            ))}
-          </div>
-        </section>
-        <RiskBanner blockers={data.blockers} warnings={data.warnings} onNavigate={onNavigate} />
-      </div>
-      <section className="eg-subject-summary">
-        <div><span>学科</span><strong>{data.subject_summary.label}</strong></div>
-        <div><span>试卷总分</span><strong>{data.subject_summary.total_score} 分</strong></div>
-        <div><span>题型构成</span><strong>{Object.entries(data.subject_summary.question_types).map(([key, count]) => `${key} ${count}`).join(" · ") || "待配置"}</strong></div>
-        <div><span>更新时间</span><strong>{new Date(data.updated_at).toLocaleString("zh-CN")}</strong></div>
+      <section className="eg-workspace-panel eg-workspace-next-panel">
+        <div className="eg-workspace-panel-heading"><div><span>优先处理</span><h2>当前下一步</h2></div><small>{data.next_actions.length} 项</small></div>
+        <div className="eg-next-actions">
+          {data.next_actions.map((action) => (
+            <button type="button" key={action.code} onClick={() => onNavigate(action.route)}>
+              <div><strong>{action.label}</strong><p>{action.description}</p></div><ArrowRight size={16} />
+            </button>
+          ))}
+        </div>
+        {data.blockers.length || data.warnings.length ? <div className="eg-workspace-check-summary">
+          <span>{data.blockers.length ? `${data.blockers.length} 项开考检查待处理` : `${data.warnings.length} 项需要确认`}</span>
+          <Button type="link" onClick={() => onNavigate(`/exams/${encodeURIComponent(data.exam_id)}/settings`)}>查看开考准备</Button>
+        </div> : null}
       </section>
     </main>
   );

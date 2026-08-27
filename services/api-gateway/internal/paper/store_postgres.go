@@ -106,6 +106,158 @@ ORDER BY p.version_no DESC
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) CreatePaperImport(ctx context.Context, tenantID, examID, userID string, input CreatePaperImportInput) (PaperImportJob, error) {
+	var valid bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(
+SELECT 1 FROM exam_paper p
+JOIN file_asset pf ON pf.tenant_id=p.tenant_id AND pf.id=$4::uuid AND pf.deleted_at IS NULL
+JOIN file_asset af ON af.tenant_id=p.tenant_id AND af.id=$5::uuid AND af.deleted_at IS NULL
+WHERE p.tenant_id=$1 AND p.exam_id=$2 AND p.id=$3::uuid AND p.deleted_at IS NULL
+  AND (pf.exam_id IS NULL OR pf.exam_id=$2) AND (af.exam_id IS NULL OR af.exam_id=$2))`, tenantID, examID, input.ExamPaperID, input.PaperFileAssetID, input.AnswerFileAssetID).Scan(&valid)
+	if err != nil {
+		return PaperImportJob{}, err
+	}
+	if !valid {
+		return PaperImportJob{}, ErrInvalidInput
+	}
+	row := s.db.QueryRowContext(ctx, `INSERT INTO paper_import_job
+(tenant_id, exam_id, exam_paper_id, paper_file_asset_id, answer_file_asset_id, status, subject, created_by)
+VALUES ($1,$2,$3,$4,$5,'processing',$6,$7)
+RETURNING id::text,tenant_id::text,exam_id::text,exam_paper_id::text,paper_file_asset_id::text,answer_file_asset_id::text,status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at`, tenantID, examID, input.ExamPaperID, input.PaperFileAssetID, input.AnswerFileAssetID, input.Subject, userID)
+	return scanPaperImport(row)
+}
+
+func (s *PostgresStore) CompletePaperImport(ctx context.Context, tenantID, id string, questions []PaperImportDraftQuestion, issues []string) (PaperImportJob, error) {
+	q, _ := json.Marshal(questions)
+	i, _ := json.Marshal(issues)
+	row := s.db.QueryRowContext(ctx, `UPDATE paper_import_job SET status='review_required',draft_questions=$3,issues=$4,error_code='',updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL RETURNING id::text,tenant_id::text,exam_id::text,exam_paper_id::text,paper_file_asset_id::text,answer_file_asset_id::text,status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at`, tenantID, id, q, i)
+	return scanPaperImport(row)
+}
+
+func (s *PostgresStore) FailPaperImport(ctx context.Context, tenantID, id, code string, issues []string) (PaperImportJob, error) {
+	i, _ := json.Marshal(issues)
+	row := s.db.QueryRowContext(ctx, `UPDATE paper_import_job SET status='failed',issues=$3,error_code=$4,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL RETURNING id::text,tenant_id::text,exam_id::text,exam_paper_id::text,paper_file_asset_id::text,answer_file_asset_id::text,status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at`, tenantID, id, i, code)
+	return scanPaperImport(row)
+}
+
+func (s *PostgresStore) GetPaperImport(ctx context.Context, tenantID, id string) (PaperImportJob, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id::text,tenant_id::text,exam_id::text,exam_paper_id::text,paper_file_asset_id::text,answer_file_asset_id::text,status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at FROM paper_import_job WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL`, tenantID, id)
+	return scanPaperImport(row)
+}
+
+func (s *PostgresStore) ListPaperImports(ctx context.Context, tenantID, examID string) ([]PaperImportJob, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id::text,tenant_id::text,exam_id::text,exam_paper_id::text,paper_file_asset_id::text,answer_file_asset_id::text,status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at FROM paper_import_job WHERE tenant_id=$1 AND exam_id=$2 AND deleted_at IS NULL ORDER BY created_at DESC`, tenantID, examID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PaperImportJob{}
+	for rows.Next() {
+		item, err := scanPaperImport(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) ApplyPaperImport(ctx context.Context, tenantID, id, userID string) (PaperImportJob, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return PaperImportJob{}, err
+	}
+	defer tx.Rollback()
+	job, err := scanPaperImport(tx.QueryRowContext(ctx, `SELECT id::text,tenant_id::text,exam_id::text,exam_paper_id::text,paper_file_asset_id::text,answer_file_asset_id::text,status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at FROM paper_import_job WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, tenantID, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return PaperImportJob{}, ErrNotFound
+	}
+	if err != nil {
+		return PaperImportJob{}, err
+	}
+	if job.Status != "review_required" {
+		return PaperImportJob{}, ErrConflict
+	}
+	var existing int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM question WHERE tenant_id=$1 AND exam_id=$2 AND deleted_at IS NULL AND status<>'deleted'`, tenantID, job.ExamID).Scan(&existing); err != nil {
+		return PaperImportJob{}, err
+	}
+	if existing > 0 {
+		return PaperImportJob{}, ErrConflict
+	}
+	for index, draft := range job.Questions {
+		if err := validateQuestionInput(draft.QuestionNo, draft.QuestionType, draft.Score); err != nil {
+			return PaperImportJob{}, ErrInvalidInput
+		}
+		kp, _ := json.Marshal(draft.KnowledgePoints)
+		area := []byte(`{}`)
+		var questionID string
+		if err := tx.QueryRowContext(ctx, `INSERT INTO question (tenant_id,exam_id,exam_paper_id,question_no,question_type,score,stem,knowledge_points,answer_area,sort_order,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'active') RETURNING id::text`, tenantID, job.ExamID, job.ExamPaperID, draft.QuestionNo, draft.QuestionType, draft.Score, draft.Stem, kp, area, index+1).Scan(&questionID); err != nil {
+			return PaperImportJob{}, err
+		}
+		if draft.AnswerKey != nil {
+			if _, err := s.insertAnswerKey(ctx, tx, tenantID, questionID, userID, "v1", *draft.AnswerKey); err != nil {
+				return PaperImportJob{}, err
+			}
+		}
+		if draft.Rubric != nil {
+			if !scoreEqual(SumRubricPoints(draft.Rubric.Points), draft.Score) || !scoreEqual(draft.Rubric.MaxScore, draft.Score) {
+				return PaperImportJob{}, ErrRubricMismatch
+			}
+			points, _ := json.Marshal(draft.Rubric.Points)
+			deductions, _ := json.Marshal(draft.Rubric.Deductions)
+			examples, _ := json.Marshal(draft.Rubric.Examples)
+			hash := contentHash(points, deductions, examples)
+			var versionID string
+			if err := tx.QueryRowContext(ctx, `INSERT INTO rubric_version (tenant_id,question_id,version,status,content_hash,created_by) VALUES ($1,$2,'v1','draft',$3,$4) RETURNING id::text`, tenantID, questionID, hash, userID).Scan(&versionID); err != nil {
+				return PaperImportJob{}, err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO question_rubric (tenant_id,question_id,rubric_version_id,status,max_score,points,deductions,examples,created_by) VALUES ($1,$2,$3,'draft',$4,$5,$6,$7,$8)`, tenantID, questionID, versionID, draft.Rubric.MaxScore, points, deductions, examples, userID); err != nil {
+				return PaperImportJob{}, err
+			}
+		}
+	}
+	job, err = scanPaperImport(tx.QueryRowContext(ctx, `UPDATE paper_import_job SET status='applied',applied_at=now(),updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid RETURNING id::text,tenant_id::text,exam_id::text,exam_paper_id::text,paper_file_asset_id::text,answer_file_asset_id::text,status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at`, tenantID, id))
+	if err != nil {
+		return PaperImportJob{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PaperImportJob{}, err
+	}
+	return job, nil
+}
+
+type paperImportScanner interface{ Scan(...any) error }
+
+func scanPaperImport(row paperImportScanner) (PaperImportJob, error) {
+	var out PaperImportJob
+	var questions, issues []byte
+	var applied sql.NullTime
+	err := row.Scan(&out.ID, &out.TenantID, &out.ExamID, &out.ExamPaperID, &out.PaperFileAssetID, &out.AnswerFileAssetID, &out.Status, &out.Subject, &questions, &issues, &out.ErrorCode, &out.CreatedBy, &out.CreatedAt, &out.UpdatedAt, &applied)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PaperImportJob{}, ErrNotFound
+	}
+	if err != nil {
+		return PaperImportJob{}, err
+	}
+	if len(questions) > 0 {
+		_ = json.Unmarshal(questions, &out.Questions)
+	}
+	if out.Questions == nil {
+		out.Questions = []PaperImportDraftQuestion{}
+	}
+	if len(issues) > 0 {
+		_ = json.Unmarshal(issues, &out.Issues)
+	}
+	if out.Issues == nil {
+		out.Issues = []string{}
+	}
+	if applied.Valid {
+		out.AppliedAt = &applied.Time
+	}
+	return out, nil
+}
+
 func (s *PostgresStore) CreateQuestion(ctx context.Context, tenantID string, examID string, userID string, input CreateQuestionInput) (Question, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

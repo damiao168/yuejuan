@@ -12,15 +12,16 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY services/ocr-worker/pyproject.toml ./pyproject.toml
-COPY services/ocr-worker/ocr_worker ./ocr_worker
 
 RUN python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
       "pip==26.1.2" "setuptools==83.0.0" \
     && if [ "$INSTALL_PADDLEOCR" = "true" ]; then \
-      python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" ".[paddle]"; \
-    else \
-      python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" .; \
+      python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
+        "paddleocr==3.7.0" "paddlepaddle==3.3.1" "tokenizers==0.22.1"; \
     fi
+
+COPY services/ocr-worker/ocr_worker ./ocr_worker
+RUN python -m pip install --no-cache-dir --no-deps .
 
 RUN sed -i \
       -e "s|http://deb.debian.org/debian-security|$DEBIAN_SECURITY_MIRROR|g" \
@@ -30,7 +31,11 @@ RUN sed -i \
     && apt-get install -y --no-install-recommends libgomp1 libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN install -d -o nobody -g nogroup /home/ocr-worker/.paddlex /home/ocr-worker/.modelscope
+RUN install -d -o nobody -g nogroup \
+      /home/ocr-worker/.paddlex \
+      /home/ocr-worker/.modelscope \
+      /home/ocr-worker/.cache \
+      /home/ocr-worker/.cache/huggingface
 
 # PaddleX initializes its cache while importing PaddleOCR. The runtime user is
 # intentionally non-root, so give it a stable writable cache location. Keep

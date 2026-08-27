@@ -54,7 +54,7 @@ func (c *memoryRuntimeCoordinator) CreateTask(ctx context.Context, tenantID, sub
 			if err = c.runHook("create.after_source"); err != nil {
 				return err
 			}
-			if _, err = runtimeTx.CreateTask(ctx, tenantID, actorID, runtimeCreateInput(sourceTask)); err != nil {
+			if _, err = runtimeTx.CreateTask(ctx, tenantID, actorID, runtimeCreateInput(sourceTask, input.SourceFileAssetIDs...)); err != nil {
 				return err
 			}
 			return c.runHook("create.after_runtime")

@@ -40,6 +40,43 @@ type CreatePaperInput struct {
 	File        FileAssetInput `json:"file"`
 }
 
+type PaperImportDraftQuestion struct {
+	QuestionNo      string          `json:"question_no"`
+	QuestionType    string          `json:"question_type"`
+	Score           float64         `json:"score"`
+	Stem            string          `json:"stem"`
+	KnowledgePoints []string        `json:"knowledge_points"`
+	AnswerKey       *AnswerKeyInput `json:"answer_key,omitempty"`
+	Rubric          *RubricInput    `json:"rubric,omitempty"`
+	Confidence      float64         `json:"confidence"`
+	Issues          []string        `json:"issues"`
+}
+
+type PaperImportJob struct {
+	ID                string                     `json:"id"`
+	TenantID          string                     `json:"tenant_id"`
+	ExamID            string                     `json:"exam_id"`
+	ExamPaperID       string                     `json:"exam_paper_id"`
+	PaperFileAssetID  string                     `json:"paper_file_asset_id"`
+	AnswerFileAssetID string                     `json:"answer_file_asset_id"`
+	Status            string                     `json:"status"`
+	Subject           string                     `json:"subject"`
+	Questions         []PaperImportDraftQuestion `json:"questions"`
+	Issues            []string                   `json:"issues"`
+	ErrorCode         string                     `json:"error_code,omitempty"`
+	CreatedBy         string                     `json:"created_by"`
+	CreatedAt         time.Time                  `json:"created_at"`
+	UpdatedAt         time.Time                  `json:"updated_at"`
+	AppliedAt         *time.Time                 `json:"applied_at,omitempty"`
+}
+
+type CreatePaperImportInput struct {
+	ExamPaperID       string `json:"exam_paper_id"`
+	PaperFileAssetID  string `json:"paper_file_asset_id"`
+	AnswerFileAssetID string `json:"answer_file_asset_id"`
+	Subject           string `json:"subject"`
+}
+
 type AnswerKeyInput struct {
 	StandardAnswer    any   `json:"standard_answer"`
 	EquivalentAnswers []any `json:"equivalent_answers"`
@@ -227,6 +264,12 @@ type ReadinessResult struct {
 type Store interface {
 	CreatePaper(ctx context.Context, tenantID string, examID string, userID string, input CreatePaperInput) (Paper, error)
 	ListPapers(ctx context.Context, tenantID string, examID string) ([]Paper, error)
+	CreatePaperImport(ctx context.Context, tenantID string, examID string, userID string, input CreatePaperImportInput) (PaperImportJob, error)
+	CompletePaperImport(ctx context.Context, tenantID string, id string, questions []PaperImportDraftQuestion, issues []string) (PaperImportJob, error)
+	FailPaperImport(ctx context.Context, tenantID string, id string, errorCode string, issues []string) (PaperImportJob, error)
+	GetPaperImport(ctx context.Context, tenantID string, id string) (PaperImportJob, error)
+	ListPaperImports(ctx context.Context, tenantID string, examID string) ([]PaperImportJob, error)
+	ApplyPaperImport(ctx context.Context, tenantID string, id string, userID string) (PaperImportJob, error)
 	CreateQuestion(ctx context.Context, tenantID string, examID string, userID string, input CreateQuestionInput) (Question, error)
 	ListQuestions(ctx context.Context, tenantID string, examID string) ([]Question, error)
 	UpdateQuestion(ctx context.Context, tenantID string, id string, userID string, input UpdateQuestionInput) (Question, error)

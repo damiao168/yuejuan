@@ -45,7 +45,7 @@ function json(route: Route, body: unknown, status = 200) {
 
 export async function installApiMocks(
   page: Page,
-  options: { role?: TestRole; initiallyAuthenticated?: boolean } = {}
+  options: { role?: TestRole; initiallyAuthenticated?: boolean; dashboardMode?: "default" | "empty" } = {}
 ) {
   const role = options.role ?? "school_admin";
   const user = userFor(role);
@@ -71,12 +71,34 @@ export async function installApiMocks(
     if (path === "/api/v1/auth/logout") return json(route, { status: "ok" });
 
     if (path === "/api/v1/dashboard/summary") {
+      if (options.dashboardMode === "empty") {
+        return json(route, {
+          scope: { tenant_id: "tenant-school", school_id: "school-1" },
+          updated_at: "2026-08-02T07:06:00Z",
+          statistics: {
+            active_exam_count: 0,
+            collecting_exam_count: 0,
+            pending_review_question_count: 0,
+            pending_review_submission_count: 0,
+            pending_arbitration_count: 0,
+            pending_arbitration_submission_count: 0,
+            failed_submission_count: 0,
+            unmatched_submission_count: 0,
+            quality_issue_submission_count: 0,
+            finalized_exam_count: 0
+          },
+          blocking_issues: [],
+          active_exams: [],
+          recent_activities: [],
+          warnings: []
+        });
+      }
       return json(route, {
         scope: { tenant_id: "tenant-school", school_id: "school-1" },
         updated_at: "2026-08-02T07:06:00Z",
         statistics: {
-          active_exam_count: 12,
-          collecting_exam_count: 2,
+          active_exam_count: 3,
+          collecting_exam_count: 1,
           pending_review_question_count: 107,
           pending_review_submission_count: 6,
           pending_arbitration_count: 3,
@@ -86,18 +108,46 @@ export async function installApiMocks(
           quality_issue_submission_count: 1,
           finalized_exam_count: 1
         },
-        blocking_issues: [],
-        active_exams: [{
-          id: "exam-1",
-          name: "2026 春季数学期中考试",
-          subject: "math",
-          status: "collecting",
-          submission_count: 48,
-          failed_count: 0,
-          quality_issue_count: 0,
-          unmatched_count: 0,
-          created_at: "2026-08-01T00:00:00Z"
-        }],
+        blocking_issues: [
+          { code: "failed_submissions", label: "答题卡处理失败", count: 1, unit: "份", impact: "会阻断后续阅卷", action: "查看并重试", drilldown_path: "/capture?issue=failed" },
+          { code: "unmatched_submissions", label: "答题卡未匹配学生", count: 1, unit: "份", impact: "无法计入学生成绩", action: "确认学生身份", drilldown_path: "/capture?issue=unmatched" },
+          { code: "pending_arbitration", label: "待人工复核", count: 2, unit: "份", impact: "未确认最终得分", action: "开始复核", drilldown_path: "/arbitration?status=pending" }
+        ],
+        active_exams: [
+          {
+            id: "exam-1",
+            name: "2026 春季数学期中考试",
+            subject: "math",
+            status: "collecting",
+            submission_count: 48,
+            failed_count: 1,
+            quality_issue_count: 1,
+            unmatched_count: 0,
+            created_at: "2026-08-01T00:00:00Z"
+          },
+          {
+            id: "exam-2",
+            name: "高二语文月考",
+            subject: "chinese",
+            status: "draft",
+            submission_count: 0,
+            failed_count: 0,
+            quality_issue_count: 0,
+            unmatched_count: 0,
+            created_at: "2026-07-31T00:00:00Z"
+          },
+          {
+            id: "exam-3",
+            name: "高一英语期末考试",
+            subject: "english",
+            status: "grading",
+            submission_count: 126,
+            failed_count: 0,
+            quality_issue_count: 0,
+            unmatched_count: 0,
+            created_at: "2026-07-30T00:00:00Z"
+          }
+        ],
         recent_activities: [],
         warnings: []
       });
@@ -106,6 +156,8 @@ export async function installApiMocks(
     if (path === "/api/v1/schools") {
       return json(route, { schools: [{ id: "school-1", tenant_id: "tenant-school", name: "示范学校", code: "DEMO" }] });
     }
+    if (path === "/api/v1/grades") return json(route, { grades: [{ id: "grade-1", school_id: "school-1", name: "高二", code: "G11", academic_year: "2026-2027", level_no: 11 }] });
+    if (path === "/api/v1/classes") return json(route, { classes: [{ id: "class-1", school_id: "school-1", grade_id: "grade-1", name: "高二（1）班", code: "G11-01" }] });
     if (path === "/api/v1/students") return json(route, { students: [] });
     if (path === "/api/v1/ocr/availability") {
       return json(route, {

@@ -21,6 +21,31 @@ export interface PaperVersion {
   file: PaperFile;
 }
 
+export interface PaperImportDraftQuestion {
+  question_no: string;
+  question_type: string;
+  score: number;
+  stem: string;
+  knowledge_points: string[];
+  confidence: number;
+  issues: string[];
+}
+
+export interface PaperImportJob {
+  id: string;
+  exam_id: string;
+  exam_paper_id: string;
+  paper_file_asset_id: string;
+  answer_file_asset_id: string;
+  status: "processing" | "review_required" | "failed" | "applied";
+  subject: string;
+  questions: PaperImportDraftQuestion[];
+  issues: string[];
+  error_code?: string;
+  created_at: string;
+  applied_at?: string;
+}
+
 export interface AnswerKeyInput {
   standard_answer: unknown;
   equivalent_answers: unknown[];
@@ -127,6 +152,18 @@ export async function registerPaperFromFile(examId: string, fileAssetId: string)
 
 export async function listPapers(examId: string) {
   return apiClient.request<{ papers: PaperVersion[] }>(`/api/v1/exams/${encodeURIComponent(examId)}/papers`);
+}
+
+export async function listPaperImports(examId: string) {
+  return apiClient.request<{ imports: PaperImportJob[] }>(`/api/v1/exams/${encodeURIComponent(examId)}/paper-imports`);
+}
+
+export async function createPaperImport(examId: string, payload: { exam_paper_id: string; paper_file_asset_id: string; answer_file_asset_id: string; subject: string }) {
+  return apiClient.request<{ import: PaperImportJob }>(`/api/v1/exams/${encodeURIComponent(examId)}/paper-imports`, { method: "POST", body: JSON.stringify(payload) });
+}
+
+export async function applyPaperImport(importId: string) {
+  return apiClient.request<{ import: PaperImportJob }>(`/api/v1/paper-imports/${encodeURIComponent(importId)}/apply`, { method: "POST" });
 }
 
 export async function listQuestions(examId: string) {

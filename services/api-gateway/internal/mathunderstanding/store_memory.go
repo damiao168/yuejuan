@@ -28,6 +28,9 @@ func (s *MemoryStore) CreateArtifact(_ context.Context, tenantID string, input C
 	key := tenantID + ":" + input.AnswerSegmentID
 	version := int64(1)
 	if previous, ok := s.current[key]; ok {
+		if previous.InputHash == input.InputHash {
+			return cloneArtifact(previous), nil
+		}
 		version = previous.Version + 1
 		previous.IsCurrent = false
 		s.artifacts[tenantID+":"+previous.ID] = previous

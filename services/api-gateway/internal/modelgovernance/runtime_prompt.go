@@ -85,16 +85,25 @@ func (s *HTTPRuntimePromptSource) Current(ctx context.Context) (RuntimePrompt, e
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return RuntimePrompt{}, ErrRuntimePromptUnavailable
 	}
-	if envelope.Prompt.ActivationMode != "deployment_manifest" || envelope.Prompt.MutableAtRuntime || len(envelope.Prompt.Components) != 6 {
+	if envelope.Prompt.ActivationMode != "deployment_manifest" || envelope.Prompt.MutableAtRuntime || len(envelope.Prompt.Components) < 3 {
 		return RuntimePrompt{}, ErrRuntimePromptUnavailable
 	}
-	allowedKeys := map[string]bool{"base": true, "short_answer": true, "calculation": true, "essay": true, "discussion": true, "structured": true}
+	allowedSubjects := map[string]bool{"chinese": true, "math": true, "english": true, "physics": true, "chemistry": true, "biology": true, "history": true, "politics": true, "geography": true, "computer_science": true}
+	allowedTypes := map[string]bool{"short_answer": true, "calculation": true, "essay": true, "discussion": true}
 	seenKeys := make(map[string]bool, len(envelope.Prompt.Components))
 	for _, component := range envelope.Prompt.Components {
-		if !allowedKeys[component.Key] || seenKeys[component.Key] || component.Filename == "" || len(component.SHA256) != 64 || strings.TrimSpace(component.Content) == "" {
+		keyAllowed := component.Key == "base" || component.Key == "structured"
+		parts := strings.Split(component.Key, ".")
+		if len(parts) == 3 && parts[0] == "subject" && allowedSubjects[parts[1]] && allowedTypes[parts[2]] {
+			keyAllowed = true
+		}
+		if !keyAllowed || seenKeys[component.Key] || component.Filename == "" || len(component.SHA256) != 64 || strings.TrimSpace(component.Content) == "" {
 			return RuntimePrompt{}, ErrRuntimePromptUnavailable
 		}
 		seenKeys[component.Key] = true
+	}
+	if !seenKeys["base"] || !seenKeys["structured"] {
+		return RuntimePrompt{}, ErrRuntimePromptUnavailable
 	}
 	return envelope.Prompt, nil
 }

@@ -98,9 +98,8 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
     <div className="page-stack admin-grading-operations">
       <section className="page-heading">
         <div>
-          <span className="dashboard-kicker">管理端</span>
-          <h1>阅卷运营</h1>
-          <p>按考试查看自动评分进度、待人工复核和失败项；需要处理时进入对应考试的工作区。</p>
+          <h1>自动阅卷</h1>
+          <p>查看每场考试的处理进度，异常题目会自动进入人工复核。</p>
         </div>
         <Button icon={<RefreshCw size={16} />} loading={loading} onClick={() => void load()}>刷新</Button>
       </section>
@@ -157,7 +156,7 @@ export function AdminGradingOperationsPage({ onNavigate }: { onNavigate: (path: 
               </div>
               <div className="operations-actions">
                 {needsAttention > 0 ? <span className="operations-warning"><CircleAlert size={15} />{needsAttention} 项需处理</span> : <span className="operations-ok"><ShieldCheck size={15} />无阻断项</span>}
-                <Button type="primary" onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/grading`)}>进入运营<ArrowRight size={16} /></Button>
+                <Button type="primary" onClick={() => onNavigate(`/exams/${encodeURIComponent(exam.id)}/grading`)}>查看自动阅卷<ArrowRight size={16} /></Button>
               </div>
             </article>
           );

@@ -111,7 +111,7 @@ export interface SecretProbe {
 }
 
 export interface RuntimePromptComponent {
-  key: "base" | "short_answer" | "calculation" | "essay" | "discussion" | "structured";
+  key: string;
   filename: string;
   sha256: string;
   content: string;

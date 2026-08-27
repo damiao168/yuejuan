@@ -33,6 +33,18 @@ func (s *PublishedQuestionAppealPostgresStore) CreatePublishedQuestionAppeal(ctx
 	if !releaseAppealWindowAllows(window, input.ReasonCode, time.Now().UTC()) {
 		return PublishedQuestionAppeal{}, ErrAppealWindowClosed
 	}
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM question_appeal
+  WHERE tenant_id = $1 AND student_id = $2::uuid
+    AND source_release_id = $3::uuid AND question_id = $4::uuid
+)`, tenantID, studentID, input.SourceReleaseID, input.QuestionID).Scan(&exists); err != nil {
+		return PublishedQuestionAppeal{}, err
+	}
+	if exists {
+		return PublishedQuestionAppeal{}, ErrAppealAlreadyFiled
+	}
 	selectedRegion, err := json.Marshal(input.SelectedRegion)
 	if err != nil {
 		return PublishedQuestionAppeal{}, ErrInvalidInput
