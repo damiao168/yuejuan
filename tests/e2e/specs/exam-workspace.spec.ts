@@ -5,7 +5,7 @@ test("考试工作区按四阶段导航，并让阻断项跳到可处理环节",
   await installApiMocks(page, { role: "school_admin", initiallyAuthenticated: true });
   await page.goto("/#/admin/exams/exam-1/overview", { waitUntil: "domcontentloaded" });
 
-  await expect(page.getByRole("heading", { name: "2026 春季数学期中考试" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "2026 春季数学期中考试" })).toBeVisible({ timeout: 30_000 });
   const stageRail = page.getByRole("navigation", { name: "考试流程" });
   await expect(stageRail.getByRole("button")).toHaveCount(4);
   await expect(stageRail).toContainText("考试准备");

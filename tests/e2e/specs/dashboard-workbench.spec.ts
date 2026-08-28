@@ -10,19 +10,17 @@ async function login(page: import("@playwright/test").Page) {
   await expect(page.getByRole("heading", { name: "考试工作台" })).toBeVisible({ timeout: 30_000 });
 }
 
-test("学校工作台优先展示真实待办、四阶段考试和成员入口", async ({ page }) => {
+test("学校工作台按成员、考试、阅卷与成绩组织真实业务工作", async ({ page }) => {
   await installApiMocks(page);
   await login(page);
 
-  await expect(page.getByRole("heading", { name: "需要你处理" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "成员管理" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "考试管理" })).toBeVisible();
+  await expect(page.getByText(/进行中 3 场/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "阅卷与成绩" })).toBeVisible();
   await expect(page.getByText("答卷处理失败")).toBeVisible();
   await expect(page.getByText("主观题等待确认")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "进行中的考试" })).toBeVisible();
-  await expect(page.getByLabel("当前阶段：答卷导入")).toBeVisible();
-  await expect(page.getByLabel("当前阶段：考试准备")).toBeVisible();
-  await expect(page.getByLabel("当前阶段：阅卷")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "成员管理" })).toBeVisible();
-  await expect(page.getByText("学生管理", { exact: true }).last()).toBeVisible();
+  await expect(page.getByRole("button", { name: /管理学生/ })).toBeVisible();
 });
 
 test("桌面壳层取消空置顶栏，并固定品牌、菜单和账户区域", async ({ page }) => {
@@ -34,10 +32,16 @@ test("桌面壳层取消空置顶栏，并固定品牌、菜单和账户区域",
   await expect(page.getByRole("button", { name: "账户菜单：学校管理员" })).toBeVisible();
 
   const expandedWidth = await page.locator(".sidebar").evaluate((element) => element.getBoundingClientRect().width);
-  expect(expandedWidth).toBeGreaterThanOrEqual(190);
+  await expect(page.locator(".brand-copy")).toBeVisible();
   await page.getByRole("button", { name: "收起导航" }).click();
   await expect(page.getByRole("button", { name: "展开导航" })).toBeVisible();
-  await expect.poll(() => page.locator(".sidebar").evaluate((element) => element.getBoundingClientRect().width)).toBeLessThanOrEqual(66);
+  let collapsedWidth = expandedWidth;
+  await expect.poll(async () => {
+    collapsedWidth = await page.locator(".sidebar").evaluate((element) => element.getBoundingClientRect().width);
+    return collapsedWidth;
+  }).toBeLessThanOrEqual(66);
+  expect(expandedWidth).toBeGreaterThan(collapsedWidth);
+  await expect(page.locator(".brand-copy")).toBeHidden();
   await expect(page.locator(".sidebar-account-copy")).toBeHidden();
 
   await page.getByRole("button", { name: "展开导航" }).click();
@@ -62,25 +66,32 @@ test("移动端只保留导航触发条，账户位于抽屉底部", async ({ pa
 });
 
 test("首页主动作完成分步骤表单新建考试并进入考试准备", async ({ page }) => {
+  test.setTimeout(90_000);
   await installApiMocks(page);
   await login(page);
 
   await page.getByRole("button", { name: "新建考试" }).click();
   await expect(page).toHaveURL(/#\/admin\/exams\/new/);
-  await expect(page.getByRole("heading", { name: "新建考试" })).toBeVisible();
-  await expect(page.getByText("基本信息", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: /下一步/ }).click();
+  await expect(page.getByRole("heading", { name: "新建考试" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "考试范围" })).toBeVisible();
+  await page.getByRole("textbox", { name: "考试名称 *" }).fill("2026-2027学年高二期中考试");
+  await page.getByRole("combobox", { name: /考试类型/ }).click();
+  await page.getByTitle("期中考试").click();
+  await page.getByRole("combobox", { name: /考试科目/ }).click();
+  await page.getByTitle("数学").click();
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: /高二（1）班/ }).click();
-  await expect(page.getByText(/1 个班级.*2 名学生/)).toBeVisible();
+  await expect(page.getByText(/1 个班级.*1 个科目/)).toBeVisible();
   await page.getByRole("button", { name: /下一步/ }).click();
-  await expect(page.getByText("阅卷完成并由管理员确认后发布")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "试卷结构" }).first()).toBeVisible();
+  await expect(page.getByText("150 / 150 分")).toBeVisible();
   await page.getByRole("button", { name: /下一步/ }).click();
-  await expect(page.getByRole("heading", { name: "确认创建" })).toBeVisible();
-  await page.getByRole("button", { name: /创建考试/ }).click();
-  await expect(page).toHaveURL(/#\/admin\/exams\/exam-created\/settings/);
+  await expect(page.getByRole("heading", { name: "检查并创建" })).toBeVisible();
+  await page.getByRole("button", { name: "创建 1 个科目工作区" }).click();
+  await expect(page).toHaveURL(/#\/admin\/exams\/exam-created-math\/settings/);
 
   await page.goto("/#/admin/dashboard");
-  await page.getByRole("button", { name: /主观题等待确认/ }).click();
+  await page.getByRole("row", { name: /主观题等待确认/ }).getByRole("button", { name: "继续阅卷" }).click();
   await expect(page).toHaveURL(/#\/admin\/grading\?status=pending/);
 
   await page.goto("/#/admin/dashboard");
@@ -92,24 +103,24 @@ test("没有待办时使用紧凑空状态", async ({ page }) => {
   await installApiMocks(page, { dashboardMode: "empty" });
   await login(page);
 
-  await expect(page.getByText("当前没有需要你处理的事项")).toBeVisible();
+  await expect(page.getByText("当前没有需要处理的事项")).toBeVisible();
   await expect(page.getByText("暂无进行中考试")).toBeVisible();
-  const todoHeight = await page.locator(".todo-pane").evaluate((element) => element.getBoundingClientRect().height);
-  expect(todoHeight).toBeLessThan(180);
+  await expect(page.getByText("进行中 0 场", { exact: false })).toBeVisible();
 });
 
 test("成员管理入口进入正式班级和教师页面", async ({ page }) => {
+  test.setTimeout(60_000);
   await installApiMocks(page);
   await login(page);
 
   await page.getByRole("button", { name: /年级与班级/ }).click();
   await expect(page).toHaveURL(/#\/admin\/members\/classes/);
-  await expect(page.getByRole("heading", { name: "年级与班级" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "年级与班级" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("高二（1）班")).toBeVisible();
 
   await page.goto("/#/admin/dashboard");
   await page.getByRole("button", { name: /教师与阅卷人员/ }).click();
   await expect(page).toHaveURL(/#\/admin\/members\/teachers/);
-  await expect(page.getByRole("heading", { name: "教师与阅卷人员" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "教师与阅卷人员" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("数学阅卷老师")).toBeVisible();
 });

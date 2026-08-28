@@ -7,6 +7,7 @@ const rolePermissions: Record<TestRole, string[]> = {
     "exam:manage",
     "submission:manage",
     "file:manage",
+    "capture:manage",
     "ocr:manage",
     "segment:manage",
     "review:manage",
@@ -76,6 +77,15 @@ export async function installApiMocks(
         return json(route, {
           scope: { tenant_id: "tenant-school", school_id: "school-1" },
           updated_at: "2026-08-02T07:06:00Z",
+          organization_statistics: {
+            active_student_count: 0,
+            grade_count: 0,
+            class_count: 0,
+            teacher_count: 0,
+            grader_count: 0,
+            empty_class_count: 0,
+            unassigned_teacher_count: 0
+          },
           statistics: {
             active_exam_count: 0,
             collecting_exam_count: 0,
@@ -97,6 +107,15 @@ export async function installApiMocks(
       return json(route, {
         scope: { tenant_id: "tenant-school", school_id: "school-1" },
         updated_at: "2026-08-02T07:06:00Z",
+        organization_statistics: {
+          active_student_count: 2,
+          grade_count: 1,
+          class_count: 1,
+          teacher_count: 1,
+          grader_count: 1,
+          empty_class_count: 0,
+          unassigned_teacher_count: 0
+        },
         statistics: {
           active_exam_count: 3,
           collecting_exam_count: 1,
@@ -199,6 +218,35 @@ export async function installApiMocks(
         }]
       });
     }
+    if (path === "/api/v1/exam-sessions" && route.request().method() === "POST") {
+      return json(route, {
+        exam_session: {
+          id: "session-created",
+          school_id: "school-1",
+          grade_id: "grade-1",
+          name: "2026-2027学年高二期中考试",
+          exam_type: "midterm_exam",
+          status: "draft",
+          exams: [{
+            id: "exam-created-math",
+            tenant_id: "tenant-school",
+            school_id: "school-1",
+            name: "2026-2027学年高二期中考试 · 数学",
+            subject: "math",
+            exam_type: "midterm_exam",
+            total_score: 150,
+            status: "draft",
+            grading_mode: "ai_assisted",
+            appeal_enabled: true,
+            publish_policy: "after_admin_approval",
+            created_by: "user-school_admin",
+            class_ids: ["class-1"],
+            revision: 1,
+            created_at: "2026-08-02T07:06:00Z"
+          }]
+        }
+      });
+    }
     if (path === "/api/v1/exams/exam-1/workspace") {
       return json(route, {
         workspace: {
@@ -268,6 +316,9 @@ export async function installApiMocks(
           updated_at: "2026-08-12T08:00:00Z"
         }
       });
+    }
+    if (path === "/api/v1/exams/exam-1/capture-batches" && request.method() === "GET") {
+      return json(route, { batches: [], next_cursor: "", has_more: false });
     }
     if (/^\/api\/v1\/exams\/[^/]+\/submissions$/.test(path)) return json(route, { submissions: [] });
     if (path === "/api/v1/ocr/tasks") return json(route, { tasks: [] });

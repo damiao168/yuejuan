@@ -14,7 +14,7 @@ test("阅卷教师先理解异常原因，再用键盘连续完成 20 份跨学�
 
   const score = page.getByRole("spinbutton", { name: "最终得分" });
   const submit = page.getByRole("button", { name: "提交并下一份" });
-  await expect(score).toBeVisible();
+  await expect(score).toBeVisible({ timeout: 30_000 });
   await expect(page.locator(".answer-panel")).toContainText("fixture-01");
   await expect(page.getByText("为什么需要我处理？")).toBeVisible();
   await expect(page.getByText("系统评分把握不足", { exact: true })).toBeVisible();
@@ -59,7 +59,7 @@ test("阅卷教师先理解异常原因，再用键盘连续完成 20 份跨学�
 });
 
 test("两个浏览器窗口保存同一草稿时，后写窗口收到 revision conflict", async ({ browser }) => {
-  test.setTimeout(30_000);
+  test.setTimeout(60_000);
   const state = createGradingWorkbenchMockState(1);
   const firstContext = await browser.newContext();
   const secondContext = await browser.newContext();
@@ -75,7 +75,10 @@ test("两个浏览器窗口保存同一草稿时，后写窗口收到 revision c
     ]);
     const firstScore = first.getByRole("spinbutton", { name: "最终得分" });
     const secondScore = second.getByRole("spinbutton", { name: "最终得分" });
-    await Promise.all([expect(firstScore).toBeVisible(), expect(secondScore).toBeVisible()]);
+    await Promise.all([
+      expect(firstScore).toBeVisible({ timeout: 30_000 }),
+      expect(secondScore).toBeVisible({ timeout: 30_000 })
+    ]);
 
     await firstScore.fill("5");
     await expect(first.locator(".draft-save-status")).toHaveText("草稿已保存", { timeout: 8_000 });

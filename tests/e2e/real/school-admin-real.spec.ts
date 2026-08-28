@@ -15,7 +15,6 @@ test("学校管理员通过真实网关登录并查看已持久化考试", async
   await page.getByRole("button", { name: "登录" }).click();
 
   await expect(page.getByRole("heading", { name: "考试工作台" })).toBeVisible();
-  await expect(page.getByText("进行中的考试", { exact: true }).first()).toBeVisible();
   await page.getByText("考试列表", { exact: true }).click();
   await expect(page).toHaveURL(/#\/admin\/exams/);
   await expect(page.getByText("STORY-060 Synthetic Chinese Exam", { exact: true })).toBeVisible();
