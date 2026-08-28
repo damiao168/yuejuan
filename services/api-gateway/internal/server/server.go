@@ -865,6 +865,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("POST /api/v1/classes/{id}/teachers", requireOrgManage(orgHandler.BindTeacherClass))
 
 	mux.Handle("POST /api/v1/exams", requireExamManage(examHandler.CreateExam))
+	mux.Handle("POST /api/v1/exam-sessions", requireExamManage(examHandler.CreateExamSession))
 	mux.Handle("GET /api/v1/exams", requireExamManage(examHandler.ListExams))
 	mux.Handle("GET /api/v1/exams/{id}", requireExamManage(examHandler.GetExam))
 	mux.Handle("PATCH /api/v1/exams/{id}", requireExamManage(examHandler.UpdateExam))

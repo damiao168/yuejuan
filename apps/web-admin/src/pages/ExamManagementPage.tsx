@@ -33,6 +33,7 @@ import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import { examStatusLabels, examStatusTone, examSubjectOptions } from "../constants/examStatus";
+import { examTypeOptions } from "../constants/examCatalog";
 import type { ProductExperience } from "../router/experience";
 import { hashQueryParam } from "../router/query";
 
@@ -46,15 +47,6 @@ const advanceLabels: Record<string, string> = {
 };
 
 const subjectOptions = examSubjectOptions;
-
-const examTypeOptions = [
-  { label: "正式考试", value: "formal_exam" },
-  { label: "校内考试", value: "school_exam" },
-  { label: "联考", value: "joint_exam" },
-  { label: "模拟考试", value: "mock_exam" },
-  { label: "阶段测验", value: "quiz" },
-  { label: "作业", value: "homework" }
-];
 
 const gradingModeOptions = [
   { label: "仅客观题自动", value: "auto_objective_only" },

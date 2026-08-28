@@ -79,11 +79,11 @@ function MembersSection({ statistics, onNavigate }: { statistics: DashboardOrgan
   );
 }
 
-function ExamsSection({ exams, onNavigate }: { exams: DashboardActiveExam[]; onNavigate: (path: string) => void }) {
+function ExamsSection({ exams, activeExamCount, onNavigate }: { exams: DashboardActiveExam[]; activeExamCount: number; onNavigate: (path: string) => void }) {
   return (
     <section className="school-dashboard-section exams-section">
       <div className="school-dashboard-section-head">
-        <div className="school-dashboard-section-title"><span>02</span><div><h2>考试管理</h2><p>查看考试当前阶段并继续下一项工作</p></div></div>
+        <div className="school-dashboard-section-title"><span>02</span><div><h2>考试管理</h2><p>进行中 {activeExamCount} 场 · 查看当前阶段并继续下一项工作</p></div></div>
         <Button type="link" onClick={() => onNavigate("/exams")}>全部考试 <ArrowRight size={14} /></Button>
       </div>
       {exams.length ? (
@@ -147,9 +147,10 @@ function GradingResultsSection({ statistics, workItems, onNavigate }: { statisti
   );
 }
 
-export function SchoolDashboard({ organizationStatistics, statistics, exams, workItems, onNavigate }: {
+export function SchoolDashboard({ organizationStatistics, statistics, activeExamCount, exams, workItems, onNavigate }: {
   organizationStatistics: DashboardOrganizationStatistics;
   statistics: DashboardStatistics;
+  activeExamCount: number;
   exams: DashboardActiveExam[];
   workItems: DashboardWorkItem[];
   onNavigate: (path: string) => void;
@@ -157,7 +158,7 @@ export function SchoolDashboard({ organizationStatistics, statistics, exams, wor
   return (
     <div className="school-dashboard-sections">
       <MembersSection statistics={organizationStatistics} onNavigate={onNavigate} />
-      <ExamsSection exams={exams} onNavigate={onNavigate} />
+      <ExamsSection exams={exams} activeExamCount={activeExamCount} onNavigate={onNavigate} />
       <GradingResultsSection statistics={statistics} workItems={workItems} onNavigate={onNavigate} />
     </div>
   );

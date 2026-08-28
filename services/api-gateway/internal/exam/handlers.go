@@ -43,6 +43,34 @@ func (h *Handler) CreateExam(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, map[string]any{"exam": out})
 }
 
+func (h *Handler) CreateExamSession(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	scope, ok := mustAccessScope(w, r)
+	if !ok {
+		return
+	}
+	store, ok := h.store.(SessionStore)
+	if !ok {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "exam_session_unavailable", "多科目考试创建服务未配置")
+		return
+	}
+	var input CreateSessionInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := validateCreateSession(input); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_exam_session", err.Error())
+		return
+	}
+	out, err := store.CreateExamSession(r.Context(), scope, user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "exam_session.created", "exam_session", out.ID, "create multi-subject exam session")
+	httpx.JSON(w, http.StatusCreated, map[string]any{"exam_session": out})
+}
+
 func (h *Handler) ListExams(w http.ResponseWriter, r *http.Request) {
 	scope, ok := mustAccessScope(w, r)
 	if !ok {
@@ -181,6 +209,43 @@ func validateCreate(input CreateInput) error {
 	}
 	if input.PublishPolicy == "" {
 		return errors.New("publish_policy is required")
+	}
+	return nil
+}
+
+func validateCreateSession(input CreateSessionInput) error {
+	if input.SchoolID == "" || input.GradeID == "" || input.Name == "" || input.ExamType == "" {
+		return errors.New("学校、年级、考试名称和类型不能为空")
+	}
+	if !IsValidGradingMode(input.GradingMode) || input.PublishPolicy == "" {
+		return errors.New("阅卷或发布设置无效")
+	}
+	if len(input.ClassIDs) == 0 || len(input.Subjects) == 0 {
+		return errors.New("请至少选择一个班级和一个科目")
+	}
+	seen := map[string]bool{}
+	validQuestionTypes := map[string]bool{"single_choice": true, "multiple_choice": true, "true_false": true, "fill_blank": true, "numeric": true, "formula": true, "short_answer": true, "calculation": true, "essay": true, "discussion": true, "coding": true}
+	for _, subject := range input.Subjects {
+		if subject.Subject == "" || seen[subject.Subject] || subject.TotalScore <= 0 || subject.DurationMinutes <= 0 {
+			return errors.New("科目、满分或考试时长无效，且科目不能重复")
+		}
+		seen[subject.Subject] = true
+		if subject.CandidateRule != "" && subject.CandidateRule != "all_selected_classes" && subject.CandidateRule != "subject_selected_classes" {
+			return errors.New("参考范围规则无效")
+		}
+		if len(subject.Sections) == 0 {
+			return errors.New("每个科目至少需要一个试卷分区")
+		}
+		total := 0.0
+		for _, section := range subject.Sections {
+			if section.Title == "" || !validQuestionTypes[section.QuestionType] || section.QuestionCount <= 0 || section.ScorePerQuestion <= 0 {
+				return errors.New("试卷分区的名称、题型、题数或分值无效")
+			}
+			total += float64(section.QuestionCount) * section.ScorePerQuestion
+		}
+		if total-subject.TotalScore > 0.001 || subject.TotalScore-total > 0.001 {
+			return errors.New("各分区题目分值之和必须等于科目满分")
+		}
 	}
 	return nil
 }

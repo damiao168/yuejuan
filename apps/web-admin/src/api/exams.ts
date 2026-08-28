@@ -42,6 +42,35 @@ export interface ExamPayload {
   class_ids: string[];
 }
 
+export interface ExamSessionPayload {
+  school_id: string;
+  grade_id: string;
+  name: string;
+  exam_type: string;
+  grading_mode: string;
+  appeal_enabled: boolean;
+  publish_policy: string;
+  class_ids: string[];
+  subjects: Array<{
+    subject: string;
+    total_score: number;
+    duration_minutes: number;
+    candidate_rule: string;
+    class_ids: string[];
+    sections: Array<{ title: string; question_type: string; question_count: number; score_per_question: number }>;
+  }>;
+}
+
+export interface ExamSession {
+  id: string;
+  school_id: string;
+  grade_id: string;
+  name: string;
+  exam_type: string;
+  status: string;
+  exams: Exam[];
+}
+
 export async function listExams(filter: ExamListFilter = {}) {
   return apiClient.request<{ exams: Exam[]; next_cursor?: string; has_more?: boolean }>(`/api/v1/exams${buildQueryString(filter)}`);
 }
@@ -52,6 +81,13 @@ export async function getExam(id: string) {
 
 export async function createExam(payload: ExamPayload) {
   return apiClient.request<{ exam: Exam }>("/api/v1/exams", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function createExamSession(payload: ExamSessionPayload) {
+  return apiClient.request<{ exam_session: ExamSession }>("/api/v1/exam-sessions", {
     method: "POST",
     body: JSON.stringify(payload)
   });

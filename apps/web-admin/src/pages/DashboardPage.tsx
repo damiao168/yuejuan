@@ -155,6 +155,7 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
       <SchoolDashboard
         organizationStatistics={data.organization_statistics}
         statistics={stats}
+        activeExamCount={stats.active_exam_count}
         exams={data.active_exams}
         workItems={todo}
         onNavigate={onNavigate}

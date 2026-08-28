@@ -50,6 +50,48 @@ func TestCreateListDetailExam(t *testing.T) {
 	}
 }
 
+func TestCreateMultiSubjectExamSession(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
+	router := testRouter(authStore, exam.NewMemoryStore())
+	token := login(t, router)
+	payload := `{
+  "school_id":"school-1","grade_id":"grade-1","name":"高二期中考试","exam_type":"midterm_exam",
+  "grading_mode":"ai_assisted","appeal_enabled":true,"publish_policy":"after_admin_approval",
+  "class_ids":["class-1","class-2"],
+  "subjects":[
+    {"subject":"math","total_score":100,"duration_minutes":90,"candidate_rule":"all_selected_classes","class_ids":[],"sections":[{"title":"客观题","question_type":"single_choice","question_count":10,"score_per_question":4},{"title":"解答题","question_type":"calculation","question_count":6,"score_per_question":10}]},
+    {"subject":"physics","total_score":100,"duration_minutes":75,"candidate_rule":"subject_selected_classes","class_ids":["class-1"],"sections":[{"title":"全卷","question_type":"short_answer","question_count":10,"score_per_question":10}]}
+  ]
+}`
+	req := authedRequest(http.MethodPost, "/api/v1/exam-sessions", bytes.NewBufferString(payload), token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create exam session expected 201, got %d %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Session exam.ExamSession `json:"exam_session"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(response.Session.Exams) != 2 || response.Session.Exams[0].Subject != "math" || len(response.Session.Exams[1].ClassIDs) != 1 {
+		t.Fatalf("unexpected session children: %#v", response.Session.Exams)
+	}
+}
+
+func TestExamSessionRejectsScoreMismatch(t *testing.T) {
+	router := testRouter(authStoreWithPermissions(t, []string{"exam:manage"}), exam.NewMemoryStore())
+	token := login(t, router)
+	payload := `{"school_id":"school-1","grade_id":"grade-1","name":"测试","exam_type":"quiz","grading_mode":"ai_assisted","publish_policy":"after_admin_approval","class_ids":["class-1"],"subjects":[{"subject":"math","total_score":100,"duration_minutes":60,"sections":[{"title":"全卷","question_type":"short_answer","question_count":9,"score_per_question":10}]}]}`
+	req := authedRequest(http.MethodPost, "/api/v1/exam-sessions", bytes.NewBufferString(payload), token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_exam_session") {
+		t.Fatalf("score mismatch expected 400, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestInvalidStatusTransitionRejected(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
 	router := testRouter(authStore, exam.NewMemoryStore())

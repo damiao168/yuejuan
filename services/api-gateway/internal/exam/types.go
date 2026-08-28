@@ -36,6 +36,58 @@ type Exam struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// ExamSession is the grade-level parent of one or more subject exams. Existing
+// grading workflows continue to operate on the child Exam IDs.
+type ExamSession struct {
+	ID            string    `json:"id"`
+	TenantID      string    `json:"tenant_id"`
+	SchoolID      string    `json:"school_id"`
+	GradeID       string    `json:"grade_id"`
+	Name          string    `json:"name"`
+	ExamType      string    `json:"exam_type"`
+	Status        string    `json:"status"`
+	GradingMode   string    `json:"grading_mode"`
+	AppealEnabled bool      `json:"appeal_enabled"`
+	PublishPolicy string    `json:"publish_policy"`
+	CreatedBy     string    `json:"created_by"`
+	Revision      int64     `json:"revision"`
+	Exams         []Exam    `json:"exams"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type BlueprintSectionInput struct {
+	Title            string  `json:"title"`
+	QuestionType     string  `json:"question_type"`
+	QuestionCount    int     `json:"question_count"`
+	ScorePerQuestion float64 `json:"score_per_question"`
+}
+
+type SessionSubjectInput struct {
+	Subject         string                  `json:"subject"`
+	TotalScore      float64                 `json:"total_score"`
+	DurationMinutes int                     `json:"duration_minutes"`
+	CandidateRule   string                  `json:"candidate_rule"`
+	ClassIDs        []string                `json:"class_ids"`
+	Sections        []BlueprintSectionInput `json:"sections"`
+}
+
+type CreateSessionInput struct {
+	SchoolID      string                `json:"school_id"`
+	GradeID       string                `json:"grade_id"`
+	Name          string                `json:"name"`
+	ExamType      string                `json:"exam_type"`
+	GradingMode   string                `json:"grading_mode"`
+	AppealEnabled *bool                 `json:"appeal_enabled"`
+	PublishPolicy string                `json:"publish_policy"`
+	ClassIDs      []string              `json:"class_ids"`
+	Subjects      []SessionSubjectInput `json:"subjects"`
+}
+
+type SessionStore interface {
+	CreateExamSession(ctx context.Context, scope auth.AccessScope, createdBy string, input CreateSessionInput) (ExamSession, error)
+}
+
 type CreateInput struct {
 	SchoolID      string   `json:"school_id"`
 	Name          string   `json:"name"`

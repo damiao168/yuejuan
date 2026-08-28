@@ -1,10 +1,5 @@
-export const examTypeOptions = [
-  { label: "期中考试", value: "midterm_exam" },
-  { label: "期末考试", value: "final_exam" },
-  { label: "模拟考试", value: "mock_exam" },
-  { label: "阶段测验", value: "quiz" },
-  { label: "校内考试", value: "school_exam" }
-];
+import { examTypeOptions } from "../../../constants/examCatalog";
+export { examTypeOptions } from "../../../constants/examCatalog";
 
 export const gradingPresentation = {
   ai_assisted: { title: "智能辅助阅卷", description: "系统自动完成高置信度评分，需要确认的题目交给教师。" },
