@@ -36,6 +36,16 @@ type AccessScope struct {
 	StudentID          string
 }
 
+func (s AccessScope) OrganizationScope() OrganizationScope {
+	normalized := s.normalized()
+	return OrganizationScope{
+		TenantWide: normalized.TenantWide || normalized.IsPlatform,
+		SchoolIDs:  normalized.SchoolIDs,
+		GradeIDs:   normalized.GradeIDs,
+		ClassIDs:   normalized.ClassIDs,
+	}
+}
+
 func (s AccessScope) AllowsSchool(id string) bool {
 	return s.TenantWide || containsID(s.SchoolIDs, id)
 }

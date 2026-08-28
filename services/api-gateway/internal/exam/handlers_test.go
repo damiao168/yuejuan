@@ -56,6 +56,7 @@ func TestCreateMultiSubjectExamSession(t *testing.T) {
 	token := login(t, router)
 	payload := `{
   "school_id":"school-1","grade_id":"grade-1","name":"高二期中考试","exam_type":"midterm_exam",
+  "template_id":"00000000-0000-0000-0000-000000000601",
   "grading_mode":"ai_assisted","appeal_enabled":true,"publish_policy":"after_admin_approval",
   "class_ids":["class-1","class-2"],
   "subjects":[
@@ -77,6 +78,23 @@ func TestCreateMultiSubjectExamSession(t *testing.T) {
 	}
 	if len(response.Session.Exams) != 2 || response.Session.Exams[0].Subject != "math" || len(response.Session.Exams[1].ClassIDs) != 1 {
 		t.Fatalf("unexpected session children: %#v", response.Session.Exams)
+	}
+	if response.Session.TemplateID != "00000000-0000-0000-0000-000000000601" || response.Session.TemplateVersion != 1 {
+		t.Fatalf("expected selected template version to be recorded, got %#v", response.Session)
+	}
+}
+
+func TestListExamTemplatesFiltersEducationStage(t *testing.T) {
+	router := testRouter(authStoreWithPermissions(t, []string{"exam:manage"}), exam.NewMemoryStore())
+	token := login(t, router)
+	req := authedRequest(http.MethodGet, "/api/v1/exam-templates?education_stage=junior", nil, token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list templates expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "system.junior.standard") || strings.Contains(rec.Body.String(), "system.senior.standard") {
+		t.Fatalf("expected only junior templates, got %s", rec.Body.String())
 	}
 }
 

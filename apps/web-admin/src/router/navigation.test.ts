@@ -13,7 +13,8 @@ function user(roles: string[], permissions: string[]): SessionUser {
     tenant: "school-1",
     school: "School 1",
     currentExam: "",
-    permissions
+    permissions,
+    organizationScope: { resolved: false, tenantWide: false, schoolIds: [], gradeIds: [], classIds: [] }
   };
 }
 

@@ -102,14 +102,11 @@ WITH requested AS (
   SELECT value::uuid AS student_id
   FROM jsonb_array_elements_text($3::jsonb)
 )
-SELECT count(DISTINCT st.id)
+SELECT count(DISTINCT candidate.student_id)
 FROM requested r
-JOIN student st
-  ON st.tenant_id=$1 AND st.id=r.student_id
-  AND st.status='active' AND st.deleted_at IS NULL
-JOIN exam_class ec
-  ON ec.tenant_id=st.tenant_id AND ec.exam_id=$2::uuid
-  AND ec.class_id=st.class_id AND ec.deleted_at IS NULL
+JOIN exam_candidate_snapshot candidate
+  ON candidate.tenant_id=$1 AND candidate.exam_id=$2::uuid
+  AND candidate.student_id=r.student_id
 `, tenantID, examID, string(studentPayload)).Scan(&rosterCount); err != nil {
 		return IssuedStudentBarcodes{}, err
 	}
@@ -376,12 +373,9 @@ func (s *PostgresStore) validateBarcodeOwnershipTx(ctx context.Context, tx *sql.
 		if err := tx.QueryRowContext(ctx, `
 SELECT EXISTS (
   SELECT 1
-  FROM student st
-  JOIN exam_class ec
-    ON ec.tenant_id=st.tenant_id AND ec.class_id=st.class_id
-    AND ec.exam_id=$2::uuid AND ec.deleted_at IS NULL
-  WHERE st.tenant_id=$1 AND st.id=$3::uuid
-    AND st.status='active' AND st.deleted_at IS NULL
+  FROM exam_candidate_snapshot candidate
+  WHERE candidate.tenant_id=$1 AND candidate.exam_id=$2::uuid
+    AND candidate.student_id=$3::uuid
 )
 `, tenantID, examID, claims.StudentID).Scan(&inRoster); err != nil || !inRoster {
 			return "student_not_in_roster"

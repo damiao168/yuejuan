@@ -60,3 +60,15 @@ func TestResolveDeclaredAccessScopeRejectsForgedPlatformScope(t *testing.T) {
 		t.Fatalf("expected invalid platform scope, got %v", err)
 	}
 }
+
+func TestOrganizationScopeProjectsResolvedBoundary(t *testing.T) {
+	resolved := AccessScope{
+		TenantID: "tenant-1", ActorID: "user-1",
+		SchoolIDs: []string{"school-2", "school-1", "school-1"},
+		GradeIDs:  []string{"grade-2"}, ClassIDs: []string{"class-3"},
+	}.OrganizationScope()
+	if resolved.TenantWide || len(resolved.SchoolIDs) != 2 || resolved.SchoolIDs[0] != "school-1" ||
+		len(resolved.GradeIDs) != 1 || resolved.GradeIDs[0] != "grade-2" {
+		t.Fatalf("unexpected organization scope: %#v", resolved)
+	}
+}

@@ -39,21 +39,23 @@ type Exam struct {
 // ExamSession is the grade-level parent of one or more subject exams. Existing
 // grading workflows continue to operate on the child Exam IDs.
 type ExamSession struct {
-	ID            string    `json:"id"`
-	TenantID      string    `json:"tenant_id"`
-	SchoolID      string    `json:"school_id"`
-	GradeID       string    `json:"grade_id"`
-	Name          string    `json:"name"`
-	ExamType      string    `json:"exam_type"`
-	Status        string    `json:"status"`
-	GradingMode   string    `json:"grading_mode"`
-	AppealEnabled bool      `json:"appeal_enabled"`
-	PublishPolicy string    `json:"publish_policy"`
-	CreatedBy     string    `json:"created_by"`
-	Revision      int64     `json:"revision"`
-	Exams         []Exam    `json:"exams"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID              string    `json:"id"`
+	TenantID        string    `json:"tenant_id"`
+	SchoolID        string    `json:"school_id"`
+	GradeID         string    `json:"grade_id"`
+	TemplateID      string    `json:"template_id,omitempty"`
+	TemplateVersion int       `json:"template_version,omitempty"`
+	Name            string    `json:"name"`
+	ExamType        string    `json:"exam_type"`
+	Status          string    `json:"status"`
+	GradingMode     string    `json:"grading_mode"`
+	AppealEnabled   bool      `json:"appeal_enabled"`
+	PublishPolicy   string    `json:"publish_policy"`
+	CreatedBy       string    `json:"created_by"`
+	Revision        int64     `json:"revision"`
+	Exams           []Exam    `json:"exams"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type BlueprintSectionInput struct {
@@ -75,6 +77,7 @@ type SessionSubjectInput struct {
 type CreateSessionInput struct {
 	SchoolID      string                `json:"school_id"`
 	GradeID       string                `json:"grade_id"`
+	TemplateID    string                `json:"template_id,omitempty"`
 	Name          string                `json:"name"`
 	ExamType      string                `json:"exam_type"`
 	GradingMode   string                `json:"grading_mode"`

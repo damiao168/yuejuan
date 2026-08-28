@@ -95,6 +95,9 @@ func TestLoginMeLogout(t *testing.T) {
 	if meRec.Code != http.StatusOK {
 		t.Fatalf("me expected 200, got %d: %s", meRec.Code, meRec.Body.String())
 	}
+	if !strings.Contains(meRec.Body.String(), `"organization_scope"`) || !strings.Contains(meRec.Body.String(), `"tenant_wide":true`) {
+		t.Fatalf("me should expose resolved organization scope: %s", meRec.Body.String())
+	}
 
 	logoutReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
 	logoutReq.Header.Set("Authorization", "Bearer "+token)

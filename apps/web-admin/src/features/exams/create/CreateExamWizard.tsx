@@ -2,23 +2,28 @@ import { Button, Steps } from "antd";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Check, Cloud } from "lucide-react";
 import type { Grade, School, SchoolClass } from "../../../api/org";
+import type { ExamTemplate } from "../../../api/examTemplates";
 import { ExamScopeStep } from "./steps/ExamScopeStep";
+import { ExamTemplateStep } from "./steps/ExamTemplateStep";
 import { PaperStructureStep } from "./steps/PaperStructureStep";
 import { ReviewCreateStep } from "./steps/ReviewCreateStep";
 import type { CreateExamDraft } from "./types";
 
 const steps = [
-  { title: "考试范围", description: "确定考试、年级、班级与多个科目" },
-  { title: "试卷结构", description: "设置各科满分、时长、参考范围和题目分区" },
+  { title: "考试范围", description: "确定考试名称、年级和参考班级" },
+  { title: "考试方案", description: "从学校或系统方案开始，也可以完全自定义" },
+  { title: "试卷结构", description: "按本场考试调整科目、分值和题目分区" },
   { title: "检查并创建", description: "完成分值校验，确认阅卷与发布策略" }
 ];
 
-export function CreateExamWizard({ step, draft, schools, grades, classes, savedAt, submitting, onChange, onStepChange, onSubmit, onCancel }: {
+export function CreateExamWizard({ step, draft, schools, grades, classes, templates, scopeLocked, savedAt, submitting, onChange, onStepChange, onSubmit, onCancel }: {
   step: number;
   draft: CreateExamDraft;
   schools: School[];
   grades: Grade[];
   classes: SchoolClass[];
+  templates: ExamTemplate[];
+  scopeLocked: boolean;
   savedAt: string;
   submitting: boolean;
   onChange: (patch: Partial<CreateExamDraft>) => void;
@@ -35,9 +40,10 @@ export function CreateExamWizard({ step, draft, schools, grades, classes, savedA
         <header><h2>{current.title}</h2><p>{current.description}</p></header>
         <AnimatePresence mode="wait" initial={false}>
           <motion.div key={step} className="exam-create-step-content" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: .16 }}>
-            {step === 0 ? <ExamScopeStep draft={draft} schools={schools} grades={grades} classes={classes} onChange={onChange} /> : null}
-            {step === 1 ? <PaperStructureStep draft={draft} classes={classes} onChange={onChange} /> : null}
-            {step === 2 ? <ReviewCreateStep draft={draft} grades={grades} classes={classes} onChange={onChange} /> : null}
+            {step === 0 ? <ExamScopeStep draft={draft} schools={schools} grades={grades} classes={classes} scopeLocked={scopeLocked} onChange={onChange} /> : null}
+            {step === 1 ? <ExamTemplateStep draft={draft} grade={grades.find((item) => item.id === draft.gradeId)} templates={templates} onChange={onChange} /> : null}
+            {step === 2 ? <PaperStructureStep draft={draft} classes={classes} onChange={onChange} /> : null}
+            {step === 3 ? <ReviewCreateStep draft={draft} grades={grades} classes={classes} onChange={onChange} /> : null}
           </motion.div>
         </AnimatePresence>
         <footer>

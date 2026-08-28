@@ -22,6 +22,7 @@ export interface CreateExamDraft {
   name: string;
   examType: string;
   gradeId: string;
+  templateId: string;
   classIds: string[];
   subjects: SubjectExamDraft[];
   gradingMode: GradingChoice;

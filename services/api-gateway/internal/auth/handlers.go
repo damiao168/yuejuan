@@ -186,6 +186,11 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request, tokenResponse bo
 		return
 	}
 	h.loginLimiter.Clear(r.Context(), limiterKey)
+	resolvedScope, err := h.store.ResolveAccessScope(r.Context(), user.User)
+	if err == nil {
+		organizationScope := resolvedScope.OrganizationScope()
+		user.OrganizationScope = &organizationScope
+	}
 
 	sessionType := SessionTypeStandard
 	sessionTTL := h.sessionTTL
@@ -645,6 +650,8 @@ func AuthMiddleware(store Store, options ...HandlerOptions) func(http.Handler) h
 				httpx.Error(w, r, http.StatusInternalServerError, "access_scope_lookup_failed", "failed to resolve data access scope")
 				return
 			}
+			organizationScope := scope.OrganizationScope()
+			user.OrganizationScope = &organizationScope
 			ctx := WithAccessScope(WithUser(r.Context(), user), scope)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

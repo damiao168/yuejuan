@@ -8376,6 +8376,19 @@ select {
 
 .exam-scope-step { display: grid; gap: 14px; }
 .exam-scope-form { display: grid; gap: 20px; }
+.exam-create-scope-context { padding: 10px 12px; border: 1px solid #d9e2f0; border-radius: 4px; background: #f7f9fc; color: #4e5969; font-size: 13px; }
+.exam-create-scope-context strong { color: #1f2329; font-weight: 600; }
+.exam-template-step { display: grid; gap: 20px; }
+.exam-template-options { display: grid; gap: 10px; }
+.exam-template-option { width: 100%; display: grid; grid-template-columns: 34px minmax(0, 1fr) 20px; gap: 12px; align-items: start; padding: 14px 16px; border: 1px solid var(--border); border-radius: 4px; background: #fff; color: #1f2329; text-align: left; cursor: pointer; }
+.exam-template-option:hover { border-color: #9cb8df; background: #fafcff; }
+.exam-template-option.selected { border-color: #3370ff; background: #f5f8ff; box-shadow: inset 3px 0 #3370ff; }
+.exam-template-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 4px; background: #eef3fa; color: #315f9b; }
+.exam-template-copy { display: grid; gap: 4px; }
+.exam-template-copy strong { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.exam-template-copy strong em { padding: 1px 6px; border-radius: 2px; background: #e8f3ff; color: #1769aa; font-size: 11px; font-style: normal; font-weight: 500; }
+.exam-template-copy small { color: #646a73; font-size: 13px; line-height: 1.55; }
+.exam-template-copy > span { color: #8f959e; font-size: 12px; }
 .exam-scope-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; color: var(--text-muted); font-size: 13px; }
 .exam-scope-toolbar .ant-btn { padding-inline: 0; }
 .exam-class-list { max-height: 330px; overflow: auto; border-top: 1px solid var(--border); }

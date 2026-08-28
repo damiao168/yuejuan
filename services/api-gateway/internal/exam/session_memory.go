@@ -9,7 +9,7 @@ import (
 )
 
 func (s *MemoryStore) CreateExamSession(ctx context.Context, scope auth.AccessScope, createdBy string, input CreateSessionInput) (ExamSession, error) {
-	if !scopeAllowsRequestedClasses(scope, input.SchoolID, input.ClassIDs) {
+	if !scopeAllowsRequestedClasses(scope, input.SchoolID, input.ClassIDs) || !scopeAllowsRequestedGrade(scope, input.GradeID) {
 		return ExamSession{}, ErrScopeForbidden
 	}
 	now := time.Now().UTC()
@@ -17,9 +17,17 @@ func (s *MemoryStore) CreateExamSession(ctx context.Context, scope auth.AccessSc
 	if input.AppealEnabled != nil {
 		appealEnabled = *input.AppealEnabled
 	}
+	templateVersion := 0
+	if input.TemplateID != "" {
+		template, err := s.GetExamTemplate(ctx, scope, input.TemplateID)
+		if err != nil {
+			return ExamSession{}, ErrInvalidInput
+		}
+		templateVersion = template.Version
+	}
 	session := ExamSession{
 		ID: fmt.Sprintf("exam-session-%d", now.UnixNano()), TenantID: scope.TenantID,
-		SchoolID: input.SchoolID, GradeID: input.GradeID, Name: input.Name,
+		SchoolID: input.SchoolID, GradeID: input.GradeID, TemplateID: input.TemplateID, TemplateVersion: templateVersion, Name: input.Name,
 		ExamType: input.ExamType, Status: "draft", GradingMode: input.GradingMode,
 		AppealEnabled: appealEnabled, PublishPolicy: input.PublishPolicy, CreatedBy: createdBy,
 		Revision: 1, CreatedAt: now, UpdatedAt: now,

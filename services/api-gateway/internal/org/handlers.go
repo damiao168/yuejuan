@@ -166,6 +166,26 @@ func (h *Handler) ListSchools(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"schools": out})
 }
 
+func (h *Handler) ListAcademicYears(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.ListAcademicYears(r.Context(), user.TenantID, r.URL.Query().Get("school_id"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusInternalServerError, "academic_year_list_failed", "failed to list academic years")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"academic_years": out})
+}
+
+func (h *Handler) ListGradeCohorts(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.ListGradeCohorts(r.Context(), user.TenantID, r.URL.Query().Get("school_id"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusInternalServerError, "grade_cohort_list_failed", "failed to list grade cohorts")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"grade_cohorts": out})
+}
+
 func (h *Handler) CreateGrade(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	var input Grade
@@ -174,6 +194,10 @@ func (h *Handler) CreateGrade(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.SchoolID == "" || input.Name == "" {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "school_id and name are required")
+		return
+	}
+	if input.EducationStage != "" && input.EducationStage != "junior" && input.EducationStage != "senior" {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_education_stage", "education_stage must be junior or senior")
 		return
 	}
 	out, err := h.store.CreateGrade(r.Context(), user.TenantID, input)
@@ -306,6 +330,38 @@ func (h *Handler) UpdateStudent(w http.ResponseWriter, r *http.Request) {
 	}
 	h.auditAction(r, "org.student_updated", "student", out.ID, "update student status")
 	httpx.JSON(w, http.StatusOK, map[string]any{"student": out})
+}
+
+func (h *Handler) TransferStudent(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input struct {
+		ClassID   string `json:"class_id"`
+		StartDate string `json:"start_date"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.ClassID == "" {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "class_id is required")
+		return
+	}
+	out, err := h.store.TransferStudent(r.Context(), user.TenantID, r.PathValue("id"), input.ClassID, input.StartDate)
+	if err != nil {
+		writeStoreError(w, r, err, "student_transfer_failed", "failed to transfer student")
+		return
+	}
+	h.auditAction(r, "org.student_transferred", "student", r.PathValue("id"), "change student enrollment")
+	httpx.JSON(w, http.StatusOK, map[string]any{"enrollment": out})
+}
+
+func (h *Handler) ListStudentEnrollments(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.ListStudentEnrollments(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusInternalServerError, "student_enrollment_list_failed", "failed to list student enrollments")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"enrollments": out})
 }
 
 func (h *Handler) ImportStudentsCSV(w http.ResponseWriter, r *http.Request) {

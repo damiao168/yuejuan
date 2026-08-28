@@ -73,6 +73,10 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	schoolID := e2eString(t, school, "id")
 	grade := e2ePostJSON(t, router, http.MethodPost, "/api/v1/grades", adminToken, `{"school_id":"`+schoolID+`","name":"Story 041 Grade","level_no":10,"academic_year":"2026"}`, http.StatusCreated)["grade"].(map[string]any)
 	gradeID := e2eString(t, grade, "id")
+	var schoolHasSeniorStage bool
+	if err := db.QueryRow(`SELECT education_stages @> '["senior"]'::jsonb FROM school WHERE tenant_id=$1::uuid AND id=$2::uuid`, demoTenantID, schoolID).Scan(&schoolHasSeniorStage); err != nil || !schoolHasSeniorStage {
+		t.Fatalf("creating a senior grade must update the school's education stages, present=%t err=%v", schoolHasSeniorStage, err)
+	}
 	class := e2ePostJSON(t, router, http.MethodPost, "/api/v1/classes", adminToken, `{"school_id":"`+schoolID+`","grade_id":"`+gradeID+`","name":"Story 041 Class","code":"story041-`+suffix+`"}`, http.StatusCreated)["class"].(map[string]any)
 	classID := e2eString(t, class, "id")
 	student := e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, `{"school_id":"`+schoolID+`","class_id":"`+classID+`","student_no":"SYN-`+suffix+`","name":"Story 041 Synthetic Student"}`, http.StatusCreated)["student"].(map[string]any)
@@ -86,6 +90,31 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 
 	examResp := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams", adminToken, `{"school_id":"`+schoolID+`","name":"Story 041 Synthetic Exam","subject":"physics","exam_type":"midterm","total_score":5,"grading_mode":"ai_assisted","appeal_enabled":true,"publish_policy":"manual_after_confirmation","class_ids":["`+classID+`"]}`, http.StatusCreated)["exam"].(map[string]any)
 	examID := e2eString(t, examResp, "id")
+	var candidateCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM exam_candidate_snapshot WHERE tenant_id=$1::uuid AND exam_id=$2::uuid`, demoTenantID, examID).Scan(&candidateCount); err != nil || candidateCount != 2 {
+		t.Fatalf("exam creation must freeze two candidate identities, count=%d err=%v", candidateCount, err)
+	}
+	if _, err := db.Exec(`UPDATE student SET name='Story 041 Current Renamed Student' WHERE tenant_id=$1::uuid AND id=$2::uuid`, demoTenantID, studentID); err != nil {
+		t.Fatalf("rename current student after snapshot: %v", err)
+	}
+	transferClass := e2ePostJSON(t, router, http.MethodPost, "/api/v1/classes", adminToken, `{"school_id":"`+schoolID+`","grade_id":"`+gradeID+`","name":"Story 041 Transfer Class","code":"story041-transfer-`+suffix+`"}`, http.StatusCreated)["class"].(map[string]any)
+	transferClassID := e2eString(t, transferClass, "id")
+	e2ePostJSON(t, router, http.MethodPut, "/api/v1/students/"+studentID+"/enrollment", adminToken, `{"class_id":"`+transferClassID+`"}`, http.StatusOK)
+	enrollments := e2eGetJSON(t, router, "/api/v1/students/"+studentID+"/enrollments", adminToken, http.StatusOK)["enrollments"].([]any)
+	if len(enrollments) != 2 || enrollments[0].(map[string]any)["class_id"] != transferClassID || enrollments[1].(map[string]any)["class_id"] != classID {
+		t.Fatalf("student transfer must preserve enrollment history: %#v", enrollments)
+	}
+	roster := e2eGetJSON(t, router, "/api/v1/exams/"+examID+"/roster", adminToken, http.StatusOK)["roster"].(map[string]any)
+	foundFrozenIdentity := false
+	for _, rawEntry := range roster["entries"].([]any) {
+		entry := rawEntry.(map[string]any)
+		if entry["student_id"] == studentID {
+			foundFrozenIdentity = entry["student_name"] == "Story 041 Synthetic Student" && entry["class_id"] == classID
+		}
+	}
+	if !foundFrozenIdentity {
+		t.Fatalf("exam roster must retain the student name captured at exam creation: %#v", roster)
+	}
 	paperFileID := e2eUploadSyntheticPDF(t, router, adminToken, "story041-paper-"+suffix+".pdf", "%PDF-1.4\n% story 041 synthetic paper "+suffix+"\n")
 	paperResp := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/papers", adminToken, `{"file_asset_id":"`+paperFileID+`"}`, http.StatusCreated)["paper"].(map[string]any)
 	paperID := e2eString(t, paperResp, "id")

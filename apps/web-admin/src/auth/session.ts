@@ -11,6 +11,13 @@ export interface SessionUser {
   school: string;
   currentExam: string;
   permissions: string[];
+  organizationScope: {
+    resolved: boolean;
+    tenantWide: boolean;
+    schoolIds: string[];
+    gradeIds: string[];
+    classIds: string[];
+  };
 }
 
 export function hasEveryPermission(user: SessionUser | null, permissions: string[]): boolean {
@@ -47,7 +54,14 @@ export function sessionFromAuthUser(user: AuthUser): SessionUser {
     tenant: user.tenant_code,
     school: schoolLabelFromScope(user.data_scope, user.tenant_code),
     currentExam: "未选择考试",
-    permissions: user.permissions
+    permissions: user.permissions,
+    organizationScope: {
+      resolved: Boolean(user.organization_scope),
+      tenantWide: user.organization_scope?.tenant_wide ?? false,
+      schoolIds: user.organization_scope?.school_ids ?? [],
+      gradeIds: user.organization_scope?.grade_ids ?? [],
+      classIds: user.organization_scope?.class_ids ?? []
+    }
   };
 }
 

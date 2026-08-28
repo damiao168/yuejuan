@@ -77,17 +77,17 @@ test("首页主动作完成分步骤表单新建考试并进入考试准备", as
   await page.getByRole("textbox", { name: "考试名称 *" }).fill("2026-2027学年高二期中考试");
   await page.getByRole("combobox", { name: /考试类型/ }).click();
   await page.getByTitle("期中考试").click();
-  await page.getByRole("combobox", { name: /考试科目/ }).click();
-  await page.getByTitle("数学").click();
-  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: /高二（1）班/ }).click();
-  await expect(page.getByText(/1 个班级.*1 个科目/)).toBeVisible();
+  await expect(page.getByText(/已选择.*1.*个班级/)).toBeVisible();
+  await page.getByRole("button", { name: /下一步/ }).click();
+  await expect(page.getByRole("heading", { name: "考试方案" })).toBeVisible();
+  await page.getByRole("button", { name: /系统通用高中考试方案/ }).click();
   await page.getByRole("button", { name: /下一步/ }).click();
   await expect(page.getByRole("heading", { name: "试卷结构" }).first()).toBeVisible();
-  await expect(page.getByText("150 / 150 分")).toBeVisible();
+  await expect(page.getByText("150 / 150 分").first()).toBeVisible();
   await page.getByRole("button", { name: /下一步/ }).click();
   await expect(page.getByRole("heading", { name: "检查并创建" })).toBeVisible();
-  await page.getByRole("button", { name: "创建 1 个科目工作区" }).click();
+  await page.getByRole("button", { name: "创建 3 个科目工作区" }).click();
   await expect(page).toHaveURL(/#\/admin\/exams\/exam-created-math\/settings/);
 
   await page.goto("/#/admin/dashboard");

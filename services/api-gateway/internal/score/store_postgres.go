@@ -92,15 +92,15 @@ WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL
 		placeholder := fmt.Sprintf("$%d", len(args))
 		where += " AND (sg.anonymous_code ILIKE " + placeholder +
 			" OR sg.submission_id::text ILIKE " + placeholder +
-			" OR COALESCE(st.name, '') ILIKE " + placeholder +
-			" OR COALESCE(st.student_no, '') ILIKE " + placeholder +
-			" OR COALESCE(cls.name, '') ILIKE " + placeholder + ")"
+			" OR COALESCE(candidate.student_name_snapshot, '') ILIKE " + placeholder +
+			" OR COALESCE(candidate.student_no_snapshot, '') ILIKE " + placeholder +
+			" OR COALESCE(candidate.class_name_snapshot, '') ILIKE " + placeholder + ")"
 	}
 	countQuery := `
 SELECT COUNT(*)
 FROM submission_grade sg
-LEFT JOIN student st ON st.tenant_id = sg.tenant_id AND st.id = sg.student_id AND st.deleted_at IS NULL
-LEFT JOIN school_class cls ON cls.tenant_id = st.tenant_id AND cls.id = st.class_id AND cls.deleted_at IS NULL
+LEFT JOIN exam_candidate_snapshot candidate
+  ON candidate.tenant_id=sg.tenant_id AND candidate.exam_id=sg.exam_id AND candidate.student_id=sg.student_id
 WHERE ` + where
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&result.FilteredTotal); err != nil {
 		return GradeListResult{}, err
@@ -124,8 +124,8 @@ SELECT sg.id::text, sg.tenant_id::text, sg.exam_id::text, sg.submission_id::text
   COALESCE(sg.confirmed_by::text, ''), sg.confirmed_at, COALESCE(sg.published_by::text, ''), sg.published_at,
   sg.revision, sg.created_by::text, sg.created_at, sg.updated_at
 FROM submission_grade sg
-LEFT JOIN student st ON st.tenant_id = sg.tenant_id AND st.id = sg.student_id AND st.deleted_at IS NULL
-LEFT JOIN school_class cls ON cls.tenant_id = st.tenant_id AND cls.id = st.class_id AND cls.deleted_at IS NULL
+LEFT JOIN exam_candidate_snapshot candidate
+  ON candidate.tenant_id=sg.tenant_id AND candidate.exam_id=sg.exam_id AND candidate.student_id=sg.student_id
 WHERE `+pageWhere+`
 ORDER BY sg.anonymous_code, sg.id
 LIMIT $`+fmt.Sprint(len(pageArgs)), pageArgs...)
@@ -186,11 +186,9 @@ func (s *PostgresStore) ListRoster(ctx context.Context, tenantID string, examID 
 	var summary RosterSummary
 	if err := s.db.QueryRowContext(ctx, `
 SELECT
-  (SELECT COUNT(DISTINCT st.id)
-   FROM exam_class ec
-   JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
-   WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
-     AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'),
+  (SELECT COUNT(*)
+   FROM exam_candidate_snapshot candidate
+   WHERE candidate.tenant_id = $1 AND candidate.exam_id = $2::uuid),
   (SELECT COUNT(*)
    FROM submission sub
    WHERE sub.tenant_id = $1 AND sub.exam_id = $2::uuid AND sub.deleted_at IS NULL)
@@ -236,12 +234,9 @@ SELECT e.status
 FROM exam e
 WHERE e.tenant_id = $1 AND e.id = $2::uuid AND e.deleted_at IS NULL
   AND EXISTS (
-    SELECT 1
-    FROM exam_class ec
-    JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
-    WHERE ec.tenant_id = e.tenant_id AND ec.exam_id = e.id
-      AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
-      AND st.id = $3::uuid
+    SELECT 1 FROM exam_candidate_snapshot candidate
+    WHERE candidate.tenant_id=e.tenant_id AND candidate.exam_id=e.id
+      AND candidate.student_id=$3::uuid
   )
 FOR UPDATE
 `, tenantID, examID, studentID).Scan(&examStatus); err != nil {
@@ -608,13 +603,11 @@ AND NOT EXISTS (
 				code:    "missing_submission_unresolved",
 				message: "expected students have no matched submission",
 				query: `WITH roster AS (
-  SELECT DISTINCT st.id
-  FROM exam_class ec
-  JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
-  LEFT JOIN exam_student_attendance ea ON ea.tenant_id = ec.tenant_id AND ea.exam_id = ec.exam_id
-    AND ea.student_id = st.id AND ea.deleted_at IS NULL
-  WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
-    AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
+  SELECT candidate.student_id AS id
+  FROM exam_candidate_snapshot candidate
+  LEFT JOIN exam_student_attendance ea ON ea.tenant_id = candidate.tenant_id AND ea.exam_id = candidate.exam_id
+    AND ea.student_id = candidate.student_id AND ea.deleted_at IS NULL
+  WHERE candidate.tenant_id = $1 AND candidate.exam_id = $2::uuid
     AND COALESCE(ea.status, 'expected') <> 'absent'
 )
 SELECT COUNT(*) FROM roster r
@@ -628,11 +621,9 @@ WHERE NOT EXISTS (
 				code:    "unidentified_submission",
 				message: "submissions are not uniquely matched to an expected student",
 				query: `WITH roster AS (
-  SELECT DISTINCT st.id
-  FROM exam_class ec
-  JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
-  WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
-    AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
+  SELECT candidate.student_id AS id
+  FROM exam_candidate_snapshot candidate
+  WHERE candidate.tenant_id = $1 AND candidate.exam_id = $2::uuid
 ),
 submission_counts AS (
   SELECT student_id, COUNT(*) AS count
@@ -657,13 +648,11 @@ WHERE sub.tenant_id = $1 AND sub.exam_id = $2::uuid AND sub.deleted_at IS NULL
 				code:    "missing_pages_unresolved",
 				message: "matched submissions have unresolved missing or rejected pages",
 				query: `WITH roster AS (
-  SELECT DISTINCT st.id
-  FROM exam_class ec
-  JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
-  LEFT JOIN exam_student_attendance ea ON ea.tenant_id = ec.tenant_id AND ea.exam_id = ec.exam_id
-    AND ea.student_id = st.id AND ea.deleted_at IS NULL
-  WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
-    AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
+  SELECT candidate.student_id AS id
+  FROM exam_candidate_snapshot candidate
+  LEFT JOIN exam_student_attendance ea ON ea.tenant_id = candidate.tenant_id AND ea.exam_id = candidate.exam_id
+    AND ea.student_id = candidate.student_id AND ea.deleted_at IS NULL
+  WHERE candidate.tenant_id = $1 AND candidate.exam_id = $2::uuid
     AND COALESCE(ea.status, 'expected') <> 'absent'
 ),
 submission_counts AS (
@@ -715,8 +704,9 @@ WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND status NO
 func (s *PostgresStore) listRosterEntries(ctx context.Context, tenantID string, examID string) ([]RosterEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
-  'student:' || st.id::text,
-  st.id::text, st.student_no, st.name, cls.id::text, cls.name,
+  'student:' || candidate.student_id::text,
+  candidate.student_id::text, candidate.student_no_snapshot, candidate.student_name_snapshot,
+  candidate.class_id_snapshot::text, candidate.class_name_snapshot,
   CASE WHEN COALESCE(sub.submission_count, 0) = 1 THEN COALESCE(sub.id::text, '') ELSE '' END,
   CASE WHEN COALESCE(sub.submission_count, 0) = 1 THEN COALESCE(sub.candidate_no, '') ELSE '' END,
   CASE
@@ -738,26 +728,23 @@ SELECT
   COALESCE(sub.expected_page_count, 0), COALESCE(sub.actual_page_count, 0),
   sg.total_score::float8, sg.max_score::float8,
   COALESCE(ea.reason, ''), COALESCE(ea.marked_by::text, ''), ea.marked_at
-FROM exam_class ec
-JOIN school_class cls ON cls.tenant_id = ec.tenant_id AND cls.id = ec.class_id AND cls.deleted_at IS NULL
-JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
+FROM exam_candidate_snapshot candidate
 LEFT JOIN LATERAL (
-  SELECT candidate.*, COUNT(*) OVER () AS submission_count
-  FROM submission candidate
-  WHERE candidate.tenant_id = ec.tenant_id
-    AND candidate.exam_id = ec.exam_id
-    AND candidate.student_id = st.id
-    AND candidate.deleted_at IS NULL
-  ORDER BY candidate.created_at DESC, candidate.id
+  SELECT candidate_submission.*, COUNT(*) OVER () AS submission_count
+  FROM submission candidate_submission
+  WHERE candidate_submission.tenant_id = candidate.tenant_id
+    AND candidate_submission.exam_id = candidate.exam_id
+    AND candidate_submission.student_id = candidate.student_id
+    AND candidate_submission.deleted_at IS NULL
+  ORDER BY candidate_submission.created_at DESC, candidate_submission.id
   LIMIT 1
 ) sub ON true
 LEFT JOIN submission_grade sg ON sg.tenant_id = $1 AND sg.exam_id = $2::uuid
   AND sg.submission_id = sub.id AND sg.deleted_at IS NULL
 LEFT JOIN exam_student_attendance ea ON ea.tenant_id = $1 AND ea.exam_id = $2::uuid
-  AND ea.student_id = st.id AND ea.deleted_at IS NULL
-WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
-  AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
-ORDER BY cls.name, st.student_no, st.name
+  AND ea.student_id = candidate.student_id AND ea.deleted_at IS NULL
+WHERE candidate.tenant_id = $1 AND candidate.exam_id = $2::uuid
+ORDER BY candidate.class_name_snapshot, candidate.student_no_snapshot, candidate.student_name_snapshot
 `, tenantID, examID)
 	if err != nil {
 		return nil, err
@@ -780,12 +767,13 @@ ORDER BY cls.name, st.student_no, st.name
 
 	unidentified, err := s.db.QueryContext(ctx, `
 WITH roster AS (
-  SELECT DISTINCT st.id, st.student_no, st.name AS student_name, cls.id AS class_id, cls.name AS class_name
-  FROM exam_class ec
-  JOIN school_class cls ON cls.tenant_id = ec.tenant_id AND cls.id = ec.class_id AND cls.deleted_at IS NULL
-  JOIN student st ON st.tenant_id = ec.tenant_id AND st.class_id = ec.class_id
-  WHERE ec.tenant_id = $1 AND ec.exam_id = $2::uuid
-    AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status = 'active'
+  SELECT candidate.student_id AS id,
+    candidate.student_no_snapshot AS student_no,
+    candidate.student_name_snapshot AS student_name,
+    candidate.class_id_snapshot AS class_id,
+    candidate.class_name_snapshot AS class_name
+  FROM exam_candidate_snapshot candidate
+  WHERE candidate.tenant_id = $1 AND candidate.exam_id = $2::uuid
 ),
 submission_counts AS (
   SELECT student_id, COUNT(*) AS count

@@ -24,32 +24,28 @@ WHERE tenant_id=$1 AND id=$2::uuid AND status='locked' AND deleted_at IS NULL
 
 	candidateRows, err := s.db.QueryContext(ctx, `
 SELECT
-  st.id::text,st.student_no,st.name,sc.id::text,sc.name,
+  candidate.student_id::text,candidate.student_no_snapshot,candidate.student_name_snapshot,
+  candidate.class_id_snapshot::text,candidate.class_name_snapshot,
   COALESCE(att.status,'expected'),
   active_sheet.id::text,active_sheet.status,active_sheet.print_batch_id::text
-FROM exam_class ec
-JOIN school_class sc
-  ON sc.tenant_id=ec.tenant_id AND sc.id=ec.class_id AND sc.deleted_at IS NULL
-JOIN student st
-  ON st.tenant_id=ec.tenant_id AND st.class_id=ec.class_id
-  AND st.status='active' AND st.deleted_at IS NULL
+FROM exam_candidate_snapshot candidate
 LEFT JOIN exam_student_attendance att
-  ON att.tenant_id=ec.tenant_id AND att.exam_id=ec.exam_id
-  AND att.student_id=st.id AND att.deleted_at IS NULL
+  ON att.tenant_id=candidate.tenant_id AND att.exam_id=candidate.exam_id
+  AND att.student_id=candidate.student_id AND att.deleted_at IS NULL
 LEFT JOIN LATERAL (
   SELECT sh.id,sh.status,sh.print_batch_id
   FROM answer_sheet_print_sheet sh
-  WHERE sh.tenant_id=ec.tenant_id
-    AND sh.exam_id=ec.exam_id
+  WHERE sh.tenant_id=candidate.tenant_id
+    AND sh.exam_id=candidate.exam_id
     AND sh.template_id=$2::uuid
     AND sh.template_content_hash=$3
-    AND sh.student_id=st.id
+    AND sh.student_id=candidate.student_id
     AND sh.status IN ('issued','observed','conflict')
   ORDER BY sh.created_at DESC,sh.id DESC
   LIMIT 1
 ) active_sheet ON true
-WHERE ec.tenant_id=$1 AND ec.exam_id=$4::uuid AND ec.deleted_at IS NULL
-ORDER BY sc.name,st.student_no,st.name,st.id
+WHERE candidate.tenant_id=$1 AND candidate.exam_id=$4::uuid
+ORDER BY candidate.class_name_snapshot,candidate.student_no_snapshot,candidate.student_name_snapshot,candidate.student_id
 `, tenantID, templateID, out.TemplateContentHash, out.ExamID)
 	if err != nil {
 		return StudentPrintContext{}, err

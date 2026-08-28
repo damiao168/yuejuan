@@ -29,6 +29,13 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : "操作失败";
 }
 
+function gradeBusinessLabel(grade?: Grade) {
+  if (!grade) return "-";
+  const startYear = Number(grade.academic_year.split("-")[0]);
+  const offset = grade.education_stage === "senior" ? Math.max(grade.level_no - 10, 0) : Math.max(grade.level_no - 7, 0);
+  return Number.isFinite(startYear) ? `${grade.name}（${startYear - offset}级）` : grade.name;
+}
+
 function downloadTemplate() {
   const content = "student_no,name,class_code\r\n20260001,张同学,G10-01\r\n";
   const url = URL.createObjectURL(new Blob(["\ufeff", content], { type: "text/csv;charset=utf-8" }));
@@ -60,6 +67,7 @@ export function StudentManagementPage() {
   const [error, setError] = useState("");
   const [keyword, setKeyword] = useState("");
   const [gradeId, setGradeId] = useState("all");
+  const [academicYear, setAcademicYear] = useState("all");
   const [classId, setClassId] = useState("all");
   const [status, setStatus] = useState("active");
   const [createOpen, setCreateOpen] = useState(false);
@@ -91,20 +99,24 @@ export function StudentManagementPage() {
 
   const classById = useMemo(() => new Map(classes.map((item) => [item.id, item])), [classes]);
   const gradeById = useMemo(() => new Map(grades.map((item) => [item.id, item])), [grades]);
+  const academicYears = useMemo(() => [...new Set(grades.map((item) => item.academic_year))].sort().reverse(), [grades]);
+  const visibleGrades = useMemo(() => grades.filter((item) => academicYear === "all" || item.academic_year === academicYear), [academicYear, grades]);
   const visibleClasses = useMemo(() => classes.filter((item) => gradeId === "all" || item.grade_id === gradeId), [classes, gradeId]);
   const filtered = useMemo(() => students.filter((student) => {
     const schoolClass = classById.get(student.class_id);
+    const grade = gradeById.get(schoolClass?.grade_id ?? "");
+    if (academicYear !== "all" && grade?.academic_year !== academicYear) return false;
     if (gradeId !== "all" && schoolClass?.grade_id !== gradeId) return false;
     if (classId !== "all" && student.class_id !== classId) return false;
     if (status !== "all" && student.status !== status) return false;
     const query = keyword.trim().toLowerCase();
     return !query || student.name.toLowerCase().includes(query) || student.student_no.toLowerCase().includes(query);
-  }), [classById, classId, gradeId, keyword, status, students]);
+  }), [academicYear, classById, classId, gradeById, gradeId, keyword, status, students]);
 
   const columns: TableColumnsType<Student> = [
     { title: "学号", dataIndex: "student_no", width: 150, ellipsis: true },
     { title: "姓名", dataIndex: "name", width: 130, ellipsis: true },
-    { title: "年级", width: 130, render: (_, item) => gradeById.get(classById.get(item.class_id)?.grade_id ?? "")?.name ?? "-" },
+    { title: "年级 / 届别", width: 180, render: (_, item) => gradeBusinessLabel(gradeById.get(classById.get(item.class_id)?.grade_id ?? "")) },
     { title: "班级", width: 150, render: (_, item) => classById.get(item.class_id)?.name ?? "-" },
     { title: "状态", dataIndex: "status", width: 100, render: (value: string) => <StatusTag tone={value === "active" ? "success" : "neutral"}>{value === "active" ? "在籍" : "停用"}</StatusTag> },
     {
@@ -188,7 +200,8 @@ export function StudentManagementPage() {
       </header>
 
       <section className="student-management-filters" aria-label="学生筛选">
-        <Select value={gradeId} options={[{ value: "all", label: "全部年级" }, ...grades.map((item) => ({ value: item.id, label: item.name }))]} onChange={(value) => { setGradeId(value); setClassId("all"); }} />
+        <Select value={academicYear} options={[{ value: "all", label: "全部学年" }, ...academicYears.map((value) => ({ value, label: `${value}学年` }))]} onChange={(value) => { setAcademicYear(value); setGradeId("all"); setClassId("all"); }} />
+        <Select value={gradeId} options={[{ value: "all", label: "全部年级" }, ...visibleGrades.map((item) => ({ value: item.id, label: gradeBusinessLabel(item) }))]} onChange={(value) => { setGradeId(value); setClassId("all"); }} />
         <Select value={classId} options={[{ value: "all", label: "全部班级" }, ...visibleClasses.map((item) => ({ value: item.id, label: item.name }))]} onChange={setClassId} />
         <Select value={status} options={[{ value: "active", label: "在籍" }, { value: "inactive", label: "停用" }, { value: "all", label: "全部状态" }]} onChange={setStatus} />
         <Input allowClear prefix={<Search size={15} />} value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索姓名或学号" />
@@ -201,7 +214,7 @@ export function StudentManagementPage() {
 
       <Modal title="新增学生" open={createOpen} okText="保存" cancelText="取消" confirmLoading={saving} onOk={() => void submitStudent()} onCancel={() => { setCreateOpen(false); form.resetFields(); }}>
         <Form form={form} layout="vertical" requiredMark={false}>
-          <Form.Item name="class_id" label="班级" rules={[{ required: true, message: "请选择班级" }]}><Select showSearch optionFilterProp="label" options={classes.map((item) => ({ value: item.id, label: `${gradeById.get(item.grade_id)?.name ?? ""} · ${item.name}` }))} /></Form.Item>
+          <Form.Item name="class_id" label="班级" rules={[{ required: true, message: "请选择班级" }]}><Select showSearch optionFilterProp="label" options={classes.map((item) => ({ value: item.id, label: `${gradeBusinessLabel(gradeById.get(item.grade_id))} · ${item.name}` }))} /></Form.Item>
           <Form.Item name="student_no" label="学号" rules={[{ required: true, message: "请输入学号" }]}><Input maxLength={50} /></Form.Item>
           <Form.Item name="name" label="姓名" rules={[{ required: true, message: "请输入姓名" }]}><Input maxLength={80} /></Form.Item>
           <Form.Item name="gender" label="性别（可选）"><Select allowClear options={[{ value: "male", label: "男" }, { value: "female", label: "女" }, { value: "unknown", label: "未填写" }]} /></Form.Item>

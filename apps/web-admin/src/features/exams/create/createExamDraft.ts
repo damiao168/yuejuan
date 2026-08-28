@@ -1,21 +1,24 @@
 import type { Grade } from "../../../api/org";
+import type { ExamTemplateSubject } from "../../../api/examTemplates";
 import type { BlueprintSectionDraft, CreateExamDraft, SubjectExamDraft } from "./types";
-
-const profiles: Record<string, { totalScore: number; durationMinutes: number; sections: Array<Omit<BlueprintSectionDraft, "id">> }> = {
-  chinese: { totalScore: 150, durationMinutes: 150, sections: [{ title: "基础与阅读", questionType: "single_choice", questionCount: 10, scorePerQuestion: 3 }, { title: "阅读与表达", questionType: "short_answer", questionCount: 6, scorePerQuestion: 10 }, { title: "写作", questionType: "essay", questionCount: 1, scorePerQuestion: 60 }] },
-  math: { totalScore: 150, durationMinutes: 120, sections: [{ title: "客观题", questionType: "single_choice", questionCount: 10, scorePerQuestion: 5 }, { title: "解答题", questionType: "calculation", questionCount: 10, scorePerQuestion: 10 }] },
-  english: { totalScore: 150, durationMinutes: 120, sections: [{ title: "客观题", questionType: "single_choice", questionCount: 15, scorePerQuestion: 5 }, { title: "语言运用与写作", questionType: "short_answer", questionCount: 5, scorePerQuestion: 15 }] }
-};
-
-const scienceProfile = { totalScore: 100, durationMinutes: 75, sections: [{ title: "客观题", questionType: "single_choice", questionCount: 10, scorePerQuestion: 4 }, { title: "主观题", questionType: "short_answer", questionCount: 6, scorePerQuestion: 10 }] };
 
 function localId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function createSubjectDraft(subject: string): SubjectExamDraft {
-  const profile = profiles[subject] ?? scienceProfile;
-  return { subject, totalScore: profile.totalScore, durationMinutes: profile.durationMinutes, candidateRule: "all_selected_classes", classIds: [], sections: profile.sections.map((section) => ({ ...section, id: localId("section") })) };
+  return { subject, totalScore: 100, durationMinutes: 90, candidateRule: "all_selected_classes", classIds: [], sections: [{ id: localId("section"), title: "全卷", questionType: "short_answer", questionCount: 10, scorePerQuestion: 10 }] };
+}
+
+export function subjectDraftFromTemplate(subject: ExamTemplateSubject): SubjectExamDraft {
+  return {
+    subject: subject.subject,
+    totalScore: subject.total_score,
+    durationMinutes: subject.duration_minutes,
+    candidateRule: subject.candidate_rule,
+    classIds: [],
+    sections: subject.sections.map((section) => ({ id: localId("section"), title: section.title, questionType: section.question_type, questionCount: section.question_count, scorePerQuestion: section.score_per_question }))
+  };
 }
 
 export function createBlankSection(): BlueprintSectionDraft {
@@ -28,6 +31,7 @@ export function initialCreateExamDraft(schoolId = "", grade?: Grade): CreateExam
     name: "",
     examType: "",
     gradeId: grade?.id ?? "",
+    templateId: "",
     classIds: [],
     subjects: [],
     gradingMode: "ai_assisted",

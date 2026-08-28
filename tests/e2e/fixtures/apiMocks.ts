@@ -176,8 +176,23 @@ export async function installApiMocks(
     if (path === "/api/v1/schools") {
       return json(route, { schools: [{ id: "school-1", tenant_id: "tenant-school", name: "示范学校", code: "DEMO", status: "active" }] });
     }
-    if (path === "/api/v1/grades") return json(route, { grades: [{ id: "grade-1", school_id: "school-1", name: "高二", code: "G11", academic_year: "2026-2027", level_no: 11, status: "active" }] });
+    if (path === "/api/v1/grades") return json(route, { grades: [{ id: "grade-1", tenant_id: "tenant-school", school_id: "school-1", name: "高二", code: "G11", academic_year: "2026-2027", level_no: 11, education_stage: "senior", status: "active" }] });
     if (path === "/api/v1/classes") return json(route, { classes: [{ id: "class-1", school_id: "school-1", grade_id: "grade-1", name: "高二（1）班", code: "G11-01", status: "active" }] });
+    if (path === "/api/v1/exam-templates") return json(route, { exam_templates: [{
+      id: "00000000-0000-0000-0000-000000000601",
+      code: "system.senior.standard",
+      name: "系统通用高中考试方案",
+      description: "适合校内期中、期末和阶段考试，可在本场考试中继续修改。",
+      education_stage: "senior",
+      version: 1,
+      source: "system",
+      recommended: true,
+      subjects: [
+        { id: "template-chinese", subject: "chinese", total_score: 150, duration_minutes: 150, candidate_rule: "all_selected_classes", sort_order: 1, sections: [{ id: "template-chinese-all", title: "全卷", question_type: "short_answer", question_count: 15, score_per_question: 10, sort_order: 1 }] },
+        { id: "template-math", subject: "math", total_score: 150, duration_minutes: 120, candidate_rule: "all_selected_classes", sort_order: 2, sections: [{ id: "template-math-all", title: "全卷", question_type: "calculation", question_count: 15, score_per_question: 10, sort_order: 1 }] },
+        { id: "template-english", subject: "english", total_score: 150, duration_minutes: 120, candidate_rule: "all_selected_classes", sort_order: 3, sections: [{ id: "template-english-all", title: "全卷", question_type: "short_answer", question_count: 15, score_per_question: 10, sort_order: 1 }] }
+      ]
+    }] });
     if (path === "/api/v1/students") return json(route, { students: [{ id: "student-1", school_id: "school-1", class_id: "class-1", name: "陈同学", student_no: "S001", status: "active" }, { id: "student-2", school_id: "school-1", class_id: "class-1", name: "林同学", student_no: "S002", status: "active" }], has_more: false });
     if (path === "/api/v1/users") return json(route, { users: [{ id: "user-school_admin", username: "school_admin", display_name: "学校管理员", status: "active", roles: ["school_admin"] }, { id: "grader-1", username: "math_grader", display_name: "数学阅卷老师", status: "active", roles: ["grader"] }], has_more: false });
     if (path === "/api/v1/roles") return json(route, { roles: [{ code: "teacher", name: "教师", scope_type: "school" }, { code: "grader", name: "阅卷员", scope_type: "exam_task" }, { code: "arbitrator", name: "仲裁员", scope_type: "exam_task" }] });

@@ -3,6 +3,7 @@ package org
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -161,16 +162,18 @@ func (s *PostgresStore) UpdateTenantStatus(ctx context.Context, id string, statu
 }
 
 func (s *PostgresStore) CreateSchool(ctx context.Context, tenantID string, input School) (School, error) {
-	row := s.db.QueryRowContext(ctx, `INSERT INTO school (tenant_id, name, code, status) VALUES ($1, $2, $3, COALESCE(NULLIF($4, ''), 'active')) RETURNING id::text, tenant_id::text, name, code, status`, tenantID, input.Name, input.Code, input.Status)
+	row := s.db.QueryRowContext(ctx, `INSERT INTO school (tenant_id, name, code, status) VALUES ($1, $2, $3, COALESCE(NULLIF($4, ''), 'active')) RETURNING id::text, tenant_id::text, name, code, education_stages, status`, tenantID, input.Name, input.Code, input.Status)
 	var out School
-	if err := row.Scan(&out.ID, &out.TenantID, &out.Name, &out.Code, &out.Status); err != nil {
+	var stages []byte
+	if err := row.Scan(&out.ID, &out.TenantID, &out.Name, &out.Code, &stages, &out.Status); err != nil {
 		return School{}, err
 	}
+	_ = json.Unmarshal(stages, &out.EducationStages)
 	return out, nil
 }
 
 func (s *PostgresStore) ListSchools(ctx context.Context, tenantID string) ([]School, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id::text, tenant_id::text, name, code, status FROM school WHERE tenant_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`, tenantID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id::text, tenant_id::text, name, code, education_stages, status FROM school WHERE tenant_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +181,43 @@ func (s *PostgresStore) ListSchools(ctx context.Context, tenantID string) ([]Sch
 	out := []School{}
 	for rows.Next() {
 		var item School
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.Name, &item.Code, &item.Status); err != nil {
+		var stages []byte
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.Name, &item.Code, &stages, &item.Status); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(stages, &item.EducationStages)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) ListAcademicYears(ctx context.Context, tenantID, schoolID string) ([]AcademicYear, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id::text,tenant_id::text,school_id::text,name,start_year,end_year,starts_at::text,ends_at::text,is_current,status FROM academic_year WHERE tenant_id=$1 AND deleted_at IS NULL AND ($2='' OR school_id::text=$2) ORDER BY start_year DESC`, tenantID, schoolID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AcademicYear{}
+	for rows.Next() {
+		var item AcademicYear
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.SchoolID, &item.Name, &item.StartYear, &item.EndYear, &item.StartsAt, &item.EndsAt, &item.IsCurrent, &item.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) ListGradeCohorts(ctx context.Context, tenantID, schoolID string) ([]GradeCohort, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id::text,tenant_id::text,school_id::text,education_stage,entry_year,expected_graduation_year,name,status FROM grade_cohort WHERE tenant_id=$1 AND deleted_at IS NULL AND ($2='' OR school_id::text=$2) ORDER BY entry_year DESC`, tenantID, schoolID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []GradeCohort{}
+	for rows.Next() {
+		var item GradeCohort
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.SchoolID, &item.EducationStage, &item.EntryYear, &item.ExpectedGraduationYear, &item.Name, &item.Status); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -188,14 +227,46 @@ func (s *PostgresStore) ListSchools(ctx context.Context, tenantID string) ([]Sch
 
 func (s *PostgresStore) CreateGrade(ctx context.Context, tenantID string, input Grade) (Grade, error) {
 	row := s.db.QueryRowContext(ctx, `
-INSERT INTO grade (tenant_id, school_id, name, level_no, academic_year, status)
-SELECT $1, school.id, $3, $4, $5, COALESCE(NULLIF($6, ''), 'active')
-FROM school
-WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
-RETURNING id::text, tenant_id::text, school_id::text, name, COALESCE(level_no, 0), COALESCE(academic_year, ''), status
-`, tenantID, input.SchoolID, input.Name, input.LevelNo, input.AcademicYear, input.Status)
+WITH input_value AS (
+  SELECT CASE WHEN $5 ~ '^[0-9]{4}-[0-9]{4}$' THEN split_part($5,'-',1)::int ELSE EXTRACT(YEAR FROM CURRENT_DATE)::int END start_year,
+    COALESCE(NULLIF($6,''),CASE WHEN $4>=10 THEN 'senior' ELSE 'junior' END) stage
+), parent_school AS (
+  SELECT id FROM school WHERE tenant_id=$1 AND id::text=$2 AND deleted_at IS NULL
+), school_stage AS (
+  UPDATE school target
+  SET education_stages=(
+    SELECT jsonb_agg(stage ORDER BY stage)
+    FROM (
+      SELECT DISTINCT jsonb_array_elements_text(target.education_stages || jsonb_build_array(input_value.stage)) AS stage
+    ) stages
+  ),updated_at=now()
+  FROM parent_school,input_value
+  WHERE target.id=parent_school.id
+  RETURNING target.id
+), year_row AS (
+  INSERT INTO academic_year(tenant_id,school_id,name,start_year,end_year,starts_at,ends_at,is_current)
+  SELECT $1,parent_school.id,input_value.start_year::text||'-'||(input_value.start_year+1)::text||'学年',input_value.start_year,input_value.start_year+1,
+    make_date(input_value.start_year,9,1),make_date(input_value.start_year+1,8,31),CURRENT_DATE BETWEEN make_date(input_value.start_year,9,1) AND make_date(input_value.start_year+1,8,31)
+  FROM parent_school CROSS JOIN input_value CROSS JOIN school_stage
+  ON CONFLICT(tenant_id,school_id,start_year) DO UPDATE SET updated_at=now()
+  RETURNING id,start_year
+), cohort_row AS (
+  INSERT INTO grade_cohort(tenant_id,school_id,education_stage,entry_year,expected_graduation_year,name)
+  SELECT $1,parent_school.id,input_value.stage,
+    year_row.start_year-CASE WHEN input_value.stage='senior' THEN GREATEST($4-10,0) ELSE GREATEST($4-7,0) END,
+    year_row.start_year-CASE WHEN input_value.stage='senior' THEN GREATEST($4-10,0) ELSE GREATEST($4-7,0) END+3,
+    (year_row.start_year-CASE WHEN input_value.stage='senior' THEN GREATEST($4-10,0) ELSE GREATEST($4-7,0) END)::text||'级'
+  FROM parent_school CROSS JOIN input_value CROSS JOIN year_row
+  ON CONFLICT(tenant_id,school_id,education_stage,entry_year) DO UPDATE SET updated_at=now()
+  RETURNING id
+)
+INSERT INTO grade (tenant_id,school_id,name,level_no,academic_year,education_stage,academic_year_id,grade_cohort_id,status)
+SELECT $1,parent_school.id,$3,$4,$5,input_value.stage,year_row.id,cohort_row.id,COALESCE(NULLIF($7,''),'active')
+FROM parent_school CROSS JOIN input_value CROSS JOIN year_row CROSS JOIN cohort_row
+RETURNING id::text,tenant_id::text,school_id::text,name,COALESCE(level_no,0),COALESCE(academic_year,''),education_stage,academic_year_id::text,grade_cohort_id::text,status
+`, tenantID, input.SchoolID, input.Name, input.LevelNo, input.AcademicYear, input.EducationStage, input.Status)
 	var out Grade
-	if err := row.Scan(&out.ID, &out.TenantID, &out.SchoolID, &out.Name, &out.LevelNo, &out.AcademicYear, &out.Status); err != nil {
+	if err := row.Scan(&out.ID, &out.TenantID, &out.SchoolID, &out.Name, &out.LevelNo, &out.AcademicYear, &out.EducationStage, &out.AcademicYearID, &out.GradeCohortID, &out.Status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Grade{}, ErrInvalidParent
 		}
@@ -205,7 +276,7 @@ RETURNING id::text, tenant_id::text, school_id::text, name, COALESCE(level_no, 0
 }
 
 func (s *PostgresStore) ListGrades(ctx context.Context, tenantID string, schoolID string) ([]Grade, error) {
-	query := `SELECT id::text, tenant_id::text, school_id::text, name, COALESCE(level_no, 0), COALESCE(academic_year, ''), status FROM grade WHERE tenant_id = $1 AND deleted_at IS NULL`
+	query := `SELECT id::text,tenant_id::text,school_id::text,name,COALESCE(level_no,0),COALESCE(academic_year,''),education_stage,academic_year_id::text,grade_cohort_id::text,status FROM grade WHERE tenant_id=$1 AND deleted_at IS NULL`
 	args := []any{tenantID}
 	if schoolID != "" {
 		query += ` AND school_id = $2`
@@ -219,7 +290,7 @@ func (s *PostgresStore) ListGrades(ctx context.Context, tenantID string, schoolI
 	out := []Grade{}
 	for rows.Next() {
 		var item Grade
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.SchoolID, &item.Name, &item.LevelNo, &item.AcademicYear, &item.Status); err != nil {
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.SchoolID, &item.Name, &item.LevelNo, &item.AcademicYear, &item.EducationStage, &item.AcademicYearID, &item.GradeCohortID, &item.Status); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -233,16 +304,16 @@ WITH parent_school AS (
   SELECT id FROM school WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 ),
 parent_grade AS (
-  SELECT id FROM grade WHERE tenant_id = $1 AND id::text = $3 AND school_id::text = $2 AND deleted_at IS NULL
+  SELECT id,academic_year_id,grade_cohort_id FROM grade WHERE tenant_id = $1 AND id::text = $3 AND school_id::text = $2 AND deleted_at IS NULL
 )
-INSERT INTO school_class (tenant_id, school_id, grade_id, name, code, status)
-SELECT $1, parent_school.id, parent_grade.id, $4, $5, COALESCE(NULLIF($6, ''), 'active')
+INSERT INTO school_class (tenant_id,school_id,grade_id,academic_year_id,grade_cohort_id,class_no,name,code,status)
+SELECT $1,parent_school.id,parent_grade.id,parent_grade.academic_year_id,parent_grade.grade_cohort_id,NULLIF($7,0),$4,$5,COALESCE(NULLIF($6,''),'active')
 FROM parent_school
 CROSS JOIN parent_grade
-RETURNING id::text, tenant_id::text, school_id::text, grade_id::text, name, code, status
-`, tenantID, input.SchoolID, input.GradeID, input.Name, input.Code, input.Status)
+RETURNING id::text,tenant_id::text,school_id::text,grade_id::text,academic_year_id::text,grade_cohort_id::text,COALESCE(class_no,0),name,code,status
+`, tenantID, input.SchoolID, input.GradeID, input.Name, input.Code, input.Status, input.ClassNo)
 	var out Class
-	if err := row.Scan(&out.ID, &out.TenantID, &out.SchoolID, &out.GradeID, &out.Name, &out.Code, &out.Status); err != nil {
+	if err := row.Scan(&out.ID, &out.TenantID, &out.SchoolID, &out.GradeID, &out.AcademicYearID, &out.GradeCohortID, &out.ClassNo, &out.Name, &out.Code, &out.Status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Class{}, ErrInvalidParent
 		}
@@ -252,7 +323,7 @@ RETURNING id::text, tenant_id::text, school_id::text, grade_id::text, name, code
 }
 
 func (s *PostgresStore) ListClasses(ctx context.Context, tenantID string, gradeID string) ([]Class, error) {
-	query := `SELECT id::text, tenant_id::text, school_id::text, grade_id::text, name, code, status FROM school_class WHERE tenant_id = $1 AND deleted_at IS NULL`
+	query := `SELECT id::text,tenant_id::text,school_id::text,grade_id::text,academic_year_id::text,grade_cohort_id::text,COALESCE(class_no,0),name,code,status FROM school_class WHERE tenant_id=$1 AND deleted_at IS NULL`
 	args := []any{tenantID}
 	if gradeID != "" {
 		query += ` AND grade_id = $2`
@@ -266,7 +337,7 @@ func (s *PostgresStore) ListClasses(ctx context.Context, tenantID string, gradeI
 	out := []Class{}
 	for rows.Next() {
 		var item Class
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.SchoolID, &item.GradeID, &item.Name, &item.Code, &item.Status); err != nil {
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.SchoolID, &item.GradeID, &item.AcademicYearID, &item.GradeCohortID, &item.ClassNo, &item.Name, &item.Code, &item.Status); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -280,16 +351,30 @@ WITH parent_school AS (
   SELECT id FROM school WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 ),
 parent_class AS (
-  SELECT id FROM school_class WHERE tenant_id = $1 AND id::text = $3 AND school_id::text = $2 AND deleted_at IS NULL
+  SELECT cls.id,cls.academic_year_id,cls.grade_cohort_id,cohort.entry_year,year.starts_at
+  FROM (
+    SELECT id,tenant_id,academic_year_id,grade_cohort_id
+    FROM school_class WHERE tenant_id = $1 AND id::text = $3 AND school_id::text = $2 AND deleted_at IS NULL
+  ) cls
+  JOIN grade_cohort cohort ON cohort.tenant_id=cls.tenant_id AND cohort.id=cls.grade_cohort_id
+  JOIN academic_year year ON year.tenant_id=cls.tenant_id AND year.id=cls.academic_year_id
+), inserted AS (
+  INSERT INTO student (tenant_id,school_id,class_id,student_no,name,gender,status,admission_year)
+  SELECT $1,parent_school.id,parent_class.id,$4,$5,$6,COALESCE(NULLIF($7,''),'active'),parent_class.entry_year
+  FROM parent_school CROSS JOIN parent_class
+  RETURNING *
+), enrollment AS (
+  INSERT INTO student_enrollment(tenant_id,school_id,student_id,academic_year_id,grade_cohort_id,class_id,status,start_date)
+  SELECT inserted.tenant_id,inserted.school_id,inserted.id,parent_class.academic_year_id,parent_class.grade_cohort_id,parent_class.id,'enrolled',parent_class.starts_at
+  FROM inserted CROSS JOIN parent_class RETURNING id
 )
-INSERT INTO student (tenant_id, school_id, class_id, student_no, name, gender, status)
-SELECT $1, parent_school.id, parent_class.id, $4, $5, $6, COALESCE(NULLIF($7, ''), 'active')
-FROM parent_school
-CROSS JOIN parent_class
-RETURNING id::text, tenant_id::text, school_id::text, class_id::text, student_no, name, COALESCE(gender, ''), status
+SELECT inserted.id::text,inserted.tenant_id::text,inserted.school_id::text,parent_class.id::text,
+  parent_class.academic_year_id::text,parent_class.grade_cohort_id::text,inserted.student_no,inserted.name,
+  COALESCE(inserted.gender,''),inserted.status,COALESCE(inserted.admission_year,0)
+FROM inserted CROSS JOIN parent_class CROSS JOIN enrollment
 `, tenantID, input.SchoolID, input.ClassID, input.StudentNo, input.Name, input.Gender, input.Status)
 	var out Student
-	if err := row.Scan(&out.ID, &out.TenantID, &out.SchoolID, &out.ClassID, &out.StudentNo, &out.Name, &out.Gender, &out.Status); err != nil {
+	if err := row.Scan(&out.ID, &out.TenantID, &out.SchoolID, &out.ClassID, &out.AcademicYearID, &out.GradeCohortID, &out.StudentNo, &out.Name, &out.Gender, &out.Status, &out.AdmissionYear); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Student{}, ErrInvalidParent
 		}
@@ -299,12 +384,21 @@ RETURNING id::text, tenant_id::text, school_id::text, class_id::text, student_no
 }
 
 func (s *PostgresStore) ListStudents(ctx context.Context, tenantID string, filter StudentListFilter) ([]Student, error) {
-	query := `SELECT id::text, tenant_id::text, school_id::text, class_id::text, student_no, name, COALESCE(gender, ''), status
-FROM student
-WHERE tenant_id = $1 AND deleted_at IS NULL
-  AND ($2 = '' OR class_id::text = $2)
-  AND ($3 = '' OR student_no ILIKE '%' || $3 || '%' OR name ILIKE '%' || $3 || '%')
-  AND ($5 = '' OR student_no > $4 OR (student_no = $4 AND id::text > $5))`
+	query := `SELECT st.id::text,st.tenant_id::text,st.school_id::text,COALESCE(current_enrollment.class_id::text,st.class_id::text,''),
+  COALESCE(current_enrollment.academic_year_id::text,''),COALESCE(current_enrollment.grade_cohort_id::text,''),
+  st.student_no,st.name,COALESCE(st.gender,''),st.status,COALESCE(st.admission_year,0)
+FROM student st
+LEFT JOIN LATERAL (
+  SELECT enrollment.class_id,enrollment.academic_year_id,enrollment.grade_cohort_id
+  FROM student_enrollment enrollment
+  JOIN academic_year year ON year.tenant_id=enrollment.tenant_id AND year.id=enrollment.academic_year_id
+  WHERE enrollment.tenant_id=st.tenant_id AND enrollment.student_id=st.id AND enrollment.deleted_at IS NULL
+  ORDER BY year.is_current DESC,year.start_year DESC LIMIT 1
+) current_enrollment ON true
+WHERE st.tenant_id=$1 AND st.deleted_at IS NULL
+  AND ($2='' OR current_enrollment.class_id::text=$2)
+  AND ($3='' OR st.student_no ILIKE '%'||$3||'%' OR st.name ILIKE '%'||$3||'%')
+  AND ($5='' OR st.student_no>$4 OR (st.student_no=$4 AND st.id::text>$5))`
 	args := []any{tenantID, filter.ClassID, filter.Query, filter.CursorStudentNo, filter.CursorID}
 	if len(filter.StudentIDs) > 0 {
 		placeholders := make([]string, len(filter.StudentIDs))
@@ -312,10 +406,10 @@ WHERE tenant_id = $1 AND deleted_at IS NULL
 			placeholders[index] = fmt.Sprintf("$%d::uuid", len(args)+1)
 			args = append(args, id)
 		}
-		query += ` AND id IN (` + strings.Join(placeholders, ",") + `)`
+		query += ` AND st.id IN (` + strings.Join(placeholders, ",") + `)`
 	}
 	args = append(args, filter.Limit)
-	query += fmt.Sprintf(" ORDER BY student_no ASC, id::text ASC LIMIT NULLIF($%d, 0)", len(args))
+	query += fmt.Sprintf(" ORDER BY st.student_no ASC, st.id::text ASC LIMIT NULLIF($%d, 0)", len(args))
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -324,7 +418,7 @@ WHERE tenant_id = $1 AND deleted_at IS NULL
 	out := []Student{}
 	for rows.Next() {
 		var item Student
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.SchoolID, &item.ClassID, &item.StudentNo, &item.Name, &item.Gender, &item.Status); err != nil {
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.SchoolID, &item.ClassID, &item.AcademicYearID, &item.GradeCohortID, &item.StudentNo, &item.Name, &item.Gender, &item.Status, &item.AdmissionYear); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

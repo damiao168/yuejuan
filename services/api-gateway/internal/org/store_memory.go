@@ -109,6 +109,37 @@ func (s *MemoryStore) ListSchools(_ context.Context, tenantID string) ([]School,
 	return out, nil
 }
 
+func (s *MemoryStore) ListAcademicYears(_ context.Context, tenantID, schoolID string) ([]AcademicYear, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := map[string]bool{}
+	out := []AcademicYear{}
+	for _, grade := range s.grades {
+		if grade.TenantID != tenantID || (schoolID != "" && grade.SchoolID != schoolID) || seen[grade.AcademicYear] {
+			continue
+		}
+		seen[grade.AcademicYear] = true
+		out = append(out, AcademicYear{ID: grade.AcademicYearID, TenantID: tenantID, SchoolID: grade.SchoolID, Name: grade.AcademicYear, Status: "active"})
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) ListGradeCohorts(_ context.Context, tenantID, schoolID string) ([]GradeCohort, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := map[string]bool{}
+	out := []GradeCohort{}
+	for _, grade := range s.grades {
+		key := grade.SchoolID + "|" + grade.GradeCohortID
+		if grade.TenantID != tenantID || (schoolID != "" && grade.SchoolID != schoolID) || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, GradeCohort{ID: grade.GradeCohortID, TenantID: tenantID, SchoolID: grade.SchoolID, EducationStage: grade.EducationStage, Name: grade.Name, Status: "active"})
+	}
+	return out, nil
+}
+
 func (s *MemoryStore) CreateGrade(_ context.Context, tenantID string, input Grade) (Grade, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,8 +148,18 @@ func (s *MemoryStore) CreateGrade(_ context.Context, tenantID string, input Grad
 	if input.Status == "" {
 		input.Status = "active"
 	}
+	if input.EducationStage == "" {
+		input.EducationStage = educationStageForLevel(input.LevelNo)
+	}
 	s.grades[input.ID] = input
 	return input, nil
+}
+
+func educationStageForLevel(level int) string {
+	if level >= 10 {
+		return "senior"
+	}
+	return "junior"
 }
 
 func (s *MemoryStore) ListGrades(_ context.Context, tenantID string, schoolID string) ([]Grade, error) {
@@ -227,6 +268,35 @@ func (s *MemoryStore) UpdateStudentStatus(_ context.Context, tenantID string, id
 	item.Status = status
 	s.students[id] = item
 	return item, nil
+}
+
+func (s *MemoryStore) TransferStudent(_ context.Context, tenantID, studentID, classID, startDate string) (StudentEnrollment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	student, ok := s.students[studentID]
+	if !ok || student.TenantID != tenantID {
+		return StudentEnrollment{}, fmt.Errorf("student not found")
+	}
+	class, ok := s.classes[classID]
+	if !ok || class.TenantID != tenantID || class.SchoolID != student.SchoolID {
+		return StudentEnrollment{}, ErrInvalidParent
+	}
+	student.ClassID = classID
+	student.AcademicYearID = class.AcademicYearID
+	student.GradeCohortID = class.GradeCohortID
+	s.students[studentID] = student
+	return StudentEnrollment{ID: s.id("enrollment"), StudentID: studentID, SchoolID: student.SchoolID, AcademicYearID: class.AcademicYearID, GradeCohortID: class.GradeCohortID, ClassID: classID, ClassName: class.Name, Status: "enrolled", StartDate: startDate}, nil
+}
+
+func (s *MemoryStore) ListStudentEnrollments(_ context.Context, tenantID, studentID string) ([]StudentEnrollment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	student, ok := s.students[studentID]
+	if !ok || student.TenantID != tenantID {
+		return nil, fmt.Errorf("student not found")
+	}
+	class := s.classes[student.ClassID]
+	return []StudentEnrollment{{StudentID: studentID, SchoolID: student.SchoolID, AcademicYearID: class.AcademicYearID, GradeCohortID: class.GradeCohortID, ClassID: class.ID, ClassName: class.Name, Status: "enrolled"}}, nil
 }
 
 func (s *MemoryStore) BindTeacherClass(_ context.Context, tenantID string, teacherID string, classID string) error {

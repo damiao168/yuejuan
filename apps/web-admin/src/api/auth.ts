@@ -10,6 +10,12 @@ export interface AuthUser {
   roles: string[];
   permissions: string[];
   data_scope: Record<string, unknown>;
+  organization_scope?: {
+    tenant_wide: boolean;
+    school_ids: string[];
+    grade_ids: string[];
+    class_ids: string[];
+  };
 }
 
 export interface LoginRequest {

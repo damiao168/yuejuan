@@ -21,8 +21,12 @@ export interface School {
   tenant_id: string;
   name: string;
   code: string;
+  education_stages?: Array<"junior" | "senior">;
   status: string;
 }
+
+export interface AcademicYear { id: string; tenant_id: string; school_id: string; name: string; start_year: number; end_year: number; starts_at: string; ends_at: string; is_current: boolean; status: string; }
+export interface GradeCohort { id: string; tenant_id: string; school_id: string; education_stage: "junior" | "senior"; entry_year: number; expected_graduation_year: number; name: string; status: string; }
 
 export interface Grade {
   id: string;
@@ -31,6 +35,9 @@ export interface Grade {
   name: string;
   level_no: number;
   academic_year: string;
+  education_stage: "junior" | "senior";
+  academic_year_id?: string;
+  grade_cohort_id?: string;
   status: string;
 }
 
@@ -39,6 +46,9 @@ export interface SchoolClass {
   tenant_id: string;
   school_id: string;
   grade_id: string;
+  academic_year_id?: string;
+  grade_cohort_id?: string;
+  class_no?: number;
   name: string;
   code: string;
   status: string;
@@ -49,11 +59,15 @@ export interface Student {
   tenant_id: string;
   school_id: string;
   class_id: string;
+  academic_year_id?: string;
+  grade_cohort_id?: string;
+  admission_year?: number;
   student_no: string;
   name: string;
   gender?: string;
   status: string;
 }
+export interface StudentEnrollment { id: string; student_id: string; school_id: string; academic_year_id: string; academic_year_name: string; grade_cohort_id: string; grade_cohort_name: string; class_id: string; class_name: string; status: string; start_date: string; end_date?: string; }
 
 export interface StudentImportError {
   row: number;
@@ -94,12 +108,20 @@ export async function listSchools() {
   return apiClient.request<{ schools: School[] }>("/api/v1/schools");
 }
 
+export async function listAcademicYears(schoolId?: string) {
+  return apiClient.request<{ academic_years: AcademicYear[] }>(`/api/v1/academic-years${buildQueryString({ school_id: schoolId })}`);
+}
+
+export async function listGradeCohorts(schoolId?: string) {
+  return apiClient.request<{ grade_cohorts: GradeCohort[] }>(`/api/v1/grade-cohorts${buildQueryString({ school_id: schoolId })}`);
+}
+
 export async function listGrades(schoolId?: string) {
   const query = schoolId ? `?school_id=${encodeURIComponent(schoolId)}` : "";
   return apiClient.request<{ grades: Grade[] }>(`/api/v1/grades${query}`);
 }
 
-export async function createGrade(payload: Pick<Grade, "school_id" | "name" | "level_no" | "academic_year">) {
+export async function createGrade(payload: Pick<Grade, "school_id" | "name" | "level_no" | "academic_year" | "education_stage">) {
   return apiClient.request<{ grade: Grade }>("/api/v1/grades", {
     method: "POST",
     body: JSON.stringify({ ...payload, status: "active" })
@@ -142,6 +164,14 @@ export async function updateStudentStatus(id: string, status: "active" | "inacti
     method: "PATCH",
     body: JSON.stringify({ status })
   });
+}
+
+export async function listStudentEnrollments(id: string) {
+  return apiClient.request<{ enrollments: StudentEnrollment[] }>(`/api/v1/students/${encodeURIComponent(id)}/enrollments`);
+}
+
+export async function transferStudent(id: string, classId: string, startDate?: string) {
+  return apiClient.request<{ enrollment: StudentEnrollment }>(`/api/v1/students/${encodeURIComponent(id)}/enrollment`, { method: "PUT", body: JSON.stringify({ class_id: classId, start_date: startDate }) });
 }
 
 export async function importStudentsCSV(csv: string) {

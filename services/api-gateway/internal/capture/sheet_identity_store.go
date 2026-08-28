@@ -139,12 +139,9 @@ FOR SHARE
 	if err = tx.QueryRowContext(ctx, `
 SELECT EXISTS (
   SELECT 1
-  FROM student st
-  JOIN exam_class ec
-    ON ec.tenant_id=st.tenant_id AND ec.class_id=st.class_id
-    AND ec.exam_id=$2::uuid AND ec.deleted_at IS NULL
-  WHERE st.tenant_id=$1 AND st.id=$3::uuid
-    AND st.status='active' AND st.deleted_at IS NULL
+  FROM exam_candidate_snapshot candidate
+  WHERE candidate.tenant_id=$1 AND candidate.exam_id=$2::uuid
+    AND candidate.student_id=$3::uuid
 )
 `, tenantID, current.ExamID, current.StudentID).Scan(&inRoster); err != nil {
 		return IssuedStudentBarcodes{}, err

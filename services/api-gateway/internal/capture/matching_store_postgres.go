@@ -12,11 +12,10 @@ func (s *PostgresStore) GetMatchingQueue(ctx context.Context, tenantID, batchID 
 	if err := s.db.QueryRowContext(ctx, `SELECT exam_id::text FROM capture_batch WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL`, tenantID, batchID).Scan(&queue.ExamID); err != nil {
 		return MatchingQueue{}, mapNotFound(err)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT st.id::text,st.student_no,st.name,st.class_id::text,sc.name
-FROM exam_class ec JOIN student st ON st.tenant_id=ec.tenant_id AND st.class_id=ec.class_id
-JOIN school_class sc ON sc.tenant_id=st.tenant_id AND sc.id=st.class_id
-WHERE ec.tenant_id=$1 AND ec.exam_id=$2::uuid AND ec.deleted_at IS NULL AND st.deleted_at IS NULL AND st.status='active'
-ORDER BY sc.name,st.student_no`, tenantID, queue.ExamID)
+	rows, err := s.db.QueryContext(ctx, `SELECT student_id::text,student_no_snapshot,student_name_snapshot,class_id_snapshot::text,class_name_snapshot
+FROM exam_candidate_snapshot
+WHERE tenant_id=$1 AND exam_id=$2::uuid
+ORDER BY class_name_snapshot,student_no_snapshot`, tenantID, queue.ExamID)
 	if err != nil {
 		return MatchingQueue{}, err
 	}
@@ -131,7 +130,7 @@ func (s *PostgresStore) applyStudentIdentity(ctx context.Context, tenantID, subm
 	candidateNo := ""
 	candidateName := ""
 	if status == "matched" {
-		err = tx.QueryRowContext(ctx, `SELECT st.student_no,st.name FROM student st JOIN exam_class ec ON ec.tenant_id=st.tenant_id AND ec.class_id=st.class_id AND ec.exam_id=$2::uuid AND ec.deleted_at IS NULL WHERE st.tenant_id=$1 AND st.id=$3::uuid AND st.status='active' AND st.deleted_at IS NULL`, tenantID, examID, studentID).Scan(&candidateNo, &candidateName)
+		err = tx.QueryRowContext(ctx, `SELECT student_no_snapshot,student_name_snapshot FROM exam_candidate_snapshot WHERE tenant_id=$1 AND exam_id=$2::uuid AND student_id=$3::uuid`, tenantID, examID, studentID).Scan(&candidateNo, &candidateName)
 		if err != nil {
 			return MatchingSubmission{}, mapNotFound(err)
 		}

@@ -26,6 +26,17 @@ type User struct {
 	Roles       []string       `json:"roles"`
 	Permissions []string       `json:"permissions"`
 	DataScope   map[string]any `json:"data_scope"`
+	// OrganizationScope is the resolved, server-trusted organization boundary.
+	// DataScope remains the persisted RBAC declaration; clients should use this
+	// projection when deciding which schools, grades and classes are selectable.
+	OrganizationScope *OrganizationScope `json:"organization_scope,omitempty"`
+}
+
+type OrganizationScope struct {
+	TenantWide bool     `json:"tenant_wide"`
+	SchoolIDs  []string `json:"school_ids"`
+	GradeIDs   []string `json:"grade_ids"`
+	ClassIDs   []string `json:"class_ids"`
 }
 
 type UserWithPassword struct {

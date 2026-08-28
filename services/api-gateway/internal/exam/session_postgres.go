@@ -10,7 +10,7 @@ import (
 )
 
 func (s *PostgresStore) CreateExamSession(ctx context.Context, scope auth.AccessScope, createdBy string, input CreateSessionInput) (ExamSession, error) {
-	if !scopeAllowsRequestedClasses(scope, input.SchoolID, input.ClassIDs) {
+	if !scopeAllowsRequestedClasses(scope, input.SchoolID, input.ClassIDs) || !scopeAllowsRequestedGrade(scope, input.GradeID) {
 		return ExamSession{}, ErrScopeForbidden
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -23,19 +23,23 @@ func (s *PostgresStore) CreateExamSession(ctx context.Context, scope auth.Access
 	if input.AppealEnabled != nil {
 		appealEnabled = *input.AppealEnabled
 	}
+	templateVersion, err := requireExamTemplate(ctx, tx, scope, input.TemplateID)
+	if err != nil {
+		return ExamSession{}, err
+	}
 	row := tx.QueryRowContext(ctx, `
-INSERT INTO exam_session (tenant_id, school_id, grade_id, name, exam_type, grading_mode, appeal_enabled, publish_policy, created_by)
-SELECT $1, s.id, g.id, $4, $5, $6, $7, $8, $9
+INSERT INTO exam_session (tenant_id, school_id, grade_id, exam_template_id, exam_template_version, name, exam_type, grading_mode, appeal_enabled, publish_policy, created_by)
+SELECT $1, s.id, g.id, NULLIF($4,'')::uuid, NULLIF($5,0), $6, $7, $8, $9, $10, $11
 FROM school s
 JOIN grade g ON g.tenant_id = s.tenant_id AND g.school_id = s.id
 WHERE s.tenant_id = $1 AND s.id::text = $2 AND g.id::text = $3
   AND s.deleted_at IS NULL AND g.deleted_at IS NULL AND g.status = 'active'
-RETURNING id::text, tenant_id::text, school_id::text, grade_id::text, name, exam_type,
+RETURNING id::text, tenant_id::text, school_id::text, grade_id::text, COALESCE(exam_template_id::text,''), COALESCE(exam_template_version,0), name, exam_type,
           status, grading_mode, appeal_enabled, publish_policy, created_by::text,
           revision, created_at, updated_at
-`, scope.TenantID, input.SchoolID, input.GradeID, input.Name, input.ExamType, input.GradingMode, appealEnabled, input.PublishPolicy, createdBy)
+`, scope.TenantID, input.SchoolID, input.GradeID, input.TemplateID, templateVersion, input.Name, input.ExamType, input.GradingMode, appealEnabled, input.PublishPolicy, createdBy)
 	var session ExamSession
-	if err := row.Scan(&session.ID, &session.TenantID, &session.SchoolID, &session.GradeID, &session.Name, &session.ExamType, &session.Status, &session.GradingMode, &session.AppealEnabled, &session.PublishPolicy, &session.CreatedBy, &session.Revision, &session.CreatedAt, &session.UpdatedAt); err != nil {
+	if err := row.Scan(&session.ID, &session.TenantID, &session.SchoolID, &session.GradeID, &session.TemplateID, &session.TemplateVersion, &session.Name, &session.ExamType, &session.Status, &session.GradingMode, &session.AppealEnabled, &session.PublishPolicy, &session.CreatedBy, &session.Revision, &session.CreatedAt, &session.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ExamSession{}, ErrInvalidInput
 		}
@@ -72,6 +76,9 @@ RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, 
 		if err := s.replaceClasses(ctx, tx, scope, child.ID, classIDs); err != nil {
 			return ExamSession{}, err
 		}
+		if err := s.refreshExamCandidateSnapshot(ctx, tx, scope.TenantID, child.ID); err != nil {
+			return ExamSession{}, err
+		}
 		child.ClassIDs = cloneStrings(classIDs)
 		questionOrder := 1
 		for sectionOrder, section := range subject.Sections {
@@ -99,6 +106,10 @@ VALUES ($1, $2, $3, $4, $5, '', '[]', $6, 'draft')
 		return ExamSession{}, err
 	}
 	return session, nil
+}
+
+func scopeAllowsRequestedGrade(scope auth.AccessScope, gradeID string) bool {
+	return scope.TenantWide || len(scope.GradeIDs) == 0 || scope.AllowsGrade(gradeID)
 }
 
 func requireSessionClasses(ctx context.Context, tx *sql.Tx, tenantID, schoolID, gradeID string, classIDs []string) error {

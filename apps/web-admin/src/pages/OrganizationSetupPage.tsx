@@ -255,12 +255,13 @@ export function OrganizationSetupPage({ onNavigate }: { onNavigate: (path: strin
         );
       case 1:
         return (
-          <Form key="grade" layout="vertical" preserve={false} onFinish={(values) => void runSave(() => createGrade(values), "学年与年级已保存")} initialValues={{ academic_year: `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`, level_no: 1 }}>
+          <Form key="grade" layout="vertical" preserve={false} onFinish={(values) => void runSave(() => createGrade(values), "学年与年级已保存")} initialValues={{ academic_year: `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`, education_stage: "senior", level_no: 10 }}>
             <h2>学年与年级</h2>
             <p className="section-copy">年级会用于班级和考试学生范围。</p>
             {data.grades.length ? <Alert type="success" showIcon message={`已有 ${data.grades.length} 个年级`} /> : null}
             <div className="form-grid compact-form-grid">
               <Form.Item name="school_id" label="所属机构" rules={[{ required: true }]}><Select options={data.schools.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item>
+              <Form.Item name="education_stage" label="学段" rules={[{ required: true }]}><Select options={[{ value: "junior", label: "初中" }, { value: "senior", label: "高中" }]} /></Form.Item>
               <Form.Item name="academic_year" label="学年" rules={[{ required: true }]}><Input /></Form.Item>
               <Form.Item name="name" label="年级名称" rules={[{ required: true }]}><Input placeholder="高一年级" /></Form.Item>
               <Form.Item name="level_no" label="年级序号" rules={[{ required: true }]}><InputNumber min={1} max={20} /></Form.Item>

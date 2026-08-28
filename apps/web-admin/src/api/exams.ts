@@ -45,6 +45,7 @@ export interface ExamPayload {
 export interface ExamSessionPayload {
   school_id: string;
   grade_id: string;
+  template_id?: string;
   name: string;
   exam_type: string;
   grading_mode: string;
@@ -65,6 +66,8 @@ export interface ExamSession {
   id: string;
   school_id: string;
   grade_id: string;
+  template_id?: string;
+  template_version?: number;
   name: string;
   exam_type: string;
   status: string;

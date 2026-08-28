@@ -51,6 +51,9 @@ RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type, 
 	if err := s.replaceClasses(ctx, tx, scope, out.ID, input.ClassIDs); err != nil {
 		return Exam{}, err
 	}
+	if err := s.refreshExamCandidateSnapshot(ctx, tx, tenantID, out.ID); err != nil {
+		return Exam{}, err
+	}
 	out.ClassIDs = cloneStrings(input.ClassIDs)
 	if err := tx.Commit(); err != nil {
 		return Exam{}, err
@@ -198,6 +201,9 @@ RETURNING id::text, tenant_id::text, school_id::text, name, subject, exam_type,
 	}
 	if input.ClassIDs != nil {
 		if err := s.replaceClasses(ctx, tx, scope, id, *input.ClassIDs); err != nil {
+			return Exam{}, err
+		}
+		if err := s.refreshExamCandidateSnapshot(ctx, tx, scope.TenantID, id); err != nil {
 			return Exam{}, err
 		}
 		out.ClassIDs = cloneStrings(*input.ClassIDs)
