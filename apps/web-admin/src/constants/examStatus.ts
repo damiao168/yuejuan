@@ -25,7 +25,11 @@ export const examSubjectOptions = [
 ];
 
 export function examSubjectLabel(subject: string): string {
-  return examSubjectOptions.find((item) => item.value === subject)?.label ?? subject;
+  const canonicalLabels: Record<string, string> = {
+    mathematics: "数学",
+    ethics_politics: "政治"
+  };
+  return canonicalLabels[subject] ?? examSubjectOptions.find((item) => item.value === subject)?.label ?? subject;
 }
 
 export function examStatusTone(status: string): StatusTone {

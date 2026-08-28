@@ -14,11 +14,16 @@ import (
 )
 
 type Dependencies struct {
-	Exams       exam.Store
-	Submissions submission.Store
-	Reviews     review.Store
-	Audits      auth.Store
-	Now         func() time.Time
+	Exams         exam.Store
+	Submissions   submission.Store
+	Reviews       review.Store
+	Audits        auth.Store
+	Organizations OrganizationSummaryStore
+	Now           func() time.Time
+}
+
+type OrganizationSummaryStore interface {
+	DashboardOrganizationSummary(ctx context.Context, tenantID string, scope auth.AccessScope) (OrganizationStatistics, error)
 }
 
 type Service struct {
@@ -51,6 +56,17 @@ func (s *Service) Summary(ctx context.Context, user auth.User, accessScope auth.
 		ActiveExams:      []ActiveExam{},
 		RecentActivities: []RecentActivity{},
 		Warnings:         []string{},
+	}
+
+	if s.deps.Organizations == nil {
+		result.Warnings = append(result.Warnings, "成员基础数据暂时无法统计")
+	} else {
+		organizationStatistics, organizationErr := s.deps.Organizations.DashboardOrganizationSummary(ctx, user.TenantID, accessScope)
+		if organizationErr != nil {
+			result.Warnings = append(result.Warnings, "成员基础数据暂时无法统计")
+		} else {
+			result.OrganizationStatistics = organizationStatistics
+		}
 	}
 
 	exams, err := s.deps.Exams.ListExams(ctx, accessScope, exam.ListFilter{SchoolID: result.Scope.SchoolID})

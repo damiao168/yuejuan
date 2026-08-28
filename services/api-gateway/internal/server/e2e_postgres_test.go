@@ -18,6 +18,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/capture"
 	"edugrade-enterprise/services/api-gateway/internal/config"
+	"edugrade-enterprise/services/api-gateway/internal/dashboard"
 	"edugrade-enterprise/services/api-gateway/internal/evidence"
 	"edugrade-enterprise/services/api-gateway/internal/exam"
 	"edugrade-enterprise/services/api-gateway/internal/files"
@@ -267,6 +268,7 @@ func e2ePostgresRouter(db *sql.DB) http.Handler {
 		score.NewPostgresStore(db),
 		appeal.NewPostgresStore(db),
 		capture.NewPostgresStoreWithBarcodeKeyring(db, e2eBarcodeKeyring()),
+		dashboard.NewPostgresOrganizationSummaryStore(db),
 	)
 }
 

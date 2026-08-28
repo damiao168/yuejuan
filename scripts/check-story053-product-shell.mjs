@@ -29,9 +29,14 @@ const checks = [
     includes: ["GET /api/v1/users", "POST /api/v1/users", "GET /api/v1/roles", "requireOrgManage"]
   },
   {
-    name: "role home",
+    name: "role home shell",
     file: "apps/web-admin/src/pages/DashboardPage.tsx",
-    includes: ["我的待办", "进行中的考试", "user.roles.includes(\"platform_admin\")", "getDashboardSummary"]
+    includes: ["user.roles.includes(\"platform_admin\")", "getDashboardSummary", "SchoolDashboard"]
+  },
+  {
+    name: "school operations workbench",
+    file: "apps/web-admin/src/features/dashboard/SchoolDashboard.tsx",
+    includes: ["成员管理", "考试管理", "阅卷与成绩", "organizationStatistics", "workItems"]
   },
   {
     name: "organization activation",
@@ -41,7 +46,7 @@ const checks = [
   {
     name: "exam workspace",
     file: "apps/web-admin/src/features/exams/workspace/ExamWorkspaceLayout.tsx",
-    includes: ["WorkspaceStageRail", "stage_progress", "data.exam_id", "当前下一步", "RiskBanner"]
+    includes: ["WorkspaceStageRail", "ExamStageIndicator", "QualityIndicator", "data.exam_id", "当前下一步"]
   },
   {
     name: "URL exam context",

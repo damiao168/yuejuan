@@ -9,8 +9,8 @@ import { workspaceLabel } from "../workspaces/registry";
 import { MockBadge } from "./MockBadge";
 
 const { Header, Sider, Content } = Layout;
-const DESKTOP_NAVIGATION_WIDTH = 192;
-const DESKTOP_NAVIGATION_COLLAPSED_WIDTH = 64;
+const DESKTOP_NAVIGATION_WIDTH = 176;
+const DESKTOP_NAVIGATION_COLLAPSED_WIDTH = 56;
 const MOBILE_NAVIGATION_WIDTH = 280;
 const NAVIGATION_COLLAPSED_STORAGE_KEY = "edugrade.navigation.collapsed";
 
@@ -145,7 +145,7 @@ export function AppLayout({
           colorError: "#ff4d4f",
           colorInfo: "#13c2c2",
           borderRadius: 6,
-          fontFamily: "Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', Arial, sans-serif"
         }
       }}
     >

@@ -20,6 +20,16 @@ type Statistics struct {
 	FinalizedExamCount                int `json:"finalized_exam_count"`
 }
 
+type OrganizationStatistics struct {
+	ActiveStudentCount     int `json:"active_student_count"`
+	GradeCount             int `json:"grade_count"`
+	ClassCount             int `json:"class_count"`
+	TeacherCount           int `json:"teacher_count"`
+	GraderCount            int `json:"grader_count"`
+	EmptyClassCount        int `json:"empty_class_count"`
+	UnassignedTeacherCount int `json:"unassigned_teacher_count"`
+}
+
 type BlockingIssue struct {
 	Code          string `json:"code"`
 	Label         string `json:"label"`
@@ -53,11 +63,12 @@ type RecentActivity struct {
 }
 
 type Summary struct {
-	Scope            Scope            `json:"scope"`
-	UpdatedAt        time.Time        `json:"updated_at"`
-	Statistics       Statistics       `json:"statistics"`
-	BlockingIssues   []BlockingIssue  `json:"blocking_issues"`
-	ActiveExams      []ActiveExam     `json:"active_exams"`
-	RecentActivities []RecentActivity `json:"recent_activities"`
-	Warnings         []string         `json:"warnings"`
+	Scope                  Scope                  `json:"scope"`
+	UpdatedAt              time.Time              `json:"updated_at"`
+	OrganizationStatistics OrganizationStatistics `json:"organization_statistics"`
+	Statistics             Statistics             `json:"statistics"`
+	BlockingIssues         []BlockingIssue        `json:"blocking_issues"`
+	ActiveExams            []ActiveExam           `json:"active_exams"`
+	RecentActivities       []RecentActivity       `json:"recent_activities"`
+	Warnings               []string               `json:"warnings"`
 }

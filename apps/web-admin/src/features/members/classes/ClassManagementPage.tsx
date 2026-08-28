@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Form, Input, InputNumber, Modal, Select } from "antd";
+import { App, Button, Form, Input, InputNumber, Modal, Select } from "antd";
 import type { TableColumnsType } from "antd";
 import { Plus, RefreshCw } from "lucide-react";
 import { createClass, createGrade, listClasses, listGrades, listSchools, listStudents, type Grade, type School, type SchoolClass, type Student } from "../../../api/org";
@@ -52,7 +52,6 @@ export function ClassManagementPage() {
     { title: "班级代码", dataIndex: "code", width: 140 },
     { title: "班级名称", dataIndex: "name" },
     { title: "学生数", width: 110, render: (_, item) => counts.has(item.id) ? `${counts.get(item.id)} 人` : "-" },
-    { title: "班主任", width: 150, render: () => <span className="muted-cell">尚未配置</span> },
     { title: "状态", dataIndex: "status", width: 100, render: (status: string) => <StatusTag tone={status === "active" ? "success" : "neutral"}>{status === "active" ? "启用" : "停用"}</StatusTag> }
   ];
 
@@ -73,7 +72,6 @@ export function ClassManagementPage() {
   if (error && !grades.length) return <ErrorState message={error} onRetry={() => void load()} />;
   return <div className="member-management-page">
     <section className="member-management-heading"><div><h1>年级与班级</h1><p>维护考试学生范围所依赖的年级、班级和班级代码。</p></div><div><Button icon={<RefreshCw size={15} />} loading={loading} onClick={() => void load()}>刷新</Button><Button onClick={() => setDialog("grade")}>新增年级</Button><Button type="primary" icon={<Plus size={15} />} disabled={!grades.length} onClick={() => setDialog("class")}>新增班级</Button></div></section>
-    <Alert type="info" showIcon message="当前后端支持新增年级、班级和教师班级绑定；编辑、停用及班主任读取接口尚未提供。" />
     <div className="class-management-layout"><aside><h2>年级</h2>{grades.map((grade) => <button type="button" key={grade.id} className={grade.id === gradeId ? "active" : ""} onClick={() => setGradeId(grade.id)}><strong>{grade.name}</strong><span>{grade.academic_year}</span></button>)}</aside><section className="member-table-section"><div className="section-head"><div><h2>{selectedGrade?.name ?? "班级"}</h2><p>{selectedGrade?.academic_year ?? "请选择年级"}</p></div><span>{visibleClasses.length} 个班级</span></div><ResponsiveTable rowKey="id" size="small" columns={columns} dataSource={visibleClasses} pagination={false} /></section></div>
     <Modal title="新增年级" open={dialog === "grade"} footer={null} destroyOnHidden onCancel={() => setDialog(null)}><Form layout="vertical" onFinish={(values) => void submitGrade(values)} initialValues={{ school_id: schools[0]?.id, academic_year: `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`, level_no: 10 }}><Form.Item name="school_id" label="学校" rules={[{ required: true }]}><Select options={schools.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item><Form.Item name="academic_year" label="学年" rules={[{ required: true, message: "请输入学年" }]}><Input /></Form.Item><Form.Item name="name" label="年级名称" rules={[{ required: true, message: "请输入年级名称" }]}><Input placeholder="例如：高二" /></Form.Item><Form.Item name="level_no" label="年级序号" rules={[{ required: true, message: "请输入年级序号" }]}><InputNumber min={1} max={20} /></Form.Item><Button type="primary" htmlType="submit" loading={saving}>新增年级</Button></Form></Modal>
     <Modal title="新增班级" open={dialog === "class"} footer={null} destroyOnHidden onCancel={() => setDialog(null)}><Form layout="vertical" onFinish={(values) => void submitClass(values)} initialValues={{ school_id: selectedGrade?.school_id, grade_id: gradeId }}><Form.Item name="school_id" hidden><Input /></Form.Item><Form.Item name="grade_id" label="所属年级" rules={[{ required: true }]}><Select options={grades.map((item) => ({ value: item.id, label: `${item.name} · ${item.academic_year}` }))} /></Form.Item><Form.Item name="name" label="班级名称" rules={[{ required: true, message: "请输入班级名称" }]}><Input placeholder="例如：高二（1）班" /></Form.Item><Form.Item name="code" label="班级代码" extra="学生 CSV 导入会使用班级代码进行匹配。" rules={[{ required: true, message: "请输入班级代码" }]}><Input placeholder="例如：G11-01" /></Form.Item><Button type="primary" htmlType="submit" loading={saving}>新增班级</Button></Form></Modal>

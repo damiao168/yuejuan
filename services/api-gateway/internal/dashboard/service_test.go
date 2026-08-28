@@ -12,6 +12,15 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/submission"
 )
 
+type organizationSummaryStub struct {
+	statistics OrganizationStatistics
+	err        error
+}
+
+func (s organizationSummaryStub) DashboardOrganizationSummary(_ context.Context, _ string, _ auth.AccessScope) (OrganizationStatistics, error) {
+	return s.statistics, s.err
+}
+
 func TestSummaryUsesEveryTenantExamAndKeepsUnitsSeparate(t *testing.T) {
 	const tenantID = "tenant-school"
 	exams := exam.NewMemoryStore()
@@ -48,7 +57,8 @@ func TestSummaryUsesEveryTenantExamAndKeepsUnitsSeparate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	service := NewService(Dependencies{Exams: exams, Submissions: submissions, Reviews: reviews, Audits: audits, Now: func() time.Time { return now }})
+	organizationStatistics := OrganizationStatistics{ActiveStudentCount: 1326, GradeCount: 6, ClassCount: 32, TeacherCount: 86, GraderCount: 42}
+	service := NewService(Dependencies{Exams: exams, Submissions: submissions, Reviews: reviews, Audits: audits, Organizations: organizationSummaryStub{statistics: organizationStatistics}, Now: func() time.Time { return now }})
 	summary, err := service.Summary(context.Background(), auth.User{
 		ID: "admin-1", TenantID: tenantID, Roles: []string{"school_admin"},
 		DataScope: map[string]any{"school_admin": map[string]any{"school_id": "school-1"}},
@@ -68,12 +78,15 @@ func TestSummaryUsesEveryTenantExamAndKeepsUnitsSeparate(t *testing.T) {
 	if summary.Scope.TenantID != tenantID || summary.Scope.SchoolID != "school-1" || !summary.UpdatedAt.Equal(now) {
 		t.Fatalf("unexpected scope or timestamp: %#v", summary)
 	}
+	if summary.OrganizationStatistics != organizationStatistics {
+		t.Fatalf("unexpected organization statistics: %#v", summary.OrganizationStatistics)
+	}
 }
 
 func TestPlatformAdminCannotReadSchoolDashboard(t *testing.T) {
 	service := NewService(Dependencies{
 		Exams: exam.NewMemoryStore(), Submissions: submission.NewMemoryStore(),
-		Reviews: review.NewMemoryStore(), Audits: auth.NewMemoryStore(),
+		Reviews: review.NewMemoryStore(), Audits: auth.NewMemoryStore(), Organizations: organizationSummaryStub{},
 	})
 	if _, err := service.Summary(context.Background(), auth.User{TenantID: auth.PlatformTenantID, Roles: []string{"platform_admin"}}, auth.AccessScope{TenantID: auth.PlatformTenantID, IsPlatform: true}); err == nil {
 		t.Fatal("platform administrator must not enter a school dashboard")

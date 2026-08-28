@@ -13,6 +13,16 @@ export interface DashboardStatistics {
   finalized_exam_count: number;
 }
 
+export interface DashboardOrganizationStatistics {
+  active_student_count: number;
+  grade_count: number;
+  class_count: number;
+  teacher_count: number;
+  grader_count: number;
+  empty_class_count: number;
+  unassigned_teacher_count: number;
+}
+
 export interface DashboardBlockingIssue {
   code: string;
   label: string;
@@ -51,6 +61,7 @@ export interface DashboardSummary {
     school_id?: string;
   };
   updated_at: string;
+  organization_statistics: DashboardOrganizationStatistics;
   statistics: DashboardStatistics;
   blocking_issues: DashboardBlockingIssue[];
   active_exams: DashboardActiveExam[];

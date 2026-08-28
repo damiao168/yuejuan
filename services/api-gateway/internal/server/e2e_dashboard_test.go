@@ -25,6 +25,14 @@ func TestDashboardSummaryE2EWithPostgresTestDatabase(t *testing.T) {
 	school := e2ePostJSON(t, router, http.MethodPost, "/api/v1/schools", adminToken,
 		`{"name":"Dashboard School","code":"dashboard-`+suffix+`"}`, http.StatusCreated)["school"].(map[string]any)
 	schoolID := e2eString(t, school, "id")
+	grade := e2ePostJSON(t, router, http.MethodPost, "/api/v1/grades", adminToken,
+		`{"school_id":"`+schoolID+`","name":"Dashboard Grade","level_no":11,"academic_year":"2026"}`, http.StatusCreated)["grade"].(map[string]any)
+	gradeID := e2eString(t, grade, "id")
+	class := e2ePostJSON(t, router, http.MethodPost, "/api/v1/classes", adminToken,
+		`{"school_id":"`+schoolID+`","grade_id":"`+gradeID+`","name":"Dashboard Class","code":"dashboard-class-`+suffix+`"}`, http.StatusCreated)["class"].(map[string]any)
+	classID := e2eString(t, class, "id")
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken,
+		`{"school_id":"`+schoolID+`","class_id":"`+classID+`","student_no":"dashboard-student-`+suffix+`","name":"Dashboard Student"}`, http.StatusCreated)
 
 	for index := 0; index < 11; index++ {
 		e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams", adminToken,
@@ -42,6 +50,10 @@ func TestDashboardSummaryE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	if summary["updated_at"] == "" {
 		t.Fatal("dashboard summary must expose updated_at")
+	}
+	organizationStatistics := summary["organization_statistics"].(map[string]any)
+	if int(organizationStatistics["active_student_count"].(float64)) < 1 || int(organizationStatistics["grade_count"].(float64)) < 1 || int(organizationStatistics["class_count"].(float64)) < 1 {
+		t.Fatalf("dashboard must aggregate organization data in PostgreSQL: %#v", organizationStatistics)
 	}
 
 	e2eGetJSON(t, router, "/api/v1/dashboard/summary", platformToken, http.StatusForbidden)

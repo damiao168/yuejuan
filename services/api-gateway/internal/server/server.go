@@ -282,7 +282,7 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 	})
 
 	loginLimiter := auth.NewRedisLoginFailureLimiter(redisChecker.Client(), cfg.Auth.LoginFailureLimit, cfg.Auth.LoginFailureWindow)
-	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, reviewAnnotationStore, goldPaperStore, calibrationStore, answerGroupStore, backmarkStore, regradeStore, graderDriftStore, seedQualityStore, scoreStore, scoreReleaseStore, releaseGateStore, studentPortalStore, appealStore, publishedQuestionAppealStore, reportStore, captureStore, captureUploadStore, processingStore, modelGovernanceStore, assessmentStore, eligibilityStore, gradingEvaluationStore, modelCalibrationStore, aiDisagreementStore, idempotencyStore, mathUnderstandingStore, mathCorrectionStore, mathPilotGateStore, fileReconciler, loginLimiter, metricsRegistry, qualityDashboardService)
+	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, reviewAnnotationStore, goldPaperStore, calibrationStore, answerGroupStore, backmarkStore, regradeStore, graderDriftStore, seedQualityStore, scoreStore, scoreReleaseStore, releaseGateStore, studentPortalStore, appealStore, publishedQuestionAppealStore, reportStore, captureStore, captureUploadStore, processingStore, modelGovernanceStore, assessmentStore, eligibilityStore, gradingEvaluationStore, modelCalibrationStore, aiDisagreementStore, idempotencyStore, mathUnderstandingStore, mathCorrectionStore, mathPilotGateStore, fileReconciler, loginLimiter, metricsRegistry, qualityDashboardService, dashboard.NewPostgresOrganizationSummaryStore(postgresDB))
 	cleanup := func() {
 		for i := len(cleanups) - 1; i >= 0; i-- {
 			_ = cleanups[i]()
@@ -310,6 +310,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	var metricsRegistry *observability.Registry
 	var fileReconciliationReader files.ReconciliationReader
 	var qualityDashboardService *qualitydashboard.Service
+	var dashboardOrganizationStore dashboard.OrganizationSummaryStore
 	for _, optionalStore := range optionalStores {
 		if limiter, ok := optionalStore.(auth.LoginLimiter); ok && limiter != nil {
 			loginLimiter = limiter
@@ -520,6 +521,10 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 			if store != nil {
 				qualityDashboardService = store
 			}
+		case dashboard.OrganizationSummaryStore:
+			if store != nil {
+				dashboardOrganizationStore = store
+			}
 		}
 	}
 	h.WithWorkerRuntimeStore(workerRuntimeStore)
@@ -625,10 +630,11 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 		Exams: examStore, Papers: paperStore, Submissions: submissionStore, Reviews: reviewStore, Assessments: assessmentStore, Processing: processingService,
 	})
 	dashboardHandler := dashboard.NewHandler(dashboard.Dependencies{
-		Exams:       examStore,
-		Submissions: submissionStore,
-		Reviews:     reviewStore,
-		Audits:      authStore,
+		Exams:         examStore,
+		Submissions:   submissionStore,
+		Reviews:       reviewStore,
+		Audits:        authStore,
+		Organizations: dashboardOrganizationStore,
 	})
 	authenticate := auth.AuthMiddleware(authStore, auth.HandlerOptions{CookieName: cfg.Auth.SessionCookieName})
 	environment := strings.ToLower(strings.TrimSpace(cfg.Service.Environment))
