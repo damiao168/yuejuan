@@ -3,7 +3,7 @@ import { Alert, App, Button, Checkbox, Progress, Space } from "antd";
 import { ArrowRight, CheckCircle2, CircleAlert, ClipboardCheck, Play, RefreshCw, Save } from "lucide-react";
 import { ApiClientError } from "../api/client";
 import { confirmExamReadiness, getExamReadiness, startExamCollection, type ExamReadiness } from "../api/configuration";
-import { getExam, updateExam, type Exam } from "../api/exams";
+import { getExam, refreshExamCandidates, updateExam, type Exam } from "../api/exams";
 import { listClasses, listGrades, type Grade, type SchoolClass } from "../api/org";
 import { ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
@@ -25,6 +25,7 @@ export function ExamStudentScopePage({ examId, canManage, onExamChanged }: { exa
   const [selected, setSelected] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+	const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string>();
 
   const load = useCallback(async () => {
@@ -55,12 +56,22 @@ export function ExamStudentScopePage({ examId, canManage, onExamChanged }: { exa
     } catch (saveError) { message.error(formatError(saveError)); } finally { setSaving(false); }
   }
 
+  async function syncCandidates() {
+	if (!exam) return;
+	setSyncing(true);
+	try {
+	  const { candidate_refresh: result } = await refreshExamCandidates(exam.id);
+	  const changes = [result.added_count ? `新增 ${result.added_count} 人` : "", result.removed_count ? `移除 ${result.removed_count} 人` : ""].filter(Boolean).join("，");
+	  message.success(changes ? `学生名单已同步：${changes}，当前 ${result.after_count} 人` : `学生名单已是最新，共 ${result.after_count} 人`);
+	} catch (syncError) { message.error(formatError(syncError)); } finally { setSyncing(false); }
+  }
+
   if (loading) return <LoadingState label="正在加载学生范围" />;
   if (error) return <ErrorState message={error} onRetry={() => void load()} />;
 
   return (
     <div className="preparation-page">
-      <section className="preparation-heading"><div><h2>学生范围</h2><p>选择参加本场考试的班级，学生名单以“组织与用户”中的在读学生为准。</p></div><Space><Button icon={<RefreshCw size={16} />} onClick={() => void load()}>刷新</Button><Button type="primary" icon={<Save size={16} />} disabled={!canManage || !changed || !selected.length} loading={saving} onClick={() => void save()}>保存范围</Button></Space></section>
+      <section className="preparation-heading"><div><h2>学生范围</h2><p>选择参加本场考试的班级；确认准备完成时，系统将按当前在读学籍生成最终冻结名单。</p></div><Space><Button icon={<RefreshCw size={16} />} disabled={!canManage || changed || !exam || !["draft", "configured"].includes(exam.status)} loading={syncing} onClick={() => void syncCandidates()}>同步学生名单</Button><Button type="primary" icon={<Save size={16} />} disabled={!canManage || !changed || !selected.length} loading={saving} onClick={() => void save()}>保存范围</Button></Space></section>
       {!classes.length ? <Alert type="warning" showIcon message="当前学校还没有班级" description="请先在组织与用户中创建年级、班级并导入学生。" /> : (
         <div className="class-scope-list">
           {grades.map((grade) => {

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"edugrade-enterprise/services/api-gateway/internal/exam"
 )
 
 func (s *PostgresStore) ListTemplates(ctx context.Context, tenantID string, examID string) ([]AnswerSheetTemplate, error) {
@@ -336,7 +338,10 @@ WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND status = 'passed'
 INSERT INTO exam_readiness_snapshot (tenant_id, exam_id, configuration_hash, status, checks, confirmed_by, confirmed_at)
 VALUES ($1::uuid, $2::uuid, $3, 'passed', $4::jsonb, $5::uuid, $6)
 RETURNING confirmed_at
-`, tenantID, examID, result.ConfigurationHash, checks, userID, now).Scan(&now); err != nil {
+	`, tenantID, examID, result.ConfigurationHash, checks, userID, now).Scan(&now); err != nil {
+		return ReadinessResult{}, err
+	}
+	if err := exam.RebuildCandidateSnapshot(ctx, tx, tenantID, examID); err != nil {
 		return ReadinessResult{}, err
 	}
 	updated, err := tx.ExecContext(ctx, `UPDATE exam SET status = 'ready', updated_at = now() WHERE tenant_id = $1::uuid AND id = $2::uuid AND status IN ('draft', 'configured', 'ready')`, tenantID, examID)

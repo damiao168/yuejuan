@@ -173,6 +173,20 @@ func (h *Handler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"exam": out})
 }
 
+func (h *Handler) RefreshCandidates(w http.ResponseWriter, r *http.Request) {
+	scope, ok := mustAccessScope(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.store.RefreshCandidateSnapshot(r.Context(), scope, r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "exam.candidates_refreshed", "exam", r.PathValue("id"), "refresh candidate snapshot from active enrollments")
+	httpx.JSON(w, http.StatusOK, map[string]any{"candidate_refresh": out})
+}
+
 func (h *Handler) Archive(w http.ResponseWriter, r *http.Request) {
 	scope, ok := mustAccessScope(w, r)
 	if !ok {
@@ -277,6 +291,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, "resource_version_conflict", "exam was changed by another user; refresh and retry")
 	case errors.Is(err, ErrScopeForbidden):
 		httpx.Error(w, r, http.StatusForbidden, "access_scope_forbidden", "exam is outside the assigned data scope")
+	case errors.Is(err, ErrCandidatesFrozen):
+		httpx.Error(w, r, http.StatusConflict, "exam_candidates_frozen", "candidate roster is frozen after readiness confirmation")
 	default:
 		httpx.Error(w, r, http.StatusInternalServerError, "exam_operation_failed", "exam operation failed")
 	}

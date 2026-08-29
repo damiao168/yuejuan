@@ -71,6 +71,16 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	school := e2ePostJSON(t, router, http.MethodPost, "/api/v1/schools", adminToken, `{"name":"Story 041 Synthetic School","code":"story041-`+suffix+`"}`, http.StatusCreated)["school"].(map[string]any)
 	schoolID := e2eString(t, school, "id")
+	evaluationKey := "pipeline-" + strings.ReplaceAll(suffix, ".", "-")
+	evaluation := e2ePostJSON(t, router, http.MethodPost, "/api/v1/grading-evaluations", adminToken, `{"key":"`+evaluationKey+`","display_name":"Pipeline attribution E2E","model_reference":"local-shadow-v1","prompt_version":"prompt-v1","rubric_version":"rubric-v1","dataset_reference":"authorized-pipeline-e2e","dataset_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`, http.StatusCreated)["evaluation_run"].(map[string]any)
+	evaluationID := e2eString(t, evaluation, "id")
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/grading-evaluations/"+evaluationID+"/observations", adminToken, `{"response_key":"aligned-1","response_fingerprint":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reference_kind":"gold","subject":"mathematics","archetype":"structured_steps","ocr_quality":"high","answer_length":"medium","rubric_complexity":"medium","reference_score":4,"model_score":4,"max_score":4,"page_match_correct":true,"crop_iou":0.97,"transcription_cer":0.01,"formula_exact":true,"rubric_criterion_agreement":1,"error_source":"none","needs_human_review":false,"reference_reviewer_count":1,"reference_adjudicated":false}`, http.StatusCreated)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/grading-evaluations/"+evaluationID+"/observations", adminToken, `{"response_key":"aligned-2","response_fingerprint":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","reference_kind":"human_adjudicated","subject":"mathematics","archetype":"structured_steps","ocr_quality":"low","answer_length":"long","rubric_complexity":"high","reference_score":3,"model_score":1,"max_score":4,"page_match_correct":true,"crop_iou":0.91,"transcription_cer":0.35,"formula_exact":false,"rubric_criterion_agreement":0.5,"error_source":"formula_recognition","needs_human_review":true,"reference_reviewer_count":2,"reference_adjudicated":true}`, http.StatusCreated)
+	qualitySummary := e2eGetJSON(t, router, "/api/v1/grading-evaluations/"+evaluationID+"/quality-summary", adminToken, http.StatusOK)["quality_summary"].(map[string]any)
+	if qualitySummary["sample_count"] != float64(2) || qualitySummary["risky_error_routing_recall"] != float64(1) || len(qualitySummary["error_attribution"].([]any)) != 1 {
+		t.Fatalf("pipeline evaluation must report aligned stage evidence and routed errors: %#v", qualitySummary)
+	}
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/grading-evaluations/"+evaluationID+"/complete", adminToken, `{}`, http.StatusOK)
 	grade := e2ePostJSON(t, router, http.MethodPost, "/api/v1/grades", adminToken, `{"school_id":"`+schoolID+`","name":"Story 041 Grade","level_no":10,"academic_year":"2026"}`, http.StatusCreated)["grade"].(map[string]any)
 	gradeID := e2eString(t, grade, "id")
 	var schoolHasSeniorStage bool

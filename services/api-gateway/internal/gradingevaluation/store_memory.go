@@ -86,7 +86,10 @@ func (s *MemoryStore) AddObservation(_ context.Context, tenantID, runID string, 
 	item := Observation{ID: s.id("eval-observation"), RunID: runID, ResponseKey: input.ResponseKey, ResponseFingerprint: input.ResponseFingerprint,
 		ReferenceKind: input.ReferenceKind, Subject: input.Subject, Archetype: input.Archetype, OCRQuality: input.OCRQuality,
 		AnswerLength: input.AnswerLength, RubricComplexity: input.RubricComplexity, ReferenceScore: input.ReferenceScore, ModelScore: input.ModelScore,
-		MaxScore: input.MaxScore, ReferenceScoreBand: scoreBand(input.ReferenceScore, input.MaxScore), ObservedAt: time.Now().UTC()}
+		MaxScore: input.MaxScore, ReferenceScoreBand: scoreBand(input.ReferenceScore, input.MaxScore), PageMatchCorrect: input.PageMatchCorrect,
+		CropIoU: input.CropIoU, TranscriptionCER: input.TranscriptionCER, FormulaExact: input.FormulaExact, RubricAgreement: input.RubricAgreement,
+		ErrorSource: input.ErrorSource, NeedsHumanReview: input.NeedsHumanReview, ReferenceReviewers: input.ReferenceReviewers,
+		ReferenceAdjudicated: input.ReferenceAdjudicated, ObservedAt: time.Now().UTC()}
 	s.observations[key] = append(s.observations[key], item)
 	return item, nil
 }

@@ -72,12 +72,16 @@ func (s *PostgresStore) AddObservation(ctx context.Context, tenantID, runID stri
 	row := s.db.QueryRowContext(ctx, `
 INSERT INTO grading_evaluation_observation(
  tenant_id,run_id,response_key,response_fingerprint,reference_kind,subject,archetype,ocr_quality,answer_length,rubric_complexity,
- reference_score,model_score,max_score,reference_score_band
-) VALUES($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+ reference_score,model_score,max_score,reference_score_band,page_match_correct,crop_iou,transcription_cer,formula_exact,
+ rubric_criterion_agreement,error_source,needs_human_review,reference_reviewer_count,reference_adjudicated
+) VALUES($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 RETURNING id::text,run_id::text,response_key,response_fingerprint,reference_kind,subject,archetype,ocr_quality,answer_length,rubric_complexity,
-          reference_score,model_score,max_score,reference_score_band,observed_at`,
+          reference_score,model_score,max_score,reference_score_band,page_match_correct,crop_iou,transcription_cer,formula_exact,
+          rubric_criterion_agreement,error_source,needs_human_review,reference_reviewer_count,reference_adjudicated,observed_at`,
 		tenantID, runID, input.ResponseKey, input.ResponseFingerprint, input.ReferenceKind, input.Subject, input.Archetype,
-		input.OCRQuality, input.AnswerLength, input.RubricComplexity, input.ReferenceScore, input.ModelScore, input.MaxScore, scoreBand(input.ReferenceScore, input.MaxScore))
+		input.OCRQuality, input.AnswerLength, input.RubricComplexity, input.ReferenceScore, input.ModelScore, input.MaxScore, scoreBand(input.ReferenceScore, input.MaxScore),
+		input.PageMatchCorrect, input.CropIoU, input.TranscriptionCER, input.FormulaExact, input.RubricAgreement, input.ErrorSource,
+		input.NeedsHumanReview, input.ReferenceReviewers, input.ReferenceAdjudicated)
 	item, err := scanObservation(row)
 	return item, mapStoreError(err)
 }
@@ -88,7 +92,8 @@ func (s *PostgresStore) ListObservations(ctx context.Context, tenantID, runID st
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id::text,run_id::text,response_key,response_fingerprint,reference_kind,subject,archetype,ocr_quality,answer_length,rubric_complexity,
-       reference_score,model_score,max_score,reference_score_band,observed_at
+       reference_score,model_score,max_score,reference_score_band,page_match_correct,crop_iou,transcription_cer,formula_exact,
+       rubric_criterion_agreement,error_source,needs_human_review,reference_reviewer_count,reference_adjudicated,observed_at
 FROM grading_evaluation_observation WHERE tenant_id=$1::uuid AND run_id=$2::uuid ORDER BY observed_at,id`, tenantID, runID)
 	if err != nil {
 		return nil, err
@@ -307,7 +312,9 @@ func scanObservation(row scanner) (Observation, error) {
 	err := row.Scan(
 		&item.ID, &item.RunID, &item.ResponseKey, &item.ResponseFingerprint, &item.ReferenceKind, &item.Subject, &item.Archetype,
 		&item.OCRQuality, &item.AnswerLength, &item.RubricComplexity, &item.ReferenceScore, &item.ModelScore, &item.MaxScore,
-		&item.ReferenceScoreBand, &item.ObservedAt,
+		&item.ReferenceScoreBand, &item.PageMatchCorrect, &item.CropIoU, &item.TranscriptionCER, &item.FormulaExact,
+		&item.RubricAgreement, &item.ErrorSource, &item.NeedsHumanReview, &item.ReferenceReviewers, &item.ReferenceAdjudicated,
+		&item.ObservedAt,
 	)
 	return item, err
 }

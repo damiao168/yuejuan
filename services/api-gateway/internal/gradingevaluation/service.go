@@ -42,10 +42,11 @@ func (s *Service) CreateRun(ctx context.Context, tenantID, actorID string, input
 }
 
 func (s *Service) AddObservation(ctx context.Context, tenantID, runID string, input AddObservationInput) (Observation, error) {
+	input = normalizeObservationInput(input)
 	if s.store == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(runID) == "" || !validObservationInput(input) {
 		return Observation{}, ErrInvalidInput
 	}
-	return s.store.AddObservation(ctx, tenantID, runID, normalizeObservationInput(input))
+	return s.store.AddObservation(ctx, tenantID, runID, input)
 }
 
 // Complete calculates every metric only from observations that were actually
@@ -114,6 +115,17 @@ func (s *Service) ListResponseDifficulty(ctx context.Context, tenantID, runID st
 	return s.store.ListResponseDifficulty(ctx, tenantID, runID)
 }
 
+func (s *Service) QualitySummary(ctx context.Context, tenantID, runID string) (QualitySummary, error) {
+	if s.store == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(runID) == "" {
+		return QualitySummary{}, ErrInvalidInput
+	}
+	items, err := s.store.ListObservations(ctx, tenantID, runID)
+	if err != nil {
+		return QualitySummary{}, err
+	}
+	return calculateQualitySummary(items), nil
+}
+
 func (s *Service) Invalidate(ctx context.Context, tenantID, runID, reason string) (Run, error) {
 	if s.store == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(runID) == "" || strings.TrimSpace(reason) == "" {
 		return Run{}, ErrInvalidInput
@@ -168,6 +180,7 @@ func sliceMetrics(runID string, observations []Observation, computedAt time.Time
 		{SliceOCRQuality, func(item Observation) string { return item.OCRQuality }},
 		{SliceAnswerLength, func(item Observation) string { return item.AnswerLength }},
 		{SliceRubricComplexity, func(item Observation) string { return item.RubricComplexity }},
+		{SliceErrorSource, func(item Observation) string { return string(item.ErrorSource) }},
 	}
 	result := make([]SliceMetric, 0, len(dimensions)*3)
 	for _, dimension := range dimensions {
@@ -188,6 +201,99 @@ func sliceMetrics(runID string, observations []Observation, computedAt time.Time
 		}
 	}
 	return result
+}
+
+func calculateQualitySummary(items []Observation) QualitySummary {
+	summary := QualitySummary{SampleCount: len(items), ErrorAttribution: []ErrorAttribution{}}
+	var pageCorrect, formulaCorrect, reviewed, risky, riskyReviewed int
+	var cropTotal, cerTotal, rubricTotal float64
+	attribution := map[ErrorSource]*ErrorAttribution{}
+	for _, item := range items {
+		if item.PageMatchCorrect != nil {
+			summary.PageMatchAccuracy.ObservedCount++
+			if *item.PageMatchCorrect {
+				pageCorrect++
+			}
+		}
+		if item.CropIoU != nil {
+			summary.MeanCropIoU.ObservedCount++
+			cropTotal += *item.CropIoU
+		}
+		if item.TranscriptionCER != nil {
+			summary.MeanTranscriptionCER.ObservedCount++
+			cerTotal += *item.TranscriptionCER
+		}
+		if item.FormulaExact != nil {
+			summary.FormulaExactRate.ObservedCount++
+			if *item.FormulaExact {
+				formulaCorrect++
+			}
+		}
+		if item.RubricAgreement != nil {
+			summary.MeanRubricCriterionAgreement.ObservedCount++
+			rubricTotal += *item.RubricAgreement
+		}
+		if item.NeedsHumanReview {
+			reviewed++
+		}
+		if item.ErrorSource != ErrorNone {
+			risky++
+			entry := attribution[item.ErrorSource]
+			if entry == nil {
+				entry = &ErrorAttribution{Source: item.ErrorSource}
+				attribution[item.ErrorSource] = entry
+			}
+			entry.Count++
+			if severeError(item) {
+				entry.SevereErrorCount++
+			}
+			if item.NeedsHumanReview {
+				entry.HumanReviewCount++
+				riskyReviewed++
+			}
+		}
+	}
+	summary.PageMatchAccuracy.Rate = ratioPointer(pageCorrect, summary.PageMatchAccuracy.ObservedCount)
+	summary.MeanCropIoU.Mean = meanPointer(cropTotal, summary.MeanCropIoU.ObservedCount)
+	summary.MeanTranscriptionCER.Mean = meanPointer(cerTotal, summary.MeanTranscriptionCER.ObservedCount)
+	summary.FormulaExactRate.Rate = ratioPointer(formulaCorrect, summary.FormulaExactRate.ObservedCount)
+	summary.MeanRubricCriterionAgreement.Mean = meanPointer(rubricTotal, summary.MeanRubricCriterionAgreement.ObservedCount)
+	if len(items) > 0 {
+		summary.HumanReviewRate = rounded(float64(reviewed) / float64(len(items)))
+	}
+	if risky > 0 {
+		summary.RiskyErrorRoutingRecall = rounded(float64(riskyReviewed) / float64(risky))
+	}
+	sources := make([]string, 0, len(attribution))
+	for source := range attribution {
+		sources = append(sources, string(source))
+	}
+	sort.Strings(sources)
+	for _, rawSource := range sources {
+		entry := attribution[ErrorSource(rawSource)]
+		if len(items) > 0 {
+			entry.Rate = rounded(float64(entry.Count) / float64(len(items)))
+		}
+		entry.HumanRoutingRecall = rounded(float64(entry.HumanReviewCount) / float64(entry.Count))
+		summary.ErrorAttribution = append(summary.ErrorAttribution, *entry)
+	}
+	return summary
+}
+
+func ratioPointer(numerator, denominator int) *float64 {
+	if denominator == 0 {
+		return nil
+	}
+	value := rounded(float64(numerator) / float64(denominator))
+	return &value
+}
+
+func meanPointer(total float64, count int) *float64 {
+	if count == 0 {
+		return nil
+	}
+	value := rounded(total / float64(count))
+	return &value
 }
 
 func calculateMetrics(items []Observation) Metrics {
@@ -358,7 +464,10 @@ func validObservationInput(input AddObservationInput) bool {
 		(input.RubricComplexity != "low" && input.RubricComplexity != "medium" && input.RubricComplexity != "high" && input.RubricComplexity != "unknown") ||
 		math.IsNaN(input.ReferenceScore) || math.IsNaN(input.ModelScore) || math.IsNaN(input.MaxScore) ||
 		math.IsInf(input.ReferenceScore, 0) || math.IsInf(input.ModelScore, 0) || math.IsInf(input.MaxScore, 0) ||
-		input.MaxScore <= 0 || input.ReferenceScore < 0 || input.ModelScore < 0 || input.ReferenceScore > input.MaxScore || input.ModelScore > input.MaxScore {
+		input.MaxScore <= 0 || input.ReferenceScore < 0 || input.ModelScore < 0 || input.ReferenceScore > input.MaxScore || input.ModelScore > input.MaxScore ||
+		!validOptionalRate(input.CropIoU) || !validOptionalRate(input.TranscriptionCER) || !validOptionalRate(input.RubricAgreement) ||
+		!validErrorSource(input.ErrorSource) || input.ReferenceReviewers < 0 ||
+		(input.ReferenceKind == ReferenceHumanAdjudicated && (input.ReferenceReviewers < 2 || !input.ReferenceAdjudicated)) {
 		return false
 	}
 	return true
@@ -374,7 +483,31 @@ func normalizeRunInput(input CreateRunInput) CreateRunInput {
 func normalizeObservationInput(input AddObservationInput) AddObservationInput {
 	input.ResponseKey, input.ResponseFingerprint = strings.TrimSpace(input.ResponseKey), strings.ToLower(strings.TrimSpace(input.ResponseFingerprint))
 	input.Subject, input.Archetype = strings.TrimSpace(input.Subject), strings.TrimSpace(input.Archetype)
+	if input.ReferenceReviewers == 0 {
+		input.ReferenceReviewers = 1
+	}
+	if input.ErrorSource == "" {
+		if math.Abs(input.ModelScore-input.ReferenceScore) < scoreEpsilon {
+			input.ErrorSource = ErrorNone
+		} else {
+			input.ErrorSource = ErrorUnattributed
+		}
+	}
 	return input
+}
+
+func validOptionalRate(value *float64) bool {
+	return value == nil || (!math.IsNaN(*value) && !math.IsInf(*value, 0) && *value >= 0 && *value <= 1)
+}
+
+func validErrorSource(value ErrorSource) bool {
+	switch value {
+	case "", ErrorNone, ErrorImageQuality, ErrorPageMatching, ErrorAnswerCrop, ErrorHandwritingOCR, ErrorFormulaRecognition,
+		ErrorAnswerStructuring, ErrorRubric, ErrorModelScoring, ErrorScoreCalculation, ErrorSystem, ErrorUnattributed:
+		return true
+	default:
+		return false
+	}
 }
 
 func validKey(value string) bool {

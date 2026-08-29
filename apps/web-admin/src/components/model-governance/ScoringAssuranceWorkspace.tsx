@@ -33,6 +33,7 @@ import {
   createModelCalibration,
   getAIEligibilityDecision,
   getAIEligibilityPolicy,
+  getGradingEvaluationQualitySummary,
   invalidateGradingEvaluation,
   invalidateModelCalibration,
   listAIHumanDisagreements,
@@ -53,6 +54,7 @@ import {
   type CreateModelCalibrationRequest,
   type EligibilityAxis,
   type GradingEvaluationResponseDifficulty,
+  type GradingEvaluationQualitySummary,
   type GradingEvaluationRun,
   type GradingEvaluationSliceMetric,
   type ModelCalibration,
@@ -81,6 +83,13 @@ const taxonomyOptions: Array<{ value: AIHumanDisagreementTaxonomy; label: string
   ["question_issue", "题目问题"], ["insufficient_evidence", "证据不足"], ["acceptable_variation", "可接受差异"]
 ].map(([value, label]) => ({ value: value as AIHumanDisagreementTaxonomy, label }));
 
+const errorSourceOptions = [
+  ["none", "无错误"], ["image_quality", "图像质量"], ["page_matching", "页面匹配"], ["answer_crop", "答题区域裁切"],
+  ["handwriting_ocr", "手写识别"], ["formula_recognition", "公式识别"], ["answer_structuring", "答案结构化"],
+  ["rubric", "Rubric"], ["model_scoring", "模型评分"], ["score_calculation", "分值计算"], ["system", "系统错误"],
+  ["unattributed", "待归因"]
+].map(([value, label]) => ({ value, label }));
+
 const defaultAxis: EligibilityAxis = {
   subject_code: "mathematics",
   education_stage: "junior",
@@ -106,6 +115,10 @@ function asErrorMessage(error: unknown) {
 
 function percentage(value: number) {
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function optionalPercentage(value?: number) {
+  return value === undefined ? "未采集" : percentage(value);
 }
 
 function shortID(value: string) {
@@ -155,6 +168,7 @@ export function ScoringAssuranceWorkspace({
   const [selectedCalibrationID, setSelectedCalibrationID] = useState<string>();
   const [sliceMetrics, setSliceMetrics] = useState<GradingEvaluationSliceMetric[]>([]);
   const [responseDifficulty, setResponseDifficulty] = useState<GradingEvaluationResponseDifficulty[]>([]);
+  const [qualitySummary, setQualitySummary] = useState<GradingEvaluationQualitySummary>();
   const [calibrationEvidence, setCalibrationEvidence] = useState<ModelCalibrationEvidence[]>([]);
   const [evaluationForm] = Form.useForm<EvaluationForm>();
   const [observationForm] = Form.useForm<ObservationForm>();
@@ -231,14 +245,16 @@ export function ScoringAssuranceWorkspace({
     if (!selectedEvaluationID || !canManageEvaluations) {
       setSliceMetrics([]);
       setResponseDifficulty([]);
+      setQualitySummary(undefined);
       return;
     }
     let active = true;
-    Promise.all([listGradingEvaluationSliceMetrics(selectedEvaluationID), listGradingEvaluationResponseDifficulty(selectedEvaluationID)])
-      .then(([slices, difficulty]) => {
+    Promise.all([listGradingEvaluationSliceMetrics(selectedEvaluationID), listGradingEvaluationResponseDifficulty(selectedEvaluationID), getGradingEvaluationQualitySummary(selectedEvaluationID)])
+      .then(([slices, difficulty, quality]) => {
         if (!active) return;
         setSliceMetrics(slices.slice_metrics);
         setResponseDifficulty(difficulty.response_difficulty);
+        setQualitySummary(quality.quality_summary);
       })
       .catch((error: unknown) => { if (active) message.error(asErrorMessage(error)); });
     return () => { active = false; };
@@ -502,6 +518,14 @@ export function ScoringAssuranceWorkspace({
             }} disabled={selectedEvaluation.status !== "completed"}>基于评测创建校准</Button>
           </Space>
           <div className="model-assurance-metrics">
+            <section><h4>全链路质量</h4>{qualitySummary ? <><Descriptions size="small" column={1} items={[
+              { key: "page", label: "页面匹配", children: `${optionalPercentage(qualitySummary.page_match_accuracy.rate)} · n=${qualitySummary.page_match_accuracy.observed_count}` },
+              { key: "crop", label: "平均 Crop IoU", children: `${optionalPercentage(qualitySummary.mean_crop_iou.mean)} · n=${qualitySummary.mean_crop_iou.observed_count}` },
+              { key: "cer", label: "平均转录 CER", children: `${optionalPercentage(qualitySummary.mean_transcription_cer.mean)} · n=${qualitySummary.mean_transcription_cer.observed_count}` },
+              { key: "formula", label: "公式精确率", children: `${optionalPercentage(qualitySummary.formula_exact_rate.rate)} · n=${qualitySummary.formula_exact_rate.observed_count}` },
+              { key: "rubric", label: "Rubric 评分点一致", children: `${optionalPercentage(qualitySummary.mean_rubric_criterion_agreement.mean)} · n=${qualitySummary.mean_rubric_criterion_agreement.observed_count}` },
+              { key: "routing", label: "错误转人工召回", children: optionalPercentage(qualitySummary.risky_error_routing_recall) }
+            ]} />{qualitySummary.error_attribution.length ? <List size="small" dataSource={qualitySummary.error_attribution} renderItem={(item) => <List.Item><span>{errorSourceOptions.find((option) => option.value === item.source)?.label ?? item.source}</span><Space size={4}><Tag>n={item.count}</Tag><Tag color={item.human_routing_recall < 1 ? "error" : "success"}>转人工 {percentage(item.human_routing_recall)}</Tag></Space></List.Item>} /> : <Typography.Text type="secondary">尚未发现或归因错误。</Typography.Text>}</> : <Typography.Text type="secondary">录入观察后显示图像、裁切、转录、公式、Rubric 与路由指标。</Typography.Text>}</section>
             <section><h4>切片指标</h4>{sliceMetrics.length ? <List size="small" dataSource={sliceMetrics.slice(0, 12)} renderItem={(item) => <List.Item><span>{item.dimension}: {item.value}</span><Space size={4}><Tag>n={item.metrics.sample_count}</Tag><Tag color={item.metrics.severe_error_rate > 0 ? "error" : "success"}>严重误差 {percentage(item.metrics.severe_error_rate)}</Tag></Space></List.Item>} /> : <Typography.Text type="secondary">完成评测后生成按题型、分段和 OCR 质量的切片。</Typography.Text>}</section>
             <section><h4>困难答卷</h4>{responseDifficulty.length ? <List size="small" dataSource={responseDifficulty.slice(0, 8)} renderItem={(item) => <List.Item><span>{item.difficulty_band} · {shortID(item.response_key)}</span><Tag color={item.severe_error ? "error" : "default"}>归一化误差 {percentage(item.normalized_error)}</Tag></List.Item>} /> : <Typography.Text type="secondary">完成评测后显示经验性难例，不代表学生能力。</Typography.Text>}</section>
           </div>
@@ -562,11 +586,15 @@ export function ScoringAssuranceWorkspace({
 
       <Drawer title="录入对齐观察" width={650} open={observationDrawerOpen} onClose={() => setObservationDrawerOpen(false)} extra={<Button type="primary" loading={actioning} onClick={() => void addObservation()}>保存观察</Button>}>
         <Alert type="info" showIcon message="只记录脱敏键、指纹、切片标签与对齐分数" description="系统不接收答题文本、图片或 Gold 解析内容。" />
-        <Form form={observationForm} layout="vertical" style={{ marginTop: 16 }} initialValues={{ reference_kind: "gold", ocr_quality: "high", answer_length: "medium", rubric_complexity: "medium" }}>
+        <Form form={observationForm} layout="vertical" style={{ marginTop: 16 }} initialValues={{ reference_kind: "gold", ocr_quality: "high", answer_length: "medium", rubric_complexity: "medium", error_source: "none", needs_human_review: false, reference_reviewer_count: 1, reference_adjudicated: false }}>
           <Space.Compact block><Form.Item name="response_key" label="脱敏答卷键" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]} style={{ width: "50%" }}><Input /></Form.Item><Form.Item name="response_fingerprint" label="答卷指纹 SHA-256" rules={[{ required: true, pattern: /^[a-f0-9]{64}$/ }]} style={{ width: "50%" }}><Input /></Form.Item></Space.Compact>
-          <Space.Compact block><Form.Item name="reference_kind" label="参考来源" rules={[{ required: true }]} style={{ width: "33%" }}><Select options={[{ value: "gold", label: "Gold" }, { value: "human_adjudicated", label: "人工裁决" }]} /></Form.Item><Form.Item name="subject" label="学科切片" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]} style={{ width: "33%" }}><Input placeholder="mathematics" /></Form.Item><Form.Item name="archetype" label="题型切片" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]} style={{ width: "34%" }}><Input placeholder="structured_steps" /></Form.Item></Space.Compact>
+          <Space.Compact block><Form.Item name="reference_kind" label="参考来源" rules={[{ required: true }]} style={{ width: "33%" }}><Select options={[{ value: "gold", label: "Gold" }, { value: "human_adjudicated", label: "双人裁决" }]} onChange={(value) => observationForm.setFieldsValue(value === "human_adjudicated" ? { reference_reviewer_count: 2, reference_adjudicated: true } : { reference_reviewer_count: 1, reference_adjudicated: false })} /></Form.Item><Form.Item name="subject" label="学科切片" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]} style={{ width: "33%" }}><Input placeholder="mathematics" /></Form.Item><Form.Item name="archetype" label="题型切片" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]} style={{ width: "34%" }}><Input placeholder="structured_steps" /></Form.Item></Space.Compact>
           <Space.Compact block><Form.Item name="ocr_quality" label="OCR 质量" rules={[{ required: true }]} style={{ width: "33%" }}><Select options={["high", "medium", "low", "unknown"].map((value) => ({ value, label: value }))} /></Form.Item><Form.Item name="answer_length" label="答案长度" rules={[{ required: true }]} style={{ width: "33%" }}><Select options={["short", "medium", "long", "unknown"].map((value) => ({ value, label: value }))} /></Form.Item><Form.Item name="rubric_complexity" label="细则复杂度" rules={[{ required: true }]} style={{ width: "34%" }}><Select options={["low", "medium", "high", "unknown"].map((value) => ({ value, label: value }))} /></Form.Item></Space.Compact>
           <Space.Compact block><Form.Item name="reference_score" label="参考分" rules={[{ required: true }]} style={{ width: "33%" }}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item><Form.Item name="model_score" label="模型分" rules={[{ required: true }]} style={{ width: "33%" }}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item><Form.Item name="max_score" label="满分" rules={[{ required: true }]} style={{ width: "34%" }}><InputNumber min={0.1} style={{ width: "100%" }} /></Form.Item></Space.Compact>
+          <Divider orientation="left">链路证据（按实际采集填写）</Divider>
+          <Space.Compact block><Form.Item name="page_match_correct" label="页面匹配正确" style={{ width: "33%" }}><Select allowClear options={[{ value: true, label: "正确" }, { value: false, label: "错误" }]} /></Form.Item><Form.Item name="crop_iou" label="Crop IoU" style={{ width: "33%" }}><InputNumber min={0} max={1} step={0.01} style={{ width: "100%" }} /></Form.Item><Form.Item name="transcription_cer" label="转录 CER" style={{ width: "34%" }}><InputNumber min={0} max={1} step={0.01} style={{ width: "100%" }} /></Form.Item></Space.Compact>
+          <Space.Compact block><Form.Item name="formula_exact" label="公式精确识别" style={{ width: "33%" }}><Select allowClear options={[{ value: true, label: "精确" }, { value: false, label: "错误" }]} /></Form.Item><Form.Item name="rubric_criterion_agreement" label="Rubric 评分点一致率" style={{ width: "33%" }}><InputNumber min={0} max={1} step={0.01} style={{ width: "100%" }} /></Form.Item><Form.Item name="error_source" label="首要错误来源" rules={[{ required: true }]} style={{ width: "34%" }}><Select options={errorSourceOptions} /></Form.Item></Space.Compact>
+          <Space.Compact block><Form.Item name="needs_human_review" label="已路由人工" rules={[{ required: true }]} style={{ width: "33%" }}><Select options={[{ value: false, label: "否" }, { value: true, label: "是" }]} /></Form.Item><Form.Item name="reference_reviewer_count" label="真值复核人数" rules={[{ required: true }]} style={{ width: "33%" }}><InputNumber min={1} precision={0} style={{ width: "100%" }} /></Form.Item><Form.Item name="reference_adjudicated" label="已完成裁决" rules={[{ required: true }]} style={{ width: "34%" }}><Select options={[{ value: false, label: "否" }, { value: true, label: "是" }]} /></Form.Item></Space.Compact>
         </Form>
       </Drawer>
 

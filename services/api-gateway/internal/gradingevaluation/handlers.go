@@ -23,6 +23,7 @@ func RegisterRoutes(mux *http.ServeMux, handler *Handler, requireManage func(htt
 	mux.Handle("POST /api/v1/grading-evaluations/{runId}/invalidate", requireManage(handler.Invalidate))
 	mux.Handle("GET /api/v1/grading-evaluations/{runId}/slice-metrics", requireManage(handler.ListSliceMetrics))
 	mux.Handle("GET /api/v1/grading-evaluations/{runId}/response-difficulty", requireManage(handler.ListResponseDifficulty))
+	mux.Handle("GET /api/v1/grading-evaluations/{runId}/quality-summary", requireManage(handler.QualitySummary))
 }
 
 type Handler struct{ service *Service }
@@ -139,6 +140,19 @@ func (h *Handler) ListResponseDifficulty(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"response_difficulty": items})
+}
+
+func (h *Handler) QualitySummary(w http.ResponseWriter, r *http.Request) {
+	user, ok := evaluationUser(w, r)
+	if !ok {
+		return
+	}
+	item, err := h.service.QualitySummary(r.Context(), user.TenantID, r.PathValue("runId"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"quality_summary": item})
 }
 
 func evaluationUser(w http.ResponseWriter, r *http.Request) (auth.User, bool) {

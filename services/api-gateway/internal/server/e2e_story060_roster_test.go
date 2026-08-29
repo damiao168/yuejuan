@@ -129,10 +129,6 @@ func TestStory060FiveHundredStudentRosterScaleE2EWithPostgresTestDatabase(t *tes
 	gradeID := e2eString(t, grade, "id")
 	class := e2ePostJSON(t, router, http.MethodPost, "/api/v1/classes", adminToken, `{"school_id":"`+schoolID+`","grade_id":"`+gradeID+`","name":"STORY-060 Scale Class","code":"c060-scale-`+suffix+`"}`, http.StatusCreated)["class"].(map[string]any)
 	classID := e2eString(t, class, "id")
-	exam := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams", adminToken,
-		`{"school_id":"`+schoolID+`","name":"STORY-060 500 Student Exam","subject":"Math","exam_type":"mock","total_score":100,"grading_mode":"human_review_required","appeal_enabled":true,"publish_policy":"manual_after_confirmation","class_ids":["`+classID+`"]}`,
-		http.StatusCreated)["exam"].(map[string]any)
-	examID := e2eString(t, exam, "id")
 	var tenantID string
 	if err := db.QueryRow(`SELECT id::text FROM tenant WHERE code='demo' AND deleted_at IS NULL`).Scan(&tenantID); err != nil {
 		t.Fatalf("lookup tenant: %v", err)
@@ -144,28 +140,68 @@ WITH inserted_students AS (
   SELECT $1::uuid, $2::uuid, $3::uuid,
     'S060-SCALE-' || $4 || '-' || lpad(n::text, 3, '0'),
     'Scale Student ' || lpad(n::text, 3, '0'), 'active'
-  FROM generate_series(1, 500) AS n
+  FROM generate_series(1, 499) AS n
   RETURNING id, student_no
-),
-inserted_submissions AS (
+)
+INSERT INTO student_enrollment (
+  tenant_id, school_id, student_id, academic_year_id, grade_cohort_id, class_id, status, start_date
+)
+SELECT $1::uuid, $2::uuid, inserted_students.id, cls.academic_year_id, cls.grade_cohort_id, cls.id, 'enrolled', ay.starts_at
+FROM inserted_students
+JOIN school_class cls ON cls.tenant_id=$1::uuid AND cls.id=$3::uuid
+JOIN academic_year ay ON ay.tenant_id=cls.tenant_id AND ay.id=cls.academic_year_id
+`, tenantID, schoolID, classID, suffix); err != nil {
+		t.Fatalf("seed initial 499-student enrollment roster: %v", err)
+	}
+
+	exam := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams", adminToken,
+		`{"school_id":"`+schoolID+`","name":"STORY-060 500 Student Exam","subject":"Math","exam_type":"mock","total_score":100,"grading_mode":"human_review_required","appeal_enabled":true,"publish_policy":"manual_after_confirmation","class_ids":["`+classID+`"]}`,
+		http.StatusCreated)["exam"].(map[string]any)
+	examID := e2eString(t, exam, "id")
+
+	if _, err := db.Exec(`
+WITH inserted_student AS (
+  INSERT INTO student (tenant_id, school_id, class_id, student_no, name, status)
+  VALUES ($1::uuid, $2::uuid, $3::uuid, 'S060-SCALE-' || $4 || '-500', 'Scale Student 500', 'active')
+  RETURNING id
+)
+INSERT INTO student_enrollment (
+  tenant_id, school_id, student_id, academic_year_id, grade_cohort_id, class_id, status, start_date
+)
+SELECT $1::uuid, $2::uuid, inserted_student.id, cls.academic_year_id, cls.grade_cohort_id, cls.id, 'enrolled', ay.starts_at
+FROM inserted_student
+JOIN school_class cls ON cls.tenant_id=$1::uuid AND cls.id=$3::uuid
+JOIN academic_year ay ON ay.tenant_id=cls.tenant_id AND ay.id=cls.academic_year_id
+`, tenantID, schoolID, classID, suffix); err != nil {
+		t.Fatalf("seed late 500th student enrollment: %v", err)
+	}
+	refresh := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/candidates/refresh", adminToken, ``, http.StatusOK)["candidate_refresh"].(map[string]any)
+	if e2eFloat(t, refresh, "before_count") != 499 || e2eFloat(t, refresh, "after_count") != 500 ||
+		e2eFloat(t, refresh, "added_count") != 1 || e2eFloat(t, refresh, "removed_count") != 0 {
+		t.Fatalf("candidate refresh should add the late enrollment: %#v", refresh)
+	}
+
+	if _, err := db.Exec(`
+WITH inserted_submissions AS (
   INSERT INTO submission (
     tenant_id, exam_id, student_id, candidate_no, source_type, status,
     expected_page_count, actual_page_count, quality_status, collected_by
   )
-  SELECT $1::uuid, $5::uuid, id, student_no, 'pdf_upload', 'created', 0, 0, 'unchecked', $6::uuid
-  FROM inserted_students
-  WHERE right(student_no, 3)::int <= 497
+  SELECT $1::uuid, $4::uuid, id, student_no, 'pdf_upload', 'created', 0, 0, 'unchecked', $5::uuid
+  FROM student
+  WHERE tenant_id=$1::uuid AND class_id=$2::uuid AND student_no LIKE 'S060-SCALE-' || $3 || '-%'
+    AND right(student_no, 3)::int <= 497
   RETURNING id, student_id, candidate_no
 )
 INSERT INTO submission_grade (
   tenant_id, exam_id, submission_id, student_id, anonymous_code,
   total_score, max_score, status, locked, confirmed_by, confirmed_at, created_by
 )
-SELECT $1::uuid, $5::uuid, id, student_id, candidate_no,
-  80, 100, 'confirmed', false, $6::uuid, now(), $6::uuid
+SELECT $1::uuid, $4::uuid, id, student_id, candidate_no,
+  80, 100, 'confirmed', false, $5::uuid, now(), $5::uuid
 FROM inserted_submissions
-`, tenantID, schoolID, classID, suffix, examID, adminID); err != nil {
-		t.Fatalf("seed 500-student roster: %v", err)
+`, tenantID, classID, suffix, examID, adminID); err != nil {
+		t.Fatalf("seed 497 roster submissions: %v", err)
 	}
 
 	storeStarted := time.Now()

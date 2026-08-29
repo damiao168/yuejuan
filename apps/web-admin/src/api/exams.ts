@@ -74,6 +74,13 @@ export interface ExamSession {
   exams: Exam[];
 }
 
+export interface CandidateRefreshResult {
+  before_count: number;
+  after_count: number;
+  added_count: number;
+  removed_count: number;
+}
+
 export async function listExams(filter: ExamListFilter = {}) {
   return apiClient.request<{ exams: Exam[]; next_cursor?: string; has_more?: boolean }>(`/api/v1/exams${buildQueryString(filter)}`);
 }
@@ -107,6 +114,12 @@ export async function updateExamStatus(id: string, status: string, expectedRevis
   return apiClient.request<{ exam: Exam }>(`/api/v1/exams/${encodeURIComponent(id)}/status`, {
     method: "POST",
     body: JSON.stringify({ status, expected_revision: expectedRevision })
+  });
+}
+
+export async function refreshExamCandidates(id: string) {
+  return apiClient.request<{ candidate_refresh: CandidateRefreshResult }>(`/api/v1/exams/${encodeURIComponent(id)}/candidates/refresh`, {
+    method: "POST"
   });
 }
 

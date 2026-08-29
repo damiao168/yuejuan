@@ -24,9 +24,9 @@ func TestCompleteComputesEvidenceBackedSlicesAndDifficulty(t *testing.T) {
 		t.Fatalf("create run: %v", err)
 	}
 	inputs := []AddObservationInput{
-		{ResponseKey: "response-1", ResponseFingerprint: testHash, ReferenceKind: ReferenceGold, Subject: "math", Archetype: "short_constructed", OCRQuality: "high", AnswerLength: "short", RubricComplexity: "medium", ReferenceScore: 0, ModelScore: 0, MaxScore: 4},
-		{ResponseKey: "response-2", ResponseFingerprint: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ReferenceKind: ReferenceHumanAdjudicated, Subject: "math", Archetype: "short_constructed", OCRQuality: "low", AnswerLength: "long", RubricComplexity: "high", ReferenceScore: 2, ModelScore: 0, MaxScore: 4},
-		{ResponseKey: "response-3", ResponseFingerprint: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", ReferenceKind: ReferenceGold, Subject: "math", Archetype: "short_constructed", OCRQuality: "medium", AnswerLength: "medium", RubricComplexity: "medium", ReferenceScore: 4, ModelScore: 4, MaxScore: 4},
+		{ResponseKey: "response-1", ResponseFingerprint: testHash, ReferenceKind: ReferenceGold, Subject: "math", Archetype: "short_constructed", OCRQuality: "high", AnswerLength: "short", RubricComplexity: "medium", ReferenceScore: 0, ModelScore: 0, MaxScore: 4, PageMatchCorrect: boolPointer(true), CropIoU: floatPointer(.96), TranscriptionCER: floatPointer(0), FormulaExact: boolPointer(true), RubricAgreement: floatPointer(1)},
+		{ResponseKey: "response-2", ResponseFingerprint: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ReferenceKind: ReferenceHumanAdjudicated, Subject: "math", Archetype: "short_constructed", OCRQuality: "low", AnswerLength: "long", RubricComplexity: "high", ReferenceScore: 2, ModelScore: 0, MaxScore: 4, PageMatchCorrect: boolPointer(true), CropIoU: floatPointer(.84), TranscriptionCER: floatPointer(.4), FormulaExact: boolPointer(false), RubricAgreement: floatPointer(.5), ErrorSource: ErrorHandwritingOCR, NeedsHumanReview: true, ReferenceReviewers: 2, ReferenceAdjudicated: true},
+		{ResponseKey: "response-3", ResponseFingerprint: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", ReferenceKind: ReferenceGold, Subject: "math", Archetype: "short_constructed", OCRQuality: "medium", AnswerLength: "medium", RubricComplexity: "medium", ReferenceScore: 4, ModelScore: 4, MaxScore: 4, PageMatchCorrect: boolPointer(false), CropIoU: floatPointer(.75), TranscriptionCER: floatPointer(.1), FormulaExact: boolPointer(true), RubricAgreement: floatPointer(1), ErrorSource: ErrorPageMatching, NeedsHumanReview: true},
 	}
 	for _, input := range inputs {
 		if _, err = service.AddObservation(ctx, "tenant-a", run.ID, input); err != nil {
@@ -47,8 +47,8 @@ func TestCompleteComputesEvidenceBackedSlicesAndDifficulty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list slices: %v", err)
 	}
-	if len(slices) != 13 {
-		t.Fatalf("slice count=%d, want 13 across the six required dimensions", len(slices))
+	if len(slices) != 16 {
+		t.Fatalf("slice count=%d, want 16 across the seven required dimensions", len(slices))
 	}
 	var partial *SliceMetric
 	for index := range slices {
@@ -71,6 +71,34 @@ func TestCompleteComputesEvidenceBackedSlicesAndDifficulty(t *testing.T) {
 	}
 	if len(difficulty) != 3 || difficulty[0].ResponseKey != "response-2" || difficulty[0].DifficultyBand != "high" || !difficulty[0].SevereError {
 		t.Fatalf("unexpected difficulty result: %+v", difficulty)
+	}
+	quality, err := service.QualitySummary(ctx, "tenant-a", run.ID)
+	if err != nil {
+		t.Fatalf("quality summary: %v", err)
+	}
+	if quality.SampleCount != 3 || quality.PageMatchAccuracy.Rate == nil || *quality.PageMatchAccuracy.Rate != .666667 ||
+		quality.MeanTranscriptionCER.Mean == nil || *quality.MeanTranscriptionCER.Mean != .166667 ||
+		quality.RiskyErrorRoutingRecall != 1 || len(quality.ErrorAttribution) != 2 {
+		t.Fatalf("unexpected pipeline quality summary: %+v", quality)
+	}
+}
+
+func boolPointer(value bool) *bool        { return &value }
+func floatPointer(value float64) *float64 { return &value }
+
+func TestHumanAdjudicatedReferenceRequiresTwoReviewers(t *testing.T) {
+	service := NewService(NewMemoryStore())
+	run, err := service.CreateRun(context.Background(), "tenant-a", "manager-a", CreateRunInput{Key: "double-review", DisplayName: "double review", ModelReference: "model", PromptVersion: "p1", RubricVersion: "r1", DatasetReference: "set-1", DatasetSHA256: testHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := AddObservationInput{ResponseKey: "response-1", ResponseFingerprint: testHash, ReferenceKind: ReferenceHumanAdjudicated, Subject: "math", Archetype: "short_constructed", OCRQuality: "high", AnswerLength: "short", RubricComplexity: "low", ReferenceScore: 1, ModelScore: 1, MaxScore: 2, ReferenceReviewers: 1}
+	if _, err = service.AddObservation(context.Background(), "tenant-a", run.ID, input); err != ErrInvalidInput {
+		t.Fatalf("single-review human reference must be rejected, got %v", err)
+	}
+	input.ReferenceReviewers, input.ReferenceAdjudicated = 2, true
+	if _, err = service.AddObservation(context.Background(), "tenant-a", run.ID, input); err != nil {
+		t.Fatalf("adjudicated double-review reference should pass: %v", err)
 	}
 }
 

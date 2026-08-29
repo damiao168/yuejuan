@@ -876,6 +876,7 @@ func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.C
 	mux.Handle("PATCH /api/v1/exams/{id}", requireExamManage(examHandler.UpdateExam))
 	mux.Handle("POST /api/v1/exams/{id}/archive", requireExamManage(examHandler.Archive))
 	mux.Handle("POST /api/v1/exams/{id}/status", requireExamManage(examHandler.UpdateStatus))
+	mux.Handle("POST /api/v1/exams/{id}/candidates/refresh", requireExamManage(examHandler.RefreshCandidates))
 	workspace.RegisterRoutes(mux, workspaceHandler, requireDashboardRead)
 	mux.Handle("GET /api/v1/assessment/subject-profiles", requireAssessmentRead(assessmentHandler.ListSubjectProfiles))
 	mux.Handle("GET /api/v1/assessment/question-archetypes", requireAssessmentRead(assessmentHandler.ListQuestionArchetypes))

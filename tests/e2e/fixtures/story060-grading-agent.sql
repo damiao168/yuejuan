@@ -13,11 +13,35 @@ BEGIN
   INSERT INTO school (id, tenant_id, name, code, status)
   VALUES ('00000000-0000-0000-0000-000000000601', tenant_uuid, 'STORY-060 Synthetic School', 'S060', 'active');
 
-  INSERT INTO grade (id, tenant_id, school_id, name, level_no, academic_year, status)
-  VALUES ('00000000-0000-0000-0000-000000000602', tenant_uuid, '00000000-0000-0000-0000-000000000601', 'Grade 8', 8, '2026', 'active');
+  INSERT INTO academic_year (
+    id, tenant_id, school_id, name, start_year, end_year, starts_at, ends_at, is_current, status
+  ) VALUES (
+    '00000000-0000-0000-0000-000000000620', tenant_uuid, '00000000-0000-0000-0000-000000000601',
+    '2026-2027学年', 2026, 2027, DATE '2026-09-01', DATE '2027-08-31', true, 'active'
+  );
 
-  INSERT INTO school_class (id, tenant_id, school_id, grade_id, name, code, status)
-  VALUES ('00000000-0000-0000-0000-000000000603', tenant_uuid, '00000000-0000-0000-0000-000000000601', '00000000-0000-0000-0000-000000000602', 'Synthetic Class', 'S060-C1', 'active');
+  INSERT INTO grade_cohort (
+    id, tenant_id, school_id, education_stage, entry_year, expected_graduation_year, name, status
+  ) VALUES (
+    '00000000-0000-0000-0000-000000000621', tenant_uuid, '00000000-0000-0000-0000-000000000601',
+    'junior', 2025, 2028, '2025级', 'active'
+  );
+
+  INSERT INTO grade (
+    id, tenant_id, school_id, academic_year_id, grade_cohort_id, name, level_no, academic_year, status
+  ) VALUES (
+    '00000000-0000-0000-0000-000000000602', tenant_uuid, '00000000-0000-0000-0000-000000000601',
+    '00000000-0000-0000-0000-000000000620', '00000000-0000-0000-0000-000000000621',
+    'Grade 8', 8, '2026', 'active'
+  );
+
+  INSERT INTO school_class (
+    id, tenant_id, school_id, grade_id, academic_year_id, grade_cohort_id, name, code, status
+  ) VALUES (
+    '00000000-0000-0000-0000-000000000603', tenant_uuid, '00000000-0000-0000-0000-000000000601',
+    '00000000-0000-0000-0000-000000000602', '00000000-0000-0000-0000-000000000620',
+    '00000000-0000-0000-0000-000000000621', 'Synthetic Class', 'S060-C1', 'active'
+  );
 
   INSERT INTO exam (id, tenant_id, school_id, name, subject, exam_type, total_score, status, grading_mode, appeal_enabled, publish_policy, created_by)
   VALUES ('00000000-0000-0000-0000-000000000604', tenant_uuid, '00000000-0000-0000-0000-000000000601', 'STORY-060 Synthetic Chinese Exam', 'chinese', 'formal_exam', 4, 'draft', 'ai_assisted', true, 'after_admin_approval', actor_uuid);

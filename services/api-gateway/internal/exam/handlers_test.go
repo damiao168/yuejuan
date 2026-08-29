@@ -50,6 +50,31 @@ func TestCreateListDetailExam(t *testing.T) {
 	}
 }
 
+func TestRefreshCandidateSnapshotOnlyWhileExamIsEditable(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
+	store := exam.NewMemoryStore()
+	router := testRouter(authStore, store)
+	token := login(t, router)
+	created := createExam(t, router, token)
+
+	req := authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/candidates/refresh", nil, token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"before_count":0`) {
+		t.Fatalf("draft candidate refresh expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	if err := store.SetStatusForTest("tenant-exam", created.ID, "ready"); err != nil {
+		t.Fatalf("seed ready exam: %v", err)
+	}
+	req = authedRequest(http.MethodPost, "/api/v1/exams/"+created.ID+"/candidates/refresh", nil, token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "exam_candidates_frozen") {
+		t.Fatalf("ready candidate refresh expected frozen conflict, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateMultiSubjectExamSession(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
 	router := testRouter(authStore, exam.NewMemoryStore())

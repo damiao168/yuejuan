@@ -26,6 +26,7 @@ func TestStory060MultiPageInsertionMissingPageAndPrintPackageE2EWithPostgresTest
 	adminToken := e2eLoginWithTenant(t, router, "demo", "tenant_admin", "ChangeMe123!")
 	suffix := strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "")
 	fixture := e2eCreateStory056AcceptanceFixture(t, db, router, adminToken, suffix)
+	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/exams/"+fixture.ExamID+"/candidates/refresh", adminToken, ``, http.StatusConflict)
 
 	layout := story056JSON(t, map[string]any{"pages": []any{
 		map[string]any{
@@ -52,26 +53,16 @@ WHERE tenant_id=$1::uuid AND id=$2::uuid
 		t.Fatalf("prepare three-page locked template: %v", err)
 	}
 
-	var studentID, classID string
+	var studentID string
 	if err := db.QueryRow(`
-SELECT st.id::text,st.class_id::text
-FROM exam_class ec
-JOIN student st
-  ON st.tenant_id=ec.tenant_id AND st.class_id=ec.class_id
-WHERE ec.tenant_id=$1::uuid AND ec.exam_id=$2::uuid
-  AND ec.deleted_at IS NULL AND st.status='active' AND st.deleted_at IS NULL
-ORDER BY st.created_at
+SELECT candidate.student_id::text
+FROM exam_candidate_snapshot candidate
+WHERE candidate.tenant_id=$1::uuid AND candidate.exam_id=$2::uuid
+ORDER BY candidate.captured_at
 LIMIT 1
-`, fixture.TenantID, fixture.ExamID).Scan(&studentID, &classID); err != nil {
+`, fixture.TenantID, fixture.ExamID).Scan(&studentID); err != nil {
 		t.Fatalf("lookup roster student: %v", err)
 	}
-	missingStudent := e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, story056JSON(t, map[string]any{
-		"school_id":  fixture.SchoolID,
-		"class_id":   classID,
-		"student_no": "S060-MISSING-" + suffix,
-		"name":       "STORY-060 Missing Page Student",
-	}), http.StatusCreated)["student"].(map[string]any)
-	missingStudentID := e2eString(t, missingStudent, "id")
 
 	issue := func(label, targetStudentID string) (string, string, map[int]string) {
 		t.Helper()
@@ -265,7 +256,7 @@ ORDER BY cp.source_index
 		t.Fatalf("observed package must become non-downloadable in the Web context: %#v", batches)
 	}
 
-	_, missingSheetSerial, missingBarcodes := issue("missing", missingStudentID)
+	_, missingSheetSerial, missingBarcodes := issue("missing", studentID)
 	missingFileID := createCapture("missing-page", []string{missingBarcodes[1], missingBarcodes[3]})
 	var missingExpected, missingActual int
 	var assignedPages []int

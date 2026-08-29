@@ -12,6 +12,7 @@ import type {
   MathPilotGateResponse,
   MathPilotGateListResponse,
   ExamWorkspaceResponse,
+  CandidateRefreshResponse,
   ExamPage,
   SubmissionPage,
   ReviewTaskPage,
@@ -72,6 +73,7 @@ import type {
   GradingEvaluationObservationResponse,
   GradingEvaluationSliceMetricsResponse,
   GradingEvaluationResponseDifficultyResponse,
+  GradingEvaluationQualitySummaryResponse,
   InvalidationReasonRequest,
   CreateModelCalibrationRequest,
   AddModelCalibrationEvidenceRequest,
@@ -162,6 +164,7 @@ import type {
 
 export interface operations {
   "listExams": { args: { query?: { "limit"?: number; "cursor"?: string; "status"?: string; "school_id"?: string; }; signal?: AbortSignal; }; response: ExamPage; };
+  "refreshExamCandidates": { args: { path: { "examId": string; }; signal?: AbortSignal; }; response: CandidateRefreshResponse; };
   "getExamWorkspace": { args: { path: { "examId": string; }; signal?: AbortSignal; }; response: ExamWorkspaceResponse; };
   "listExamSubmissions": { args: { path: { "examId": string; }; query?: { "limit"?: number; "cursor"?: string; }; signal?: AbortSignal; }; response: SubmissionPage; };
   "listReviewTasks": { args: { query?: { "limit"?: number; "cursor"?: string; "status"?: string; "assigned_to"?: string; "exam_id"?: string; }; signal?: AbortSignal; }; response: ReviewTaskPage; };
@@ -217,6 +220,7 @@ export interface operations {
   "invalidateGradingEvaluation": { args: { path: { "runId": string; }; body: InvalidationReasonRequest; signal?: AbortSignal; }; response: GradingEvaluationRunResponse; };
   "listGradingEvaluationSliceMetrics": { args: { path: { "runId": string; }; signal?: AbortSignal; }; response: GradingEvaluationSliceMetricsResponse; };
   "listGradingEvaluationResponseDifficulty": { args: { path: { "runId": string; }; signal?: AbortSignal; }; response: GradingEvaluationResponseDifficultyResponse; };
+  "getGradingEvaluationQualitySummary": { args: { path: { "runId": string; }; signal?: AbortSignal; }; response: GradingEvaluationQualitySummaryResponse; };
   "listModelCalibrations": { args: { query?: { "model_reference"?: string; "prompt_version"?: string; "rubric_version"?: string; "subject"?: string; "archetype"?: string; "slice_key"?: string; "limit"?: number; }; signal?: AbortSignal; }; response: ModelCalibrationListResponse; };
   "createModelCalibration": { args: { body: CreateModelCalibrationRequest; signal?: AbortSignal; }; response: ModelCalibrationResponse; };
   "getModelCalibration": { args: { path: { "calibrationId": string; }; signal?: AbortSignal; }; response: ModelCalibrationResponse; };
@@ -312,6 +316,11 @@ export class EduGradeApi {
   listExams(args: operations["listExams"]["args"] = {}): Promise<operations["listExams"]["response"]> {
     const requestPath = appendQuery("/api/v1/exams", args.query);
     return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  refreshExamCandidates(args: operations["refreshExamCandidates"]["args"]): Promise<operations["refreshExamCandidates"]["response"]> {
+    const requestPath = fillPath("/api/v1/exams/{examId}/candidates/refresh", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal });
   }
 
   getExamWorkspace(args: operations["getExamWorkspace"]["args"]): Promise<operations["getExamWorkspace"]["response"]> {
@@ -586,6 +595,11 @@ export class EduGradeApi {
 
   listGradingEvaluationResponseDifficulty(args: operations["listGradingEvaluationResponseDifficulty"]["args"]): Promise<operations["listGradingEvaluationResponseDifficulty"]["response"]> {
     const requestPath = fillPath("/api/v1/grading-evaluations/{runId}/response-difficulty", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  getGradingEvaluationQualitySummary(args: operations["getGradingEvaluationQualitySummary"]["args"]): Promise<operations["getGradingEvaluationQualitySummary"]["response"]> {
+    const requestPath = fillPath("/api/v1/grading-evaluations/{runId}/quality-summary", args.path);
     return this.transport.request(requestPath, { method: "GET", signal: args.signal });
   }
 

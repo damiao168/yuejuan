@@ -69,6 +69,55 @@
         }
       }
     },
+    "/api/v1/exams/{examId}/candidates/refresh": {
+      "post": {
+        "operationId": "refreshExamCandidates",
+        "description": "Rebuilds the candidate snapshot from active enrollments while the exam is still draft or configured. Readiness confirmation performs the final rebuild and freezes the roster.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ExamId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Candidate snapshot refreshed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateRefreshResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Exam not found in the authenticated scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Candidate snapshot is frozen after readiness confirmation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/exams/{examId}/workspace": {
       "get": {
         "operationId": "getExamWorkspace",
@@ -2482,6 +2531,39 @@
           "403": {
             "$ref": "#/components/responses/Forbidden"
           }
+        }
+      }
+    },
+    "/api/v1/grading-evaluations/{runId}/quality-summary": {
+      "get": {
+        "operationId": "getGradingEvaluationQualitySummary",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GradingEvaluationQualitySummaryResponse",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GradingEvaluationQualitySummaryResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
         }
       }
     },
@@ -6151,6 +6233,46 @@
         "properties": {
           "workspace": {
             "$ref": "#/components/schemas/ExamWorkspaceProjection"
+          }
+        }
+      },
+      "CandidateRefreshResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "before_count",
+          "after_count",
+          "added_count",
+          "removed_count"
+        ],
+        "properties": {
+          "before_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "after_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "added_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "removed_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "CandidateRefreshResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "candidate_refresh"
+        ],
+        "properties": {
+          "candidate_refresh": {
+            "$ref": "#/components/schemas/CandidateRefreshResult"
           }
         }
       },
@@ -10207,6 +10329,23 @@
           }
         }
       },
+      "GradingEvaluationErrorSource": {
+        "type": "string",
+        "enum": [
+          "none",
+          "image_quality",
+          "page_matching",
+          "answer_crop",
+          "handwriting_ocr",
+          "formula_recognition",
+          "answer_structuring",
+          "rubric",
+          "model_scoring",
+          "score_calculation",
+          "system",
+          "unattributed"
+        ]
+      },
       "AddGradingEvaluationObservationRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -10256,6 +10395,40 @@
           },
           "max_score": {
             "type": "number"
+          },
+          "page_match_correct": {
+            "type": "boolean"
+          },
+          "crop_iou": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "transcription_cer": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "formula_exact": {
+            "type": "boolean"
+          },
+          "rubric_criterion_agreement": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "error_source": {
+            "$ref": "#/components/schemas/GradingEvaluationErrorSource"
+          },
+          "needs_human_review": {
+            "type": "boolean"
+          },
+          "reference_reviewer_count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reference_adjudicated": {
+            "type": "boolean"
           }
         }
       },
@@ -10277,6 +10450,10 @@
           "model_score",
           "max_score",
           "reference_score_band",
+          "error_source",
+          "needs_human_review",
+          "reference_reviewer_count",
+          "reference_adjudicated",
           "observed_at"
         ],
         "properties": {
@@ -10321,6 +10498,33 @@
           },
           "reference_score_band": {
             "type": "string"
+          },
+          "page_match_correct": {
+            "type": "boolean"
+          },
+          "crop_iou": {
+            "type": "number"
+          },
+          "transcription_cer": {
+            "type": "number"
+          },
+          "formula_exact": {
+            "type": "boolean"
+          },
+          "rubric_criterion_agreement": {
+            "type": "number"
+          },
+          "error_source": {
+            "$ref": "#/components/schemas/GradingEvaluationErrorSource"
+          },
+          "needs_human_review": {
+            "type": "boolean"
+          },
+          "reference_reviewer_count": {
+            "type": "integer"
+          },
+          "reference_adjudicated": {
+            "type": "boolean"
           },
           "observed_at": {
             "type": "string",
@@ -10536,6 +10740,67 @@
               "$ref": "#/components/schemas/GradingEvaluationResponseDifficulty"
             }
           }
+        }
+      },
+      "GradingEvaluationCoveredRate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["observed_count"],
+        "properties": {
+          "observed_count": { "type": "integer" },
+          "rate": { "type": "number" }
+        }
+      },
+      "GradingEvaluationCoveredMean": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["observed_count"],
+        "properties": {
+          "observed_count": { "type": "integer" },
+          "mean": { "type": "number" }
+        }
+      },
+      "GradingEvaluationErrorAttribution": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "count", "rate", "severe_error_count", "human_review_count", "human_routing_recall"],
+        "properties": {
+          "source": { "$ref": "#/components/schemas/GradingEvaluationErrorSource" },
+          "count": { "type": "integer" },
+          "rate": { "type": "number" },
+          "severe_error_count": { "type": "integer" },
+          "human_review_count": { "type": "integer" },
+          "human_routing_recall": { "type": "number" }
+        }
+      },
+      "GradingEvaluationQualitySummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sample_count", "page_match_accuracy", "mean_crop_iou", "mean_transcription_cer", "formula_exact_rate",
+          "mean_rubric_criterion_agreement", "human_review_rate", "risky_error_routing_recall", "error_attribution"
+        ],
+        "properties": {
+          "sample_count": { "type": "integer" },
+          "page_match_accuracy": { "$ref": "#/components/schemas/GradingEvaluationCoveredRate" },
+          "mean_crop_iou": { "$ref": "#/components/schemas/GradingEvaluationCoveredMean" },
+          "mean_transcription_cer": { "$ref": "#/components/schemas/GradingEvaluationCoveredMean" },
+          "formula_exact_rate": { "$ref": "#/components/schemas/GradingEvaluationCoveredRate" },
+          "mean_rubric_criterion_agreement": { "$ref": "#/components/schemas/GradingEvaluationCoveredMean" },
+          "human_review_rate": { "type": "number" },
+          "risky_error_routing_recall": { "type": "number" },
+          "error_attribution": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/GradingEvaluationErrorAttribution" }
+          }
+        }
+      },
+      "GradingEvaluationQualitySummaryResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["quality_summary"],
+        "properties": {
+          "quality_summary": { "$ref": "#/components/schemas/GradingEvaluationQualitySummary" }
         }
       },
       "InvalidationReasonRequest": {

@@ -15,6 +15,7 @@ var (
 	ErrInvalidInput      = errors.New("invalid exam input")
 	ErrRevisionConflict  = errors.New("exam revision conflict")
 	ErrScopeForbidden    = errors.New("exam access scope forbidden")
+	ErrCandidatesFrozen  = errors.New("exam candidates are frozen")
 )
 
 type Exam struct {
@@ -124,10 +125,20 @@ type ListFilter struct {
 	CursorID string
 }
 
+// CandidateRefreshResult describes how the editable exam roster changed when
+// it was rebuilt from the currently active class enrollments.
+type CandidateRefreshResult struct {
+	BeforeCount  int `json:"before_count"`
+	AfterCount   int `json:"after_count"`
+	AddedCount   int `json:"added_count"`
+	RemovedCount int `json:"removed_count"`
+}
+
 type Store interface {
 	CreateExam(ctx context.Context, scope auth.AccessScope, createdBy string, input CreateInput) (Exam, error)
 	ListExams(ctx context.Context, scope auth.AccessScope, filter ListFilter) ([]Exam, error)
 	GetExam(ctx context.Context, scope auth.AccessScope, id string) (Exam, error)
 	UpdateExam(ctx context.Context, scope auth.AccessScope, id string, input UpdateInput) (Exam, error)
 	UpdateStatus(ctx context.Context, scope auth.AccessScope, id string, status string, expectedRevision int64) (Exam, error)
+	RefreshCandidateSnapshot(ctx context.Context, scope auth.AccessScope, id string) (CandidateRefreshResult, error)
 }

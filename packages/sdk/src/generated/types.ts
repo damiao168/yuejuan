@@ -50,6 +50,10 @@ export type ExamWorkspaceProjection = { "exam_id": string; "exam_name": string; 
 
 export type ExamWorkspaceResponse = { "workspace": ExamWorkspaceProjection; };
 
+export type CandidateRefreshResult = { "before_count": number; "after_count": number; "added_count": number; "removed_count": number; };
+
+export type CandidateRefreshResponse = { "candidate_refresh": CandidateRefreshResult; };
+
 export type ExamPage = (unknown) & (CursorPageMeta) & ({ "exams": Array<({ "id": string; "name": string; "status": string; } & Record<string, unknown>)>; });
 
 export type SubmissionPage = (unknown) & (CursorPageMeta) & ({ "submissions": Array<({ "id": string; "exam_id": string; "status": string; } & Record<string, unknown>)>; });
@@ -282,9 +286,11 @@ export type GradingEvaluationRun = { "id": string; "tenant_id"?: string; "key": 
 
 export type CreateGradingEvaluationRequest = { "key": string; "display_name": string; "model_reference": string; "prompt_version": string; "rubric_version": string; "dataset_reference": string; "dataset_sha256": string; };
 
-export type AddGradingEvaluationObservationRequest = { "response_key": string; "response_fingerprint": string; "reference_kind": GradingEvaluationReferenceKind; "subject": string; "archetype": string; "ocr_quality": string; "answer_length": string; "rubric_complexity": string; "reference_score": number; "model_score": number; "max_score": number; };
+export type GradingEvaluationErrorSource = "none" | "image_quality" | "page_matching" | "answer_crop" | "handwriting_ocr" | "formula_recognition" | "answer_structuring" | "rubric" | "model_scoring" | "score_calculation" | "system" | "unattributed";
 
-export type GradingEvaluationObservation = { "id": string; "run_id": string; "response_key": string; "response_fingerprint": string; "reference_kind": GradingEvaluationReferenceKind; "subject": string; "archetype": string; "ocr_quality": string; "answer_length": string; "rubric_complexity": string; "reference_score": number; "model_score": number; "max_score": number; "reference_score_band": string; "observed_at": string; };
+export type AddGradingEvaluationObservationRequest = { "response_key": string; "response_fingerprint": string; "reference_kind": GradingEvaluationReferenceKind; "subject": string; "archetype": string; "ocr_quality": string; "answer_length": string; "rubric_complexity": string; "reference_score": number; "model_score": number; "max_score": number; "page_match_correct"?: boolean; "crop_iou"?: number; "transcription_cer"?: number; "formula_exact"?: boolean; "rubric_criterion_agreement"?: number; "error_source"?: GradingEvaluationErrorSource; "needs_human_review"?: boolean; "reference_reviewer_count"?: number; "reference_adjudicated"?: boolean; };
+
+export type GradingEvaluationObservation = { "id": string; "run_id": string; "response_key": string; "response_fingerprint": string; "reference_kind": GradingEvaluationReferenceKind; "subject": string; "archetype": string; "ocr_quality": string; "answer_length": string; "rubric_complexity": string; "reference_score": number; "model_score": number; "max_score": number; "reference_score_band": string; "page_match_correct"?: boolean; "crop_iou"?: number; "transcription_cer"?: number; "formula_exact"?: boolean; "rubric_criterion_agreement"?: number; "error_source": GradingEvaluationErrorSource; "needs_human_review": boolean; "reference_reviewer_count": number; "reference_adjudicated": boolean; "observed_at": string; };
 
 export type GradingEvaluationMetrics = { "sample_count": number; "mae": number; "exact_rate": number; "within_one_rate": number; "severe_error_rate": number; "false_zero_rate": number; "false_full_rate": number; "qwk"?: number | null; "qwk_available": boolean; "qwk_unavailable_reason"?: string; };
 
@@ -301,6 +307,16 @@ export type GradingEvaluationObservationResponse = { "observation": GradingEvalu
 export type GradingEvaluationSliceMetricsResponse = { "slice_metrics": Array<GradingEvaluationSliceMetric>; };
 
 export type GradingEvaluationResponseDifficultyResponse = { "response_difficulty": Array<GradingEvaluationResponseDifficulty>; };
+
+export type GradingEvaluationCoveredRate = { "observed_count": number; "rate"?: number; };
+
+export type GradingEvaluationCoveredMean = { "observed_count": number; "mean"?: number; };
+
+export type GradingEvaluationErrorAttribution = { "source": GradingEvaluationErrorSource; "count": number; "rate": number; "severe_error_count": number; "human_review_count": number; "human_routing_recall": number; };
+
+export type GradingEvaluationQualitySummary = { "sample_count": number; "page_match_accuracy": GradingEvaluationCoveredRate; "mean_crop_iou": GradingEvaluationCoveredMean; "mean_transcription_cer": GradingEvaluationCoveredMean; "formula_exact_rate": GradingEvaluationCoveredRate; "mean_rubric_criterion_agreement": GradingEvaluationCoveredMean; "human_review_rate": number; "risky_error_routing_recall": number; "error_attribution": Array<GradingEvaluationErrorAttribution>; };
+
+export type GradingEvaluationQualitySummaryResponse = { "quality_summary": GradingEvaluationQualitySummary; };
 
 export type InvalidationReasonRequest = { "reason": string; };
 
@@ -671,6 +687,8 @@ export interface components {
     "ExamWorkspaceSubjectSummary": ExamWorkspaceSubjectSummary;
     "ExamWorkspaceProjection": ExamWorkspaceProjection;
     "ExamWorkspaceResponse": ExamWorkspaceResponse;
+    "CandidateRefreshResult": CandidateRefreshResult;
+    "CandidateRefreshResponse": CandidateRefreshResponse;
     "ExamPage": ExamPage;
     "SubmissionPage": SubmissionPage;
     "ReviewTask": ReviewTask;
@@ -787,6 +805,7 @@ export interface components {
     "GradingEvaluationReferenceKind": GradingEvaluationReferenceKind;
     "GradingEvaluationRun": GradingEvaluationRun;
     "CreateGradingEvaluationRequest": CreateGradingEvaluationRequest;
+    "GradingEvaluationErrorSource": GradingEvaluationErrorSource;
     "AddGradingEvaluationObservationRequest": AddGradingEvaluationObservationRequest;
     "GradingEvaluationObservation": GradingEvaluationObservation;
     "GradingEvaluationMetrics": GradingEvaluationMetrics;
@@ -797,6 +816,11 @@ export interface components {
     "GradingEvaluationObservationResponse": GradingEvaluationObservationResponse;
     "GradingEvaluationSliceMetricsResponse": GradingEvaluationSliceMetricsResponse;
     "GradingEvaluationResponseDifficultyResponse": GradingEvaluationResponseDifficultyResponse;
+    "GradingEvaluationCoveredRate": GradingEvaluationCoveredRate;
+    "GradingEvaluationCoveredMean": GradingEvaluationCoveredMean;
+    "GradingEvaluationErrorAttribution": GradingEvaluationErrorAttribution;
+    "GradingEvaluationQualitySummary": GradingEvaluationQualitySummary;
+    "GradingEvaluationQualitySummaryResponse": GradingEvaluationQualitySummaryResponse;
     "InvalidationReasonRequest": InvalidationReasonRequest;
     "ModelCalibrationMethod": ModelCalibrationMethod;
     "ModelCalibrationStatus": ModelCalibrationStatus;

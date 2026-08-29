@@ -14,6 +14,7 @@ import type {
   EducationStage,
   ExamRiskTier,
   GradingEvaluationResponseDifficulty,
+  GradingEvaluationQualitySummary,
   GradingEvaluationRun,
   GradingEvaluationSliceMetric,
   ModelCalibration,
@@ -41,6 +42,7 @@ export type {
   EducationStage,
   ExamRiskTier,
   GradingEvaluationResponseDifficulty,
+  GradingEvaluationQualitySummary,
   GradingEvaluationRun,
   GradingEvaluationSliceMetric,
   ModelCalibration,
@@ -95,6 +97,10 @@ export function listGradingEvaluationSliceMetrics(runId: string) {
 
 export function listGradingEvaluationResponseDifficulty(runId: string) {
   return api.listGradingEvaluationResponseDifficulty({ path: { runId } });
+}
+
+export function getGradingEvaluationQualitySummary(runId: string) {
+  return api.getGradingEvaluationQualitySummary({ path: { runId } });
 }
 
 export function listModelCalibrations() {

@@ -39,6 +39,24 @@ const (
 	SliceOCRQuality       = "ocr_quality"
 	SliceAnswerLength     = "answer_length"
 	SliceRubricComplexity = "rubric_complexity"
+	SliceErrorSource      = "error_source"
+)
+
+type ErrorSource string
+
+const (
+	ErrorNone               ErrorSource = "none"
+	ErrorImageQuality       ErrorSource = "image_quality"
+	ErrorPageMatching       ErrorSource = "page_matching"
+	ErrorAnswerCrop         ErrorSource = "answer_crop"
+	ErrorHandwritingOCR     ErrorSource = "handwriting_ocr"
+	ErrorFormulaRecognition ErrorSource = "formula_recognition"
+	ErrorAnswerStructuring  ErrorSource = "answer_structuring"
+	ErrorRubric             ErrorSource = "rubric"
+	ErrorModelScoring       ErrorSource = "model_scoring"
+	ErrorScoreCalculation   ErrorSource = "score_calculation"
+	ErrorSystem             ErrorSource = "system"
+	ErrorUnattributed       ErrorSource = "unattributed"
 )
 
 type Run struct {
@@ -65,21 +83,61 @@ type Run struct {
 // The six slice fields are recorded at observation time so a later metadata
 // change cannot rewrite historical evaluation evidence.
 type Observation struct {
-	ID                  string        `json:"id"`
-	RunID               string        `json:"run_id"`
-	ResponseKey         string        `json:"response_key"`
-	ResponseFingerprint string        `json:"response_fingerprint"`
-	ReferenceKind       ReferenceKind `json:"reference_kind"`
-	Subject             string        `json:"subject"`
-	Archetype           string        `json:"archetype"`
-	OCRQuality          string        `json:"ocr_quality"`
-	AnswerLength        string        `json:"answer_length"`
-	RubricComplexity    string        `json:"rubric_complexity"`
-	ReferenceScore      float64       `json:"reference_score"`
-	ModelScore          float64       `json:"model_score"`
-	MaxScore            float64       `json:"max_score"`
-	ReferenceScoreBand  string        `json:"reference_score_band"`
-	ObservedAt          time.Time     `json:"observed_at"`
+	ID                   string        `json:"id"`
+	RunID                string        `json:"run_id"`
+	ResponseKey          string        `json:"response_key"`
+	ResponseFingerprint  string        `json:"response_fingerprint"`
+	ReferenceKind        ReferenceKind `json:"reference_kind"`
+	Subject              string        `json:"subject"`
+	Archetype            string        `json:"archetype"`
+	OCRQuality           string        `json:"ocr_quality"`
+	AnswerLength         string        `json:"answer_length"`
+	RubricComplexity     string        `json:"rubric_complexity"`
+	ReferenceScore       float64       `json:"reference_score"`
+	ModelScore           float64       `json:"model_score"`
+	MaxScore             float64       `json:"max_score"`
+	ReferenceScoreBand   string        `json:"reference_score_band"`
+	PageMatchCorrect     *bool         `json:"page_match_correct,omitempty"`
+	CropIoU              *float64      `json:"crop_iou,omitempty"`
+	TranscriptionCER     *float64      `json:"transcription_cer,omitempty"`
+	FormulaExact         *bool         `json:"formula_exact,omitempty"`
+	RubricAgreement      *float64      `json:"rubric_criterion_agreement,omitempty"`
+	ErrorSource          ErrorSource   `json:"error_source"`
+	NeedsHumanReview     bool          `json:"needs_human_review"`
+	ReferenceReviewers   int           `json:"reference_reviewer_count"`
+	ReferenceAdjudicated bool          `json:"reference_adjudicated"`
+	ObservedAt           time.Time     `json:"observed_at"`
+}
+
+type CoveredRate struct {
+	ObservedCount int      `json:"observed_count"`
+	Rate          *float64 `json:"rate,omitempty"`
+}
+
+type CoveredMean struct {
+	ObservedCount int      `json:"observed_count"`
+	Mean          *float64 `json:"mean,omitempty"`
+}
+
+type ErrorAttribution struct {
+	Source             ErrorSource `json:"source"`
+	Count              int         `json:"count"`
+	Rate               float64     `json:"rate"`
+	SevereErrorCount   int         `json:"severe_error_count"`
+	HumanReviewCount   int         `json:"human_review_count"`
+	HumanRoutingRecall float64     `json:"human_routing_recall"`
+}
+
+type QualitySummary struct {
+	SampleCount                  int                `json:"sample_count"`
+	PageMatchAccuracy            CoveredRate        `json:"page_match_accuracy"`
+	MeanCropIoU                  CoveredMean        `json:"mean_crop_iou"`
+	MeanTranscriptionCER         CoveredMean        `json:"mean_transcription_cer"`
+	FormulaExactRate             CoveredRate        `json:"formula_exact_rate"`
+	MeanRubricCriterionAgreement CoveredMean        `json:"mean_rubric_criterion_agreement"`
+	HumanReviewRate              float64            `json:"human_review_rate"`
+	RiskyErrorRoutingRecall      float64            `json:"risky_error_routing_recall"`
+	ErrorAttribution             []ErrorAttribution `json:"error_attribution"`
 }
 
 type Metrics struct {
@@ -133,17 +191,26 @@ type CreateRunInput struct {
 }
 
 type AddObservationInput struct {
-	ResponseKey         string        `json:"response_key"`
-	ResponseFingerprint string        `json:"response_fingerprint"`
-	ReferenceKind       ReferenceKind `json:"reference_kind"`
-	Subject             string        `json:"subject"`
-	Archetype           string        `json:"archetype"`
-	OCRQuality          string        `json:"ocr_quality"`
-	AnswerLength        string        `json:"answer_length"`
-	RubricComplexity    string        `json:"rubric_complexity"`
-	ReferenceScore      float64       `json:"reference_score"`
-	ModelScore          float64       `json:"model_score"`
-	MaxScore            float64       `json:"max_score"`
+	ResponseKey          string        `json:"response_key"`
+	ResponseFingerprint  string        `json:"response_fingerprint"`
+	ReferenceKind        ReferenceKind `json:"reference_kind"`
+	Subject              string        `json:"subject"`
+	Archetype            string        `json:"archetype"`
+	OCRQuality           string        `json:"ocr_quality"`
+	AnswerLength         string        `json:"answer_length"`
+	RubricComplexity     string        `json:"rubric_complexity"`
+	ReferenceScore       float64       `json:"reference_score"`
+	ModelScore           float64       `json:"model_score"`
+	MaxScore             float64       `json:"max_score"`
+	PageMatchCorrect     *bool         `json:"page_match_correct,omitempty"`
+	CropIoU              *float64      `json:"crop_iou,omitempty"`
+	TranscriptionCER     *float64      `json:"transcription_cer,omitempty"`
+	FormulaExact         *bool         `json:"formula_exact,omitempty"`
+	RubricAgreement      *float64      `json:"rubric_criterion_agreement,omitempty"`
+	ErrorSource          ErrorSource   `json:"error_source,omitempty"`
+	NeedsHumanReview     bool          `json:"needs_human_review"`
+	ReferenceReviewers   int           `json:"reference_reviewer_count,omitempty"`
+	ReferenceAdjudicated bool          `json:"reference_adjudicated"`
 }
 
 type RunFilter struct {

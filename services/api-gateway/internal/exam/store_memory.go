@@ -162,6 +162,19 @@ func (s *MemoryStore) UpdateStatus(_ context.Context, scope auth.AccessScope, id
 	return item, nil
 }
 
+func (s *MemoryStore) RefreshCandidateSnapshot(_ context.Context, scope auth.AccessScope, id string) (CandidateRefreshResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.items[id]
+	if !ok || item.TenantID != scope.TenantID || !scopeAllowsExam(scope, item) {
+		return CandidateRefreshResult{}, ErrNotFound
+	}
+	if item.Status != "draft" && item.Status != "configured" {
+		return CandidateRefreshResult{}, ErrCandidatesFrozen
+	}
+	return CandidateRefreshResult{}, nil
+}
+
 func (s *MemoryStore) SetStatusForTest(tenantID string, id string, status string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
