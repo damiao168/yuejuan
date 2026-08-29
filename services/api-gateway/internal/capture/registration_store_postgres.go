@@ -30,39 +30,27 @@ func (s *PostgresStore) QueueSubmissionPages(ctx context.Context, tenantID, subm
 	if err = ensureBatchWritableTx(ctx, tx, tenantID, batchID); err != nil {
 		return nil, err
 	}
-	var templateID, templateHash, templateAssetID, templateContentType string
-	var layoutRaw []byte
-	err = tx.QueryRowContext(ctx, `SELECT ast.id::text,ast.content_hash,ast.layout,ep.file_asset_id::text,fa.content_type
-FROM answer_sheet_template ast
-JOIN exam_paper ep ON ep.tenant_id=ast.tenant_id AND ep.id=ast.exam_paper_id
-JOIN file_asset fa ON fa.tenant_id=ep.tenant_id AND fa.id=ep.file_asset_id
-WHERE ast.tenant_id=$1 AND ast.exam_id=$2::uuid AND ast.status='locked' AND ast.deleted_at IS NULL
-ORDER BY ast.version_no DESC LIMIT 1`, tenantID, examID).Scan(&templateID, &templateHash, &layoutRaw, &templateAssetID, &templateContentType)
-	if err != nil {
-		return nil, mapNotFound(err)
-	}
-	var layout templateLayout
-	if json.Unmarshal(layoutRaw, &layout) != nil || len(layout.Pages) == 0 {
-		return nil, ErrInvalidInput
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT cp.id::text,cp.submission_page_id::text,sp.normalized_file_asset_id::text,cp.assigned_page_no,cp.revision,fa.hash_sha256
+	rows, err := tx.QueryContext(ctx, `SELECT cp.id::text,cp.submission_page_id::text,sp.normalized_file_asset_id::text,cp.assigned_page_no,cp.revision,fa.hash_sha256,
+	COALESCE(sheet.template_id::text,cp.barcode_template_id::text,''),COALESCE(sheet.template_content_hash,'')
 	FROM capture_page cp
 	JOIN submission_page sp ON sp.tenant_id=cp.tenant_id AND sp.id=cp.submission_page_id
 	JOIN file_asset fa ON fa.tenant_id=sp.tenant_id AND fa.id=sp.normalized_file_asset_id
+	LEFT JOIN answer_sheet_print_sheet sheet ON sheet.tenant_id=cp.tenant_id AND sheet.id=cp.sheet_serial
 	WHERE cp.tenant_id=$1 AND cp.submission_id=$2::uuid AND cp.status='normalized'
 	  AND sp.quality_status='passed' AND sp.normalized_file_asset_id IS NOT NULL
-	  AND cp.deleted_at IS NULL ORDER BY cp.sequence_no FOR UPDATE`, tenantID, submissionID)
+	  AND cp.deleted_at IS NULL ORDER BY cp.sequence_no FOR UPDATE OF cp`, tenantID, submissionID)
 	if err != nil {
 		return nil, err
 	}
 	type pageRow struct {
 		id, submissionPageID, assetID, hash string
+		templateID, templateHash            string
 		pageNo, revision                    int
 	}
 	pages := []pageRow{}
 	for rows.Next() {
 		var p pageRow
-		if err = rows.Scan(&p.id, &p.submissionPageID, &p.assetID, &p.pageNo, &p.revision, &p.hash); err != nil {
+		if err = rows.Scan(&p.id, &p.submissionPageID, &p.assetID, &p.pageNo, &p.revision, &p.hash, &p.templateID, &p.templateHash); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -77,6 +65,38 @@ ORDER BY ast.version_no DESC LIMIT 1`, tenantID, examID).Scan(&templateID, &temp
 	}
 	if len(pages) == 0 {
 		return nil, ErrNotFound
+	}
+	var templateID, templateHash string
+	controlled := false
+	for _, page := range pages {
+		if page.templateID == "" && page.templateHash == "" {
+			continue
+		}
+		if page.templateID == "" || page.templateHash == "" {
+			return nil, ErrInvalidTransition
+		}
+		if !controlled {
+			templateID, templateHash, controlled = page.templateID, page.templateHash, true
+		} else if page.templateID != templateID || page.templateHash != templateHash {
+			return nil, ErrInvalidTransition
+		}
+	}
+	var templateAssetID, templateContentType string
+	var layoutRaw []byte
+	if controlled {
+		err = tx.QueryRowContext(ctx, `SELECT ast.id::text,ast.content_hash,ast.layout,ep.file_asset_id::text,fa.content_type
+FROM answer_sheet_template ast JOIN exam_paper ep ON ep.tenant_id=ast.tenant_id AND ep.id=ast.exam_paper_id JOIN file_asset fa ON fa.tenant_id=ep.tenant_id AND fa.id=ep.file_asset_id
+WHERE ast.tenant_id=$1 AND ast.exam_id=$2::uuid AND ast.id=$3::uuid AND ast.content_hash=$4 AND ast.status='locked' AND ast.deleted_at IS NULL`, tenantID, examID, templateID, templateHash).Scan(&templateID, &templateHash, &layoutRaw, &templateAssetID, &templateContentType)
+	} else {
+		err = tx.QueryRowContext(ctx, `WITH locked AS (SELECT ast.* FROM answer_sheet_template ast WHERE ast.tenant_id=$1 AND ast.exam_id=$2::uuid AND ast.status='locked' AND ast.deleted_at IS NULL)
+SELECT ast.id::text,ast.content_hash,ast.layout,ep.file_asset_id::text,fa.content_type FROM locked ast JOIN exam_paper ep ON ep.tenant_id=ast.tenant_id AND ep.id=ast.exam_paper_id JOIN file_asset fa ON fa.tenant_id=ep.tenant_id AND fa.id=ep.file_asset_id WHERE (SELECT COUNT(*) FROM locked)=1`, tenantID, examID).Scan(&templateID, &templateHash, &layoutRaw, &templateAssetID, &templateContentType)
+	}
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	var layout templateLayout
+	if json.Unmarshal(layoutRaw, &layout) != nil || len(layout.Pages) == 0 {
+		return nil, ErrInvalidInput
 	}
 	out := []RegistrationRun{}
 	for _, page := range pages {

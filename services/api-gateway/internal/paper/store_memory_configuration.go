@@ -26,6 +26,9 @@ func (s *MemoryStore) CreateTemplate(_ context.Context, tenantID string, examID 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureExamPaperMutableLocked(examID); err != nil {
+		return AnswerSheetTemplate{}, err
+	}
 	if !s.paperBelongsToExam(tenantID, examID, input.ExamPaperID) {
 		return AnswerSheetTemplate{}, ErrInvalidInput
 	}
@@ -61,6 +64,9 @@ func (s *MemoryStore) UpdateTemplate(_ context.Context, tenantID string, id stri
 	if !ok || item.TenantID != tenantID {
 		return AnswerSheetTemplate{}, ErrNotFound
 	}
+	if err := s.ensureExamPaperMutableLocked(item.ExamID); err != nil {
+		return AnswerSheetTemplate{}, err
+	}
 	if item.Status != "draft" {
 		return AnswerSheetTemplate{}, ErrTemplateLocked
 	}
@@ -91,6 +97,9 @@ func (s *MemoryStore) LockTemplate(_ context.Context, tenantID string, id string
 	if !ok || item.TenantID != tenantID {
 		return AnswerSheetTemplate{}, ErrNotFound
 	}
+	if err := s.ensureExamPaperMutableLocked(item.ExamID); err != nil {
+		return AnswerSheetTemplate{}, err
+	}
 	if item.Status != "draft" {
 		return AnswerSheetTemplate{}, ErrTemplateLocked
 	}
@@ -118,6 +127,9 @@ func (s *MemoryStore) CloneTemplate(_ context.Context, tenantID string, id strin
 	source, ok := s.templates[id]
 	if !ok || source.TenantID != tenantID {
 		return AnswerSheetTemplate{}, ErrNotFound
+	}
+	if err := s.ensureExamPaperMutableLocked(source.ExamID); err != nil {
+		return AnswerSheetTemplate{}, err
 	}
 	version := source.VersionNo + 1
 	for _, item := range s.templates {

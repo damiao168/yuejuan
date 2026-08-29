@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type PostgresStore struct {
@@ -128,10 +129,148 @@ RETURNING id::text,tenant_id::text,exam_id::text,exam_paper_id::text,paper_file_
 }
 
 func (s *PostgresStore) CompletePaperImport(ctx context.Context, tenantID, id string, questions []PaperImportDraftQuestion, issues []string) (PaperImportJob, error) {
+	var examID string
+	if err := s.db.QueryRowContext(ctx, `SELECT exam_id::text FROM paper_import_job WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL`, tenantID, id).Scan(&examID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PaperImportJob{}, ErrNotFound
+		}
+		return PaperImportJob{}, err
+	}
+	var err error
+	questions, issues, err = reconcilePaperImportQuestions(ctx, s.db, tenantID, examID, questions, issues)
+	if err != nil {
+		return PaperImportJob{}, err
+	}
 	q, _ := json.Marshal(questions)
 	i, _ := json.Marshal(issues)
 	row := s.db.QueryRowContext(ctx, `UPDATE paper_import_job SET status='review_required',draft_questions=$3,issues=$4,error_code='',updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL RETURNING id::text,tenant_id::text,exam_id::text,exam_paper_id::text,paper_file_asset_id::text,answer_file_asset_id::text,status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at`, tenantID, id, q, i)
 	return scanPaperImport(row)
+}
+
+type paperImportQuestionReader interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+type paperImportExistingQuestion struct {
+	id, number, kind string
+	score            float64
+	sortOrder        int
+}
+
+func reconcilePaperImportQuestions(ctx context.Context, reader paperImportQuestionReader, tenantID, examID string, drafts []PaperImportDraftQuestion, baseIssues []string) ([]PaperImportDraftQuestion, []string, error) {
+	rows, err := reader.QueryContext(ctx, `SELECT id::text,question_no,question_type,score::float8,sort_order FROM question WHERE tenant_id=$1 AND exam_id=$2::uuid AND deleted_at IS NULL AND status<>'deleted' ORDER BY sort_order,question_no`, tenantID, examID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	existing := []paperImportExistingQuestion{}
+	for rows.Next() {
+		var item paperImportExistingQuestion
+		if err := rows.Scan(&item.id, &item.number, &item.kind, &item.score, &item.sortOrder); err != nil {
+			return nil, nil, err
+		}
+		existing = append(existing, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	issues := append([]string{}, baseIssues...)
+	if len(existing) == 0 {
+		for i := range drafts {
+			drafts[i].MatchStatus = "create"
+			drafts[i].MatchedQuestionID = ""
+		}
+		return drafts, dedupeStrings(issues), nil
+	}
+	byNumber := map[string][]paperImportExistingQuestion{}
+	for _, item := range existing {
+		key := strings.TrimSpace(item.number)
+		byNumber[key] = append(byNumber[key], item)
+	}
+	used := map[string]bool{}
+	seenDraftNumbers := map[string]bool{}
+	for index := range drafts {
+		draft := &drafts[index]
+		draft.MatchedQuestionID = ""
+		draft.MatchStatus = "extra"
+		key := strings.TrimSpace(draft.QuestionNo)
+		if key != "" && seenDraftNumbers[key] {
+			draft.MatchStatus = "ambiguous"
+			draft.Issues = append(draft.Issues, "AI 结果包含重复题号 "+key)
+			issues = append(issues, "AI 结果包含重复题号 "+key)
+			continue
+		}
+		seenDraftNumbers[key] = key != ""
+		matches := byNumber[key]
+		var matched *paperImportExistingQuestion
+		if len(matches) == 1 && !used[matches[0].id] {
+			candidate := matches[0]
+			matched = &candidate
+		} else if len(matches) > 1 {
+			draft.MatchStatus = "ambiguous"
+			draft.Issues = append(draft.Issues, "题号 "+key+" 无法唯一匹配蓝图题目")
+			issues = append(issues, "题号 "+key+" 无法唯一匹配蓝图题目")
+			continue
+		} else if len(drafts) == len(existing) && index < len(existing) && !used[existing[index].id] {
+			candidate := existing[index]
+			matched = &candidate
+			draft.MatchStatus = "matched_by_order"
+			draft.Issues = append(draft.Issues, fmt.Sprintf("题号 %s 未直接命中，按第 %d 题候选匹配蓝图题号 %s，请核对", draft.QuestionNo, index+1, candidate.number))
+		}
+		if matched == nil {
+			draft.Issues = append(draft.Issues, "未找到可唯一匹配的蓝图题目")
+			issues = append(issues, "AI 多识别题目 "+draft.QuestionNo)
+			continue
+		}
+		used[matched.id] = true
+		draft.MatchedQuestionID = matched.id
+		if draft.MatchStatus == "extra" {
+			draft.MatchStatus = "matched"
+		}
+		mismatch := false
+		if draft.QuestionType != matched.kind {
+			mismatch = true
+			draft.Issues = append(draft.Issues, fmt.Sprintf("题型不一致：AI=%s，蓝图=%s；将保留蓝图题型", draft.QuestionType, matched.kind))
+		}
+		if !scoreEqual(draft.Score, matched.score) {
+			mismatch = true
+			draft.Issues = append(draft.Issues, fmt.Sprintf("分值不一致：AI=%.2f，蓝图=%.2f；将保留蓝图分值", draft.Score, matched.score))
+		}
+		if mismatch {
+			draft.MatchStatus = "mismatch"
+			issues = append(issues, "题目 "+matched.number+" 的题型或分值与蓝图不一致")
+		}
+		draft.Issues = dedupeStrings(draft.Issues)
+	}
+	for _, item := range existing {
+		if !used[item.id] {
+			issues = append(issues, "AI 漏识别蓝图题目 "+item.number)
+		}
+	}
+	var draftTotal, existingTotal float64
+	for _, item := range drafts {
+		draftTotal += item.Score
+	}
+	for _, item := range existing {
+		existingTotal += item.score
+	}
+	if !scoreEqual(draftTotal, existingTotal) {
+		issues = append(issues, fmt.Sprintf("AI 识别总分 %.2f 与蓝图总分 %.2f 不一致", draftTotal, existingTotal))
+	}
+	return drafts, dedupeStrings(issues), nil
+}
+
+func dedupeStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func (s *PostgresStore) FailPaperImport(ctx context.Context, tenantID, id, code string, issues []string) (PaperImportJob, error) {
@@ -178,16 +317,43 @@ func (s *PostgresStore) ApplyPaperImport(ctx context.Context, tenantID, id, user
 	if job.Status != "review_required" {
 		return PaperImportJob{}, ErrConflict
 	}
+	if err := ensureExamPaperMutableTx(ctx, tx, tenantID, job.ExamID); err != nil {
+		return PaperImportJob{}, err
+	}
 	var existing int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM question WHERE tenant_id=$1 AND exam_id=$2 AND deleted_at IS NULL AND status<>'deleted'`, tenantID, job.ExamID).Scan(&existing); err != nil {
 		return PaperImportJob{}, err
 	}
-	if existing > 0 {
-		return PaperImportJob{}, ErrConflict
+	job.Questions, job.Issues, err = reconcilePaperImportQuestions(ctx, tx, tenantID, job.ExamID, job.Questions, job.Issues)
+	if err != nil {
+		return PaperImportJob{}, err
 	}
 	for index, draft := range job.Questions {
 		if err := validateQuestionInput(draft.QuestionNo, draft.QuestionType, draft.Score); err != nil {
 			return PaperImportJob{}, ErrInvalidInput
+		}
+		if existing > 0 {
+			if draft.MatchedQuestionID == "" || draft.MatchStatus == "extra" || draft.MatchStatus == "ambiguous" {
+				continue
+			}
+			kp, _ := json.Marshal(draft.KnowledgePoints)
+			result, updateErr := tx.ExecContext(ctx, `UPDATE question SET exam_paper_id=$3::uuid,stem=$4,knowledge_points=$5,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND exam_id=$6::uuid AND deleted_at IS NULL AND status<>'deleted'`, tenantID, draft.MatchedQuestionID, job.ExamPaperID, draft.Stem, kp, job.ExamID)
+			if updateErr != nil {
+				return PaperImportJob{}, updateErr
+			}
+			if affected, _ := result.RowsAffected(); affected != 1 {
+				return PaperImportJob{}, ErrConflict
+			}
+			// A core mismatch is intentionally review-only. The blueprint score and
+			// type remain authoritative, and importing an answer/rubric for a
+			// different question shape would create a second inconsistency.
+			if draft.MatchStatus == "mismatch" {
+				continue
+			}
+			if err := s.applyImportedAnswerAndRubric(ctx, tx, tenantID, draft.MatchedQuestionID, userID, draft); err != nil {
+				return PaperImportJob{}, err
+			}
+			continue
 		}
 		kp, _ := json.Marshal(draft.KnowledgePoints)
 		area := []byte(`{}`)
@@ -195,29 +361,13 @@ func (s *PostgresStore) ApplyPaperImport(ctx context.Context, tenantID, id, user
 		if err := tx.QueryRowContext(ctx, `INSERT INTO question (tenant_id,exam_id,exam_paper_id,question_no,question_type,score,stem,knowledge_points,answer_area,sort_order,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'active') RETURNING id::text`, tenantID, job.ExamID, job.ExamPaperID, draft.QuestionNo, draft.QuestionType, draft.Score, draft.Stem, kp, area, index+1).Scan(&questionID); err != nil {
 			return PaperImportJob{}, err
 		}
-		if draft.AnswerKey != nil {
-			if _, err := s.insertAnswerKey(ctx, tx, tenantID, questionID, userID, "v1", *draft.AnswerKey); err != nil {
-				return PaperImportJob{}, err
-			}
-		}
-		if draft.Rubric != nil {
-			if !scoreEqual(SumRubricPoints(draft.Rubric.Points), draft.Score) || !scoreEqual(draft.Rubric.MaxScore, draft.Score) {
-				return PaperImportJob{}, ErrRubricMismatch
-			}
-			points, _ := json.Marshal(draft.Rubric.Points)
-			deductions, _ := json.Marshal(draft.Rubric.Deductions)
-			examples, _ := json.Marshal(draft.Rubric.Examples)
-			hash := contentHash(points, deductions, examples)
-			var versionID string
-			if err := tx.QueryRowContext(ctx, `INSERT INTO rubric_version (tenant_id,question_id,version,status,content_hash,created_by) VALUES ($1,$2,'v1','draft',$3,$4) RETURNING id::text`, tenantID, questionID, hash, userID).Scan(&versionID); err != nil {
-				return PaperImportJob{}, err
-			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO question_rubric (tenant_id,question_id,rubric_version_id,status,max_score,points,deductions,examples,created_by) VALUES ($1,$2,$3,'draft',$4,$5,$6,$7,$8)`, tenantID, questionID, versionID, draft.Rubric.MaxScore, points, deductions, examples, userID); err != nil {
-				return PaperImportJob{}, err
-			}
+		if err := s.applyImportedAnswerAndRubric(ctx, tx, tenantID, questionID, userID, draft); err != nil {
+			return PaperImportJob{}, err
 		}
 	}
-	job, err = scanPaperImport(tx.QueryRowContext(ctx, `UPDATE paper_import_job SET status='applied',applied_at=now(),updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid RETURNING id::text,tenant_id::text,exam_id::text,exam_paper_id::text,paper_file_asset_id::text,answer_file_asset_id::text,status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at`, tenantID, id))
+	questionsJSON, _ := json.Marshal(job.Questions)
+	issuesJSON, _ := json.Marshal(job.Issues)
+	job, err = scanPaperImport(tx.QueryRowContext(ctx, `UPDATE paper_import_job SET status='applied',draft_questions=$3,issues=$4,applied_at=now(),updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid RETURNING id::text,tenant_id::text,exam_id::text,exam_paper_id::text,paper_file_asset_id::text,answer_file_asset_id::text,status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at`, tenantID, id, questionsJSON, issuesJSON))
 	if err != nil {
 		return PaperImportJob{}, err
 	}
@@ -225,6 +375,42 @@ func (s *PostgresStore) ApplyPaperImport(ctx context.Context, tenantID, id, user
 		return PaperImportJob{}, err
 	}
 	return job, nil
+}
+
+func (s *PostgresStore) applyImportedAnswerAndRubric(ctx context.Context, tx *sql.Tx, tenantID, questionID, userID string, draft PaperImportDraftQuestion) error {
+	if draft.AnswerKey != nil {
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM question_answer_key WHERE tenant_id=$1 AND question_id=$2::uuid AND deleted_at IS NULL`, tenantID, questionID).Scan(&count); err != nil {
+			return err
+		}
+		if _, err := s.insertAnswerKey(ctx, tx, tenantID, questionID, userID, fmt.Sprintf("v%d", count+1), *draft.AnswerKey); err != nil {
+			return err
+		}
+	}
+	if draft.Rubric == nil {
+		return nil
+	}
+	if !scoreEqual(SumRubricPoints(draft.Rubric.Points), draft.Score) || !scoreEqual(draft.Rubric.MaxScore, draft.Score) {
+		return ErrRubricMismatch
+	}
+	var count int
+	var locked bool
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(BOOL_OR(status='locked'),false) FROM rubric_version WHERE tenant_id=$1 AND question_id=$2::uuid AND deleted_at IS NULL`, tenantID, questionID).Scan(&count, &locked); err != nil {
+		return err
+	}
+	if locked {
+		return ErrRubricLocked
+	}
+	points, _ := json.Marshal(draft.Rubric.Points)
+	deductions, _ := json.Marshal(draft.Rubric.Deductions)
+	examples, _ := json.Marshal(draft.Rubric.Examples)
+	hash := contentHash(points, deductions, examples)
+	var versionID string
+	if err := tx.QueryRowContext(ctx, `INSERT INTO rubric_version (tenant_id,question_id,version,status,content_hash,created_by) VALUES ($1,$2,$3,'draft',$4,$5) RETURNING id::text`, tenantID, questionID, fmt.Sprintf("v%d", count+1), hash, userID).Scan(&versionID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO question_rubric (tenant_id,question_id,rubric_version_id,status,max_score,points,deductions,examples,created_by) VALUES ($1,$2,$3,'draft',$4,$5,$6,$7,$8)`, tenantID, questionID, versionID, draft.Rubric.MaxScore, points, deductions, examples, userID)
+	return err
 }
 
 type paperImportScanner interface{ Scan(...any) error }
@@ -264,6 +450,9 @@ func (s *PostgresStore) CreateQuestion(ctx context.Context, tenantID string, exa
 		return Question{}, err
 	}
 	defer tx.Rollback()
+	if err := ensureExamPaperMutableTx(ctx, tx, tenantID, examID); err != nil {
+		return Question{}, err
+	}
 	if err := ensurePaperBelongsToExam(ctx, tx, tenantID, examID, input.ExamPaperID); err != nil {
 		return Question{}, err
 	}
@@ -336,8 +525,19 @@ ORDER BY sort_order, question_no
 }
 
 func (s *PostgresStore) UpdateQuestion(ctx context.Context, tenantID string, id string, userID string, input UpdateQuestionInput) (Question, error) {
-	current, err := s.question(ctx, tenantID, id)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return Question{}, err
+	}
+	defer tx.Rollback()
+	var current Question
+	if err := scanQuestion(tx.QueryRowContext(ctx, `SELECT id::text,tenant_id::text,exam_id::text,COALESCE(exam_paper_id::text,''),question_no,question_type,score::float8,COALESCE(stem,''),knowledge_points,answer_area,sort_order,status FROM question WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL AND status<>'deleted' FOR UPDATE`, tenantID, id), &current); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Question{}, ErrNotFound
+		}
+		return Question{}, err
+	}
+	if err := ensureExamPaperMutableTx(ctx, tx, tenantID, current.ExamID); err != nil {
 		return Question{}, err
 	}
 	merged := current
@@ -364,11 +564,6 @@ func (s *PostgresStore) UpdateQuestion(ctx context.Context, tenantID string, id 
 	}
 	kp, _ := json.Marshal(merged.KnowledgePoints)
 	area, _ := json.Marshal(merged.AnswerArea)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Question{}, err
-	}
-	defer tx.Rollback()
 	row := tx.QueryRowContext(ctx, `
 UPDATE question
 SET question_no = $3, question_type = $4, score = $5, stem = $6, knowledge_points = $7, answer_area = $8, sort_order = $9, updated_at = now()
@@ -393,7 +588,22 @@ RETURNING id::text, tenant_id::text, exam_id::text, COALESCE(exam_paper_id::text
 }
 
 func (s *PostgresStore) DeleteQuestion(ctx context.Context, tenantID string, id string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE question SET status = 'deleted', deleted_at = now(), updated_at = now() WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL`, tenantID, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var examID string
+	if err := tx.QueryRowContext(ctx, `SELECT exam_id::text FROM question WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL AND status<>'deleted' FOR UPDATE`, tenantID, id).Scan(&examID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if err := ensureExamPaperMutableTx(ctx, tx, tenantID, examID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE question SET status = 'deleted', deleted_at = now(), updated_at = now() WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL`, tenantID, id)
 	if err != nil {
 		return err
 	}
@@ -401,17 +611,30 @@ func (s *PostgresStore) DeleteQuestion(ctx context.Context, tenantID string, id 
 	if affected == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *PostgresStore) CreateRubric(ctx context.Context, tenantID string, questionID string, userID string, input RubricInput) (Rubric, error) {
-	question, err := s.question(ctx, tenantID, questionID)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Rubric{}, err
 	}
-	if latest, ok, err := s.latestRubric(ctx, tenantID, questionID); err != nil {
+	defer tx.Rollback()
+	var question Question
+	if err := scanQuestion(tx.QueryRowContext(ctx, `SELECT id::text,tenant_id::text,exam_id::text,COALESCE(exam_paper_id::text,''),question_no,question_type,score::float8,COALESCE(stem,''),knowledge_points,answer_area,sort_order,status FROM question WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL AND status<>'deleted' FOR UPDATE`, tenantID, questionID), &question); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Rubric{}, ErrNotFound
+		}
 		return Rubric{}, err
-	} else if ok && latest.Status == "locked" {
+	}
+	if err := ensureExamPaperMutableTx(ctx, tx, tenantID, question.ExamID); err != nil {
+		return Rubric{}, err
+	}
+	var locked bool
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(BOOL_OR(status='locked'),false) FROM rubric_version WHERE tenant_id=$1 AND question_id=$2::uuid AND deleted_at IS NULL`, tenantID, questionID).Scan(&locked); err != nil {
+		return Rubric{}, err
+	}
+	if locked {
 		return Rubric{}, ErrRubricLocked
 	}
 	if !ValidRubricEvidenceRequirements(input.Points) {
@@ -420,11 +643,6 @@ func (s *PostgresStore) CreateRubric(ctx context.Context, tenantID string, quest
 	if !scoreEqual(SumRubricPoints(input.Points), question.Score) || !scoreEqual(input.MaxScore, question.Score) {
 		return Rubric{}, ErrRubricMismatch
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Rubric{}, err
-	}
-	defer tx.Rollback()
 	versionNo := 1
 	_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) + 1 FROM rubric_version WHERE tenant_id = $1 AND question_id = $2`, tenantID, questionID).Scan(&versionNo)
 	version := fmt.Sprintf("v%d", versionNo)
@@ -528,6 +746,20 @@ WHERE tenant_id = $1 AND exam_id = $2 AND id::text = $3 AND deleted_at IS NULL
 		return ErrNotFound
 	}
 	return err
+}
+
+func ensureExamPaperMutableTx(ctx context.Context, tx *sql.Tx, tenantID, examID string) error {
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM exam WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, tenantID, examID).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if status != "draft" && status != "configured" {
+		return ErrExamFrozen
+	}
+	return nil
 }
 
 func (s *PostgresStore) question(ctx context.Context, tenantID string, id string) (Question, error) {

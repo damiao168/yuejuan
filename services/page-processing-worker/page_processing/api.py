@@ -128,6 +128,12 @@ class Client:
     def fail_task(self, task: dict[str, Any], error_code: str, detail: dict[str, Any]) -> None:
         self._json("POST", f"/api/v1/internal/worker/tasks/{task['id']}/fail", {"lease_token": task["lease_token"], "retryable": True, "error_code": error_code, "error_detail": detail, "duration_ms": 0})
 
+    def complete_paper_import_decode(self, import_id: str, payload: dict[str, Any]) -> None:
+        self._json("POST", f"/api/v1/internal/paper-imports/{import_id}/decode-result", payload)
+
+    def fail_paper_import(self, import_id: str, task: dict[str, Any], error_code: str, detail: dict[str, Any]) -> None:
+        self._json("POST", f"/api/v1/internal/paper-imports/{import_id}/failure", {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": False, "error_code": error_code, "error_detail": detail, "duration_ms": 0})
+
     def _json(self, method: str, path: str, payload: dict[str, Any], auth: bool = True, timeout: float | None = None) -> dict[str, Any]:
         req = self._request(method, path, json.dumps(payload).encode("utf-8"), auth=auth)
         req.add_header("Content-Type", "application/json")

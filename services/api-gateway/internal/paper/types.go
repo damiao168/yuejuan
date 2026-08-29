@@ -14,6 +14,7 @@ var (
 	ErrTemplateLocked = errors.New("locked template cannot be modified")
 	ErrConflict       = errors.New("configuration revision conflict")
 	ErrNotReady       = errors.New("exam configuration is not ready")
+	ErrExamFrozen     = errors.New("exam paper configuration is frozen")
 )
 
 type FileAssetInput struct {
@@ -41,15 +42,17 @@ type CreatePaperInput struct {
 }
 
 type PaperImportDraftQuestion struct {
-	QuestionNo      string          `json:"question_no"`
-	QuestionType    string          `json:"question_type"`
-	Score           float64         `json:"score"`
-	Stem            string          `json:"stem"`
-	KnowledgePoints []string        `json:"knowledge_points"`
-	AnswerKey       *AnswerKeyInput `json:"answer_key,omitempty"`
-	Rubric          *RubricInput    `json:"rubric,omitempty"`
-	Confidence      float64         `json:"confidence"`
-	Issues          []string        `json:"issues"`
+	QuestionNo        string          `json:"question_no"`
+	QuestionType      string          `json:"question_type"`
+	Score             float64         `json:"score"`
+	Stem              string          `json:"stem"`
+	KnowledgePoints   []string        `json:"knowledge_points"`
+	AnswerKey         *AnswerKeyInput `json:"answer_key,omitempty"`
+	Rubric            *RubricInput    `json:"rubric,omitempty"`
+	Confidence        float64         `json:"confidence"`
+	Issues            []string        `json:"issues"`
+	MatchedQuestionID string          `json:"matched_question_id,omitempty"`
+	MatchStatus       string          `json:"match_status,omitempty"`
 }
 
 type PaperImportJob struct {
@@ -75,6 +78,57 @@ type CreatePaperImportInput struct {
 	PaperFileAssetID  string `json:"paper_file_asset_id"`
 	AnswerFileAssetID string `json:"answer_file_asset_id"`
 	Subject           string `json:"subject"`
+}
+
+type PaperImportOCRAsset struct {
+	Role        string `json:"role"`
+	FileAssetID string `json:"file_asset_id"`
+	ContentType string `json:"content_type"`
+}
+
+type PaperImportDecodedPage struct {
+	Role        string `json:"role"`
+	PageNo      int    `json:"page_no"`
+	FileAssetID string `json:"file_asset_id"`
+	SHA256      string `json:"sha256"`
+}
+
+type PaperImportDecodeResult struct {
+	TaskID     string                   `json:"task_id"`
+	LeaseToken string                   `json:"lease_token"`
+	DurationMS int                      `json:"duration_ms"`
+	Pages      []PaperImportDecodedPage `json:"pages"`
+}
+
+type PaperImportOCRBlock struct {
+	Role       string  `json:"role"`
+	PageNo     int     `json:"page_no"`
+	Text       string  `json:"text"`
+	BBox       any     `json:"bbox"`
+	Confidence float64 `json:"confidence"`
+}
+
+type PaperImportOCRResult struct {
+	TaskID     string                `json:"task_id"`
+	LeaseToken string                `json:"lease_token"`
+	DurationMS int                   `json:"duration_ms"`
+	Blocks     []PaperImportOCRBlock `json:"blocks"`
+}
+
+type PaperImportRuntimeFailure struct {
+	TaskID      string         `json:"task_id"`
+	LeaseToken  string         `json:"lease_token"`
+	Retryable   bool           `json:"retryable"`
+	ErrorCode   string         `json:"error_code"`
+	ErrorDetail map[string]any `json:"error_detail"`
+	DurationMS  int            `json:"duration_ms"`
+}
+
+type PaperImportRuntime interface {
+	QueuePaperImportOCR(context.Context, string, PaperImportJob, string, []PaperImportOCRAsset) error
+	CompletePaperImportDecode(context.Context, string, string, PaperImportDecodeResult) error
+	CompletePaperImportOCR(context.Context, string, string, PaperImportOCRResult) error
+	FailPaperImportRuntime(context.Context, string, string, PaperImportRuntimeFailure) error
 }
 
 type AnswerKeyInput struct {
@@ -177,14 +231,16 @@ type ValidationResult struct {
 }
 
 type LayoutRegion struct {
-	ID            string         `json:"id"`
-	QuestionID    string         `json:"question_id,omitempty"`
-	Label         string         `json:"label,omitempty"`
-	X             float64        `json:"x"`
-	Y             float64        `json:"y"`
-	Width         float64        `json:"width"`
-	Height        float64        `json:"height"`
-	OptionRegions []OptionRegion `json:"option_regions,omitempty"`
+	ID                   string         `json:"id"`
+	QuestionID           string         `json:"question_id,omitempty"`
+	Label                string         `json:"label,omitempty"`
+	X                    float64        `json:"x"`
+	Y                    float64        `json:"y"`
+	Width                float64        `json:"width"`
+	Height               float64        `json:"height"`
+	OptionRegions        []OptionRegion `json:"option_regions,omitempty"`
+	SuggestionConfidence float64        `json:"suggestion_confidence,omitempty"`
+	SuggestionSource     string         `json:"suggestion_source,omitempty"`
 }
 
 type OptionRegion struct {

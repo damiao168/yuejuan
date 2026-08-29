@@ -9,6 +9,8 @@ export interface LayoutRegion {
   width: number;
   height: number;
   option_regions?: OptionRegion[];
+  suggestion_confidence?: number;
+  suggestion_source?: "pdf_text_anchor" | "ocr_layout";
 }
 
 export interface OptionRegion {

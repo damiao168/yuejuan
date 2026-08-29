@@ -83,6 +83,65 @@ func TestInvalidQuestionTypeRejected(t *testing.T) {
 	}
 }
 
+func TestReadyExamRejectsAllOfficialPaperMutations(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
+	store := paper.NewMemoryStore()
+	router := testRouter(authStore, store)
+	token := login(t, router)
+	paperVersion := createPaper(t, router, token, "exam-1")
+	qUpdate := createQuestion(t, router, token, "exam-1", 10)
+	qDelete := createQuestionWithNumber(t, router, token, "exam-1", "Q2", 10)
+	qRubric := createQuestionWithNumber(t, router, token, "exam-1", "Q3", 10)
+
+	templatePayload, _ := json.Marshal(map[string]any{
+		"exam_paper_id": paperVersion.ID, "name": "冻结测试模板", "page_count": 1,
+		"layout": map[string]any{"pages": []any{map[string]any{
+			"page_no": 1, "width": 1000, "height": 1400, "registration_marks": []any{}, "identity_regions": []any{},
+			"question_regions": []any{map[string]any{"id": "q1", "question_id": qUpdate.ID, "label": "Q1", "x": .1, "y": .1, "width": .8, "height": .2}},
+		}}},
+	})
+	createTemplateReq := authedRequest(http.MethodPost, "/api/v1/exams/exam-1/answer-sheet-templates", bytes.NewBuffer(templatePayload), token)
+	createTemplateRec := httptest.NewRecorder()
+	router.ServeHTTP(createTemplateRec, createTemplateReq)
+	if createTemplateRec.Code != http.StatusCreated {
+		t.Fatalf("create template: %d %s", createTemplateRec.Code, createTemplateRec.Body.String())
+	}
+	var templateResponse struct {
+		Template paper.AnswerSheetTemplate `json:"template"`
+	}
+	if err := json.Unmarshal(createTemplateRec.Body.Bytes(), &templateResponse); err != nil {
+		t.Fatal(err)
+	}
+	var updateTemplate map[string]any
+	if err := json.Unmarshal(templatePayload, &updateTemplate); err != nil {
+		t.Fatal(err)
+	}
+	delete(updateTemplate, "exam_paper_id")
+	updateTemplate["expected_revision"] = 1
+	updateTemplatePayload, _ := json.Marshal(updateTemplate)
+
+	store.SetReadinessContext("exam-1", 30, 1, 1, "ready")
+	requests := []struct{ name, method, path, body string }{
+		{"create", http.MethodPost, "/api/v1/exams/exam-1/questions", `{"question_no":"Q4","question_type":"short_answer","score":10}`},
+		{"update", http.MethodPatch, "/api/v1/questions/" + qUpdate.ID, `{"stem":"changed"}`},
+		{"answer", http.MethodPatch, "/api/v1/questions/" + qUpdate.ID, `{"answer_key":{"standard_answer":"x","equivalent_answers":[],"tolerance":{}}}`},
+		{"delete", http.MethodDelete, "/api/v1/questions/" + qDelete.ID, ""},
+		{"rubric", http.MethodPost, "/api/v1/questions/" + qRubric.ID + "/rubric", validRubricJSON("draft", 10)},
+		{"template-update", http.MethodPatch, "/api/v1/answer-sheet-templates/" + templateResponse.Template.ID, string(updateTemplatePayload)},
+		{"template-lock", http.MethodPost, "/api/v1/answer-sheet-templates/" + templateResponse.Template.ID + "/lock", ""},
+	}
+	for _, tc := range requests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := authedRequest(tc.method, tc.path, bytes.NewBufferString(tc.body), token)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"exam_frozen"`) {
+				t.Fatalf("expected frozen 409, got %d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestQuestionRejectsPaperFromDifferentExam(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
 	paperStore := paper.NewMemoryStore()
@@ -219,15 +278,8 @@ func TestAnswerTemplateReadinessGateAndInvalidation(t *testing.T) {
 	cloneReq := authedRequest(http.MethodPost, "/api/v1/answer-sheet-templates/"+created.Template.ID+"/clone", nil, token)
 	cloneRec := httptest.NewRecorder()
 	router.ServeHTTP(cloneRec, cloneReq)
-	if cloneRec.Code != http.StatusCreated || paperStore.ExamStatus("exam-1") != "configured" {
-		t.Fatalf("clone must invalidate readiness, got %d %s status=%s", cloneRec.Code, cloneRec.Body.String(), paperStore.ExamStatus("exam-1"))
-	}
-
-	startReq := authedRequest(http.MethodPost, "/api/v1/exams/exam-1/start-collection", nil, token)
-	startRec := httptest.NewRecorder()
-	router.ServeHTTP(startRec, startReq)
-	if startRec.Code != http.StatusConflict || !strings.Contains(startRec.Body.String(), `"readiness_confirmation_required"`) {
-		t.Fatalf("invalidated readiness must block collection, got %d %s", startRec.Code, startRec.Body.String())
+	if cloneRec.Code != http.StatusConflict || !strings.Contains(cloneRec.Body.String(), `"exam_frozen"`) || paperStore.ExamStatus("exam-1") != "ready" {
+		t.Fatalf("ready exam must reject template clone, got %d %s status=%s", cloneRec.Code, cloneRec.Body.String(), paperStore.ExamStatus("exam-1"))
 	}
 }
 
@@ -334,6 +386,24 @@ func createQuestion(t *testing.T, router http.Handler, token string, examID stri
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	return response.Question
+}
+
+func createQuestionWithNumber(t *testing.T, router http.Handler, token, examID, number string, score float64) paper.Question {
+	t.Helper()
+	body := strings.Replace(validQuestionJSON(score), `"question_no":"Q1"`, `"question_no":"`+number+`"`, 1)
+	req := authedRequest(http.MethodPost, "/api/v1/exams/"+examID+"/questions", bytes.NewBufferString(body), token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create question %s expected 201, got %d %s", number, rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Question paper.Question `json:"question"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
 	}
 	return response.Question
 }

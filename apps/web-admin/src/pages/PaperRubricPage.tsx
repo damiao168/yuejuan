@@ -277,6 +277,12 @@ export function PaperRubricPage({
   }, [loadConfig, selectedExamId]);
 
   useEffect(() => {
+    if (!selectedExamId || !paperImports.some((item) => item.status === "processing")) return;
+    const timer = window.setTimeout(() => void loadConfig(selectedExamId), 2500);
+    return () => window.clearTimeout(timer);
+  }, [loadConfig, paperImports, selectedExamId]);
+
+  useEffect(() => {
     if (selectedQuestion) {
       const answerArea = selectedQuestion.answer_area ?? {};
       const rawTolerance = selectedQuestion.answer_key?.tolerance;
@@ -583,10 +589,6 @@ export function PaperRubricPage({
       message.error("请先上传完整试卷，再上传标准答案");
       return;
     }
-    if (questions.length > 0) {
-      message.warning("当前考试已有题目，自动导入不会覆盖；请继续使用逐题校对");
-      return;
-    }
     setParsing(true);
     try {
       const upload = await uploadFile(file, { owner_type: "import", owner_id: selectedExam.id, exam_id: selectedExam.id, school_id: selectedExam.school_id });
@@ -803,7 +805,7 @@ export function PaperRubricPage({
             </Button>
           </Upload>
           <Upload {...answerUploadProps}>
-            <Button icon={<FileUp size={16} />} disabled={!canManage || !selectedExam || papers.length === 0 || questions.length > 0} loading={parsing}>
+            <Button icon={<FileUp size={16} />} disabled={!canManage || !selectedExam || papers.length === 0} loading={parsing}>
               上传标准答案并自动拆题
             </Button>
           </Upload>
@@ -871,6 +873,7 @@ export function PaperRubricPage({
                 <div className="paper-import-facts">
                   <span><strong>{latestPaperImport.questions.length}</strong> 道题</span>
                   <span><strong>{latestPaperImport.questions.filter((item) => item.confidence < 0.8 || item.issues.length > 0).length}</strong> 项需重点核对</span>
+                  <span><strong>{latestPaperImport.questions.filter((item) => item.match_status === "matched" || item.match_status === "matched_by_order").length}</strong> 道已匹配蓝图</span>
                   <span><strong>{latestPaperImport.questions.reduce((sum, item) => sum + item.score, 0)}</strong> 分</span>
                 </div>
               ) : null}

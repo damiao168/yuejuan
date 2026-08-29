@@ -191,6 +191,15 @@ class EduGradeClient:
             tenant_id=tenant_id,
         )
 
+    def complete_paper_import_ocr(self, import_id: str, payload: dict[str, Any], tenant_id: str | None = None) -> None:
+        self._request("POST", f"/api/v1/internal/paper-imports/{import_id}/ocr-result", payload, tenant_id=tenant_id)
+
+    def fail_paper_import(self, import_id: str, runtime_task_id: str, lease_token: str, error_code: str, retryable: bool, tenant_id: str | None = None) -> None:
+        self._request("POST", f"/api/v1/internal/paper-imports/{import_id}/failure", {
+            "task_id": runtime_task_id, "lease_token": lease_token, "retryable": retryable,
+            "error_code": error_code, "error_detail": {}, "duration_ms": 0,
+        }, tenant_id=tenant_id)
+
     def download(self, url: str, tenant_id: str | None = None) -> bytes:
         req = self._build_request("GET", url, None, tenant_id=tenant_id)
         try:

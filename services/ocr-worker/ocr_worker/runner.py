@@ -66,6 +66,9 @@ class OCRRunner:
         activate_task = getattr(self.api, "activate_task", None)
         if callable(activate_task):
             activate_task(runtime_task, self.config.worker_id)
+        if str(runtime_task.get("source_type") or "") == "paper_import_job":
+            self._process_paper_import(runtime_task, start, tenant_id)
+            return
         incompatibility = self._runtime_incompatibility(runtime_task)
         if incompatibility is not None:
             self.api.fail_task(task_id, incompatibility, runtime_task_id, lease_token, False, tenant_id)
@@ -132,6 +135,51 @@ class OCRRunner:
             }
             heartbeat.stop()
             self.api.complete_task(task_id, payload, tenant_id)
+
+    def _process_paper_import(self, runtime_task: dict[str, Any], start: float, tenant_id: str) -> None:
+        runtime_task_id = str(runtime_task["id"])
+        lease_token = str(runtime_task["lease_token"])
+        import_id = str(runtime_task["source_id"])
+        payload = runtime_task.get("payload") or {}
+        incompatibility = self._runtime_incompatibility(runtime_task)
+        if incompatibility is not None:
+            self.api.fail_paper_import(import_id, runtime_task_id, lease_token, incompatibility, False, tenant_id)
+            return
+        pages = payload.get("pages")
+        if not isinstance(pages, list) or not pages:
+            self.api.fail_paper_import(import_id, runtime_task_id, lease_token, "invalid_paper_ocr_payload", False, tenant_id)
+            return
+        with _LeaseHeartbeat(
+            api=self.api, runtime_task_id=runtime_task_id, lease_token=lease_token,
+            worker_id=self.config.worker_id, interval=self.config.heartbeat_interval,
+            lease_seconds=self.config.lease_seconds, request_timeout=self.config.heartbeat_timeout,
+            tenant_id=tenant_id,
+        ) as heartbeat:
+            blocks: list[dict[str, Any]] = []
+            try:
+                for page in pages:
+                    heartbeat.raise_if_failed()
+                    role = str(page.get("role") or "")
+                    page_no = int(page.get("page_no") or 0)
+                    if role not in {"paper", "answer"} or page_no <= 0:
+                        raise ValueError("invalid_paper_ocr_page")
+                    image = self.api.download(str(page["download_url"]), tenant_id)
+                    for block in self.engine.recognize(image):
+                        if _valid_block(block.text, block.bbox, block.confidence):
+                            blocks.append({"role": role, "page_no": page_no, "text": block.text, "bbox": block.bbox, "confidence": block.confidence})
+                if not blocks:
+                    raise ValueError("empty_ocr_result")
+            except AuthenticationError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - OCR backends expose heterogeneous errors.
+                heartbeat.stop()
+                self.api.fail_paper_import(import_id, runtime_task_id, lease_token, str(exc)[:80] or "paper_ocr_failed", False, tenant_id)
+                return
+            heartbeat.stop()
+            self.api.complete_paper_import_ocr(import_id, {
+                "task_id": runtime_task_id, "lease_token": lease_token,
+                "duration_ms": int((time.monotonic() - start) * 1000), "blocks": blocks,
+            }, tenant_id)
 
     def _config_hash(self) -> str:
         if self.config.config_hash:

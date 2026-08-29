@@ -42,6 +42,7 @@ class Runner:
     def run_once(self) -> int:
         tasks = self.client.claim(self.config.worker_id, self.config.batch_size, self.config.lease_seconds)
         handlers = {
+            "layout": self._process_paper_import_decode,
             "capture_file_decode": self._process_capture,
             "page_registration": self._process_registration,
             "page_registration_correction_preview": self._process_correction,
@@ -81,6 +82,35 @@ class Runner:
                     )
                     traceback.print_exception(exc, file=sys.stderr)
         return len(tasks)
+
+    def _process_paper_import_decode(self, task: dict, heartbeat: _LeaseHeartbeat | _NullHeartbeat = _NULL_HEARTBEAT) -> None:
+        started = time.perf_counter()
+        payload = task.get("payload") or {}
+        if str(task.get("source_type") or "") != "paper_import_job" or not isinstance(payload.get("documents"), list):
+            raise DecodeError("unsupported_layout_task")
+        results = []
+        for document in payload["documents"]:
+            role = str(document.get("role") or "")
+            if role not in {"paper", "answer"}:
+                raise DecodeError("paper_import_role_invalid")
+            source = self.client.download(str(document["download_url"]))
+            heartbeat.raise_if_failed()
+            pages, _ = decode_document(
+                source, str(document.get("content_type") or ""),
+                render_dpi=int(document.get("render_dpi") or 220),
+                max_pages=min(int(document.get("max_pages") or self.config.max_pages), self.config.max_pages),
+                max_page_pixels=self.config.max_page_pixels,
+                max_total_pixels=self.config.max_total_pixels,
+            )
+            for page in pages:
+                heartbeat.raise_if_failed()
+                asset = self.client.upload_asset(task, "import", str(payload["paper_import_id"]), f"{role}-page-{page.index:04d}.png", page.png)
+                results.append({"role": role, "page_no": page.index, "file_asset_id": asset["id"], "sha256": asset["hash_sha256"]})
+        heartbeat.stop(raise_on_error=False)
+        self.client.complete_paper_import_decode(str(payload["paper_import_id"]), {
+            "task_id": task["id"], "lease_token": task["lease_token"],
+            "duration_ms": int((time.perf_counter() - started) * 1000), "pages": results,
+        })
 
     def run_forever(self) -> None:
         while True:
@@ -254,6 +284,8 @@ class Runner:
             self.client.fail_correction(str(payload["correction_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": not isinstance(exc, RegistrationError), "error_code": code, "error_detail": detail, "duration_ms": 0})
         elif task.get("task_type") == "omr_extract" and payload.get("omr_run_id"):
             self.client.fail_omr(str(payload["omr_run_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": not isinstance(exc, OMRExtractionError), "error_code": code, "error_detail": detail, "duration_ms": 0})
+        elif task.get("task_type") == "layout" and payload.get("paper_import_id"):
+            self.client.fail_paper_import(str(payload["paper_import_id"]), task, code, detail)
         else:
             self.client.fail_task(task, code, detail)
 

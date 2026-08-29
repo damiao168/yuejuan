@@ -202,6 +202,76 @@ LIMIT 1
 		t.Fatalf("controlled pages must match the student without counting the insertion: student=%s status=%s expected=%d actual=%d",
 			insertedStudentID, insertedIdentityStatus, insertedExpected, insertedActual)
 	}
+	var insertedSubmissionID string
+	if err := db.QueryRow(`
+SELECT DISTINCT cp.submission_id::text
+FROM capture_page cp
+WHERE cp.tenant_id=$1::uuid AND cp.capture_file_id=$2::uuid AND cp.sheet_serial=$3::uuid
+`, fixture.TenantID, insertedFileID, insertedSheetSerial).Scan(&insertedSubmissionID); err != nil {
+		t.Fatalf("lookup controlled submission: %v", err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO answer_sheet_template (
+  tenant_id,exam_id,exam_paper_id,version_no,revision,name,status,page_count,layout,
+  content_hash,created_by,locked_by,locked_at
+)
+SELECT tenant_id,exam_id,exam_paper_id,version_no+1,1,name || ' v2','locked',page_count,layout,
+       $3,created_by,$4::uuid,now()
+FROM answer_sheet_template
+WHERE tenant_id=$1::uuid AND id=$2::uuid
+`, fixture.TenantID, fixture.TemplateID, "sha256:story060-later-v2-"+suffix, fixture.AdminID); err != nil {
+		t.Fatalf("seed a later locked template version: %v", err)
+	}
+	var printedTemplateID, printedTemplateHash string
+	if err := db.QueryRow(`
+SELECT template_id::text,template_content_hash
+FROM answer_sheet_print_sheet
+WHERE tenant_id=$1::uuid AND id=$2::uuid
+`, fixture.TenantID, insertedSheetSerial).Scan(&printedTemplateID, &printedTemplateHash); err != nil {
+		t.Fatalf("lookup immutable printed template identity: %v", err)
+	}
+	if _, err := db.Exec(`
+WITH normalized AS (
+  INSERT INTO file_asset (
+    tenant_id,school_id,exam_id,submission_id,owner_type,owner_id,original_name,
+    content_type,size_bytes,hash_sha256,storage_bucket,storage_key,visibility,uploaded_by
+  )
+  SELECT fa.tenant_id,fa.school_id,fa.exam_id,cp.submission_id,'submission_page_normalized',sp.id,
+         'normalized-' || sp.id::text || '.png','image/png',fa.size_bytes,
+         md5(sp.id::text) || md5(sp.id::text || '-normalized'),fa.storage_bucket,
+         fa.storage_key || '/normalized-' || sp.id::text,'private',fa.uploaded_by
+  FROM capture_page cp
+  JOIN submission_page sp ON sp.tenant_id=cp.tenant_id AND sp.id=cp.submission_page_id
+  JOIN file_asset fa ON fa.tenant_id=sp.tenant_id AND fa.id=sp.file_asset_id
+  WHERE cp.tenant_id=$1::uuid AND cp.capture_file_id=$2::uuid AND cp.sheet_serial=$3::uuid
+  RETURNING id,owner_id
+)
+UPDATE submission_page sp
+SET normalized_file_asset_id=normalized.id, quality_status='passed', updated_at=now()
+FROM normalized
+WHERE sp.tenant_id=$1::uuid AND sp.id=normalized.owner_id
+`, fixture.TenantID, insertedFileID, insertedSheetSerial); err != nil {
+		t.Fatalf("prepare controlled submission pages for registration: %v", err)
+	}
+	if _, err := db.Exec(`
+UPDATE capture_page
+SET status='normalized', updated_at=now()
+WHERE tenant_id=$1::uuid AND capture_file_id=$2::uuid AND sheet_serial=$3::uuid
+`, fixture.TenantID, insertedFileID, insertedSheetSerial); err != nil {
+		t.Fatalf("prepare controlled capture pages for registration: %v", err)
+	}
+	runs, err := store.QueueSubmissionPages(context.Background(), fixture.TenantID, insertedSubmissionID, fixture.AdminID)
+	if err != nil {
+		t.Fatalf("queue controlled v1 pages after v2 exists: %v", err)
+	}
+	if len(runs) != 3 {
+		t.Fatalf("expected three controlled registration runs, got %d", len(runs))
+	}
+	for _, run := range runs {
+		if run.TemplateID != printedTemplateID || run.TemplateContentHash != printedTemplateHash {
+			t.Fatalf("printed v1 sheet must keep v1 identity after v2 exists: %#v", run)
+		}
+	}
 	rows, err := db.Query(`
 SELECT cp.source_index,cp.assigned_page_no,sp.page_no,cp.status,
        COALESCE(cp.page_identity->>'barcode_conflict_code','')

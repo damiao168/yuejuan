@@ -76,6 +76,66 @@ func (h *Handler) ApplyPaperImport(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, 200, map[string]any{"import": out})
 }
 
+func (h *Handler) CompletePaperImportDecode(w http.ResponseWriter, r *http.Request) {
+	runtime, ok := h.store.(PaperImportRuntime)
+	if !ok {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "paper_ocr_unavailable", "paper OCR runtime is unavailable")
+		return
+	}
+	user := mustUser(r)
+	var input PaperImportDecodeResult
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := runtime.CompletePaperImportDecode(r.Context(), user.TenantID, r.PathValue("id"), input); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"accepted": true})
+}
+
+func (h *Handler) CompletePaperImportOCR(w http.ResponseWriter, r *http.Request) {
+	runtime, ok := h.store.(PaperImportRuntime)
+	if !ok || h.documentImport == nil {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "paper_ocr_unavailable", "paper OCR runtime is unavailable")
+		return
+	}
+	user := mustUser(r)
+	var input PaperImportOCRResult
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := runtime.CompletePaperImportOCR(r.Context(), user.TenantID, r.PathValue("id"), input); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	out, err := h.documentImport.CompleteOCR(r.Context(), user.TenantID, r.PathValue("id"), input.Blocks)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.import_ocr_completed", "paper_import_job", out.ID, "complete scanned document OCR and paper parsing")
+	httpx.JSON(w, http.StatusOK, map[string]any{"import": out})
+}
+
+func (h *Handler) FailPaperImportRuntime(w http.ResponseWriter, r *http.Request) {
+	runtime, ok := h.store.(PaperImportRuntime)
+	if !ok {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "paper_ocr_unavailable", "paper OCR runtime is unavailable")
+		return
+	}
+	user := mustUser(r)
+	var input PaperImportRuntimeFailure
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := runtime.FailPaperImportRuntime(r.Context(), user.TenantID, r.PathValue("id"), input); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"accepted": true})
+}
+
 func NewHandler(store Store, audit auth.Store) *Handler {
 	return &Handler{store: store, audit: audit}
 }
@@ -234,6 +294,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, "rubric_locked", "locked rubric cannot be modified")
 	case errors.Is(err, ErrTemplateLocked):
 		httpx.Error(w, r, http.StatusConflict, "template_locked", "locked template cannot be modified; clone a new version")
+	case errors.Is(err, ErrExamFrozen):
+		httpx.Error(w, r, http.StatusConflict, "exam_frozen", "exam paper configuration is frozen after readiness confirmation")
 	case errors.Is(err, ErrConflict):
 		httpx.Error(w, r, http.StatusConflict, "configuration_conflict", "configuration changed; refresh before saving")
 	case errors.Is(err, ErrInvalidInput):

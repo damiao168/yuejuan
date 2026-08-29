@@ -1,0 +1,118 @@
+package paper
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
+)
+
+func (s *PostgresStore) QueuePaperImportOCR(ctx context.Context, tenantID string, job PaperImportJob, actorID string, assets []PaperImportOCRAsset) error {
+	if len(assets) == 0 {
+		return ErrInvalidInput
+	}
+	documents := make([]map[string]any, 0, len(assets))
+	for _, asset := range assets {
+		if asset.Role != "paper" && asset.Role != "answer" {
+			return ErrInvalidInput
+		}
+		documents = append(documents, map[string]any{
+			"role": asset.Role, "file_asset_id": asset.FileAssetID,
+			"download_url": "/api/v1/files/" + asset.FileAssetID + "/download",
+			"content_type": asset.ContentType, "render_dpi": 220, "max_pages": 100,
+		})
+	}
+	payload, _ := json.Marshal(map[string]any{"paper_import_id": job.ID, "exam_id": job.ExamID, "documents": documents})
+	_, err := s.db.ExecContext(ctx, `INSERT INTO agent_worker_task(tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)
+VALUES($1,'layout','page-processing','paper_import_job',$2::uuid,55,$3,'paper-import-decode-v1',$4,$4,3,10,$5::uuid)
+ON CONFLICT(tenant_id,task_type,idempotency_key) DO NOTHING`, tenantID, job.ID, payload, "paper-import-decode:"+job.ID+":v1", actorID)
+	return err
+}
+
+func (s *PostgresStore) CompletePaperImportDecode(ctx context.Context, tenantID, importID string, input PaperImportDecodeResult) error {
+	if input.TaskID == "" || input.LeaseToken == "" || len(input.Pages) == 0 {
+		return ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result := mapFromJSON(input)
+	if _, err = workerruntime.CompleteTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.CompleteInput{LeaseToken: input.LeaseToken, ResultSchemaVersion: "paper-import-decode-result-v1", Result: result, DurationMS: input.DurationMS}); err != nil {
+		return err
+	}
+	var examID, actorID string
+	if err = tx.QueryRowContext(ctx, `SELECT exam_id::text,created_by::text FROM paper_import_job WHERE tenant_id=$1 AND id=$2::uuid AND status='processing' AND deleted_at IS NULL FOR UPDATE`, tenantID, importID).Scan(&examID, &actorID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	pages := make([]map[string]any, 0, len(input.Pages))
+	for _, page := range input.Pages {
+		if (page.Role != "paper" && page.Role != "answer") || page.PageNo <= 0 || page.FileAssetID == "" {
+			return ErrInvalidInput
+		}
+		pages = append(pages, map[string]any{"role": page.Role, "page_no": page.PageNo, "file_asset_id": page.FileAssetID, "download_url": "/api/v1/files/" + page.FileAssetID + "/download", "sha256": page.SHA256})
+	}
+	payload, _ := json.Marshal(map[string]any{"paper_import_id": importID, "exam_id": examID, "engine": "paddleocr", "engine_version": "pp-ocrv5", "pages": pages})
+	_, err = tx.ExecContext(ctx, `INSERT INTO agent_worker_task(tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)
+VALUES($1,'ocr','ocr','paper_import_job',$2::uuid,55,$3,'paper-import-ocr-v1',$4,$4,3,10,$5::uuid)
+ON CONFLICT(tenant_id,task_type,idempotency_key) DO NOTHING`, tenantID, importID, payload, "paper-import-ocr:"+importID+":v1", actorID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *PostgresStore) CompletePaperImportOCR(ctx context.Context, tenantID, importID string, input PaperImportOCRResult) error {
+	if input.TaskID == "" || input.LeaseToken == "" || len(input.Blocks) == 0 {
+		return ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = workerruntime.CompleteTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.CompleteInput{LeaseToken: input.LeaseToken, ResultSchemaVersion: "paper-import-ocr-result-v1", Result: mapFromJSON(input), DurationMS: input.DurationMS}); err != nil {
+		return err
+	}
+	var status string
+	if err = tx.QueryRowContext(ctx, `SELECT status FROM paper_import_job WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, tenantID, importID).Scan(&status); err != nil {
+		return err
+	}
+	if status != "processing" {
+		return fmt.Errorf("%w: paper import is %s", ErrConflict, status)
+	}
+	return tx.Commit()
+}
+
+func (s *PostgresStore) FailPaperImportRuntime(ctx context.Context, tenantID, importID string, input PaperImportRuntimeFailure) error {
+	if input.TaskID == "" || input.LeaseToken == "" || input.ErrorCode == "" {
+		return ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = workerruntime.FailTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: input.Retryable, ErrorCode: input.ErrorCode, ErrorDetail: input.ErrorDetail, DurationMS: input.DurationMS}); err != nil {
+		return err
+	}
+	issues, _ := json.Marshal([]string{"扫描文档 OCR 失败：" + input.ErrorCode})
+	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='failed',error_code='paper_ocr_failed',issues=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND status='processing' AND deleted_at IS NULL`, tenantID, importID, issues); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func mapFromJSON(value any) map[string]any {
+	raw, _ := json.Marshal(value)
+	out := map[string]any{}
+	_ = json.Unmarshal(raw, &out)
+	return out
+}

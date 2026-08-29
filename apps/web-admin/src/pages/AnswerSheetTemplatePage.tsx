@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Alert, App, Button, Checkbox, Collapse, Drawer, Input, InputNumber, List, Modal, Progress, Select, Space, Spin } from "antd";
-import { ChevronLeft, ChevronRight, Copy, Download, LockKeyhole, MousePointer2, Plus, Printer, RefreshCw, Save, Trash2, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Download, LockKeyhole, MousePointer2, Plus, Printer, RefreshCw, Save, Trash2, WandSparkles, ZoomIn, ZoomOut } from "lucide-react";
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { ApiClientError } from "../api/client";
@@ -168,6 +168,7 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
+  const [suggestingRegions, setSuggestingRegions] = useState(false);
   const [preview, setPreview] = useState<PreviewState>({ loading: false, pageCount: 1, width: 2480, height: 3508 });
   const [pdfSourceId, setPdfSourceId] = useState("");
 	const [calibrations, setCalibrations] = useState<OMRCalibrationSession[]>([]);
@@ -537,6 +538,70 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
     updateRegion(selectedRegionId, { option_regions: (selectedRegion.option_regions ?? []).filter((option) => option.id !== optionId) });
   }
 
+  async function suggestQuestionRegions() {
+    const pdf = pdfRef.current;
+    if (!pdf || readonly || !questions.length) {
+      message.warning("当前文件没有可分析的 PDF 页面，或模板已锁定");
+      return;
+    }
+    setSuggestingRegions(true);
+    try {
+      const anchors = new Map<number, Array<{ question: Question; top: number }>>();
+      const unmatched = new Set(questions.map((question) => question.id));
+      const normalizedQuestions = questions
+        .map((question) => ({ question, key: question.question_no.replace(/\s+/g, "").toLowerCase() }))
+        .sort((a, b) => b.key.length - a.key.length);
+      for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
+        const page = await pdf.getPage(pageIndex);
+        const viewport = page.getViewport({ scale: 1 });
+        const content = await page.getTextContent();
+        const pageAnchors: Array<{ question: Question; top: number }> = [];
+        for (const raw of content.items) {
+          if (!("str" in raw) || !("transform" in raw)) continue;
+          const text = String(raw.str).replace(/\s+/g, "").toLowerCase();
+          if (!text) continue;
+          const candidate = normalizedQuestions.find(({ question, key }) => unmatched.has(question.id) && (text === key || text.startsWith(`${key}.`) || text.startsWith(`${key}、`) || text.startsWith(`${key}．`)));
+          if (!candidate) continue;
+          const transform = raw.transform as number[];
+          const itemHeight = Math.abs(transform[3] || transform[0] || 12);
+          const top = clamp(1 - ((transform[5] || 0) + itemHeight) / viewport.height);
+          pageAnchors.push({ question: candidate.question, top });
+          unmatched.delete(candidate.question.id);
+        }
+        pageAnchors.sort((a, b) => a.top - b.top);
+        if (pageAnchors.length) anchors.set(pageIndex, pageAnchors);
+      }
+      if (!anchors.size) {
+        message.warning("没有从 PDF 文字层识别到题号；扫描版请先完成 OCR 后再生成候选区域");
+        return;
+      }
+      setLayout((current) => ({
+        ...current,
+        pages: current.pages.map((page) => {
+          const pageAnchors = anchors.get(page.page_no) ?? [];
+          if (!pageAnchors.length) return page;
+          const matchedIDs = new Set(pageAnchors.map(({ question }) => question.id));
+          const suggestions = pageAnchors.map(({ question, top }, index) => {
+            const nextTop = pageAnchors[index + 1]?.top ?? 0.96;
+            const y = clamp(top - 0.01, 0.02, 0.94);
+            const height = clamp(nextTop - y - 0.012, 0.04, 0.42);
+            return {
+              id: crypto.randomUUID(), question_id: question.id, label: question.question_no,
+              x: 0.04, y: roundCoordinate(y), width: 0.92, height: roundCoordinate(height), option_regions: [],
+              suggestion_confidence: 0.72, suggestion_source: "pdf_text_anchor" as const
+            };
+          });
+          return { ...page, question_regions: page.question_regions.filter((region) => !region.question_id || !matchedIDs.has(region.question_id)).concat(suggestions) };
+        })
+      }));
+      message.success(`已生成 ${questions.length - unmatched.size} 道题的候选区域；请逐题核对并调整${unmatched.size ? `，另有 ${unmatched.size} 道题未识别` : ""}`);
+    } catch (suggestError) {
+      message.error(formatError(suggestError));
+    } finally {
+      setSuggestingRegions(false);
+    }
+  }
+
 	function setOMRProfile(mode: "manual_only" | "template_difference") {
 		setLayout((current) => ({
 			...current,
@@ -752,7 +817,7 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
           <Button icon={<RefreshCw size={16} />} onClick={() => void loadData()}>刷新</Button>
           {!selectedTemplate ? <Button type="primary" icon={<Plus size={16} />} loading={saving} onClick={() => void createDraft()}>新建模板</Button> : null}
           {selectedTemplate?.status === "locked" ? <Button icon={<Copy size={16} />} loading={saving} onClick={() => void cloneTemplate()}>克隆新版本</Button> : null}
-          {selectedTemplate?.status === "draft" ? <><Button icon={<Save size={16} />} loading={saving} onClick={() => void saveDraft()}>保存</Button><Button type="primary" icon={<LockKeyhole size={16} />} disabled={!questions.length} onClick={confirmLock}>锁定模板</Button></> : null}
+          {selectedTemplate?.status === "draft" ? <><Button icon={<WandSparkles size={16} />} loading={suggestingRegions} onClick={() => void suggestQuestionRegions()}>自动识别区域</Button><Button icon={<Save size={16} />} loading={saving} onClick={() => void saveDraft()}>保存</Button><Button type="primary" icon={<LockKeyhole size={16} />} disabled={!questions.length} onClick={confirmLock}>锁定模板</Button></> : null}
         </Space>
       </section>
 
@@ -771,7 +836,7 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
             <div className="template-canvas-scroll">
               <div ref={canvasRef} className={readonly ? "template-canvas readonly" : "template-canvas"} style={{ width: `${zoom * 760}px`, aspectRatio: `${currentPage?.width || preview.width} / ${currentPage?.height || preview.height}` }} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={onCanvasPointerUp}>
                 {preview.loading ? <div className="template-preview-state"><Spin /><span>正在渲染页面</span></div> : preview.error ? <div className="template-preview-state error">{preview.error}</div> : preview.imageUrl ? <img src={preview.imageUrl} alt={`试卷第 ${pageNo} 页`} draggable={false} /> : null}
-                {currentPage?.question_regions.map((region) => <div key={region.id} className={selectedRegionId === region.id ? "template-region selected" : "template-region"} style={{ left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.width * 100}%`, height: `${region.height * 100}%` }} onPointerDown={(event) => beginRegionInteraction(event, region, "move")}><span>{region.label}</span>{(region.option_regions ?? []).map((option) => <i key={option.id} className="template-option-region" title={`选项 ${option.label}`} style={{ left: `${option.x * 100}%`, top: `${option.y * 100}%`, width: `${option.width * 100}%`, height: `${option.height * 100}%` }}>{option.label}</i>)}{!readonly ? <button type="button" className="template-resize-handle" onPointerDown={(event) => beginRegionInteraction(event, region, "resize")} aria-label="调整区域大小" /> : null}</div>)}
+                {currentPage?.question_regions.map((region) => <div key={region.id} className={selectedRegionId === region.id ? "template-region selected" : "template-region"} style={{ left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.width * 100}%`, height: `${region.height * 100}%` }} onPointerDown={(event) => beginRegionInteraction(event, region, "move")}><span>{region.label}{region.suggestion_confidence ? ` · 建议 ${Math.round(region.suggestion_confidence * 100)}%` : ""}</span>{(region.option_regions ?? []).map((option) => <i key={option.id} className="template-option-region" title={`选项 ${option.label}`} style={{ left: `${option.x * 100}%`, top: `${option.y * 100}%`, width: `${option.width * 100}%`, height: `${option.height * 100}%` }}>{option.label}</i>)}{!readonly ? <button type="button" className="template-resize-handle" onPointerDown={(event) => beginRegionInteraction(event, region, "resize")} aria-label="调整区域大小" /> : null}</div>)}
                 {draftRect ? <div className="template-region drawing" style={{ left: `${draftRect.x * 100}%`, top: `${draftRect.y * 100}%`, width: `${draftRect.width * 100}%`, height: `${draftRect.height * 100}%` }} /> : null}
               </div>
             </div>

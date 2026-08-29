@@ -48,6 +48,9 @@ func (s *PostgresStore) CreateTemplate(ctx context.Context, tenantID string, exa
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, examID); err != nil {
 		return AnswerSheetTemplate{}, err
 	}
+	if err := ensureExamPaperMutableTx(ctx, tx, tenantID, examID); err != nil {
+		return AnswerSheetTemplate{}, err
+	}
 	input.Layout, err = s.materializeTemplateOMRReferenceTx(ctx, tx, tenantID, examID, input.ExamPaperID, input.Layout)
 	if err != nil {
 		return AnswerSheetTemplate{}, err
@@ -110,6 +113,9 @@ FOR UPDATE
 	if revision != input.ExpectedRevision {
 		return AnswerSheetTemplate{}, ErrConflict
 	}
+	if err := ensureExamPaperMutableTx(ctx, tx, tenantID, examID); err != nil {
+		return AnswerSheetTemplate{}, err
+	}
 	input.Layout, err = s.materializeTemplateOMRReferenceTx(ctx, tx, tenantID, examID, examPaperID, input.Layout)
 	if err != nil {
 		return AnswerSheetTemplate{}, err
@@ -158,6 +164,9 @@ FOR UPDATE
 		if errors.Is(err, sql.ErrNoRows) {
 			return AnswerSheetTemplate{}, s.templateWriteError(ctx, tenantID, id, 0)
 		}
+		return AnswerSheetTemplate{}, err
+	}
+	if err := ensureExamPaperMutableTx(ctx, tx, tenantID, draft.ExamID); err != nil {
 		return AnswerSheetTemplate{}, err
 	}
 	draft.Layout = NormalizeTemplateLayout(draft.Layout)
@@ -290,7 +299,7 @@ JOIN omr_calibration_case c
 }
 
 func (s *PostgresStore) Readiness(ctx context.Context, tenantID string, examID string) (ReadinessResult, error) {
-	result, status, err := s.calculateReadiness(ctx, tenantID, examID)
+	result, status, _, err := s.calculateReadiness(ctx, tenantID, examID)
 	if err != nil {
 		return ReadinessResult{}, err
 	}
@@ -311,15 +320,14 @@ ORDER BY confirmed_at DESC LIMIT 1
 }
 
 func (s *PostgresStore) ConfirmReadiness(ctx context.Context, tenantID string, examID string, userID string) (ReadinessResult, error) {
-	result, status, err := s.calculateReadiness(ctx, tenantID, examID)
+	result, status, candidateCount, err := s.calculateReadiness(ctx, tenantID, examID)
 	if err != nil {
 		return ReadinessResult{}, err
 	}
 	if !result.Ready || (status != "draft" && status != "configured" && status != "ready") {
 		return result, ErrNotReady
 	}
-	checks, _ := json.Marshal(result.Checks)
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return ReadinessResult{}, err
 	}
@@ -327,6 +335,29 @@ func (s *PostgresStore) ConfirmReadiness(ctx context.Context, tenantID string, e
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, examID); err != nil {
 		return ReadinessResult{}, err
 	}
+	var lockedStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM exam WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, tenantID, examID).Scan(&lockedStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ReadinessResult{}, ErrNotFound
+		}
+		return ReadinessResult{}, err
+	}
+	if lockedStatus != status || (lockedStatus != "draft" && lockedStatus != "configured" && lockedStatus != "ready") {
+		return result, ErrNotReady
+	}
+	if lockedStatus == "draft" || lockedStatus == "configured" {
+		if err := exam.RebuildCandidateSnapshot(ctx, tx, tenantID, examID); err != nil {
+			return ReadinessResult{}, err
+		}
+		var frozenCount int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM exam_candidate_snapshot WHERE tenant_id=$1::uuid AND exam_id=$2::uuid`, tenantID, examID).Scan(&frozenCount); err != nil {
+			return ReadinessResult{}, err
+		}
+		if frozenCount != candidateCount {
+			return result, ErrConflict
+		}
+	}
+	checks, _ := json.Marshal(result.Checks)
 	if _, err := tx.ExecContext(ctx, `
 UPDATE exam_readiness_snapshot SET status = 'invalidated', invalidated_at = now(), invalidation_reason = 'superseded by new confirmation'
 WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND status = 'passed'
@@ -339,9 +370,6 @@ INSERT INTO exam_readiness_snapshot (tenant_id, exam_id, configuration_hash, sta
 VALUES ($1::uuid, $2::uuid, $3, 'passed', $4::jsonb, $5::uuid, $6)
 RETURNING confirmed_at
 	`, tenantID, examID, result.ConfigurationHash, checks, userID, now).Scan(&now); err != nil {
-		return ReadinessResult{}, err
-	}
-	if err := exam.RebuildCandidateSnapshot(ctx, tx, tenantID, examID); err != nil {
 		return ReadinessResult{}, err
 	}
 	updated, err := tx.ExecContext(ctx, `UPDATE exam SET status = 'ready', updated_at = now() WHERE tenant_id = $1::uuid AND id = $2::uuid AND status IN ('draft', 'configured', 'ready')`, tenantID, examID)
@@ -360,7 +388,7 @@ RETURNING confirmed_at
 }
 
 func (s *PostgresStore) StartCollection(ctx context.Context, tenantID string, examID string, _ string) (ReadinessResult, error) {
-	result, status, err := s.calculateReadiness(ctx, tenantID, examID)
+	result, status, _, err := s.calculateReadiness(ctx, tenantID, examID)
 	if err != nil {
 		return ReadinessResult{}, err
 	}
@@ -391,39 +419,45 @@ ORDER BY confirmed_at DESC LIMIT 1
 	return result, nil
 }
 
-func (s *PostgresStore) calculateReadiness(ctx context.Context, tenantID string, examID string) (ReadinessResult, string, error) {
+func (s *PostgresStore) calculateReadiness(ctx context.Context, tenantID string, examID string) (ReadinessResult, string, int, error) {
 	var total float64
 	var status string
 	var classCount, studentCount int
 	err := s.db.QueryRowContext(ctx, `
 SELECT e.total_score::float8, e.status,
-       COUNT(DISTINCT ec.class_id)::int,
-       COUNT(DISTINCT st.id) FILTER (WHERE st.status = 'active' AND st.deleted_at IS NULL)::int
+       (SELECT COUNT(DISTINCT ec.class_id)::int FROM exam_class ec WHERE ec.tenant_id=e.tenant_id AND ec.exam_id=e.id AND ec.deleted_at IS NULL),
+       CASE WHEN e.status IN ('draft','configured') THEN
+         (SELECT COUNT(DISTINCT st.id)::int
+          FROM exam_class ec
+          JOIN school_class cls ON cls.tenant_id=ec.tenant_id AND cls.id=ec.class_id AND cls.deleted_at IS NULL
+          JOIN student_enrollment enrollment ON enrollment.tenant_id=ec.tenant_id AND enrollment.class_id=ec.class_id AND enrollment.academic_year_id=cls.academic_year_id AND enrollment.status='enrolled' AND enrollment.end_date IS NULL AND enrollment.deleted_at IS NULL
+          JOIN student st ON st.tenant_id=enrollment.tenant_id AND st.id=enrollment.student_id AND st.status='active' AND st.deleted_at IS NULL
+          WHERE ec.tenant_id=e.tenant_id AND ec.exam_id=e.id AND ec.deleted_at IS NULL)
+       ELSE
+         (SELECT COUNT(*)::int FROM exam_candidate_snapshot candidate WHERE candidate.tenant_id=e.tenant_id AND candidate.exam_id=e.id)
+       END
 FROM exam e
-LEFT JOIN exam_class ec ON ec.tenant_id = e.tenant_id AND ec.exam_id = e.id AND ec.deleted_at IS NULL
-LEFT JOIN student st ON st.tenant_id = e.tenant_id AND st.class_id = ec.class_id
 WHERE e.tenant_id = $1::uuid AND e.id = $2::uuid AND e.deleted_at IS NULL
-GROUP BY e.id
 `, tenantID, examID).Scan(&total, &status, &classCount, &studentCount)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ReadinessResult{}, "", ErrNotFound
+			return ReadinessResult{}, "", 0, ErrNotFound
 		}
-		return ReadinessResult{}, "", err
+		return ReadinessResult{}, "", 0, err
 	}
 	papers, err := s.ListPapers(ctx, tenantID, examID)
 	if err != nil {
-		return ReadinessResult{}, "", err
+		return ReadinessResult{}, "", 0, err
 	}
 	questions, err := s.ListQuestions(ctx, tenantID, examID)
 	if err != nil {
-		return ReadinessResult{}, "", err
+		return ReadinessResult{}, "", 0, err
 	}
 	templates, err := s.ListTemplates(ctx, tenantID, examID)
 	if err != nil {
-		return ReadinessResult{}, "", err
+		return ReadinessResult{}, "", 0, err
 	}
-	return buildReadiness(total, classCount, studentCount, papers, questions, templates), status, nil
+	return buildReadiness(total, classCount, studentCount, papers, questions, templates), status, studentCount, nil
 }
 
 func (s *PostgresStore) templateWriteError(ctx context.Context, tenantID string, id string, expectedRevision int) error {

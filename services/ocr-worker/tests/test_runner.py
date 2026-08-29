@@ -16,6 +16,8 @@ class FakeAPI:
         self.pending_error = None
         self.heartbeats = []
         self.runtime_failed = []
+        self.paper_completed = []
+        self.paper_failed = []
 
     def claim_tasks(self, worker_instance_id, limit, lease_seconds):
         if self.pending_error:
@@ -54,6 +56,12 @@ class FakeAPI:
         self.failed.append((task_id, message))
         self.runtime_failed.append((runtime_task_id, lease_token, message, retryable, 0))
 
+    def complete_paper_import_ocr(self, import_id, payload, tenant_id=None):
+        self.paper_completed.append((import_id, payload))
+
+    def fail_paper_import(self, import_id, runtime_task_id, lease_token, error_code, retryable, tenant_id=None):
+        self.paper_failed.append((import_id, error_code, retryable))
+
 
 class FakeEngine:
     model_version = "ppocr-v5-server"
@@ -70,6 +78,24 @@ class FakeEngine:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_paper_import_pages_use_existing_ocr_engine(self):
+        api = FakeAPI()
+        api.claim_tasks = lambda *_: [{
+            "id": "runtime-paper", "tenant_id": "tenant-1", "source_id": "import-1",
+            "source_type": "paper_import_job", "lease_token": "lease-paper",
+            "payload": {"engine": "paddleocr", "engine_version": "pp-ocrv5", "pages": [
+                {"role": "paper", "page_no": 1, "download_url": "/files/paper-page"},
+                {"role": "answer", "page_no": 1, "download_url": "/files/answer-page"},
+            ]},
+        }]
+        runner = OCRRunner(api=api, engine=FakeEngine([OCRBlock(text="Q1 answer", bbox=[1, 2, 30, 10], confidence=0.7)]), config=WorkerConfig(worker_id="worker-a"))
+        self.assertEqual(runner.process_once(), 1)
+        self.assertEqual(api.paper_failed, [])
+        import_id, payload = api.paper_completed[0]
+        self.assertEqual(import_id, "import-1")
+        self.assertEqual({block["role"] for block in payload["blocks"]}, {"paper", "answer"})
+        self.assertEqual(payload["blocks"][0]["confidence"], 0.7)
+
     def test_incompatible_runtime_task_is_rejected_before_start(self):
         api = FakeAPI()
         original_claim = api.claim_tasks

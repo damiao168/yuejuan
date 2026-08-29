@@ -29,6 +29,8 @@ export interface PaperImportDraftQuestion {
   knowledge_points: string[];
   confidence: number;
   issues: string[];
+  matched_question_id?: string;
+  match_status?: "create" | "matched" | "matched_by_order" | "mismatch" | "extra" | "ambiguous";
 }
 
 export interface PaperImportJob {

@@ -30,6 +30,8 @@ func TestStory060RosterReconciliationAndAbsenceE2EWithPostgresTestDatabase(t *te
 	gradeID := e2eString(t, grade, "id")
 	class := e2ePostJSON(t, router, http.MethodPost, "/api/v1/classes", adminToken, `{"school_id":"`+schoolID+`","grade_id":"`+gradeID+`","name":"STORY-060 Class","code":"c060-`+suffix+`"}`, http.StatusCreated)["class"].(map[string]any)
 	classID := e2eString(t, class, "id")
+	transferClass := e2ePostJSON(t, router, http.MethodPost, "/api/v1/classes", adminToken, `{"school_id":"`+schoolID+`","grade_id":"`+gradeID+`","name":"STORY-060 Transfer Class","code":"c060-transfer-`+suffix+`"}`, http.StatusCreated)["class"].(map[string]any)
+	transferClassID := e2eString(t, transferClass, "id")
 
 	studentIDs := make([]string, 0, 3)
 	for index, name := range []string{"Roster Graded", "Roster Absent One", "Roster Absent Two"} {
@@ -65,6 +67,20 @@ INSERT INTO submission_grade (
 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, 88, 100, 'confirmed', false, $6::uuid, now(), $6::uuid)
 `, tenantID, examID, gradedSubmissionID, studentIDs[0], "S060-GRADED-"+suffix, adminID); err != nil {
 		t.Fatalf("seed confirmed grade: %v", err)
+	}
+	if _, err := db.Exec(`
+UPDATE student
+SET class_id=$3::uuid, updated_at=now()
+WHERE tenant_id=$1::uuid AND id=$2::uuid
+`, tenantID, studentIDs[0], transferClassID); err != nil {
+		t.Fatalf("transfer student after the exam roster was frozen: %v", err)
+	}
+	if _, err := db.Exec(`
+UPDATE student_enrollment
+SET class_id=$3::uuid, updated_at=now()
+WHERE tenant_id=$1::uuid AND student_id=$2::uuid AND status='enrolled' AND deleted_at IS NULL
+`, tenantID, studentIDs[0], transferClassID); err != nil {
+		t.Fatalf("transfer active enrollment after the exam roster was frozen: %v", err)
 	}
 
 	roster := e2eGetJSON(t, router, "/api/v1/exams/"+examID+"/roster", adminToken, http.StatusOK)["roster"].(map[string]any)
