@@ -70,6 +70,8 @@ MATH-00～08 的软件底座已接线：版本化数学工件、现有 OCR Worke
 
 2026-08-16 定向验证与入库：Go（mathunderstanding/apicontract/paper/server）、Python（OCR 路由、符号验证、MathBench 契约）、Web 类型检查、MathEvidenceInspector 定向 Vitest、`generate:sdk`（无新增 diff）、`check:openapi-breaking`、SDK 类型检查、Ruff 与 `git diff --check` 全部通过；MATH-00～08 全部改动已随 `9ea52c8` 提交。MathBench 由单条 smoke 扩充为 55 个确定性合成样本、25 个类别全覆盖（`generate_synthetic_fixtures.py` 可幂等再生成），产出 synthetic-v2 基线报告（`reports/synthetic-v2.json`，`dataset: synthetic`）。该组数字仅为 harness 自校验基线，证明各指标路径有区分度，不代表任何真实模型准确率；真实 MathBench 仍需脱敏答卷与真实模型运行。
 
+2026-08-29 MATH-09 定向验证：现有 deterministic `BuildSpatialRelations` / `BuildSolutionGraph` 已接入 math-understanding runtime，Worker 空 relations 会在入库前补全，SolutionGraph 会由服务器 canonical builder 重建并保留 Worker 的人工复核信号。这不代表 learned layout model 已实现，也不代表复杂手写阅读顺序准确率或真实学校数据已完成验证。
+
 - 新增“已实现”必须同时列出代码接线、验证入口和未覆盖边界。
 - Mock、stub、合成数据和外部模型协议模拟器必须显式标识，不得写成真实模型或现场结果。
 - 发布到 GitHub、合并到 `main` 或远端 CI 通过是独立事实；本工作树状态不会自动同步到其中任何一个。

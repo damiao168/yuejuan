@@ -55,6 +55,8 @@ type completeRuntimeRequest struct {
 	Artifact   CreateArtifactInput `json:"artifact"`
 }
 
+const runtimeSolutionBuilderVersion = "math-runtime-spatial-baseline-v1"
+
 func (h *Handler) GetRuntimeInput(w http.ResponseWriter, r *http.Request) {
 	user, ok := currentMathUser(w, r)
 	if !ok || h.runtime == nil {
@@ -97,7 +99,12 @@ func (h *Handler) CompleteRuntimeTask(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_math_runtime_result", "math runtime result does not match its immutable task input")
 		return
 	}
-	artifact, err := h.artifacts.CreateArtifact(r.Context(), user.TenantID, input.Artifact)
+	preparedArtifact, err := prepareRuntimeArtifact(input.Artifact)
+	if err != nil {
+		writeMathError(w, r, err)
+		return
+	}
+	artifact, err := h.artifacts.CreateArtifact(r.Context(), user.TenantID, preparedArtifact)
 	if err != nil {
 		writeMathError(w, r, err)
 		return
@@ -112,6 +119,39 @@ func (h *Handler) CompleteRuntimeTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"artifact": artifact})
+}
+
+func prepareRuntimeArtifact(input CreateArtifactInput) (CreateArtifactInput, error) {
+	relations := input.Relations
+	if len(relations) == 0 {
+		relations = BuildSpatialRelations(input.Blocks, SpatialGraphOptions{})
+	}
+
+	formulaModelVersion := "text-only"
+	if len(input.Formulas) > 0 {
+		formulaModelVersion = strings.TrimSpace(input.SolutionGraph.FormulaModelVersion)
+		for index := 0; formulaModelVersion == "" && index < len(input.Formulas); index++ {
+			formulaModelVersion = strings.TrimSpace(input.Formulas[index].RecognitionVersion)
+		}
+	}
+
+	graph, err := BuildSolutionGraph(SolutionBuildInput{
+		AnswerSegmentID:     input.AnswerSegmentID,
+		Blocks:              input.Blocks,
+		Formulas:            input.Formulas,
+		Relations:           relations,
+		Verifications:       input.Verifications,
+		BuilderVersion:      runtimeSolutionBuilderVersion,
+		FormulaModelVersion: formulaModelVersion,
+	})
+	if err != nil {
+		return CreateArtifactInput{}, err
+	}
+	graph.RequiresHumanReview = graph.RequiresHumanReview || input.SolutionGraph.RequiresHumanReview
+
+	input.Relations = relations
+	input.SolutionGraph = graph
+	return input, nil
 }
 
 func stringPayload(payload map[string]any, key string) string {

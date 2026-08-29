@@ -30,6 +30,8 @@ def test_build_artifact_binds_formula_to_immutable_task_input():
     assert artifact["exam_question_snapshot_id"] == "snapshot-1"
     assert artifact["formulas"][0]["ast"]["kind"] == "equation"
     assert artifact["verifications"][0]["status"] == "verified"
+    assert artifact["verifications"][0]["formula_id"] == "formula-1"
+    assert "step_id" not in artifact["verifications"][0]
 
 
 def test_failed_formula_recognition_still_produces_reviewable_evidence():

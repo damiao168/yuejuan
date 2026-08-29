@@ -48,7 +48,7 @@ class APIConfig:
 
 def load_engine_config() -> EngineConfig:
     return EngineConfig(
-        batch_size=_int_env("EDUGRADE_IMAGE_QUALITY_BATCH_SIZE", 5),
+        batch_size=_int_env("EDUGRADE_IMAGE_QUALITY_BATCH_SIZE", 1),
         lease_seconds=_int_env("EDUGRADE_IMAGE_QUALITY_LEASE_SECONDS", 300),
         worker_instance_id=os.getenv("EDUGRADE_IMAGE_QUALITY_WORKER_ID") or f"{socket.gethostname()}-image-quality",
         poll_interval=float(os.getenv("EDUGRADE_IMAGE_QUALITY_POLL_INTERVAL", "5")),

@@ -149,6 +149,7 @@
 | STORY-MATH-06 | [Rubric 数学证据](STORY-MATH-06-rubric-evidence.md) | Implemented |
 | STORY-MATH-07 | [教师数学证据工作台](STORY-MATH-07-evidence-workbench.md) | Implemented |
 | STORY-MATH-08 | [分层试点门禁](STORY-MATH-08-pilot-gates.md) | Implemented / Real Gate Evidence Pending |
+| STORY-MATH-09 | [Runtime Spatial / Solution Baseline Integration](STORY-MATH-09-runtime-spatial-integration.md) | Implemented |
 
 ## 编号语义说明（2026-07-26）
 

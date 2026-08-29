@@ -172,7 +172,6 @@ def _build_artifact(task: dict[str, Any], routed: Any, verifier: MathVerificatio
             verifications.append(
                 {
                     "id": "verification-1",
-                    "step_id": "step-1",
                     "formula_id": "formula-1",
                     "kind": "syntax",
                     "status": "verified" if parsed else "uncertain",

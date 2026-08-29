@@ -13,6 +13,68 @@ import (
 )
 
 func TestRuntimeCompletionPersistsBoundArtifactAndCompletesLease(t *testing.T) {
+	input := runtimeSpatialInput(false)
+	artifact := completeRuntimeArtifact(t, input)
+	if len(artifact.Blocks) != 2 {
+		t.Fatalf("runtime merged OCR blocks: %#v", artifact.Blocks)
+	}
+	if len(artifact.Relations) == 0 {
+		t.Fatal("runtime did not derive spatial relations")
+	}
+	if artifact.SolutionGraph.BuilderVersion != runtimeSolutionBuilderVersion {
+		t.Fatalf("builder version=%q", artifact.SolutionGraph.BuilderVersion)
+	}
+	if len(artifact.SolutionGraph.Steps) != 2 || artifact.SolutionGraph.Steps[0].ID == "step-1" {
+		t.Fatalf("runtime retained placeholder graph: %#v", artifact.SolutionGraph)
+	}
+	if len(artifact.SolutionGraph.Edges) == 0 {
+		t.Fatalf("runtime graph has no spatial edge: %#v", artifact.SolutionGraph)
+	}
+}
+
+func TestRuntimeCompletionPreservesWorkerHumanReviewSignal(t *testing.T) {
+	artifact := completeRuntimeArtifact(t, runtimeSpatialInput(true))
+	if !artifact.SolutionGraph.RequiresHumanReview {
+		t.Fatal("runtime discarded worker human-review signal")
+	}
+}
+
+func TestPrepareRuntimeArtifactPreservesWorkerRelations(t *testing.T) {
+	input := runtimeSpatialInput(false)
+	input.Relations = []SpatialRelation{{
+		ID: "worker-relation", FromID: "block-1", ToID: "block-2", Kind: "continues", Confidence: .9,
+	}}
+	prepared, err := prepareRuntimeArtifact(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.Relations) != 1 || prepared.Relations[0].ID != "worker-relation" {
+		t.Fatalf("runtime replaced worker relations: %#v", prepared.Relations)
+	}
+}
+
+func runtimeSpatialInput(requiresHumanReview bool) CreateArtifactInput {
+	input := validInput()
+	input.InputHash = "hash-1"
+	input.Blocks = []MathAnswerBlock{block("block-1", .1, .1), block("block-2", .1, .3)}
+	input.Formulas = nil
+	input.Relations = nil
+	input.SolutionGraph = SolutionGraph{
+		ID:                  "worker-placeholder",
+		AnswerSegmentID:     input.AnswerSegmentID,
+		BuilderVersion:      "math-runtime-v1",
+		FormulaModelVersion: "text-only",
+		OverallConfidence:   .9,
+		RequiresHumanReview: requiresHumanReview,
+		Steps:               []SolutionStep{{ID: "step-1", OrderHint: 1, BlockIDs: []string{"block-1", "block-2"}, Confidence: .9}},
+	}
+	input.Verifications = nil
+	input.RubricEvidence = nil
+	return input
+}
+
+func completeRuntimeArtifact(t *testing.T, input CreateArtifactInput) Artifact {
+	t.Helper()
 	ctx := context.Background()
 	artifacts := NewMemoryStore()
 	runtime := workerruntime.NewMemoryStore()
@@ -28,8 +90,6 @@ func TestRuntimeCompletionPersistsBoundArtifactAndCompletesLease(t *testing.T) {
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim: items=%d err=%v", len(claimed), err)
 	}
-	input := validInput()
-	input.InputHash = "hash-1"
 	body, _ := json.Marshal(completeRuntimeRequest{LeaseToken: claimed[0].LeaseToken, DurationMS: 12, Artifact: input})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/math-understanding/tasks/"+task.ID+"/complete", bytes.NewReader(body))
 	req.SetPathValue("taskId", task.ID)
@@ -47,6 +107,7 @@ func TestRuntimeCompletionPersistsBoundArtifactAndCompletesLease(t *testing.T) {
 	if err != nil || artifact.InputHash != "hash-1" {
 		t.Fatalf("artifact=%#v err=%v", artifact, err)
 	}
+	return artifact
 }
 
 func TestArtifactCreationIsIdempotentForSameCropHash(t *testing.T) {

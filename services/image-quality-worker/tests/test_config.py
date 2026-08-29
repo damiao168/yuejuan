@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 import pytest
-from image_quality.config import APIConfig, EngineConfig
+from image_quality.config import APIConfig, EngineConfig, load_engine_config
+
+
+def test_default_batch_size_matches_sequential_worker(monkeypatch) -> None:
+    monkeypatch.delenv("EDUGRADE_IMAGE_QUALITY_BATCH_SIZE", raising=False)
+
+    assert load_engine_config().batch_size == 1
 
 
 def test_sequential_worker_rejects_claiming_multiple_jobs() -> None:
