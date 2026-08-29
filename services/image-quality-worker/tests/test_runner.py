@@ -20,6 +20,7 @@ def test_runner_claims_downloads_processes_uploads_and_submits() -> None:
     assert client.result_submitted["quality_status"] == "passed"
     assert client.result_submitted["normalized_file_asset_id"] == "file-normalized-1"
     assert "source_to_normalized_matrix" in client.result_submitted["normalization_transform"]
+    assert client.requested_dimensions == client.uploaded_dimensions
     assert "student_id" not in json.dumps(client.result_submitted)
     assert "candidate_no" not in json.dumps(client.result_submitted)
 
@@ -40,6 +41,8 @@ class FakeClient:
     def __init__(self, image_bytes: bytes) -> None:
         self.image_bytes = image_bytes
         self.upload_requested = False
+        self.requested_dimensions: tuple[int, int] | None = None
+        self.uploaded_dimensions: tuple[int, int] | None = None
         self.result_submitted: dict | None = None
         self.failure_submitted: dict | None = None
 
@@ -76,11 +79,14 @@ class FakeClient:
         assert payload["lease_token"] == "lease-token-1"
         assert payload["content_type"] == "image/png"
         assert payload["sha256"]
+        self.requested_dimensions = (payload["pixel_width"], payload["pixel_height"])
         return {"upload_url": "/api/v1/files", "upload_method": "POST", "expected_sha256": payload["sha256"]}
 
     def upload_normalized(self, slot: dict, job: dict, normalized_png: bytes, sha256: str) -> str:
         assert slot["expected_sha256"] == sha256
         assert normalized_png.startswith(b"\x89PNG")
+        with Image.open(io.BytesIO(normalized_png)) as normalized:
+            self.uploaded_dimensions = normalized.size
         self.upload_requested = True
         return "file-normalized-1"
 

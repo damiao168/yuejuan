@@ -12,16 +12,16 @@ from image_quality.schemas import QualityAnalysisResult
 METRIC_SCHEMA_VERSION = "image-quality-metrics-v1"
 REPORT_SCHEMA_VERSION = "image-quality-report-v1"
 MAX_IMAGE_PIXELS = 50_000_000
+MAX_ANALYSIS_DIMENSION = 1800
 
 # Initial engineering thresholds. They are deliberately centralized and
 # conservative until governed school answer-sheet benchmarks are available.
-SKEW_REVIEW_DEGREES = 2.0
-SKEW_MIN_CONFIDENCE = 0.35
-BORDER_REVIEW_SCORE = 0.65
-BORDER_MIN_CONFIDENCE = 0.4
-PERSPECTIVE_REVIEW_SCORE = 0.25
-PERSPECTIVE_MIN_CONFIDENCE = 0.45
-SHADOW_REVIEW_SCORE = 0.38
+MAX_SKEW_ANALYSIS_DEGREES = 15.0
+MIN_LINE_LENGTH_RATIO = 0.12
+MIN_DESKEW_DEGREES = 0.5
+MAX_DESKEW_DEGREES = 7.0
+MIN_DESKEW_CONFIDENCE = 0.45
+PERSPECTIVE_SUSPECTED_SCORE = 0.25
 
 
 class ImageQualityError(RuntimeError):
@@ -36,32 +36,43 @@ def analyze_and_normalize(data: bytes) -> QualityAnalysisResult:
             source.load()
             source_width, source_height = source.size
             source_format = source.format or "unknown"
-            exif_rotation = _exif_rotation_degrees(source)
+            exif_orientation = _exif_orientation(source)
+            exif_rotation = _exif_rotation_degrees(exif_orientation)
+            exif_matrix = _exif_transform_matrix(exif_orientation, source_width, source_height)
             normalized_image = ImageOps.exif_transpose(source).convert("RGB")
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise ImageQualityError("unreadable_image") from exc
 
-    pixel_width, pixel_height = normalized_image.size
-
     try:
         with normalized_image.convert("L") as grayscale_image:
             gray = np.asarray(grayscale_image, dtype=np.uint8)
-            skew_angle, skew_confidence = _detect_skew(gray)
-            border_status, border_confidence, border_completeness, page_quad = _detect_page_border(gray)
+            analysis_gray = _analysis_image(gray)
+            skew_angle, skew_confidence = _detect_skew(analysis_gray)
+            border_status, border_confidence, border_completeness, page_quad = _detect_page_border(analysis_gray)
             perspective_status, perspective_confidence, perspective_risk = _detect_perspective_risk(
-                page_quad, border_confidence, gray.shape
+                page_quad, border_confidence, analysis_gray.shape
             )
             metrics = _metrics(gray, border_completeness, perspective_risk)
-            geometry = {
-                "detected_skew_angle": round(skew_angle, 4),
-                "skew_confidence": round(skew_confidence, 4),
-                "skew_correction_applied": False,
-                "page_border_status": border_status,
-                "page_border_confidence": round(border_confidence, 4),
-                "perspective_status": perspective_status,
-                "perspective_confidence": round(perspective_confidence, 4),
-            }
-        issues = _issues(metrics, geometry)
+
+        deskew_applied = _should_apply_deskew(skew_angle, skew_confidence)
+        content_rotation = skew_angle if deskew_applied else 0.0
+        deskew_matrix = np.eye(3, dtype=np.float64)
+        if deskew_applied:
+            deskewed_image, deskew_matrix = _apply_deskew(normalized_image, content_rotation)
+            normalized_image.close()
+            normalized_image = deskewed_image
+
+        pixel_width, pixel_height = normalized_image.size
+        geometry = {
+            "detected_skew_angle": round(skew_angle, 4),
+            "skew_confidence": round(skew_confidence, 4),
+            "skew_correction_applied": deskew_applied,
+            "page_border_status": border_status,
+            "page_border_confidence": round(border_confidence, 4),
+            "perspective_status": perspective_status,
+            "perspective_confidence": round(perspective_confidence, 4),
+        }
+        issues = _issues(metrics)
         quality_status = "review" if issues else "passed"
 
         output = io.BytesIO()
@@ -89,11 +100,11 @@ def analyze_and_normalize(data: bytes) -> QualityAnalysisResult:
         "normalized_pixel_width": pixel_width,
         "normalized_pixel_height": pixel_height,
         "exif_rotation_degrees": exif_rotation,
-        "content_rotation_degrees": 0,
+        "content_rotation_degrees": round(content_rotation, 4),
         "detected_skew_angle": round(skew_angle, 4),
-        "skew_correction_applied": False,
+        "skew_correction_applied": deskew_applied,
         "crop_box_source_pixels": [0, 0, source_width, source_height],
-        "source_to_normalized_matrix": _identity_matrix(),
+        "source_to_normalized_matrix": _matrix_list(deskew_matrix @ exif_matrix),
     }
     return QualityAnalysisResult(
         quality_status=quality_status,
@@ -123,7 +134,16 @@ def _metrics(gray: np.ndarray, border_completeness: float, perspective_risk: flo
     }
 
 
-def _issues(metrics: dict[str, float], geometry: dict[str, Any]) -> list[dict[str, Any]]:
+def _analysis_image(gray: np.ndarray) -> np.ndarray:
+    height, width = gray.shape
+    longest_side = max(height, width)
+    if longest_side <= MAX_ANALYSIS_DIMENSION:
+        return gray
+    scale = MAX_ANALYSIS_DIMENSION / float(longest_side)
+    return cv2.resize(gray, (max(1, round(width * scale)), max(1, round(height * scale))), interpolation=cv2.INTER_AREA)
+
+
+def _issues(metrics: dict[str, float]) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if metrics["sharpness_score"] < 0.35:
         issues.append(
@@ -151,68 +171,19 @@ def _issues(metrics: dict[str, float], geometry: dict[str, Any]) -> list[dict[st
                 "parameters": {},
             }
         )
-    skew_angle = abs(float(geometry["detected_skew_angle"]))
-    if float(geometry["skew_confidence"]) >= SKEW_MIN_CONFIDENCE and skew_angle > SKEW_REVIEW_DEGREES:
-        issues.append(
-            _review_issue("excessive_skew", "detected_skew_angle", skew_angle, SKEW_REVIEW_DEGREES, "skew-max-v1")
-        )
-    if (
-        float(geometry["page_border_confidence"]) >= BORDER_MIN_CONFIDENCE
-        and metrics["border_completeness_score"] < BORDER_REVIEW_SCORE
-    ):
-        issues.append(
-            _review_issue(
-                "page_border_incomplete",
-                "border_completeness_score",
-                metrics["border_completeness_score"],
-                BORDER_REVIEW_SCORE,
-                "page-border-min-v1",
-            )
-        )
-    if (
-        float(geometry["perspective_confidence"]) >= PERSPECTIVE_MIN_CONFIDENCE
-        and metrics["perspective_risk_score"] > PERSPECTIVE_REVIEW_SCORE
-    ):
-        issues.append(
-            _review_issue(
-                "high_perspective_risk",
-                "perspective_risk_score",
-                metrics["perspective_risk_score"],
-                PERSPECTIVE_REVIEW_SCORE,
-                "perspective-risk-max-v1",
-            )
-        )
-    if metrics["shadow_risk_score"] > SHADOW_REVIEW_SCORE:
-        issues.append(
-            _review_issue(
-                "heavy_shadow",
-                "shadow_risk_score",
-                metrics["shadow_risk_score"],
-                SHADOW_REVIEW_SCORE,
-                "shadow-risk-max-v1",
-            )
-        )
     return issues
 
 
-def _review_issue(code: str, metric: str, observed: float, threshold: float, rule_id: str) -> dict[str, Any]:
-    return {
-        "code": code,
-        "severity": "review",
-        "metric": metric,
-        "observed": round(float(observed), 4),
-        "threshold": threshold,
-        "rule_id": rule_id,
-        "action": "manual_review",
-        "parameters": {},
-    }
-
-
 def _detect_skew(gray: np.ndarray) -> tuple[float, float]:
-    height, width = gray.shape
+    """Return line tilt in raster coordinates and heuristic evidence strength.
+
+    Positive raster angles slope downward to the right. OpenCV's affine
+    rotation with the same signed angle counter-rotates that tilt.
+    """
+    _, width = gray.shape
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blurred, 50, 150)
-    minimum_length = max(40, int(width * 0.12))
+    minimum_length = max(40, int(width * MIN_LINE_LENGTH_RATIO))
     lines = cv2.HoughLinesP(
         edges,
         1,
@@ -236,7 +207,7 @@ def _detect_skew(gray: np.ndarray) -> tuple[float, float]:
             angle += 180.0
         while angle > 90.0:
             angle -= 180.0
-        if abs(angle) > 20.0:
+        if abs(angle) > MAX_SKEW_ANALYSIS_DEGREES:
             continue
         angles.append(angle)
         # Capping prevents one long page border from deciding the result.
@@ -252,10 +223,49 @@ def _detect_skew(gray: np.ndarray) -> tuple[float, float]:
     consistency = _clamp(1.0 - mad / 3.0)
     count_support = min(1.0, len(values) / 8.0)
     length_support = min(1.0, float(line_weights.sum()) / max(width * 2.0, 1.0))
+    # This is heuristic evidence strength, not a calibrated probability.
     confidence = _clamp(consistency * (0.55 * count_support + 0.45 * length_support))
     if confidence < 0.15:
         return 0.0, confidence
     return float(angle), confidence
+
+
+def _should_apply_deskew(angle: float, confidence: float) -> bool:
+    return (
+        np.isfinite(angle)
+        and np.isfinite(confidence)
+        and MIN_DESKEW_DEGREES <= abs(angle) <= MAX_DESKEW_DEGREES
+        and confidence >= MIN_DESKEW_CONFIDENCE
+    )
+
+
+def _apply_deskew(image: Image.Image, rotation_degrees: float) -> tuple[Image.Image, np.ndarray]:
+    width, height = image.size
+    center = ((width - 1) / 2.0, (height - 1) / 2.0)
+    affine = cv2.getRotationMatrix2D(center, rotation_degrees, 1.0).astype(np.float64)
+    corners = np.array(
+        [[[0.0, 0.0]], [[width - 1.0, 0.0]], [[width - 1.0, height - 1.0]], [[0.0, height - 1.0]]],
+        dtype=np.float64,
+    )
+    transformed = cv2.transform(corners, affine).reshape(-1, 2)
+    minimum = transformed.min(axis=0)
+    maximum = transformed.max(axis=0)
+    affine[:, 2] -= minimum
+    output_width = int(np.ceil(maximum[0] - minimum[0])) + 1
+    output_height = int(np.ceil(maximum[1] - minimum[1])) + 1
+
+    rgb = np.asarray(image, dtype=np.uint8)
+    rotated = cv2.warpAffine(
+        rgb,
+        affine,
+        (output_width, output_height),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(255, 255, 255),
+    )
+    matrix = np.eye(3, dtype=np.float64)
+    matrix[:2, :] = affine
+    return Image.fromarray(rotated, mode="RGB"), matrix
 
 
 def _detect_page_border(gray: np.ndarray) -> tuple[str, float, float, np.ndarray | None]:
@@ -314,8 +324,8 @@ def _detect_page_border(gray: np.ndarray) -> tuple[str, float, float, np.ndarray
         )
     )
     if float(np.percentile(edge_pixels, 25)) >= 210.0:
-        return "complete", 0.25, 0.75, None
-    return "not_detected", 0.0, 0.0, None
+        return "unknown", 0.25, 0.75, None
+    return "unknown", 0.0, 0.0, None
 
 
 def _border_side_support(edges: np.ndarray) -> list[float]:
@@ -354,14 +364,14 @@ def _detect_perspective_risk(
     quad: np.ndarray | None, border_confidence: float, shape: tuple[int, int]
 ) -> tuple[str, float, float]:
     if quad is None:
-        return "not_detected", 0.0, 0.0
+        return "unknown", 0.0, 0.0
     top_left, top_right, bottom_right, bottom_left = quad
     top = float(np.linalg.norm(top_right - top_left))
     bottom = float(np.linalg.norm(bottom_right - bottom_left))
     left = float(np.linalg.norm(bottom_left - top_left))
     right = float(np.linalg.norm(bottom_right - top_right))
     if min(top, bottom, left, right) <= 1.0:
-        return "not_detected", 0.0, 0.0
+        return "unknown", 0.0, 0.0
 
     horizontal_difference = abs(top - bottom) / max(top, bottom)
     vertical_difference = abs(left - right) / max(left, right)
@@ -380,7 +390,7 @@ def _detect_perspective_risk(
     height, width = shape
     area_ratio = abs(float(cv2.contourArea(quad))) / max(float(height * width), 1.0)
     confidence = _clamp(border_confidence * min(area_ratio / 0.6, 1.0))
-    status = "high_risk" if risk > PERSPECTIVE_REVIEW_SCORE else "low_risk"
+    status = "suspected" if risk > PERSPECTIVE_SUSPECTED_SCORE else "normal"
     return status, confidence, risk
 
 
@@ -423,17 +433,40 @@ def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
     return float(sorted_values[min(index, len(sorted_values) - 1)])
 
 
-def _exif_rotation_degrees(image: Image.Image) -> int:
-    orientation = image.getexif().get(274)
+def _exif_orientation(image: Image.Image) -> int:
+    orientation = int(image.getexif().get(274, 1))
+    return orientation if 1 <= orientation <= 8 else 1
+
+
+def _exif_rotation_degrees(orientation: int) -> int:
     return {
         3: 180,
+        4: 180,
+        5: 270,
         6: 90,
+        7: 90,
         8: 270,
     }.get(orientation, 0)
 
 
-def _identity_matrix() -> list[list[float]]:
-    return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+def _exif_transform_matrix(orientation: int, width: int, height: int) -> np.ndarray:
+    matrices = {
+        1: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        2: [[-1.0, 0.0, width - 1.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        3: [[-1.0, 0.0, width - 1.0], [0.0, -1.0, height - 1.0], [0.0, 0.0, 1.0]],
+        4: [[1.0, 0.0, 0.0], [0.0, -1.0, height - 1.0], [0.0, 0.0, 1.0]],
+        5: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        6: [[0.0, -1.0, height - 1.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        7: [[0.0, -1.0, height - 1.0], [-1.0, 0.0, width - 1.0], [0.0, 0.0, 1.0]],
+        8: [[0.0, 1.0, 0.0], [-1.0, 0.0, width - 1.0], [0.0, 0.0, 1.0]],
+    }
+    return np.asarray(matrices[orientation], dtype=np.float64)
+
+
+def _matrix_list(matrix: np.ndarray) -> list[list[float]]:
+    if matrix.shape != (3, 3) or not np.isfinite(matrix).all():
+        raise ImageQualityError("invalid_normalization_transform")
+    return [[round(float(value), 8) for value in row] for row in matrix]
 
 
 def _clamp(value: float) -> float:

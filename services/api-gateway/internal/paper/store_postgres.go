@@ -762,22 +762,6 @@ func ensureExamPaperMutableTx(ctx context.Context, tx *sql.Tx, tenantID, examID 
 	return nil
 }
 
-func (s *PostgresStore) question(ctx context.Context, tenantID string, id string) (Question, error) {
-	row := s.db.QueryRowContext(ctx, `
-SELECT id::text, tenant_id::text, exam_id::text, COALESCE(exam_paper_id::text, ''), question_no, question_type, score::float8, COALESCE(stem, ''), knowledge_points, answer_area, sort_order, status
-FROM question
-WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL AND status <> 'deleted'
-`, tenantID, id)
-	var out Question
-	if err := scanQuestion(row, &out); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Question{}, ErrNotFound
-		}
-		return Question{}, err
-	}
-	return out, nil
-}
-
 func (s *PostgresStore) latestRubric(ctx context.Context, tenantID string, questionID string) (Rubric, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT qr.id::text, qr.question_id::text, rv.version, qr.status, qr.max_score::float8, qr.points, qr.deductions, qr.examples

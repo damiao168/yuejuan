@@ -72,6 +72,8 @@ MATH-00～08 的软件底座已接线：版本化数学工件、现有 OCR Worke
 
 2026-08-29 MATH-09 定向验证：现有 deterministic `BuildSpatialRelations` / `BuildSolutionGraph` 已接入 math-understanding runtime，Worker 空 relations 会在入库前补全，SolutionGraph 会由服务器 canonical builder 重建并保留 Worker 的人工复核信号。这不代表 learned layout model 已实现，也不代表复杂手写阅读顺序准确率或真实学校数据已完成验证。
 
+2026-08-29 MATH-10 定向验证：`image-quality-worker` 已接入 deterministic skew、page-border、perspective 与 shadow geometry measurement，并仅对满足安全条件的小角度 skew 执行扩大画布、可追踪矩阵的 deskew。未自动 perspective rectify、shadow removal 或 page crop，未实现 Answer Perception，也未验证真实学校图像准确率。
+
 - 新增“已实现”必须同时列出代码接线、验证入口和未覆盖边界。
 - Mock、stub、合成数据和外部模型协议模拟器必须显式标识，不得写成真实模型或现场结果。
 - 发布到 GitHub、合并到 `main` 或远端 CI 通过是独立事实；本工作树状态不会自动同步到其中任何一个。
