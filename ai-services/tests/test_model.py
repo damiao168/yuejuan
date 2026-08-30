@@ -5,8 +5,6 @@ import unittest
 from pathlib import Path
 from urllib import error as urlerror
 
-from helpers import settings, valid_raw_output, valid_request
-
 from grading_agent.errors import AgentError
 from grading_agent.model import (
     DashScopeNativeAdapter,
@@ -15,6 +13,7 @@ from grading_agent.model import (
     grading_output_schema,
 )
 from grading_agent.paper_parser import PaperParser
+from helpers import settings, valid_raw_output, valid_request
 
 
 class ModelAdapterTests(unittest.TestCase):

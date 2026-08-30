@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import io
 
-from PIL import Image
-
 from page_processing.config import Config
 from page_processing.runner import Runner
+from PIL import Image
 
 
 class FakeClient:

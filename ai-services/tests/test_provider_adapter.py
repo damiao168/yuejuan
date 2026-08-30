@@ -3,8 +3,6 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 
-from helpers import settings, valid_request
-
 from grading_agent.app import GradingAgentApplication
 from grading_agent.model import DashScopeNativeAdapter, LocalLlamaCppAdapter
 from grading_agent.provider_adapter import (
@@ -13,6 +11,7 @@ from grading_agent.provider_adapter import (
     build_provider_adapter,
     default_provider_adapter_registry,
 )
+from helpers import settings, valid_request
 
 FIXTURES = Path(__file__).parent / "fixtures" / "dashscope-native"
 
