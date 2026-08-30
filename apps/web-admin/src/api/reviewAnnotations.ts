@@ -12,6 +12,7 @@ import {
 import { apiClient } from "./client";
 
 const generatedApi = new EduGradeApi(apiClient);
+const applyReviewCommentTemplateRequest = generatedApi.useReviewCommentTemplate.bind(generatedApi);
 
 export type {
   CreateReviewAnnotationRequest,
@@ -69,6 +70,6 @@ export async function deleteReviewCommentTemplate(templateId: string, expectedRe
   return generatedApi.deleteReviewCommentTemplate({ path: { templateId }, body, signal });
 }
 
-export async function useReviewCommentTemplate(shortcut: string, signal?: AbortSignal) {
-  return generatedApi.useReviewCommentTemplate({ path: { shortcut }, signal });
+export async function applyReviewCommentTemplate(shortcut: string, signal?: AbortSignal) {
+  return applyReviewCommentTemplateRequest({ path: { shortcut }, signal });
 }

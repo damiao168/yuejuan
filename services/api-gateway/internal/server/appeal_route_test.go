@@ -13,14 +13,8 @@ import (
 	appealpkg "edugrade-enterprise/services/api-gateway/internal/appeal"
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/config"
-	"edugrade-enterprise/services/api-gateway/internal/exam"
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
-	ocrpkg "edugrade-enterprise/services/api-gateway/internal/ocr"
-	"edugrade-enterprise/services/api-gateway/internal/org"
-	"edugrade-enterprise/services/api-gateway/internal/paper"
-	"edugrade-enterprise/services/api-gateway/internal/segment"
-	"edugrade-enterprise/services/api-gateway/internal/submission"
 )
 
 const appealTenantID = "00000000-0000-0000-0000-000000000002"
@@ -194,7 +188,10 @@ func appealRouter(authStore *auth.MemoryStore, appealStore appealpkg.Store) http
 		Service: config.ServiceConfig{Name: "test", Environment: "test", ReadinessTimeout: time.Millisecond},
 		Auth:    config.AuthConfig{SessionTTL: time.Hour},
 	}
-	return NewRouterComplete(cfg, logger.New(io.Discard, "error"), nil, authStore, org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore(), files.NewMemoryStore(), files.NewMemoryObjectStorage(), submission.NewMemoryStore(), ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), segment.NewMemoryStore(), appealStore)
+	return NewMemoryRouter(cfg, logger.New(io.Discard, "error"), nil, files.NewMemoryObjectStorage(), func(stores *ApplicationStores) {
+		stores.Identity.Auth = authStore
+		stores.Release.Appeal = appealStore
+	})
 }
 
 func appealAuthStore(t *testing.T) *auth.MemoryStore {

@@ -15,17 +15,12 @@ import (
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/config"
-	"edugrade-enterprise/services/api-gateway/internal/exam"
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/grading"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
-	ocrpkg "edugrade-enterprise/services/api-gateway/internal/ocr"
-	"edugrade-enterprise/services/api-gateway/internal/org"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
-	"edugrade-enterprise/services/api-gateway/internal/segment"
 	"edugrade-enterprise/services/api-gateway/internal/server"
 	"edugrade-enterprise/services/api-gateway/internal/subjective"
-	"edugrade-enterprise/services/api-gateway/internal/submission"
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
 
@@ -115,7 +110,10 @@ func TestConfiguredRouterUsesGovernedGradingAgentAndOverridesCallerPolicy(t *tes
 			ModelVersion: "governed-model-v1", PromptVersion: "governed-prompt-v2", MinConfidence: 0.8,
 		},
 	}
-	router := server.NewRouterComplete(cfg, logger.New(io.Discard, "error"), nil, authStore, org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore(), files.NewMemoryStore(), files.NewMemoryObjectStorage(), submission.NewMemoryStore(), ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), segment.NewMemoryStore(), store)
+	router := server.NewMemoryRouter(cfg, logger.New(io.Discard, "error"), nil, files.NewMemoryObjectStorage(), func(stores *server.ApplicationStores) {
+		stores.Identity.Auth = authStore
+		stores.Grading.Subjective = store
+	})
 	token := login(t, router)
 	req := authedRequest(http.MethodPost, "/api/v1/answer-segments/segment-1/subjective-ai-grade", bytes.NewBufferString(`{"model_policy":{"model_version":"caller-selected-model","prompt_version":"caller-prompt","min_confidence":0.1}}`), token)
 	rec := httptest.NewRecorder()
@@ -514,7 +512,10 @@ func testRouter(authStore *auth.MemoryStore, subjectiveStore subjective.Store) h
 		Service: config.ServiceConfig{Name: "test", Environment: "test", ReadinessTimeout: time.Millisecond},
 		Auth:    config.AuthConfig{SessionTTL: time.Hour},
 	}
-	return server.NewRouterComplete(cfg, logger.New(io.Discard, "error"), nil, authStore, org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore(), files.NewMemoryStore(), files.NewMemoryObjectStorage(), submission.NewMemoryStore(), ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), segment.NewMemoryStore(), subjectiveStore)
+	return server.NewMemoryRouter(cfg, logger.New(io.Discard, "error"), nil, files.NewMemoryObjectStorage(), func(stores *server.ApplicationStores) {
+		stores.Identity.Auth = authStore
+		stores.Grading.Subjective = subjectiveStore
+	})
 }
 
 func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemoryStore {

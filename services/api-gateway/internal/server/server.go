@@ -4,57 +4,40 @@ import (
 	"context"
 	"net/http"
 	"strings"
-	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/aidisagreement"
 	"edugrade-enterprise/services/api-gateway/internal/aieligibility"
 	"edugrade-enterprise/services/api-gateway/internal/answergroup"
-	"edugrade-enterprise/services/api-gateway/internal/appeal"
-	"edugrade-enterprise/services/api-gateway/internal/assessment"
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/backmark"
 	"edugrade-enterprise/services/api-gateway/internal/calibration"
-	"edugrade-enterprise/services/api-gateway/internal/capture"
 	"edugrade-enterprise/services/api-gateway/internal/captureupload"
 	"edugrade-enterprise/services/api-gateway/internal/config"
 	"edugrade-enterprise/services/api-gateway/internal/dashboard"
-	"edugrade-enterprise/services/api-gateway/internal/db"
 	"edugrade-enterprise/services/api-gateway/internal/deps"
-	"edugrade-enterprise/services/api-gateway/internal/evidence"
 	"edugrade-enterprise/services/api-gateway/internal/exam"
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/goldpaper"
 	"edugrade-enterprise/services/api-gateway/internal/graderdrift"
-	"edugrade-enterprise/services/api-gateway/internal/grading"
 	"edugrade-enterprise/services/api-gateway/internal/gradingevaluation"
 	"edugrade-enterprise/services/api-gateway/internal/handlers"
 	"edugrade-enterprise/services/api-gateway/internal/idempotency"
-	"edugrade-enterprise/services/api-gateway/internal/imagequality"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
 	"edugrade-enterprise/services/api-gateway/internal/mathunderstanding"
 	"edugrade-enterprise/services/api-gateway/internal/middleware"
 	"edugrade-enterprise/services/api-gateway/internal/modelcalibration"
 	"edugrade-enterprise/services/api-gateway/internal/modelgovernance"
 	"edugrade-enterprise/services/api-gateway/internal/observability"
-	ocrpkg "edugrade-enterprise/services/api-gateway/internal/ocr"
-	"edugrade-enterprise/services/api-gateway/internal/orchestrator"
 	"edugrade-enterprise/services/api-gateway/internal/org"
-	"edugrade-enterprise/services/api-gateway/internal/outbox"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
 	"edugrade-enterprise/services/api-gateway/internal/processing"
 	"edugrade-enterprise/services/api-gateway/internal/qualitydashboard"
 	"edugrade-enterprise/services/api-gateway/internal/regrade"
 	"edugrade-enterprise/services/api-gateway/internal/regraderelease"
 	"edugrade-enterprise/services/api-gateway/internal/releasegate"
-	"edugrade-enterprise/services/api-gateway/internal/report"
-	"edugrade-enterprise/services/api-gateway/internal/review"
-	"edugrade-enterprise/services/api-gateway/internal/reviewannotation"
-	"edugrade-enterprise/services/api-gateway/internal/score"
 	"edugrade-enterprise/services/api-gateway/internal/scorerelease"
 	"edugrade-enterprise/services/api-gateway/internal/seedquality"
-	"edugrade-enterprise/services/api-gateway/internal/segment"
 	"edugrade-enterprise/services/api-gateway/internal/studentportal"
-	"edugrade-enterprise/services/api-gateway/internal/subjective"
 	"edugrade-enterprise/services/api-gateway/internal/submission"
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 	"edugrade-enterprise/services/api-gateway/internal/workspace"
@@ -99,196 +82,28 @@ func (b regradeBlocker) BlockingRegradeCount(ctx context.Context, tenantID, exam
 }
 
 func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
-	checkers := make([]deps.Checker, 0, 5)
-	cleanups := make([]func() error, 0, 2)
-	metricsRegistry := observability.NewRegistry()
-
-	postgresDB, closePostgres, err := db.OpenPostgres(cfg.Postgres, db.QueryObserver{
-		SlowThreshold: cfg.Observability.SlowRequestThreshold,
-		Observe:       metricsRegistry.ObserveDatabaseQuery,
-		LogSlow: func(ctx context.Context, operation string, duration time.Duration, queryErr error) {
-			logg.Warn(ctx, "slow database query observed", map[string]any{
-				"event": "slow_database_query", "operation": operation,
-				"duration_ms": duration.Milliseconds(), "failed": queryErr != nil,
-			})
-		},
-	})
+	infra, err := newInfrastructure(cfg, logg)
 	if err != nil {
 		return nil, nil, err
 	}
-	authStore := auth.NewPostgresStore(postgresDB)
-	orgStore := org.NewPostgresStore(postgresDB)
-	examStore := exam.NewPostgresStore(postgresDB)
-	paperStore := paper.NewPostgresStore(postgresDB)
-	fileStore := files.NewPostgresStore(postgresDB)
-	submissionStore := submission.NewPostgresStore(postgresDB)
-	imageQualityStore := imagequality.NewPostgresStore(postgresDB)
-	workerRuntimeStore := workerruntime.NewPostgresStore(postgresDB)
-	ocrStore := ocrpkg.NewPostgresStore(postgresDB)
-	ocrQueue := ocrpkg.NewMemoryQueue()
-	segmentStore := segment.NewPostgresStore(postgresDB)
-	orchestratorStore := orchestrator.NewPostgresStore(postgresDB)
-	gradingStore := grading.NewPostgresStore(postgresDB)
-	subjectiveStore := subjective.NewPostgresStore(postgresDB)
-	evidenceStore := evidence.NewPostgresStore(postgresDB)
-	reviewStore := review.NewPostgresStore(postgresDB)
-	reviewAnnotationStore := reviewannotation.NewPostgresStore(postgresDB)
-	goldPaperStore := goldpaper.NewPostgresStore(postgresDB)
-	calibrationStore := calibration.NewPostgresStore(postgresDB)
-	answerGroupStore := answergroup.NewPostgresStore(postgresDB, nil, answergroup.DefaultPolicy())
-	backmarkStore := backmark.NewPostgresStore(postgresDB)
-	regradeStore := regrade.NewPostgresStore(postgresDB)
-	graderDriftStore := graderdrift.NewPostgresStore(postgresDB)
-	seedQualityStore := seedquality.NewPostgresStore(postgresDB)
-	scoreStore := score.NewPostgresStore(postgresDB)
-	appealStore := appeal.NewPostgresStore(postgresDB)
-	publishedQuestionAppealStore := appeal.NewPublishedQuestionAppealPostgresStore(postgresDB)
-	reportStore := report.NewPostgresStore(postgresDB)
-	captureStore := capture.NewPostgresStoreWithBarcodeKeyring(postgresDB, capture.BarcodeKeyring{ActiveKeyID: cfg.Barcode.ActiveKeyID, Keys: cfg.Barcode.HMACKeys})
-	captureUploadStore := captureupload.NewPostgresStore(postgresDB)
-	processingStore := processing.NewPostgresStore(postgresDB)
-	modelGovernanceStore := modelgovernance.NewPostgresStore(postgresDB)
-	assessmentStore := assessment.NewPostgresStore(postgresDB)
-	eligibilityStore := aieligibility.NewPostgresStore(postgresDB)
-	gradingEvaluationStore := gradingevaluation.NewPostgresStore(postgresDB)
-	modelCalibrationStore := modelcalibration.NewPostgresStore(postgresDB)
-	aiDisagreementStore := aidisagreement.NewPostgresStore(postgresDB)
-	idempotencyStore := idempotency.NewPostgresStore(postgresDB)
-	mathUnderstandingStore := mathunderstanding.NewPostgresStore(postgresDB)
-	mathCorrectionStore := mathunderstanding.NewPostgresCorrectionStore(postgresDB, mathUnderstandingStore)
-	mathPilotGateStore := mathunderstanding.NewPostgresPilotGateStore(postgresDB)
-	qualityCalibrationService := calibration.NewService(calibrationStore, goldPaperStore)
-	qualitySeedService := seedquality.NewService(seedQualityStore, goldPaperStore, qualityCalibrationService, assessmentStore)
-	qualityDriftService := graderdrift.NewService(graderDriftStore, qualitySeedService, qualityCalibrationService)
-	qualityDashboardService := qualitydashboard.NewService(qualitydashboard.Sources{
-		Questions:   qualitydashboard.NewPostgresQuestionReader(postgresDB),
-		Gold:        goldPaperStore,
-		Calibration: qualitydashboard.NewPostgresCalibrationReader(postgresDB),
-		Seeds:       seedQualityStore,
-		Groups:      answerGroupStore,
-		Review:      reviewStore,
-		Drift:       qualitydashboard.NewDriftReader(qualityDriftService),
-		Backmark:    qualitydashboard.NewBackmarkReader(backmark.NewService(backmarkStore)),
-	})
-	scoreReleaseStore := scorerelease.NewPostgresStore(postgresDB, qualityDashboardService)
-	releaseGateStore := releasegate.NewPostgresStore(postgresDB)
-	studentPortalStore := studentportal.NewPostgresStore(postgresDB)
-	metricsRegistry.SetDatabaseStats(func() observability.DatabaseStats {
-		stats := postgresDB.Stats()
-		return observability.DatabaseStats{
-			OpenConnections: stats.OpenConnections,
-			InUse:           stats.InUse,
-			Idle:            stats.Idle,
-			WaitCount:       stats.WaitCount,
-			WaitDuration:    stats.WaitDuration,
-		}
-	})
-	if err := modelGovernanceStore.EnsureLocalBaseline(context.Background(), "", localModelBaseline(cfg)); err != nil {
-		_ = closePostgres()
-		return nil, nil, err
-	}
-	if strings.EqualFold(strings.TrimSpace(cfg.Service.Environment), "production") && cfg.AIService.Enabled {
-		if err := modelGovernanceStore.ValidateProductionReadiness(
-			context.Background(),
-			modelgovernance.NewEnvironmentSecretResolver(""),
-		); err != nil {
-			_ = closePostgres()
-			return nil, nil, err
-		}
-	}
-	postgresChecker := deps.NewPostgresChecker(postgresDB)
-	checkers = append(checkers, postgresChecker)
-	cleanups = append(cleanups, closePostgres)
-
-	redisChecker, closeRedis := deps.NewRedisChecker(cfg.Redis)
-	checkers = append(checkers, redisChecker)
-	cleanups = append(cleanups, closeRedis)
-
-	minioChecker, err := deps.NewMinIOChecker(cfg.MinIO)
+	modules, err := NewPostgresApplicationModules(infra)
 	if err != nil {
+		infra.Close()
 		return nil, nil, err
 	}
-	checkers = append(checkers, minioChecker)
-	checkers = append(checkers, deps.NewQdrantChecker(cfg.Qdrant))
-	checkers = append(checkers, deps.NewAIServiceChecker(cfg.AIService, cfg.Service.Environment))
-	objectStore, err := files.NewMinIOObjectStorage(cfg.MinIO)
-	if err != nil {
-		return nil, nil, err
-	}
-	fileReconciler := files.NewReconciler(postgresDB, objectStore)
-	if cfg.Files.ReconciliationInterval > 0 {
-		reconciliationContext, stopReconciliation := context.WithCancel(context.Background())
-		reconciliationDone := make(chan struct{})
-		go func() {
-			defer close(reconciliationDone)
-			ticker := time.NewTicker(cfg.Files.ReconciliationInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-reconciliationContext.Done():
-					return
-				case <-ticker.C:
-					run, reconcileErr := fileReconciler.Run(reconciliationContext, files.ReconciliationOptions{
-						Bucket: cfg.Files.Bucket, BatchSize: cfg.Files.ReconciliationBatchSize,
-						ObjectScanLimit: cfg.Files.ReconciliationObjectLimit,
-						StaleAfter:      cfg.Files.ReconciliationStaleAfter, Repair: false,
-					})
-					if reconcileErr != nil {
-						logg.Error(context.Background(), "file reconciliation report failed", map[string]any{
-							"event": "file_reconciliation_failed", "error": reconcileErr.Error(),
-						})
-					} else if run.FindingCount > 0 {
-						logg.Warn(context.Background(), "file reconciliation findings detected", map[string]any{
-							"event": "file_reconciliation_findings", "run_id": run.ID,
-							"finding_count": run.FindingCount, "scanned_assets": run.ScannedAssets,
-						})
-					}
-				}
-			}
-		}()
-		cleanups = append(cleanups, func() error {
-			stopReconciliation()
-			select {
-			case <-reconciliationDone:
-			case <-time.After(5 * time.Second):
-				return context.DeadlineExceeded
-			}
-			return nil
-		})
-	}
-	outboxDispatcher := outbox.NewDispatcher(
-		outbox.NewPostgresStore(postgresDB),
-		outbox.NewLogPublisher(logg),
-		outbox.Options{Owner: cfg.Service.Name + "-" + time.Now().UTC().Format("20060102T150405.000000000")},
-	)
-	outboxContext, stopOutbox := context.WithCancel(context.Background())
-	outboxDone := make(chan struct{})
-	go func() {
-		defer close(outboxDone)
-		outboxDispatcher.Run(outboxContext, func(dispatchErr error) {
-			logg.Error(context.Background(), "transactional outbox dispatch failed", map[string]any{
-				"event": "outbox_dispatch_failed", "error": dispatchErr.Error(),
-			})
-		})
-	}()
-	cleanups = append(cleanups, func() error {
-		stopOutbox()
-		select {
-		case <-outboxDone:
-		case <-time.After(5 * time.Second):
-			return context.DeadlineExceeded
-		}
-		return nil
+	router := NewRouterComplete(RouterDependencies{
+		Config: cfg, Logger: logg, Checkers: infra.Checkers, Metrics: infra.Metrics,
+		Modules: modules,
 	})
+	return &Server{handler: router}, infra.Close, nil
+}
 
-	loginLimiter := auth.NewRedisLoginFailureLimiter(redisChecker.Client(), cfg.Auth.LoginFailureLimit, cfg.Auth.LoginFailureWindow)
-	router := NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrQueue, segmentStore, imageQualityStore, workerRuntimeStore, orchestratorStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, reviewAnnotationStore, goldPaperStore, calibrationStore, answerGroupStore, backmarkStore, regradeStore, graderDriftStore, seedQualityStore, scoreStore, scoreReleaseStore, releaseGateStore, studentPortalStore, appealStore, publishedQuestionAppealStore, reportStore, captureStore, captureUploadStore, processingStore, modelGovernanceStore, assessmentStore, eligibilityStore, gradingEvaluationStore, modelCalibrationStore, aiDisagreementStore, idempotencyStore, mathUnderstandingStore, mathCorrectionStore, mathPilotGateStore, fileReconciler, loginLimiter, metricsRegistry, qualityDashboardService, dashboard.NewPostgresOrganizationSummaryStore(postgresDB))
-	cleanup := func() {
-		for i := len(cleanups) - 1; i >= 0; i-- {
-			_ = cleanups[i]()
-		}
-	}
-	return &Server{handler: router}, cleanup, nil
+type RouterDependencies struct {
+	Config   config.Config
+	Logger   *logger.Logger
+	Checkers []deps.Checker
+	Metrics  *observability.Registry
+	Modules  ApplicationModules
 }
 
 func NewRouter(cfg config.Config, logg *logger.Logger, checkers []deps.Checker, authStore auth.Store, orgStore org.Store, examStore exam.Store, paperStore paper.Store) http.Handler {
@@ -300,342 +115,97 @@ func NewRouterWithFiles(cfg config.Config, logg *logger.Logger, checkers []deps.
 }
 
 func NewRouterFull(cfg config.Config, logg *logger.Logger, checkers []deps.Checker, authStore auth.Store, orgStore org.Store, examStore exam.Store, paperStore paper.Store, fileStore files.Store, objectStore files.ObjectStorage, submissionStore submission.Store) http.Handler {
-	return NewRouterComplete(cfg, logg, checkers, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), segment.NewMemoryStore())
+	stores := NewMemoryApplicationStores()
+	stores.Identity = IdentityStores{Auth: authStore, Org: orgStore}
+	stores.Exam.Exam = examStore
+	stores.Exam.Paper = paperStore
+	stores.Exam.Files = fileStore
+	stores.Exam.Submissions = submissionStore
+	return NewRouterWithApplicationStores(cfg, logg, checkers, objectStore, stores)
 }
 
-func NewRouterComplete(cfg config.Config, logg *logger.Logger, checkers []deps.Checker, authStore auth.Store, orgStore org.Store, examStore exam.Store, paperStore paper.Store, fileStore files.Store, objectStore files.ObjectStorage, submissionStore submission.Store, ocrStore ocrpkg.Store, ocrQueue ocrpkg.Queue, segmentStore segment.Store, optionalStores ...any) http.Handler {
-	mux := http.NewServeMux()
-	h := handlers.New(cfg, checkers)
-	var loginLimiter auth.LoginLimiter
-	var metricsRegistry *observability.Registry
-	var fileReconciliationReader files.ReconciliationReader
-	var qualityDashboardService *qualitydashboard.Service
-	var dashboardOrganizationStore dashboard.OrganizationSummaryStore
-	for _, optionalStore := range optionalStores {
-		if limiter, ok := optionalStore.(auth.LoginLimiter); ok && limiter != nil {
-			loginLimiter = limiter
-		}
-		if registry, ok := optionalStore.(*observability.Registry); ok && registry != nil {
-			metricsRegistry = registry
-		}
-		if reader, ok := optionalStore.(files.ReconciliationReader); ok && reader != nil {
-			fileReconciliationReader = reader
-		}
+func NewRouterWithApplicationStores(cfg config.Config, logg *logger.Logger, checkers []deps.Checker, objectStore files.ObjectStorage, stores ApplicationStores) http.Handler {
+	modules := NewMemoryApplicationModules(MemoryApplicationDependencies{
+		Config: cfg, ObjectStore: objectStore,
+	}, stores)
+	return NewRouterComplete(RouterDependencies{
+		Config: cfg, Logger: logg, Checkers: checkers, Modules: modules,
+	})
+}
+
+func NewMemoryRouter(cfg config.Config, logg *logger.Logger, checkers []deps.Checker, objectStore files.ObjectStorage, configure func(*ApplicationStores)) http.Handler {
+	stores := NewMemoryApplicationStores()
+	if configure != nil {
+		configure(&stores)
 	}
+	return NewRouterWithApplicationStores(cfg, logg, checkers, objectStore, stores)
+}
+
+func NewRouterComplete(dependencies RouterDependencies) http.Handler {
+	cfg := dependencies.Config
+	logg := dependencies.Logger
+	modules := dependencies.Modules
+	metricsRegistry := dependencies.Metrics
 	if metricsRegistry == nil {
 		metricsRegistry = observability.NewRegistry()
 	}
-	authHandler := auth.NewHandler(authStore, cfg.Auth.SessionTTL, auth.HandlerOptions{
-		LoginFailureLimit:    cfg.Auth.LoginFailureLimit,
-		LoginFailureWindow:   cfg.Auth.LoginFailureWindow,
-		RememberedSessionTTL: cfg.Auth.RememberedSessionTTL,
-		CookieName:           cfg.Auth.SessionCookieName,
-		CookieSecure:         cfg.Auth.SessionCookieSecure,
-		LoginLimiter:         loginLimiter,
-		TrustedProxyCIDRs:    cfg.Security.TrustedProxyCIDRs,
-	})
-	orgHandler := org.NewHandler(orgStore, authStore)
-	examHandler := exam.NewHandler(examStore, authStore)
-	paperHandler := paper.NewHandler(paperStore, authStore).WithDocumentImport(paper.NewDocumentImportService(paperStore, fileStore, objectStore, cfg.AIService.URL, cfg.AIService.Token, cfg.AIService.Timeout))
-	fileHandler := files.NewHandler(fileStore, objectStore, authStore, cfg.Files).WithReconciliationReader(fileReconciliationReader)
-	submissionHandler := submission.NewHandler(submissionStore, fileStore, authStore)
-	segmentHandler := segment.NewHandler(segmentStore, paperStore, submissionStore, authStore, fileStore, objectStore)
-	var imageQualityStore imagequality.Store = imagequality.NewMemoryStore()
-	var workerRuntimeStore workerruntime.Store = workerruntime.NewMemoryStore()
-	var orchestratorStore orchestrator.Store = orchestrator.NewMemoryStore()
-	var gradingStore grading.Store = grading.NewMemoryStore()
-	var subjectiveStore subjective.Store = subjective.NewMemoryStore()
-	var evidenceStore evidence.Store = evidence.NewMemoryStore()
-	var reviewStore review.Store = review.NewMemoryStore()
-	var reviewAnnotationStore reviewannotation.Store = reviewannotation.NewMemoryStore()
-	var goldPaperStore goldpaper.Store = goldpaper.NewMemoryStore()
-	var calibrationStore calibration.Store = calibration.NewMemoryStore()
-	var answerGroupStore answergroup.Store = answergroup.NewMemoryStore(nil, answergroup.DefaultPolicy())
-	var backmarkStore backmark.Store = backmark.NewMemoryStore()
-	var regradeStore regrade.Store = regrade.NewMemoryStore()
-	var graderDriftStore graderdrift.Store = graderdrift.NewMemoryStore()
-	var seedQualityStore seedquality.Store = seedquality.NewMemoryStore()
-	var scoreStore score.Store = score.NewMemoryStore()
-	var scoreReleaseStore scorerelease.Store = scorerelease.NewMemoryStore()
-	var releaseGateStore releasegate.Store = releasegate.NewMemoryStore()
-	var studentPortalStore studentportal.Store = studentportal.NewMemoryStore()
-	var appealStore appeal.Store = appeal.NewMemoryStore()
-	var publishedQuestionAppealStore appeal.PublishedQuestionAppealStore = appeal.NewPublishedQuestionAppealMemoryStore()
-	var reportStore report.Store = report.NewMemoryStore()
-	var captureStore capture.Store = capture.NewMemoryStore()
-	var captureUploadStore captureupload.Store = captureupload.NewMemoryStore()
-	var processingStore processing.Store = processing.NewMemoryStore()
-	var modelGovernanceStore modelgovernance.Store = modelgovernance.NewMemoryStore()
-	var assessmentStore assessment.Store = assessment.NewMemoryStore()
-	var eligibilityStore aieligibility.Store
-	var gradingEvaluationStore gradingevaluation.Store = gradingevaluation.NewMemoryStore()
-	var modelCalibrationStore modelcalibration.Store = modelcalibration.NewMemoryStore()
-	var aiDisagreementStore aidisagreement.Store = aidisagreement.NewMemoryStore()
-	var idempotencyStore idempotency.Store = idempotency.NewMemoryStore()
-	var mathUnderstandingStore mathunderstanding.Store = mathunderstanding.NewMemoryStore()
-	var mathCorrectionStore mathunderstanding.CorrectionStore = mathunderstanding.NewMemoryCorrectionStore(mathUnderstandingStore)
-	var mathPilotGateStore mathunderstanding.PilotGateStore = mathunderstanding.NewMemoryPilotGateStore()
-	for _, optionalStore := range optionalStores {
-		switch store := optionalStore.(type) {
-		case imagequality.Store:
-			if store != nil {
-				imageQualityStore = store
-			}
-		case workerruntime.Store:
-			if store != nil {
-				workerRuntimeStore = store
-			}
-		case orchestrator.Store:
-			if store != nil {
-				orchestratorStore = store
-			}
-		case grading.Store:
-			if store != nil {
-				gradingStore = store
-			}
-		case subjective.Store:
-			if store != nil {
-				subjectiveStore = store
-			}
-		case evidence.Store:
-			if store != nil {
-				evidenceStore = store
-			}
-		case review.Store:
-			if store != nil {
-				reviewStore = store
-			}
-		case reviewannotation.Store:
-			if store != nil {
-				reviewAnnotationStore = store
-			}
-		case goldpaper.Store:
-			if store != nil {
-				goldPaperStore = store
-			}
-		case calibration.Store:
-			if store != nil {
-				calibrationStore = store
-			}
-		case answergroup.Store:
-			if store != nil {
-				answerGroupStore = store
-			}
-		case backmark.Store:
-			if store != nil {
-				backmarkStore = store
-			}
-		case regrade.Store:
-			if store != nil {
-				regradeStore = store
-			}
-		case graderdrift.Store:
-			if store != nil {
-				graderDriftStore = store
-			}
-		case seedquality.Store:
-			if store != nil {
-				seedQualityStore = store
-			}
-		case score.Store:
-			if store != nil {
-				scoreStore = store
-			}
-		case scorerelease.Store:
-			if store != nil {
-				scoreReleaseStore = store
-			}
-		case releasegate.Store:
-			if store != nil {
-				releaseGateStore = store
-			}
-		case studentportal.Store:
-			if store != nil {
-				studentPortalStore = store
-			}
-		case appeal.Store:
-			if store != nil {
-				appealStore = store
-			}
-		case appeal.PublishedQuestionAppealStore:
-			if store != nil {
-				publishedQuestionAppealStore = store
-			}
-		case report.Store:
-			if store != nil {
-				reportStore = store
-			}
-		case capture.Store:
-			if store != nil {
-				captureStore = store
-			}
-		case captureupload.Store:
-			if store != nil {
-				captureUploadStore = store
-			}
-		case processing.Store:
-			if store != nil {
-				processingStore = store
-			}
-		case modelgovernance.Store:
-			if store != nil {
-				modelGovernanceStore = store
-			}
-		case assessment.Store:
-			if store != nil {
-				assessmentStore = store
-			}
-		case aieligibility.Store:
-			if store != nil {
-				eligibilityStore = store
-			}
-		case gradingevaluation.Store:
-			if store != nil {
-				gradingEvaluationStore = store
-			}
-		case modelcalibration.Store:
-			if store != nil {
-				modelCalibrationStore = store
-			}
-		case aidisagreement.Store:
-			if store != nil {
-				aiDisagreementStore = store
-			}
-		case idempotency.Store:
-			if store != nil {
-				idempotencyStore = store
-			}
-		case mathunderstanding.Store:
-			if store != nil {
-				mathUnderstandingStore = store
-			}
-		case mathunderstanding.CorrectionStore:
-			if store != nil {
-				mathCorrectionStore = store
-			}
-		case mathunderstanding.PilotGateStore:
-			if store != nil {
-				mathPilotGateStore = store
-			}
-		case *qualitydashboard.Service:
-			if store != nil {
-				qualityDashboardService = store
-			}
-		case dashboard.OrganizationSummaryStore:
-			if store != nil {
-				dashboardOrganizationStore = store
-			}
-		}
-	}
-	h.WithWorkerRuntimeStore(workerRuntimeStore)
-	orchestratorHandler := orchestrator.NewHandler(orchestratorStore, authStore)
-	ocrHandler := ocrpkg.NewHandler(ocrStore, ocrQueue, submissionStore, authStore, workerRuntimeStore)
-	imageQualityHandler := imagequality.NewHandler(imageQualityStore, submissionStore, fileStore, authStore, workerRuntimeStore).WithCaptureStore(captureStore)
-	workerRuntimeHandler := workerruntime.NewHandler(workerRuntimeStore, authStore, workerSourceLeaseRenewer{imageQuality: imageQualityStore})
-	captureHandler := capture.NewHandler(captureStore, fileStore, examStore, workerRuntimeStore, authStore)
-	var captureUploadHandler *captureupload.Handler
-	if lifecycleFiles, ok := fileStore.(files.LifecycleStore); ok {
-		captureUploadHandler = captureupload.NewHandler(captureupload.NewService(captureUploadStore, captureStore, lifecycleFiles, objectStore, cfg.Files), authStore)
-	}
-	processingService := processing.NewService(processingStore, workerRuntimeStore)
-	processingHandler := processing.NewHandler(processingService, authStore)
-	gradingHandler := grading.NewHandler(gradingStore, grading.NewEngine(), authStore)
-	gradingHandler.SetProductionDependencies(workerRuntimeStore, fileStore)
-	var subjectiveAdapter subjective.LLMGradingAdapter
-	if useRealAIService(cfg) {
-		subjectiveAdapter = subjective.NewHTTPAdapter(subjective.HTTPAdapterConfig{
-			BaseURL:           cfg.AIService.URL,
-			Token:             cfg.AIService.Token,
-			Timeout:           cfg.AIService.Timeout,
-			MaxRetries:        cfg.AIService.MaxRetries,
-			ModelVersion:      cfg.AIService.ModelVersion,
-			PromptVersion:     cfg.AIService.PromptVersion,
-			MinConfidence:     cfg.AIService.MinConfidence,
-			ProviderKey:       cfg.AIService.ProviderKey,
-			DeploymentKey:     cfg.AIService.DeploymentKey,
-			AdapterType:       cfg.AIService.AdapterType,
-			DeploymentRegion:  cfg.AIService.DeploymentRegion,
-			CapabilityProfile: cfg.AIService.CapabilityProfile,
-		})
-	} else if allowMockAI(cfg) {
-		subjectiveAdapter = subjective.NewMockLLMAdapter()
-	} else {
-		subjectiveAdapter = subjective.NewDisabledAdapter("ai_grading_disabled", cfg.AIService.ModelVersion, cfg.AIService.PromptVersion)
-	}
-	gradingEvaluationService := gradingevaluation.NewService(gradingEvaluationStore)
-	modelCalibrationService := modelcalibration.NewService(modelCalibrationStore, modelcalibration.NewEvaluationReader(gradingEvaluationService))
-	subjectiveHandler := subjective.NewHandler(subjectiveStore, subjectiveAdapter, authStore).WithWorkerRuntimeStore(workerRuntimeStore).WithEvaluationEvidence(gradingEvaluationService).WithCalibrationEvidence(modelCalibrationService).WithParserQuality(processingService)
-	var eligibilityService *aieligibility.Service
-	var eligibilityHandler *aieligibility.Handler
-	if eligibilityStore != nil {
-		eligibilityService = aieligibility.NewService(eligibilityStore)
-		eligibilityHandler = aieligibility.NewHandler(eligibilityService)
-		subjectiveHandler.WithEligibilityGate(eligibilityService)
-	}
-	gradingEvaluationHandler := gradingevaluation.NewHandler(gradingEvaluationService)
-	modelCalibrationHandler := modelcalibration.NewHandler(modelCalibrationService)
-	aiDisagreementService := aidisagreement.NewService(aiDisagreementStore)
-	aiDisagreementHandler := aidisagreement.NewHandler(aiDisagreementService)
-	evidenceHandler := evidence.NewHandler(evidenceStore, evidence.NewEngine(), authStore)
-	calibrationService := calibration.NewService(calibrationStore, goldPaperStore)
-	calibrationHandler := calibration.NewHandler(calibrationService, authStore)
-	seedQualityService := seedquality.NewService(seedQualityStore, goldPaperStore, calibrationService, assessmentStore)
-	seedQualityHandler := seedquality.NewHandler(seedQualityService, authStore)
-	graderDriftService := graderdrift.NewService(graderDriftStore, seedQualityService, calibrationService)
-	graderDriftHandler := graderdrift.NewHandler(graderDriftService, authStore)
-	backmarkService := backmark.NewService(backmarkStore)
-	if contextStore, ok := reviewStore.(review.TaskContextStore); ok {
-		backmarkService.WithContextSource(contextStore)
-	}
-	backmarkService.WithTaskSource(reviewStore)
-	regradeService := regrade.NewService(regradeStore)
-	if contextStore, ok := regradeStore.(regrade.ContextSource); ok {
-		regradeService.WithContextSource(contextStore)
-	}
-	regradeHandler := regrade.NewHandler(regradeService, authStore).WithSegmentImage(segmentHandler.GetImage)
-	backmarkHandler := backmark.NewHandler(backmarkService, authStore).WithSegmentImage(segmentHandler.GetImage).WithRegradeService(regradeService)
-	var qualityDashboardHandler *qualitydashboard.Handler
-	if qualityDashboardService != nil {
-		qualityDashboardHandler = qualitydashboard.NewHandler(qualityDashboardService)
-	}
-	reviewHandler := review.NewHandler(reviewStore, authStore, segmentHandler.GetImage, fileHandler.Download).WithQualificationGate(calibrationService).WithSeedHook(seedQualityService).WithSeedObservationRefresher(graderDriftService).WithAIHumanDisagreementObserver(aiDisagreementService)
-	reviewAnnotationHandler := reviewannotation.NewHandler(reviewAnnotationStore, authStore)
-	goldPaperHandler := goldpaper.NewHandler(goldPaperStore, authStore)
-	answerGroupHandler := answergroup.NewHandlerWithReferences(answerGroupStore, authStore, goldPaperStore)
-	scoreHandler := score.NewHandler(scoreStore, authStore)
-	scoreReleaseService := scorerelease.NewService(scoreReleaseStore)
-	releaseGateService := releasegate.NewService(releaseGateStore, scoreReleaseService).WithRegradeBlockerReader(regradeBlocker{service: regradeService})
-	releaseGateHandler := releasegate.NewHandler(releaseGateService, authStore)
-	scoreReleaseHandler := scorerelease.NewHandler(scoreReleaseService, authStore).WithPublicationPublisher(releaseGatePublisher{
-		coordinator: releasegate.NewPublicationCoordinator(releaseGateService, scoreReleaseService),
-	}).WithStudentQuestionImage(segmentHandler.GetImage)
-	studentPortalHandler := studentportal.NewHandler(studentportal.NewService(studentPortalStore))
-	regradeReleaseHandler := regraderelease.NewHandler(regraderelease.NewService(regradeService, scoreReleaseService))
-	appealHandler := appeal.NewHandler(appealStore, authStore)
-	publishedQuestionAppealHandler := appeal.NewPublishedQuestionAppealHandler(appeal.NewPublishedQuestionAppealService(publishedQuestionAppealStore), authStore).WithSegmentImage(segmentHandler.GetImage)
-	reportHandler := report.NewHandler(reportStore, authStore)
-	modelGovernanceHandler := modelgovernance.NewHandler(
-		modelGovernanceStore,
-		authStore,
-		modelgovernance.NewEnvironmentSecretResolver(""),
-		localModelBaseline(cfg),
-	).WithRuntimePromptSource(modelgovernance.NewHTTPRuntimePromptSource(
-		cfg.AIService.URL,
-		cfg.AIService.Token,
-		cfg.AIService.Timeout,
-	))
-	assessmentHandler := assessment.NewHandler(assessmentStore, authStore)
-	mathUnderstandingHandler := mathunderstanding.NewHandler(mathUnderstandingStore, mathCorrectionStore, mathPilotGateStore, reviewStore, authStore).WithRuntime(workerRuntimeStore)
-	workspaceHandler := workspace.NewHandler(workspace.Dependencies{
-		Exams: examStore, Papers: paperStore, Submissions: submissionStore, Reviews: reviewStore, Assessments: assessmentStore, Processing: processingService,
-	})
-	dashboardHandler := dashboard.NewHandler(dashboard.Dependencies{
-		Exams:         examStore,
-		Submissions:   submissionStore,
-		Reviews:       reviewStore,
-		Audits:        authStore,
-		Organizations: dashboardOrganizationStore,
-	})
+
+	mux := http.NewServeMux()
+	h := handlers.New(cfg, dependencies.Checkers)
+	h.WithWorkerRuntimeStore(modules.Capture.WorkerRuntimeStore)
+
+	authStore := modules.Identity.AuthStore
+	authHandler := modules.Identity.AuthHandler
+	orgHandler := modules.Identity.OrgHandler
+	examHandler := modules.Exam.ExamHandler
+	paperHandler := modules.Exam.PaperHandler
+	fileHandler := modules.Exam.FileHandler
+	submissionHandler := modules.Exam.SubmissionHandler
+	segmentHandler := modules.Exam.SegmentHandler
+	assessmentHandler := modules.Exam.AssessmentHandler
+	workspaceHandler := modules.Exam.WorkspaceHandler
+	dashboardHandler := modules.Exam.DashboardHandler
+
+	workerRuntimeStore := modules.Capture.WorkerRuntimeStore
+	orchestratorHandler := modules.Capture.OrchestratorHandler
+	ocrHandler := modules.Capture.OCRHandler
+	imageQualityHandler := modules.Capture.ImageQualityHandler
+	workerRuntimeHandler := modules.Capture.WorkerRuntimeHandler
+	captureHandler := modules.Capture.CaptureHandler
+	captureUploadHandler := modules.Capture.CaptureUploadHandler
+	processingHandler := modules.Capture.ProcessingHandler
+
+	gradingHandler := modules.Grading.GradingHandler
+	subjectiveHandler := modules.Grading.SubjectiveHandler
+	evidenceHandler := modules.Grading.EvidenceHandler
+	reviewHandler := modules.Grading.ReviewHandler
+	reviewAnnotationHandler := modules.Grading.ReviewAnnotationHandler
+	goldPaperHandler := modules.Grading.GoldPaperHandler
+	calibrationHandler := modules.Grading.CalibrationHandler
+	answerGroupHandler := modules.Grading.AnswerGroupHandler
+	backmarkHandler := modules.Grading.BackmarkHandler
+	regradeHandler := modules.Grading.RegradeHandler
+	graderDriftHandler := modules.Grading.GraderDriftHandler
+	seedQualityHandler := modules.Grading.SeedQualityHandler
+	qualityDashboardHandler := modules.Grading.QualityDashboardHandler
+
+	scoreHandler := modules.Release.ScoreHandler
+	scoreReleaseHandler := modules.Release.ScoreReleaseHandler
+	releaseGateHandler := modules.Release.ReleaseGateHandler
+	studentPortalHandler := modules.Release.StudentPortalHandler
+	regradeReleaseHandler := modules.Release.RegradeReleaseHandler
+	appealHandler := modules.Release.AppealHandler
+	publishedQuestionAppealHandler := modules.Release.PublishedQuestionAppealHandler
+	reportHandler := modules.Release.ReportHandler
+
+	modelGovernanceHandler := modules.AIGovernance.ModelGovernanceHandler
+	mathUnderstandingHandler := modules.AIGovernance.MathUnderstandingHandler
+	eligibilityHandler := modules.AIGovernance.Foundation.EligibilityHandler
+	gradingEvaluationHandler := modules.AIGovernance.Foundation.GradingEvaluationHandler
+	modelCalibrationHandler := modules.AIGovernance.Foundation.ModelCalibrationHandler
+	aiDisagreementHandler := modules.AIGovernance.Foundation.DisagreementHandler
+	idempotencyStore := modules.Idempotency
+
 	authenticate := auth.AuthMiddleware(authStore, auth.HandlerOptions{CookieName: cfg.Auth.SessionCookieName})
 	environment := strings.ToLower(strings.TrimSpace(cfg.Service.Environment))
 	idempotent := idempotency.Middleware(idempotencyStore, idempotency.Options{Enforce: environment == "production" || environment == "staging"})

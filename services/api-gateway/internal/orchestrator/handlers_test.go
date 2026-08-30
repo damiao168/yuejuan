@@ -12,16 +12,10 @@ import (
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/config"
-	"edugrade-enterprise/services/api-gateway/internal/exam"
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
-	ocrpkg "edugrade-enterprise/services/api-gateway/internal/ocr"
 	"edugrade-enterprise/services/api-gateway/internal/orchestrator"
-	"edugrade-enterprise/services/api-gateway/internal/org"
-	"edugrade-enterprise/services/api-gateway/internal/paper"
-	"edugrade-enterprise/services/api-gateway/internal/segment"
 	"edugrade-enterprise/services/api-gateway/internal/server"
-	"edugrade-enterprise/services/api-gateway/internal/submission"
 )
 
 const tenantID = "00000000-0000-0000-0000-000000000002"
@@ -192,7 +186,10 @@ func testRouter(authStore *auth.MemoryStore, orchestratorStore orchestrator.Stor
 		Service: config.ServiceConfig{Name: "test", Environment: "test", ReadinessTimeout: time.Millisecond},
 		Auth:    config.AuthConfig{SessionTTL: time.Hour},
 	}
-	return server.NewRouterComplete(cfg, logger.New(io.Discard, "error"), nil, authStore, org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore(), files.NewMemoryStore(), files.NewMemoryObjectStorage(), submission.NewMemoryStore(), ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), segment.NewMemoryStore(), orchestratorStore)
+	return server.NewMemoryRouter(cfg, logger.New(io.Discard, "error"), nil, files.NewMemoryObjectStorage(), func(stores *server.ApplicationStores) {
+		stores.Identity.Auth = authStore
+		stores.Capture.Orchestrator = orchestratorStore
+	})
 }
 
 func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemoryStore {

@@ -14,14 +14,9 @@ import (
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/config"
-	"edugrade-enterprise/services/api-gateway/internal/exam"
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/imagequality"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
-	ocrpkg "edugrade-enterprise/services/api-gateway/internal/ocr"
-	"edugrade-enterprise/services/api-gateway/internal/org"
-	"edugrade-enterprise/services/api-gateway/internal/paper"
-	"edugrade-enterprise/services/api-gateway/internal/segment"
 	"edugrade-enterprise/services/api-gateway/internal/server"
 	"edugrade-enterprise/services/api-gateway/internal/submission"
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
@@ -227,11 +222,15 @@ func testRouter(authStore *auth.MemoryStore, fileStore files.Store, submissionSt
 		Service: config.ServiceConfig{Name: "test", Environment: "test", ReadinessTimeout: time.Millisecond},
 		Auth:    config.AuthConfig{SessionTTL: time.Hour},
 	}
-	optionalStores := []any{qualityStore}
-	if len(runtimeStores) > 0 {
-		optionalStores = append(optionalStores, runtimeStores[0])
-	}
-	return server.NewRouterComplete(cfg, logger.New(io.Discard, "error"), nil, authStore, org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore(), fileStore, files.NewMemoryObjectStorage(), submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), segment.NewMemoryStore(), optionalStores...)
+	return server.NewMemoryRouter(cfg, logger.New(io.Discard, "error"), nil, files.NewMemoryObjectStorage(), func(stores *server.ApplicationStores) {
+		stores.Identity.Auth = authStore
+		stores.Exam.Files = fileStore
+		stores.Exam.Submissions = submissionStore
+		stores.Capture.ImageQuality = qualityStore
+		if len(runtimeStores) > 0 {
+			stores.Capture.WorkerRuntime = runtimeStores[0]
+		}
+	})
 }
 
 func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemoryStore {

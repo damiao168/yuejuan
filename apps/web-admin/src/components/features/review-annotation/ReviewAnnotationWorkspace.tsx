@@ -147,7 +147,7 @@ export function ReviewAnnotationWorkspace({
   const insertTemplate = async (shortcut: string) => {
     if (!draft) return;
     try {
-      const template = await workspace.useTemplate(shortcut);
+      const template = await workspace.applyTemplate(shortcut);
       setDraft((current) => current ? {
         ...current,
         content: replaceTrailingTemplateShortcut(current.content, template.content)

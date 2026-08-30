@@ -284,31 +284,25 @@ func e2ePostgresRouter(db *sql.DB) http.Handler {
 		},
 		Security: config.SecurityConfig{MaxRequestBodyBytes: 2 * 1024 * 1024},
 	}
-	return NewRouterComplete(
-		cfg,
-		logger.New(io.Discard, "error"),
-		nil,
-		auth.NewPostgresStore(db),
-		org.NewPostgresStore(db),
-		exam.NewPostgresStore(db),
-		paper.NewPostgresStore(db),
-		files.NewPostgresStore(db),
-		files.NewMemoryObjectStorage(),
-		submission.NewPostgresStore(db),
-		ocrpkg.NewPostgresStore(db),
-		ocrpkg.NewMemoryQueue(),
-		segment.NewPostgresStore(db),
-		workerruntime.NewPostgresStore(db),
-		grading.NewPostgresStore(db),
-		subjective.NewPostgresStore(db),
-		assessment.NewPostgresStore(db),
-		evidence.NewPostgresStore(db),
-		review.NewPostgresStore(db),
-		score.NewPostgresStore(db),
-		appeal.NewPostgresStore(db),
-		capture.NewPostgresStoreWithBarcodeKeyring(db, e2eBarcodeKeyring()),
-		dashboard.NewPostgresOrganizationSummaryStore(db),
-	)
+	stores := NewMemoryApplicationStores()
+	stores.Identity = IdentityStores{Auth: auth.NewPostgresStore(db), Org: org.NewPostgresStore(db)}
+	stores.Exam.Exam = exam.NewPostgresStore(db)
+	stores.Exam.Paper = paper.NewPostgresStore(db)
+	stores.Exam.Files = files.NewPostgresStore(db)
+	stores.Exam.Submissions = submission.NewPostgresStore(db)
+	stores.Exam.Segments = segment.NewPostgresStore(db)
+	stores.Exam.Assessments = assessment.NewPostgresStore(db)
+	stores.Exam.DashboardOrganizations = dashboard.NewPostgresOrganizationSummaryStore(db)
+	stores.Capture.OCR = ocrpkg.NewPostgresStore(db)
+	stores.Capture.WorkerRuntime = workerruntime.NewPostgresStore(db)
+	stores.Capture.Capture = capture.NewPostgresStoreWithBarcodeKeyring(db, e2eBarcodeKeyring())
+	stores.Grading.Grading = grading.NewPostgresStore(db)
+	stores.Grading.Subjective = subjective.NewPostgresStore(db)
+	stores.Grading.Evidence = evidence.NewPostgresStore(db)
+	stores.Grading.Review = review.NewPostgresStore(db)
+	stores.Release.Score = score.NewPostgresStore(db)
+	stores.Release.Appeal = appeal.NewPostgresStore(db)
+	return NewRouterWithApplicationStores(cfg, logger.New(io.Discard, "error"), nil, files.NewMemoryObjectStorage(), stores)
 }
 
 func e2eBarcodeKeyring() capture.BarcodeKeyring {

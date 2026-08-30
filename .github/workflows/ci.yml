@@ -35,6 +35,8 @@ jobs:
         run: npm run check:openapi-breaking
       - run: npm audit --audit-level=high
       - run: npm --prefix lab audit --audit-level=high
+      - name: Frontend static analysis
+        run: npm run lint
       - run: npm run typecheck
       - run: npm --workspace apps/web-admin run test
       - run: npm run build

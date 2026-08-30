@@ -13,16 +13,11 @@ import (
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/config"
-	"edugrade-enterprise/services/api-gateway/internal/exam"
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/grading"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
-	ocrpkg "edugrade-enterprise/services/api-gateway/internal/ocr"
-	"edugrade-enterprise/services/api-gateway/internal/org"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
-	"edugrade-enterprise/services/api-gateway/internal/segment"
 	"edugrade-enterprise/services/api-gateway/internal/server"
-	"edugrade-enterprise/services/api-gateway/internal/submission"
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
 
@@ -230,13 +225,18 @@ func TestScoringReadinessEndpointAndBlockedStartReturnActionableChecks(t *testin
 	}
 }
 
-func testRouter(authStore *auth.MemoryStore, gradingStore grading.Store, optionalStores ...any) http.Handler {
+func testRouter(authStore *auth.MemoryStore, gradingStore grading.Store, runtimeStores ...workerruntime.Store) http.Handler {
 	cfg := config.Config{
 		Service: config.ServiceConfig{Name: "test", Environment: "test", ReadinessTimeout: time.Millisecond},
 		Auth:    config.AuthConfig{SessionTTL: time.Hour},
 	}
-	stores := append([]any{gradingStore}, optionalStores...)
-	return server.NewRouterComplete(cfg, logger.New(io.Discard, "error"), nil, authStore, org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore(), files.NewMemoryStore(), files.NewMemoryObjectStorage(), submission.NewMemoryStore(), ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue(), segment.NewMemoryStore(), stores...)
+	return server.NewMemoryRouter(cfg, logger.New(io.Discard, "error"), nil, files.NewMemoryObjectStorage(), func(stores *server.ApplicationStores) {
+		stores.Identity.Auth = authStore
+		stores.Grading.Grading = gradingStore
+		if len(runtimeStores) > 0 {
+			stores.Capture.WorkerRuntime = runtimeStores[0]
+		}
+	})
 }
 
 type scoringRecoveryTestStore struct {

@@ -3,13 +3,13 @@ import { ApiClientError } from "../../../api/client";
 import {
   createReviewAnnotation,
   createReviewCommentTemplate,
+  applyReviewCommentTemplate,
   deleteReviewAnnotation,
   deleteReviewCommentTemplate,
   listReviewAnnotations,
   listReviewCommentTemplates,
   updateReviewAnnotation,
   updateReviewCommentTemplate,
-  useReviewCommentTemplate,
   type CreateReviewAnnotationRequest,
   type CreateReviewCommentTemplateRequest,
   type ReviewAnnotation,
@@ -155,8 +155,8 @@ export function useReviewAnnotations(taskId: string) {
     }
   }, [reloadTemplates]);
 
-  const useTemplate = useCallback(async (shortcut: string) => {
-    const response = await useReviewCommentTemplate(shortcut);
+  const applyTemplate = useCallback(async (shortcut: string) => {
+    const response = await applyReviewCommentTemplate(shortcut);
     setTemplates((items) => items.map((item) => item.id === response.comment_template.id ? response.comment_template : item));
     return response.comment_template;
   }, []);
@@ -173,6 +173,6 @@ export function useReviewAnnotations(taskId: string) {
     createTemplate,
     updateTemplate,
     removeTemplate,
-    useTemplate
+    applyTemplate
   };
 }

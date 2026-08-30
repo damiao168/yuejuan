@@ -5,6 +5,7 @@ import App from "./App";
 import "@edugrade/design-tokens/tokens.css";
 import "@edugrade/ui/styles.css";
 import "./styles.css";
+import "./features/grading/workbench/grading-workbench.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -25,6 +25,7 @@
     "lab:eval": "npm --prefix lab run eval",
     "lab:gate:dev": "npm --prefix lab run gate:dev",
     "check:lab-integration": "node scripts/check-lab-integration.mjs",
+    "lint": "biome lint",
     "typecheck": "npm --workspaces --if-present run typecheck",
     "preview": "npm --workspace apps/web-admin run preview",
     "test:e2e": "playwright test",
@@ -34,6 +35,7 @@
     "test:e2e:report": "playwright show-report output/playwright/report"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.11",
     "@playwright/test": "1.55.1"
   }
 }

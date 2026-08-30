@@ -374,7 +374,22 @@ func newE2EMemoryFixture(t *testing.T) *e2eMemoryFixture {
 			SlowRequestThreshold: time.Second,
 		},
 	}
-	router := NewRouterComplete(cfg, logger.New(io.Discard, "error"), nil, authStore, orgStore, examStore, paperStore, fileStore, objectStore, submissionStore, ocrStore, ocrpkg.NewMemoryQueue(), segmentStore, gradingStore, subjectiveStore, evidenceStore, reviewStore, scoreStore, appealStore)
+	router := NewMemoryRouter(cfg, logger.New(io.Discard, "error"), nil, objectStore, func(stores *ApplicationStores) {
+		stores.Identity = IdentityStores{Auth: authStore, Org: orgStore}
+		stores.Exam.Exam = examStore
+		stores.Exam.Paper = paperStore
+		stores.Exam.Files = fileStore
+		stores.Exam.Submissions = submissionStore
+		stores.Exam.Segments = segmentStore
+		stores.Capture.OCR = ocrStore
+		stores.Capture.OCRQueue = ocrpkg.NewMemoryQueue()
+		stores.Grading.Grading = gradingStore
+		stores.Grading.Subjective = subjectiveStore
+		stores.Grading.Evidence = evidenceStore
+		stores.Grading.Review = reviewStore
+		stores.Release.Score = scoreStore
+		stores.Release.Appeal = appealStore
+	})
 	return &e2eMemoryFixture{
 		router:          router,
 		authStore:       authStore,
