@@ -39,6 +39,7 @@ jobs:
         run: npm run lint
       - run: npm run typecheck
       - run: npm --workspace apps/web-admin run test
+      - run: npm --workspace apps/student-portal run test
       - run: npm run build
       - run: npm --workspace apps/web-admin run check:production-routes
       - run: npm --workspace apps/desktop-client run check:security-config
