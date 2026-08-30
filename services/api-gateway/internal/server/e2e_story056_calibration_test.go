@@ -83,21 +83,6 @@ func TestStory056TemplateDifferenceCalibrationApprovalAndRevocationE2E(t *testin
 		t.Fatalf("independent approval must freeze a durable evidence hash: %#v", approvedSession)
 	}
 	approvedCases := approved["cases"].([]any)
-	clonedTemplate := e2ePostJSON(t, router, http.MethodPost, "/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/clone", adminToken, `{}`, http.StatusCreated)["template"].(map[string]any)
-	clonedTemplateID := e2eString(t, clonedTemplate, "id")
-	var inheritedFrom, inheritedStatus, inheritedEvidence string
-	var inheritedCaseCount int
-	if err := db.QueryRow(`
-SELECT s.inherited_from_session_id::text,s.status,s.evidence_hash,
-  (SELECT count(*) FROM omr_calibration_case c WHERE c.tenant_id=s.tenant_id AND c.calibration_session_id=s.id)
-FROM omr_calibration_session s
-WHERE s.tenant_id=$1::uuid AND s.template_id=$2::uuid AND s.deleted_at IS NULL
-`, fixture.TenantID, clonedTemplateID).Scan(&inheritedFrom, &inheritedStatus, &inheritedEvidence, &inheritedCaseCount); err != nil {
-		t.Fatalf("load inherited clone calibration: %v", err)
-	}
-	if inheritedFrom != calibrationID || inheritedStatus != "approved" || inheritedEvidence != e2eString(t, approvedSession, "evidence_hash") || inheritedCaseCount != paper.OMRCalibrationMinimumSampleCount {
-		t.Fatalf("an unchanged template clone must inherit the exact approved evidence: source=%s status=%s evidence=%s cases=%d", inheritedFrom, inheritedStatus, inheritedEvidence, inheritedCaseCount)
-	}
 
 	firstCase := e2eStory056CalibrationCaseForQuestionAndStratum(t, approvedCases, fixture.QuestionIDs["single_choice"], "selected_high")
 	firstSegmentID := e2eString(t, firstCase, "answer_segment_id")
@@ -157,6 +142,101 @@ WHERE o.tenant_id=$1::uuid AND o.id=$2::uuid`, fixture.TenantID, secondLease.OMR
 	}
 	if blockedEligible || blockedReason != paper.OMRAutoConfirmReasonCalibrationRevoked || blockedGrades != 0 || reviewReason != "omr_"+paper.OMRAutoConfirmReasonCalibrationRevoked {
 		t.Fatalf("revoked calibration must become a human-review result: eligible=%t reason=%s grades=%d review=%s", blockedEligible, blockedReason, blockedGrades, reviewReason)
+	}
+}
+
+func TestStory056ApprovedCalibrationIsInheritedByTemplateCloneE2E(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("EDUGRADE_E2E_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("EDUGRADE_E2E_DATABASE_URL is not set; skipping STORY-056 calibration clone PostgreSQL test")
+	}
+
+	db := e2eOpenPostgresTestDB(t, dsn)
+	e2eApplyPostgresMigrations(t, db)
+	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin"})
+	router := e2ePostgresRouter(db)
+	suffix := time.Now().UTC().Format("20060102150405.000000000")
+	adminToken := e2eLoginWithTenant(t, router, "demo", "tenant_admin", "ChangeMe123!")
+	approverID, approverUsername := e2eCreateStory056CalibrationApprover(t, db, suffix+"-clone")
+	approverToken := e2eLoginWithTenant(t, router, "demo", approverUsername, "ChangeMe123!")
+	fixture := e2eCreateStory056MutableTemplateFixture(t, db, router, adminToken, suffix, map[string]any{
+		"mode": paper.OMRProfileModeTemplateDifference, "version": paper.OMRProfileVersionTemplateDifferenceBubbleV1,
+	})
+	e2eSeedStory056AcceptanceAnswersWithQuestionTypes(t, db, fixture, suffix+"-clone", 120, []string{"single_choice", "true_false", "multiple_choice"})
+	e2eSeedStory056MutableCalibrationOMRFacts(t, db, fixture)
+
+	created := e2ePostJSON(t, router, http.MethodPost, "/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/omr-calibrations", adminToken, `{}`, http.StatusCreated)["calibration"].(map[string]any)
+	session := created["session"].(map[string]any)
+	calibrationID := e2eString(t, session, "id")
+	cases := created["cases"].([]any)
+	if len(cases) != paper.OMRCalibrationMinimumSampleCount {
+		t.Fatalf("mutable clone fixture must expose complete calibration evidence: %d", len(cases))
+	}
+	for _, raw := range cases {
+		item := raw.(map[string]any)
+		e2ePostJSON(t, router, http.MethodPost, "/api/v1/omr-calibrations/"+calibrationID+"/cases/"+e2eString(t, item, "id")+"/label", adminToken, story056JSON(t, map[string]any{
+			"expected_options": e2eStory056CalibrationExpectedOptions(t, db, fixture.TenantID, e2eString(t, item, "id")),
+		}), http.StatusOK)
+	}
+	approved := e2ePostJSON(t, router, http.MethodPost, "/api/v1/omr-calibrations/"+calibrationID+"/approve", approverToken, story056JSON(t, map[string]any{
+		"approval_note": "independent reviewer verified clone inheritance evidence",
+	}), http.StatusOK)["calibration"].(map[string]any)
+	approvedSession := approved["session"].(map[string]any)
+	if e2eString(t, approvedSession, "approved_by") != approverID {
+		t.Fatalf("clone source calibration must be independently approved: %#v", approvedSession)
+	}
+
+	clonedTemplate := e2ePostJSON(t, router, http.MethodPost, "/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/clone", adminToken, `{}`, http.StatusCreated)["template"].(map[string]any)
+	clonedTemplateID := e2eString(t, clonedTemplate, "id")
+	if clonedTemplateID == fixture.TemplateID || e2eString(t, clonedTemplate, "content_hash") != fixture.TemplateContentHash || e2eString(t, clonedTemplate, "status") != "draft" {
+		t.Fatalf("clone must be a distinct mutable template with identical immutable content: %#v", clonedTemplate)
+	}
+	var sourceVersion int
+	if err := db.QueryRow(`SELECT version_no FROM answer_sheet_template WHERE tenant_id=$1::uuid AND id=$2::uuid`, fixture.TenantID, fixture.TemplateID).Scan(&sourceVersion); err != nil {
+		t.Fatalf("load source template version: %v", err)
+	}
+	if int(e2eFloat(t, clonedTemplate, "version_no")) <= sourceVersion {
+		t.Fatalf("clone version must advance beyond source version %d: %#v", sourceVersion, clonedTemplate)
+	}
+
+	var inheritedFrom, inheritedStatus, inheritedEvidence string
+	var inheritedCaseCount int
+	if err := db.QueryRow(`
+SELECT s.inherited_from_session_id::text,s.status,s.evidence_hash,
+  (SELECT count(*) FROM omr_calibration_case c WHERE c.tenant_id=s.tenant_id AND c.calibration_session_id=s.id)
+FROM omr_calibration_session s
+WHERE s.tenant_id=$1::uuid AND s.template_id=$2::uuid AND s.deleted_at IS NULL
+`, fixture.TenantID, clonedTemplateID).Scan(&inheritedFrom, &inheritedStatus, &inheritedEvidence, &inheritedCaseCount); err != nil {
+		t.Fatalf("load inherited clone calibration: %v", err)
+	}
+	if inheritedFrom != calibrationID || inheritedStatus != "approved" || inheritedEvidence != e2eString(t, approvedSession, "evidence_hash") || inheritedCaseCount != paper.OMRCalibrationMinimumSampleCount {
+		t.Fatalf("an unchanged template clone must inherit the exact approved evidence: source=%s status=%s evidence=%s cases=%d", inheritedFrom, inheritedStatus, inheritedEvidence, inheritedCaseCount)
+	}
+}
+
+func TestStory056TemplateCloneIsRejectedAfterReadinessConfirmationE2E(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("EDUGRADE_E2E_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("EDUGRADE_E2E_DATABASE_URL is not set; skipping STORY-056 frozen clone PostgreSQL test")
+	}
+
+	db := e2eOpenPostgresTestDB(t, dsn)
+	e2eApplyPostgresMigrations(t, db)
+	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin"})
+	router := e2ePostgresRouter(db)
+	suffix := time.Now().UTC().Format("20060102150405.000000000")
+	adminToken := e2eLoginWithTenant(t, router, "demo", "tenant_admin", "ChangeMe123!")
+	fixture := e2eCreateStory056MutableTemplateFixture(t, db, router, adminToken, suffix, nil)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+fixture.ExamID+"/readiness/confirm", adminToken, `{}`, http.StatusOK)
+
+	rec := e2eExpectStatus(t, router, http.MethodPost, "/api/v1/answer-sheet-templates/"+fixture.TemplateID+"/clone", adminToken, `{}`, http.StatusConflict)
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode frozen clone response: %v", err)
+	}
+	errorBody, ok := response["error"].(map[string]any)
+	if !ok || e2eString(t, errorBody, "code") != "exam_frozen" {
+		t.Fatalf("readiness-confirmed clone must fail with exam_frozen: %#v", response)
 	}
 }
 
@@ -237,6 +317,86 @@ WHERE task.tenant_id=o.tenant_id AND task.id=o.runtime_task_id
 	}
 	if _, err = db.Exec(`UPDATE scoring_run SET status='completed',queued_count=0,review_count=0,failed_count=0,auto_confirmed_count=0,completed_at=now(),updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, runID); err != nil {
 		t.Fatalf("complete seeded calibration scoring run: %v", err)
+	}
+}
+
+// This fixture creates completed worker evidence without moving the exam into
+// its runtime lifecycle. It keeps clone inheritance in the configuration
+// phase while the production scoring-run API remains correctly restricted to
+// collecting and grading exams.
+func e2eSeedStory056MutableCalibrationOMRFacts(t *testing.T, db *sql.DB, fixture story056AcceptanceFixture) {
+	t.Helper()
+	var layoutRaw []byte
+	var templateStatus, templateHash string
+	if err := db.QueryRow(`
+SELECT layout,status,content_hash
+FROM answer_sheet_template
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL`, fixture.TenantID, fixture.TemplateID).Scan(&layoutRaw, &templateStatus, &templateHash); err != nil {
+		t.Fatalf("load mutable calibration template: %v", err)
+	}
+	var layout paper.TemplateLayout
+	if err := json.Unmarshal(layoutRaw, &layout); err != nil {
+		t.Fatalf("decode mutable calibration template layout: %v", err)
+	}
+	if layout.OMRProfile.Reference == nil {
+		t.Fatal("template-difference calibration fixture must contain a server-bound reference")
+	}
+	reference := *layout.OMRProfile.Reference
+	policy := paper.OMRAutoConfirmPolicyForTemplateReference(
+		layout, templateStatus, templateHash, templateHash, reference, fixture.QuestionIDs["single_choice"],
+	)
+	if policy.Reference == nil || policy.RuntimeProfile.Mode != paper.OMRProfileModeTemplateDifference {
+		t.Fatalf("mutable calibration fixture did not resolve template-difference evidence: %#v", policy)
+	}
+
+	var runID string
+	if err := db.QueryRow(`
+INSERT INTO scoring_run (
+  tenant_id,exam_id,idempotency_key,status,total_count,queued_count,
+  auto_confirmed_count,review_count,failed_count,started_by,started_at,completed_at
+)
+VALUES ($1::uuid,$2::uuid,$3,'completed',120,0,0,0,0,$4::uuid,now(),now())
+RETURNING id::text`, fixture.TenantID, fixture.ExamID, "story056-mutable-calibration-"+fixture.TemplateID, fixture.AdminID).Scan(&runID); err != nil {
+		t.Fatalf("create mutable calibration evidence run: %v", err)
+	}
+	result, err := db.Exec(`
+WITH candidates AS (
+  SELECT seg.id,seg.crop_file_asset_id,seg.crop_sha256,q.question_type,
+    (row_number() OVER (PARTITION BY seg.question_id ORDER BY seg.id) - 1) AS question_rank
+  FROM answer_segment seg
+  JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id AND q.deleted_at IS NULL
+  WHERE seg.tenant_id=$1::uuid AND seg.template_id=$2::uuid AND seg.deleted_at IS NULL
+), classified AS (
+  SELECT *,
+    CASE WHEN question_type='true_false'
+      THEN CASE ((question_rank / 4) % 2) WHEN 0 THEN 'true' ELSE 'false' END
+      ELSE CASE ((question_rank / 4) % 4) WHEN 0 THEN 'A' WHEN 1 THEN 'B' WHEN 2 THEN 'C' ELSE 'D' END
+    END AS option_label,
+    (question_rank % 4) AS stratum_index
+  FROM candidates
+)
+INSERT INTO omr_run (
+  tenant_id,scoring_run_id,answer_segment_id,crop_file_asset_id,crop_sha256,
+  template_id,template_content_hash,profile_version,profile_hash,
+  reference_file_asset_id,reference_sha256,auto_confirm_min_confidence,
+  auto_confirm_eligible,auto_confirm_reason,status,decision,selected_options,
+  confidence,measurements,result_version,duration_ms,completed_at
+)
+SELECT $1::uuid,$3::uuid,c.id,c.crop_file_asset_id,c.crop_sha256,
+  $2::uuid,$4,$5,$6,$7::uuid,$8,$9,false,$10,'completed',
+  CASE c.stratum_index WHEN 2 THEN 'blank' WHEN 3 THEN 'ambiguous' ELSE 'selected' END,
+  CASE WHEN c.stratum_index IN (0,1) THEN jsonb_build_array(c.option_label) ELSE '[]'::jsonb END,
+  CASE c.stratum_index WHEN 0 THEN 0.99 WHEN 1 THEN 0.80 WHEN 2 THEN 0.95 ELSE 0.50 END,
+  jsonb_build_array(jsonb_build_object('option',c.option_label,'foreground_delta',0.9)),
+  'story056-mutable-calibration-v1',1,now()
+FROM classified c`, fixture.TenantID, fixture.TemplateID, runID, templateHash,
+		policy.RuntimeProfile.Version, policy.ProfileHash, policy.Reference.FileAssetID, policy.Reference.HashSHA256,
+		paper.OMRCalibrationMinimumConfidence, paper.OMRAutoConfirmReasonCalibrationUnapproved)
+	if err != nil {
+		t.Fatalf("seed mutable completed OMR calibration evidence: %v", err)
+	}
+	if count, _ := result.RowsAffected(); count != 120 {
+		t.Fatalf("expected 120 mutable calibration OMR facts, got %d", count)
 	}
 }
 

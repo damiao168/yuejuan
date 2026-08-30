@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createInitialDraft, fallbackSnapshot } from "./gradingWorkbench.model";
+import { createInitialDraft, fallbackSnapshot, latestGrade, resultState } from "./gradingWorkbench.model";
+import type { AiGrade, ScoringRunItem } from "../../../api/review";
 import type { WorkbenchContext } from "./gradingWorkbench.types";
 
 function contextWith(points: Array<{ id: string; description: string; score: number }>, ocrText: string) {
@@ -73,6 +74,29 @@ describe("grading workbench draft model", () => {
         offset: { x: 12, y: 0 },
         fit: false
       }
+    });
+  });
+});
+
+describe("grading workbench production safeguards", () => {
+  it("never exposes a shadow-only grade as a usable suggestion", () => {
+    const shadowGrade = {
+      id: "shadow-grade",
+      delivery_mode: "shadow_only",
+      created_at: "2026-08-30T00:00:00Z"
+    } as AiGrade;
+
+    expect(latestGrade([shadowGrade])).toBeUndefined();
+  });
+
+  it("labels only rule-confirmed results as automatically confirmed", () => {
+    expect(resultState({ state: "confirmed", grade_source: "rule_confirmed" } as ScoringRunItem)).toEqual({
+      label: "自动确认",
+      tone: "success"
+    });
+    expect(resultState({ state: "confirmed", grade_source: "human_review" } as ScoringRunItem)).toEqual({
+      label: "人工完成",
+      tone: "success"
     });
   });
 });

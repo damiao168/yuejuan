@@ -15,6 +15,7 @@ const appShell = read("src/AppShell.tsx");
 const appRouter = read("src/router/appRouter.tsx");
 const login = read("src/pages/LoginPage.tsx");
 const grading = read("src/features/grading/workbench/GradingWorkbench.tsx");
+const gradingStyles = read("src/features/grading/workbench/grading-workbench.css");
 const experience = read("src/router/experience.ts");
 const teacherDashboard = read("src/pages/TeacherDashboardPage.tsx");
 const responsiveTable = read("src/components/ResponsiveTable.tsx");
@@ -23,7 +24,6 @@ const examManagement = read("src/pages/ExamManagementPage.tsx");
 const appealApi = read("src/api/appeals.ts");
 const apiClient = read("src/api/client.ts");
 const viteConfig = read("vite.config.ts");
-const styles = read("src/styles.css");
 
 function sourceFiles(directory) {
   return readdirSync(join(root, directory), { withFileTypes: true }).flatMap((entry) => {
@@ -167,10 +167,11 @@ assert(
 );
 
 const allUiSource = sourceFiles("src").join("\n");
+const gradingFeature = sourceFiles("src/features/grading/workbench").join("\n");
 
 assert(
-  /\.immersive-workspace \.grading-inspector\s*\{[\s\S]*?overflow-y:\s*auto;/.test(styles)
-    && /@media \(min-width: 1100px\) and \(max-height: 820px\)[\s\S]*?\.immersive-frame,[\s\S]*?height:\s*auto;[\s\S]*?\.immersive-workspace\s*\{[\s\S]*?overflow:\s*visible;/.test(styles),
+  /\.immersive-workspace \.grading-inspector\s*\{[\s\S]*?overflow-y:\s*auto;/.test(gradingStyles)
+    && /@media \(min-width: 1100px\) and \(max-height: 820px\)[\s\S]*?\.immersive-workspace \.grading-workspace\s*\{[\s\S]*?overflow:\s*visible;[\s\S]*?\.immersive-workspace \.grading-inspector\s*\{[\s\S]*?overflow:\s*visible;/.test(gradingStyles),
   "Immersive grading must keep the scoring inspector scrollable and restore document flow on short desktops."
 );
 
@@ -181,23 +182,23 @@ assert(
 );
 
 assert(
-  /loadTaskContext\(taskId: string, allowOriginalImage: boolean\)/.test(grading)
-    && /originalImageUrl: allowOriginalImage \? artifact\.original_image_url : undefined/.test(grading)
+  /loadTaskContext\(taskId: string, allowOriginalImage: boolean\)/.test(gradingFeature)
+    && /originalImageUrl:\s*allowOriginalImage\s*\?\s*artifact\.original_image_url\s*:\s*undefined/.test(gradingFeature)
     && /canViewOriginalImage=\{experience === "admin"\}/.test(appShell)
-    && /viewerMode === "original" && \(!canViewOriginalImage/.test(grading)
-    && /options=\{canViewOriginalImage/.test(grading),
+    && /mode === "original" && \(!canViewOriginalImage/.test(gradingFeature)
+    && /options=\{canViewOriginalImage/.test(gradingFeature),
   "Teacher grading must neither retain nor request the original answer-sheet image."
 );
 
 assert(
-  /candidate\.delivery_mode === "shadow_only"/.test(grading)
-    && /selectedGrade\.delivery_mode === "shadow_only"/.test(grading),
+  /delivery_mode\s*===\s*["']shadow_only["']/.test(gradingFeature)
+    && /delivery_mode\s*!==\s*["']shadow_only["']/.test(gradingFeature),
   "Shadow-only AI results must be hidden and impossible to adopt."
 );
 
 assert(
-  /result\.grade_source === "rule_confirmed"/.test(grading)
-    && /未生效 · 转人工/.test(grading),
+  /\.grade_source\s*===\s*["']rule_confirmed["']/.test(gradingFeature)
+    && /未生效 · 转人工/.test(gradingFeature),
   "Automatic scoring labels must require the rule_confirmed grade source."
 );
 

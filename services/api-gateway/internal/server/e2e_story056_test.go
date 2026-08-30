@@ -232,6 +232,14 @@ func e2eCreateStory056AcceptanceFixture(t *testing.T, db *sql.DB, router http.Ha
 }
 
 func e2eCreateStory056AcceptanceFixtureWithOMRProfile(t *testing.T, db *sql.DB, router http.Handler, adminToken string, suffix string, omrProfile map[string]any) story056AcceptanceFixture {
+	return e2eCreateStory056AcceptanceFixtureWithLifecycle(t, db, router, adminToken, suffix, omrProfile, true)
+}
+
+func e2eCreateStory056MutableTemplateFixture(t *testing.T, db *sql.DB, router http.Handler, adminToken string, suffix string, omrProfile map[string]any) story056AcceptanceFixture {
+	return e2eCreateStory056AcceptanceFixtureWithLifecycle(t, db, router, adminToken, suffix, omrProfile, false)
+}
+
+func e2eCreateStory056AcceptanceFixtureWithLifecycle(t *testing.T, db *sql.DB, router http.Handler, adminToken string, suffix string, omrProfile map[string]any, activateExam bool) story056AcceptanceFixture {
 	t.Helper()
 	adminID := e2eLookupUserID(t, db, "demo", "tenant_admin")
 	var tenantID string
@@ -298,8 +306,10 @@ func e2eCreateStory056AcceptanceFixtureWithOMRProfile(t *testing.T, db *sql.DB, 
 	}), http.StatusCreated)["template"].(map[string]any)
 	templateID := e2eString(t, template, "id")
 	locked := e2ePostJSON(t, router, http.MethodPost, "/api/v1/answer-sheet-templates/"+templateID+"/lock", adminToken, `{}`, http.StatusOK)["template"].(map[string]any)
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/readiness/confirm", adminToken, `{}`, http.StatusOK)
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/start-collection", adminToken, `{}`, http.StatusOK)
+	if activateExam {
+		e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/readiness/confirm", adminToken, `{}`, http.StatusOK)
+		e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/start-collection", adminToken, `{}`, http.StatusOK)
+	}
 
 	return story056AcceptanceFixture{
 		TenantID: tenantID, AdminID: adminID, SchoolID: schoolID, ClassID: classID, ExamID: examID,
