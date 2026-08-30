@@ -7,6 +7,9 @@ from typing import ClassVar
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
+from jsonschema import exceptions as schema_exceptions
+from jsonschema import validators
+
 from .dashscope_native_contract import (
     DASHSCOPE_TEXT_GENERATION_PATH,
     build_dashscope_grading_payload,
@@ -30,6 +33,47 @@ MODEL_RISK_FLAGS = [
     "PROMPT_INJECTION_SUSPECTED",
     "HUMAN_REVIEW_REQUIRED",
 ]
+
+
+def _validate_structured_output(output, schema, request_id):
+    try:
+        validator_type = validators.validator_for(schema)
+        validator_type.check_schema(schema)
+        validator_type(schema).validate(output)
+    except schema_exceptions.SchemaError as exc:
+        raise RuntimeError("application supplied an invalid JSON Schema") from exc
+    except schema_exceptions.ValidationError as exc:
+        path = "$" + "".join(
+            f"[{part}]" if isinstance(part, int) else f".{part}" for part in exc.path
+        )
+        raise AgentError(
+            "model_output_invalid",
+            f"model output did not satisfy the required JSON Schema at {path}",
+            status=502,
+            request_id=request_id,
+        ) from exc
+    return output
+
+
+def _decode_structured_content(content, request_id):
+    if isinstance(content, dict):
+        return content
+    if not isinstance(content, str) or not content.strip():
+        raise AgentError(
+            "model_output_invalid",
+            "model response contained no structured content",
+            status=502,
+            request_id=request_id,
+        )
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise AgentError(
+            "model_output_invalid",
+            "model response was not valid JSON",
+            status=502,
+            request_id=request_id,
+        ) from exc
 
 
 def _map_model_http_error(exc, request_id, provider="local model"):
@@ -392,7 +436,10 @@ class LocalLlamaCppAdapter:
                 retryable=True,
                 request_id=request_id,
             ) from exc
-        return self._parse_content(response, request_id)
+        output = self._parse_content(response, request_id)
+        return _validate_structured_output(
+            output, grading_output_schema(grading_request), request_id
+        )
 
     def request_structured(self, request_id, messages, schema, name):
         payload = {
@@ -410,7 +457,8 @@ class LocalLlamaCppAdapter:
             headers["Authorization"] = f"Bearer {self.settings.model_api_key}"
         try:
             response = self.transport(f"{self.settings.model_base_url}/chat/completions", payload, headers, self.settings.model_timeout_seconds)
-            return self._parse_content(response, request_id)
+            output = self._parse_content(response, request_id)
+            return _validate_structured_output(output, schema, request_id)
         except AgentError:
             raise
         except TimeoutError as exc:
@@ -430,24 +478,7 @@ class LocalLlamaCppAdapter:
                 status=502,
                 request_id=request_id,
             ) from exc
-        if isinstance(content, dict):
-            return content
-        if not isinstance(content, str) or not content.strip():
-            raise AgentError(
-                "model_output_invalid",
-                "local model response contained no structured content",
-                status=502,
-                request_id=request_id,
-            )
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise AgentError(
-                "model_output_invalid",
-                "local model response was not valid JSON",
-                status=502,
-                request_id=request_id,
-            ) from exc
+        return _decode_structured_content(content, request_id)
 
     def ready(self):
         if self.ready_transport:
@@ -504,7 +535,10 @@ class DashScopeNativeAdapter:
                 },
                 self.settings.model_timeout_seconds,
             )
-            return parse_dashscope_text_response(response).output
+            output = parse_dashscope_text_response(response).output
+            return _validate_structured_output(
+                output, grading_output_schema(grading_request), request_id
+            )
         except AgentError:
             raise
         except TimeoutError as exc:
@@ -529,7 +563,7 @@ class DashScopeNativeAdapter:
                 request_id=request_id,
             ) from exc
 
-    def request_structured(self, request_id, messages, _schema, _name):
+    def request_structured(self, request_id, messages, schema, _name):
         payload = {
             "model": self.settings.model_name,
             "input": {"messages": messages},
@@ -549,7 +583,8 @@ class DashScopeNativeAdapter:
             content = response["output"]["choices"][0]["message"]["content"]
             if isinstance(content, list):
                 content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
-            return content if isinstance(content, dict) else json.loads(content)
+            output = _decode_structured_content(content, request_id)
+            return _validate_structured_output(output, schema, request_id)
         except AgentError:
             raise
         except urlerror.HTTPError as exc:
@@ -557,7 +592,7 @@ class DashScopeNativeAdapter:
             mapped = map_dashscope_error(exc.code, error_payload)
             mapped.request_id = mapped.request_id or request_id
             raise mapped from exc
-        except (KeyError, IndexError, TypeError, TimeoutError, urlerror.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        except (KeyError, IndexError, TypeError, TimeoutError, urlerror.URLError, OSError, ValueError) as exc:
             raise AgentError("model_unavailable", "document parsing model request failed", status=503, retryable=True, request_id=request_id) from exc
 
     @staticmethod

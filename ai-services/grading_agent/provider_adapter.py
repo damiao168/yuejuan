@@ -15,6 +15,9 @@ class ProviderAdapter(Protocol):
     def request(self, grading_request, repair_reason=None):
         ...
 
+    def request_structured(self, request_id, messages, schema, name):
+        ...
+
     def ready(self):
         ...
 

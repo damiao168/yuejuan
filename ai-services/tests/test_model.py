@@ -5,16 +5,69 @@ import unittest
 from pathlib import Path
 from urllib import error as urlerror
 
+from helpers import settings, valid_raw_output, valid_request
+
 from grading_agent.errors import AgentError
 from grading_agent.model import (
+    DashScopeNativeAdapter,
     LocalLlamaCppAdapter,
     PromptRegistry,
     grading_output_schema,
 )
-from helpers import settings, valid_raw_output, valid_request
+from grading_agent.paper_parser import PaperParser
 
 
 class ModelAdapterTests(unittest.TestCase):
+    @staticmethod
+    def structured_schema():
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["kind", "count", "items"],
+            "properties": {
+                "kind": {"type": "string", "enum": ["accepted"]},
+                "count": {"type": "number", "minimum": 1, "maximum": 2},
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["id"],
+                        "properties": {"id": {"type": "string"}},
+                    },
+                },
+            },
+        }
+
+    @staticmethod
+    def structured_adapter(provider, output):
+        if provider == "local":
+            def transport(_url, _payload, _headers, _timeout):
+                content = output if isinstance(output, str) else json.dumps(output)
+                return {"choices": [{"message": {"content": content}}]}
+
+            return LocalLlamaCppAdapter(settings(), transport=transport)
+
+        def transport(_url, _payload, _headers, _timeout):
+            content = output if isinstance(output, str) else json.dumps(output)
+            return {
+                "output": {"choices": [{
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": content},
+                }]},
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                "request_id": "dashscope-fixture-1",
+            }
+
+        return DashScopeNativeAdapter(
+            settings(
+                adapter_type="dashscope_native",
+                model_base_url="https://dashscope.aliyuncs.com/api/v1",
+                model_api_key="synthetic-key-with-16-characters",
+            ),
+            transport=transport,
+        )
+
     def test_llama_cpp_request_uses_strict_schema_and_untrusted_answer_boundary(self):
         calls = []
 
@@ -50,6 +103,84 @@ class ModelAdapterTests(unittest.TestCase):
             "rubric_point_id"
         ]["enum"]
         self.assertEqual(point_enum, ["p1", "p2"])
+
+    def test_all_providers_accept_the_same_valid_structured_output(self):
+        output = {"kind": "accepted", "count": 1, "items": [{"id": "one"}]}
+        for provider in ("local", "dashscope"):
+            with self.subTest(provider=provider):
+                adapter = self.structured_adapter(provider, output)
+                self.assertEqual(
+                    adapter.request_structured(
+                        "request-1", [], self.structured_schema(), "fixture"
+                    ),
+                    output,
+                )
+
+    def test_all_providers_reject_schema_violations_with_identical_semantics(self):
+        invalid_outputs = {
+            "required": {"kind": "accepted", "count": 1},
+            "additional": {
+                "kind": "accepted", "count": 1, "items": [], "extra": True
+            },
+            "enum": {"kind": "rejected", "count": 1, "items": []},
+            "range": {"kind": "accepted", "count": 3, "items": []},
+            "array item": {
+                "kind": "accepted", "count": 1, "items": [{"unknown": "one"}]
+            },
+        }
+        for case, output in invalid_outputs.items():
+            for provider in ("local", "dashscope"):
+                with self.subTest(case=case, provider=provider):
+                    adapter = self.structured_adapter(provider, output)
+                    with self.assertRaises(AgentError) as raised:
+                        adapter.request_structured(
+                            "request-1", [], self.structured_schema(), "fixture"
+                        )
+                    self.assertEqual(raised.exception.code, "model_output_invalid")
+                    self.assertEqual(raised.exception.status, 502)
+                    self.assertFalse(raised.exception.retryable)
+                    self.assertEqual(raised.exception.request_id, "request-1")
+
+    def test_all_providers_keep_malformed_json_as_invalid_model_output(self):
+        for provider in ("local", "dashscope"):
+            with self.subTest(provider=provider):
+                adapter = self.structured_adapter(provider, "{not-json")
+                with self.assertRaises(AgentError) as raised:
+                    adapter.request_structured(
+                        "request-1", [], self.structured_schema(), "fixture"
+                    )
+                self.assertEqual(raised.exception.code, "model_output_invalid")
+                self.assertEqual(raised.exception.status, 502)
+
+    def test_grading_output_uses_local_schema_validation_for_every_provider(self):
+        output = valid_raw_output()
+        output.pop("teacher_note")
+        for provider in ("local", "dashscope"):
+            with self.subTest(provider=provider):
+                adapter = self.structured_adapter(provider, output)
+                with self.assertRaises(AgentError) as raised:
+                    adapter.request(valid_request())
+                self.assertEqual(raised.exception.code, "model_output_invalid")
+
+    def test_paper_parser_uses_provider_local_schema_validation(self):
+        invalid_paper = {
+            "questions": [{
+                "question_no": "1", "question_type": "calculation", "score": 10,
+                "stem": "计算", "knowledge_points": ["函数"],
+                "answer_key": {"standard_answer": "2", "equivalent_answers": [], "tolerance": {}},
+                "rubric": {"status": "draft", "max_score": 10, "points": [{"id": "p1", "description": "正确", "score": 10, "required": True}], "deductions": [], "examples": []},
+                "confidence": 2, "issues": [],
+            }],
+            "issues": [],
+        }
+        adapter = self.structured_adapter("local", invalid_paper)
+        with self.assertRaises(AgentError) as raised:
+            PaperParser(adapter).parse({
+                "request_id": "paper-1", "subject": "数学",
+                "paper_text": "第一题，请计算函数结果。" * 3,
+                "answer_text": "第一题答案为2。",
+            })
+        self.assertEqual(raised.exception.code, "model_output_invalid")
 
     def test_local_model_maps_request_rejection_without_claiming_unavailability(self):
         def transport(_url, _payload, _headers, _timeout):

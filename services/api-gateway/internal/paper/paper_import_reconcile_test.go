@@ -2,6 +2,7 @@ package paper
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -14,11 +15,16 @@ func newReconcileFixture(t *testing.T, questions []CreateQuestionInput) (*Memory
 	if err != nil {
 		t.Fatal(err)
 	}
+	var total float64
 	for _, input := range questions {
 		input.ExamPaperID = p.ID
+		total += input.Score
 		if _, err := store.CreateQuestion(ctx, "tenant", "exam", "user", input); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if len(questions) > 0 {
+		store.SetExamTotal("exam", total)
 	}
 	job, err := store.CreatePaperImport(ctx, "tenant", "exam", "user", CreatePaperImportInput{ExamPaperID: p.ID, PaperFileAssetID: p.FileAssetID, AnswerFileAssetID: "answer-file", Subject: "mathematics"})
 	if err != nil {
@@ -36,71 +42,144 @@ func importedDraft(number, kind string, score float64) PaperImportDraftQuestion 
 	}
 }
 
-func TestPaperImportReconcilesExistingQuestion(t *testing.T) {
-	store, job := newReconcileFixture(t, []CreateQuestionInput{{QuestionNo: "Q1", QuestionType: "short_answer", Score: 10, SortOrder: 1}})
-	preview, err := store.CompletePaperImport(context.Background(), "tenant", job.ID, []PaperImportDraftQuestion{importedDraft("Q1", "short_answer", 10)}, nil)
-	if err != nil {
-		t.Fatal(err)
+func joinedImportIssues(job PaperImportJob) string {
+	parts := append([]string{}, job.Issues...)
+	for _, question := range job.Questions {
+		parts = append(parts, question.Issues...)
 	}
-	if preview.Questions[0].MatchStatus != "matched" || preview.Questions[0].MatchedQuestionID == "" {
-		t.Fatalf("unexpected reconcile preview: %#v", preview)
-	}
-	if _, err = store.ApplyPaperImport(context.Background(), "tenant", job.ID, "user"); err != nil {
-		t.Fatal(err)
-	}
-	questions, _ := store.ListQuestions(context.Background(), "tenant", "exam")
-	if len(questions) != 1 || questions[0].Stem != "正式题干 Q1" || questions[0].AnswerKey == nil || questions[0].Rubric == nil {
-		t.Fatalf("import did not enrich existing question: %#v", questions)
+	return strings.Join(parts, " ")
+}
+
+func TestNormalizePaperImportQuestionNumber(t *testing.T) {
+	for input, expected := range map[string]string{
+		"1": "1", "1.": "1", "1、": "1", "（1）": "1", "1(1)": "1(1)", "一": "1", "一、1": "一、1",
+	} {
+		if actual := normalizePaperImportQuestionNumber(input); actual != expected {
+			t.Errorf("normalize %q: got %q want %q", input, actual, expected)
+		}
 	}
 }
 
-func TestPaperImportReportsScoreAndTypeMismatchWithoutOverwritingBlueprint(t *testing.T) {
-	for _, tc := range []struct {
-		name, kind string
-		score      float64
-		issue      string
+func TestPaperImportReconciliationDetectsQuestionSetConflicts(t *testing.T) {
+	blueprint := []CreateQuestionInput{
+		{QuestionNo: "1", QuestionType: "short_answer", Score: 10, SortOrder: 1},
+		{QuestionNo: "2", QuestionType: "short_answer", Score: 10, SortOrder: 2},
+	}
+	tests := []struct {
+		name   string
+		drafts []PaperImportDraftQuestion
+		code   string
 	}{
-		{"score", "short_answer", 8, "分值不一致"}, {"type", "essay", 10, "题型不一致"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			store, job := newReconcileFixture(t, []CreateQuestionInput{{QuestionNo: "Q1", QuestionType: "short_answer", Score: 10, SortOrder: 1}})
-			preview, err := store.CompletePaperImport(context.Background(), "tenant", job.ID, []PaperImportDraftQuestion{importedDraft("Q1", tc.kind, tc.score)}, nil)
+		{"duplicate normalized number", []PaperImportDraftQuestion{importedDraft("1.", "short_answer", 10), importedDraft("1、", "short_answer", 10)}, "paper_import.duplicate_question"},
+		{"missing question", []PaperImportDraftQuestion{importedDraft("1", "short_answer", 10)}, "paper_import.missing_question"},
+		{"unexpected question", []PaperImportDraftQuestion{importedDraft("1", "short_answer", 10), importedDraft("2", "short_answer", 10), importedDraft("3", "short_answer", 10)}, "paper_import.unexpected_question"},
+		{"answer for nonexistent question", []PaperImportDraftQuestion{importedDraft("1", "short_answer", 10), importedDraft("3", "short_answer", 10)}, "paper_import.unexpected_question"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			store, job := newReconcileFixture(t, blueprint)
+			preview, err := store.CompletePaperImport(context.Background(), "tenant", job.ID, testCase.drafts, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if preview.Questions[0].MatchStatus != "mismatch" || !strings.Contains(strings.Join(preview.Questions[0].Issues, " "), tc.issue) {
-				t.Fatalf("mismatch was not explicit: %#v", preview)
-			}
-			if _, err = store.ApplyPaperImport(context.Background(), "tenant", job.ID, "user"); err != nil {
-				t.Fatal(err)
-			}
-			questions, _ := store.ListQuestions(context.Background(), "tenant", "exam")
-			if questions[0].Score != 10 || questions[0].QuestionType != "short_answer" {
-				t.Fatalf("blueprint core was overwritten: %#v", questions[0])
+			if !strings.Contains(joinedImportIssues(preview), testCase.code) {
+				t.Fatalf("missing issue %s: %#v", testCase.code, preview)
 			}
 		})
 	}
 }
 
-func TestPaperImportReportsMissingAndExtraQuestions(t *testing.T) {
-	store, job := newReconcileFixture(t, []CreateQuestionInput{
-		{QuestionNo: "Q1", QuestionType: "short_answer", Score: 10, SortOrder: 1},
-		{QuestionNo: "Q2", QuestionType: "short_answer", Score: 10, SortOrder: 2},
-	})
-	preview, err := store.CompletePaperImport(context.Background(), "tenant", job.ID, []PaperImportDraftQuestion{importedDraft("Q1", "short_answer", 10)}, nil)
-	if err != nil {
-		t.Fatal(err)
+func TestPaperImportReconciliationDetectsQuestionAndRubricConflicts(t *testing.T) {
+	blueprint := []CreateQuestionInput{{QuestionNo: "1", QuestionType: "short_answer", Score: 10, SortOrder: 1}}
+	tests := []struct {
+		name   string
+		mutate func(*PaperImportDraftQuestion)
+		code   string
+	}{
+		{"question type", func(draft *PaperImportDraftQuestion) { draft.QuestionType = "essay" }, "paper_import.question_type_mismatch"},
+		{"question score", func(draft *PaperImportDraftQuestion) {
+			draft.Score, draft.Rubric.MaxScore, draft.Rubric.Points[0].Score = 8, 8, 8
+		}, "paper_import.question_score_mismatch"},
+		{"rubric max score", func(draft *PaperImportDraftQuestion) { draft.Rubric.MaxScore = 8 }, "paper_import.rubric_max_score_mismatch"},
+		{"rubric point total", func(draft *PaperImportDraftQuestion) { draft.Rubric.Points[0].Score = 8 }, "paper_import.rubric_points_score_mismatch"},
+		{"missing answer", func(draft *PaperImportDraftQuestion) { draft.AnswerKey = nil }, "paper_import.missing_answer"},
 	}
-	if !strings.Contains(strings.Join(preview.Issues, " "), "漏识别蓝图题目 Q2") {
-		t.Fatalf("missing question issue absent: %#v", preview.Issues)
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			store, job := newReconcileFixture(t, blueprint)
+			draft := importedDraft("1", "short_answer", 10)
+			testCase.mutate(&draft)
+			preview, err := store.CompletePaperImport(context.Background(), "tenant", job.ID, []PaperImportDraftQuestion{draft}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(joinedImportIssues(preview), testCase.code) {
+				t.Fatalf("missing issue %s: %#v", testCase.code, preview)
+			}
+		})
 	}
+}
 
-	store, job = newReconcileFixture(t, []CreateQuestionInput{{QuestionNo: "Q1", QuestionType: "short_answer", Score: 10, SortOrder: 1}})
-	preview, err = store.CompletePaperImport(context.Background(), "tenant", job.ID, []PaperImportDraftQuestion{importedDraft("Q1", "short_answer", 10), importedDraft("Q2", "short_answer", 10)}, nil)
+func TestPaperImportReconciliationChecksExamTotalWithoutExistingQuestions(t *testing.T) {
+	store, job := newReconcileFixture(t, nil)
+	store.SetExamTotal("exam", 20)
+	preview, err := store.CompletePaperImport(context.Background(), "tenant", job.ID, []PaperImportDraftQuestion{importedDraft("1", "short_answer", 10)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(preview.Issues, " "), "AI 多识别题目 Q2") || preview.Questions[1].MatchStatus != "extra" {
-		t.Fatalf("extra question issue absent: %#v", preview)
+	if !strings.Contains(joinedImportIssues(preview), "paper_import.total_score_mismatch") {
+		t.Fatalf("exam total mismatch was not reported: %#v", preview)
+	}
+}
+
+func TestPaperImportValidCompletePaperApplies(t *testing.T) {
+	store, job := newReconcileFixture(t, []CreateQuestionInput{
+		{QuestionNo: "1", QuestionType: "short_answer", Score: 10, SortOrder: 1},
+		{QuestionNo: "2", QuestionType: "short_answer", Score: 10, SortOrder: 2},
+	})
+	preview, err := store.CompletePaperImport(context.Background(), "tenant", job.ID, []PaperImportDraftQuestion{
+		importedDraft("1.", "short_answer", 10), importedDraft("2、", "short_answer", 10),
+	}, nil)
+	if err != nil || len(preview.Issues) != 0 {
+		t.Fatalf("valid paper rejected: %#v err=%v", preview, err)
+	}
+	if _, err = store.ApplyPaperImport(context.Background(), "tenant", job.ID, "user"); err != nil {
+		t.Fatal(err)
+	}
+	questions, _ := store.ListQuestions(context.Background(), "tenant", "exam")
+	if len(questions) != 2 || questions[0].AnswerKey == nil || questions[1].AnswerKey == nil {
+		t.Fatalf("valid import was not applied: %#v", questions)
+	}
+}
+
+func TestPaperImportReconciliationIssuesBlockApply(t *testing.T) {
+	store, job := newReconcileFixture(t, []CreateQuestionInput{{QuestionNo: "1", QuestionType: "short_answer", Score: 10, SortOrder: 1}})
+	invalid := importedDraft("1", "essay", 10)
+	if _, err := store.CompletePaperImport(context.Background(), "tenant", job.ID, []PaperImportDraftQuestion{invalid}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyPaperImport(context.Background(), "tenant", job.ID, "user"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("reconciliation issue bypassed apply gate: %v", err)
+	}
+	questions, _ := store.ListQuestions(context.Background(), "tenant", "exam")
+	if questions[0].Stem != "" || questions[0].AnswerKey != nil {
+		t.Fatalf("blocked import mutated canonical question: %#v", questions[0])
+	}
+}
+
+func TestPaperImportCanApplyAfterCandidateCorrection(t *testing.T) {
+	store, job := newReconcileFixture(t, []CreateQuestionInput{{QuestionNo: "1", QuestionType: "short_answer", Score: 10, SortOrder: 1}})
+	if _, err := store.CompletePaperImport(context.Background(), "tenant", job.ID, []PaperImportDraftQuestion{importedDraft("2", "short_answer", 10)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyPaperImport(context.Background(), "tenant", job.ID, "user"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid candidate unexpectedly applied: %v", err)
+	}
+	corrected, err := store.CompletePaperImport(context.Background(), "tenant", job.ID, []PaperImportDraftQuestion{importedDraft("1", "short_answer", 10)}, nil)
+	if err != nil || len(corrected.Issues) != 0 {
+		t.Fatalf("corrected candidate did not reconcile: %#v err=%v", corrected, err)
+	}
+	if _, err := store.ApplyPaperImport(context.Background(), "tenant", job.ID, "user"); err != nil {
+		t.Fatalf("corrected candidate could not apply: %v", err)
 	}
 }

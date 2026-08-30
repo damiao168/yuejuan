@@ -32,15 +32,26 @@ type DocumentImportService struct {
 }
 
 type documentParseRequest struct {
-	RequestID  string `json:"request_id"`
-	Subject    string `json:"subject"`
-	PaperText  string `json:"paper_text"`
-	AnswerText string `json:"answer_text"`
+	RequestID string                     `json:"request_id"`
+	Subject   string                     `json:"subject"`
+	Documents []normalizedImportDocument `json:"documents"`
 }
 
 type documentParseResponse struct {
-	Questions []PaperImportDraftQuestion `json:"questions"`
-	Issues    []string                   `json:"issues"`
+	Documents          []PaperImportDetectedDocument `json:"documents"`
+	QuestionCandidates []QuestionCandidate           `json:"question_candidates"`
+	AnswerCandidates   []AnswerCandidate             `json:"answer_candidates"`
+	SolutionCandidates []SolutionCandidate           `json:"solution_candidates"`
+	Issues             []PaperImportIssue            `json:"issues"`
+}
+
+type normalizedImportDocument struct {
+	SourceID      string                `json:"source_id"`
+	FileAssetID   string                `json:"file_asset_id"`
+	DocumentIndex int                   `json:"document_index"`
+	RoleHint      string                `json:"role_hint"`
+	Content       string                `json:"content"`
+	Blocks        []PaperImportOCRBlock `json:"blocks"`
 }
 
 func NewDocumentImportService(store Store, fileStore files.Store, objects files.ObjectStorage, baseURL, token string, timeout time.Duration) *DocumentImportService {
@@ -55,25 +66,43 @@ func (s *DocumentImportService) Start(ctx context.Context, tenantID, examID, use
 	if err != nil {
 		return PaperImportJob{}, err
 	}
-	paperText, paperErr := s.assetText(ctx, tenantID, input.PaperFileAssetID)
-	answerText, answerErr := s.assetText(ctx, tenantID, input.AnswerFileAssetID)
+	return s.processSources(ctx, tenantID, userID, job)
+}
+
+func (s *DocumentImportService) AddSources(ctx context.Context, tenantID, userID, importID string, input AddPaperImportSourcesInput) (PaperImportJob, error) {
+	job, err := s.store.AddPaperImportSources(ctx, tenantID, importID, userID, input)
+	if err != nil {
+		return PaperImportJob{}, err
+	}
+	return s.processSources(ctx, tenantID, userID, job)
+}
+
+func (s *DocumentImportService) ReplaceSources(ctx context.Context, tenantID, userID, importID string, input ReplacePaperImportSourcesInput) (PaperImportJob, error) {
+	job, err := s.store.ReplacePaperImportSources(ctx, tenantID, importID, userID, input)
+	if err != nil {
+		return PaperImportJob{}, err
+	}
+	return s.processSources(ctx, tenantID, userID, job)
+}
+
+func (s *DocumentImportService) processSources(ctx context.Context, tenantID, userID string, job PaperImportJob) (PaperImportJob, error) {
+	documents := []normalizedImportDocument{}
 	ocrAssets := []PaperImportOCRAsset{}
-	for _, candidate := range []struct {
-		role, id string
-		err      error
-	}{{"paper", input.PaperFileAssetID, paperErr}, {"answer", input.AnswerFileAssetID, answerErr}} {
-		if candidate.err == nil {
+	for _, source := range job.Sources {
+		text, textErr := s.assetText(ctx, tenantID, source.FileAssetID)
+		if textErr == nil {
+			documents = append(documents, normalizedImportDocument{SourceID: source.ID, FileAssetID: source.FileAssetID, DocumentIndex: source.DocumentIndex, RoleHint: source.RoleHint, Content: text, Blocks: []PaperImportOCRBlock{}})
 			continue
 		}
-		if !errors.Is(candidate.err, errDocumentOCRRequired) {
-			failed, _ := s.store.FailPaperImport(ctx, tenantID, job.ID, candidate.role+"_text_unavailable", []string{candidate.err.Error()})
+		if !errors.Is(textErr, errDocumentOCRRequired) {
+			failed, _ := s.store.FailPaperImport(ctx, tenantID, job.ID, "source_text_unavailable", []string{textErr.Error()})
 			return failed, nil
 		}
-		asset, getErr := s.files.Get(ctx, tenantID, candidate.id)
+		asset, getErr := s.files.Get(ctx, tenantID, source.FileAssetID)
 		if getErr != nil {
 			return PaperImportJob{}, getErr
 		}
-		ocrAssets = append(ocrAssets, PaperImportOCRAsset{Role: candidate.role, FileAssetID: candidate.id, ContentType: asset.ContentType})
+		ocrAssets = append(ocrAssets, PaperImportOCRAsset{SourceID: source.ID, DocumentIndex: source.DocumentIndex, RoleHint: source.RoleHint, FileAssetID: source.FileAssetID, ContentType: asset.ContentType})
 	}
 	if len(ocrAssets) > 0 {
 		runtime, ok := s.store.(PaperImportRuntime)
@@ -86,29 +115,17 @@ func (s *DocumentImportService) Start(ctx context.Context, tenantID, examID, use
 		}
 		return job, nil
 	}
-	return s.completeParsedText(ctx, tenantID, job, paperText, answerText, nil)
+	return s.completeParsedDocuments(ctx, tenantID, job, documents, nil)
 }
 
-func (s *DocumentImportService) completeParsedText(ctx context.Context, tenantID string, job PaperImportJob, paperText, answerText string, extraIssues []string) (PaperImportJob, error) {
-	parsed, err := s.parse(ctx, job.ID, job.Subject, paperText, answerText)
+func (s *DocumentImportService) completeParsedDocuments(ctx context.Context, tenantID string, job PaperImportJob, documents []normalizedImportDocument, extraIssues []PaperImportIssue) (PaperImportJob, error) {
+	parsed, err := s.parse(ctx, job.ID, job.Subject, documents)
 	if err != nil {
 		failed, _ := s.store.FailPaperImport(ctx, tenantID, job.ID, "ai_parse_failed", []string{"AI 解析服务暂不可用，可稍后重试"})
 		return failed, nil
 	}
-	if len(parsed.Questions) == 0 {
-		failed, _ := s.store.FailPaperImport(ctx, tenantID, job.ID, "no_questions_detected", []string{"未识别到题目，请检查文件是否包含可复制文字"})
-		return failed, nil
-	}
-	for i := range parsed.Questions {
-		parsed.Questions[i].QuestionNo = strings.TrimSpace(parsed.Questions[i].QuestionNo)
-		parsed.Questions[i].QuestionType = strings.TrimSpace(parsed.Questions[i].QuestionType)
-		parsed.Questions[i].Stem = strings.TrimSpace(parsed.Questions[i].Stem)
-		if err := validateQuestionInput(parsed.Questions[i].QuestionNo, parsed.Questions[i].QuestionType, parsed.Questions[i].Score); err != nil {
-			parsed.Questions[i].Issues = append(parsed.Questions[i].Issues, err.Error())
-		}
-	}
 	parsed.Issues = append(parsed.Issues, extraIssues...)
-	return s.store.CompletePaperImport(ctx, tenantID, job.ID, parsed.Questions, parsed.Issues)
+	return s.store.CompletePaperImportCandidates(ctx, tenantID, job.ID, parsed.Documents, parsed.QuestionCandidates, parsed.AnswerCandidates, parsed.SolutionCandidates, parsed.Issues)
 }
 
 func (s *DocumentImportService) CompleteOCR(ctx context.Context, tenantID, importID string, blocks []PaperImportOCRBlock) (PaperImportJob, error) {
@@ -119,46 +136,87 @@ func (s *DocumentImportService) CompleteOCR(ctx context.Context, tenantID, impor
 	if job.Status != "processing" {
 		return PaperImportJob{}, ErrConflict
 	}
-	sort.SliceStable(blocks, func(i, j int) bool {
-		if blocks[i].Role == blocks[j].Role {
-			return blocks[i].PageNo < blocks[j].PageNo
-		}
-		return blocks[i].Role < blocks[j].Role
-	})
-	texts := map[string][]string{"paper": {}, "answer": {}}
-	issues := []string{}
+	sortPaperImportOCRBlocks(blocks)
+	bySource := map[string][]PaperImportOCRBlock{}
+	sourceByID := map[string]PaperImportSource{}
+	for _, source := range job.Sources {
+		sourceByID[source.ID] = source
+	}
+	issues := []PaperImportIssue{}
 	for _, block := range blocks {
-		if block.Role != "paper" && block.Role != "answer" {
-			continue
+		source, known := sourceByID[block.SourceID]
+		if !known || source.DocumentIndex != block.DocumentIndex {
+			return PaperImportJob{}, ErrInvalidInput
 		}
 		if strings.TrimSpace(block.Text) != "" {
-			texts[block.Role] = append(texts[block.Role], block.Text)
+			bySource[block.SourceID] = append(bySource[block.SourceID], block)
 		}
 		if block.Confidence < 0.75 {
-			issues = append(issues, fmt.Sprintf("%s 第 %d 页包含低置信度 OCR 文本（%.0f%%），必须人工核对", block.Role, block.PageNo, block.Confidence*100))
+			c := block.Confidence
+			issues = append(issues, PaperImportIssue{Code: "LOW_OCR_CONFIDENCE", Severity: "error", Certainty: "confirmed", Message: fmt.Sprintf("第 %d 页部分内容识别不确定（%.0f%%）", block.PageNo, block.Confidence*100), Confidence: &c, SourceRefs: []PaperImportSourceRef{{SourceID: block.SourceID, FileAssetID: source.FileAssetID, DocumentIndex: block.DocumentIndex, PageNo: block.PageNo, BlockID: block.BlockID, BBox: block.BBox, OCRConfidence: &c}}, ResolutionHint: "请对照原图核对"})
 		}
 	}
-	resolve := func(role, assetID string) (string, error) {
-		if len(texts[role]) > 0 {
-			return strings.Join(texts[role], "\n"), nil
+	issues = append(issues, possiblePageMissingIssues(job.Sources, blocks)...)
+	documents := []normalizedImportDocument{}
+	for _, source := range job.Sources {
+		sourceBlocks := bySource[source.ID]
+		contentParts := []string{}
+		for _, block := range sourceBlocks {
+			contentParts = append(contentParts, block.Text)
 		}
-		text, textErr := s.assetText(ctx, tenantID, assetID)
-		if errors.Is(textErr, errDocumentOCRRequired) {
-			return "", errors.New("OCR 未返回可用文字")
+		content := strings.Join(contentParts, "\n")
+		if content == "" {
+			text, textErr := s.assetText(ctx, tenantID, source.FileAssetID)
+			if textErr != nil {
+				failed, _ := s.store.FailPaperImport(ctx, tenantID, job.ID, "source_ocr_failed", []string{"OCR 未返回可用文字"})
+				return failed, nil
+			}
+			content = text
 		}
-		return text, textErr
+		documents = append(documents, normalizedImportDocument{SourceID: source.ID, FileAssetID: source.FileAssetID, DocumentIndex: source.DocumentIndex, RoleHint: source.RoleHint, Content: content, Blocks: sourceBlocks})
 	}
-	paperText, err := resolve("paper", job.PaperFileAssetID)
-	if err != nil {
-		failed, _ := s.store.FailPaperImport(ctx, tenantID, job.ID, "paper_ocr_failed", []string{err.Error()})
-		return failed, nil
+	return s.completeParsedDocuments(ctx, tenantID, job, documents, issues)
+}
+
+func sortPaperImportOCRBlocks(blocks []PaperImportOCRBlock) {
+	sort.SliceStable(blocks, func(i, j int) bool {
+		if blocks[i].DocumentIndex == blocks[j].DocumentIndex {
+			if blocks[i].PageNo == blocks[j].PageNo {
+				return false
+			}
+			return blocks[i].PageNo < blocks[j].PageNo
+		}
+		return blocks[i].DocumentIndex < blocks[j].DocumentIndex
+	})
+}
+
+func possiblePageMissingIssues(sources []PaperImportSource, blocks []PaperImportOCRBlock) []PaperImportIssue {
+	pagesBySource := map[string]map[int]bool{}
+	for _, block := range blocks {
+		if block.PageNo > 0 {
+			if pagesBySource[block.SourceID] == nil {
+				pagesBySource[block.SourceID] = map[int]bool{}
+			}
+			pagesBySource[block.SourceID][block.PageNo] = true
+		}
 	}
-	answerText, err := resolve("answer", job.AnswerFileAssetID)
-	if err != nil {
-		failed, _ := s.store.FailPaperImport(ctx, tenantID, job.ID, "answer_ocr_failed", []string{err.Error()})
-		return failed, nil
+	issues := []PaperImportIssue{}
+	for _, source := range sources {
+		pages := pagesBySource[source.ID]
+		maxPage := 0
+		for page := range pages {
+			if page > maxPage {
+				maxPage = page
+			}
+		}
+		for page := 1; page < maxPage; page++ {
+			if pages[page] {
+				continue
+			}
+			issues = append(issues, candidateIssue("POSSIBLE_PAGE_MISSING", "warning", "suspected", "", fmt.Sprintf("资料第 %d 页没有可用 OCR 文本", page), "请核对该页是否空白、漏传或识别失败", []PaperImportSourceRef{{SourceID: source.ID, FileAssetID: source.FileAssetID, DocumentIndex: source.DocumentIndex, PageNo: page}}))
+		}
 	}
-	return s.completeParsedText(ctx, tenantID, job, paperText, answerText, issues)
+	return issues
 }
 
 func (s *DocumentImportService) assetText(ctx context.Context, tenantID, id string) (string, error) {
@@ -181,6 +239,8 @@ func (s *DocumentImportService) assetText(ctx context.Context, tenantID, id stri
 		text, err = extractDOCXText(data)
 	case asset.ContentType == "application/pdf" || strings.HasSuffix(strings.ToLower(asset.OriginalName), ".pdf"):
 		text, err = extractPDFText(data)
+	case strings.HasPrefix(asset.ContentType, "image/"):
+		return "", errDocumentOCRRequired
 	default:
 		err = errors.New("仅支持 PDF 或 DOCX 文件")
 	}
@@ -200,11 +260,11 @@ func (s *DocumentImportService) assetText(ctx context.Context, tenantID, id stri
 	return text, nil
 }
 
-func (s *DocumentImportService) parse(ctx context.Context, requestID, subject, paperText, answerText string) (documentParseResponse, error) {
+func (s *DocumentImportService) parse(ctx context.Context, requestID, subject string, documents []normalizedImportDocument) (documentParseResponse, error) {
 	if s.baseURL == "" || len(s.token) < 32 {
 		return documentParseResponse{}, errors.New("AI service not configured")
 	}
-	body, _ := json.Marshal(documentParseRequest{RequestID: requestID, Subject: subject, PaperText: paperText, AnswerText: answerText})
+	body, _ := json.Marshal(documentParseRequest{RequestID: requestID, Subject: subject, Documents: documents})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+"/paper/parse", bytes.NewReader(body))
 	if err != nil {
 		return documentParseResponse{}, err

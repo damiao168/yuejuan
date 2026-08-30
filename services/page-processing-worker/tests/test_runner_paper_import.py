@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import io
 
+from PIL import Image
+
 from page_processing.config import Config
 from page_processing.runner import Runner
-from PIL import Image
 
 
 class FakeClient:
@@ -32,11 +33,12 @@ def test_layout_task_renders_paper_import_for_existing_ocr_worker() -> None:
     runner._process_paper_import_decode({
         "id": "task-1", "lease_token": "lease-1", "source_type": "paper_import_job",
         "payload": {"paper_import_id": "import-1", "exam_id": "exam-1", "documents": [
-            {"role": "paper", "download_url": "/files/paper", "content_type": "image/png", "max_pages": 10},
+            {"source_id": "source-1", "document_index": 0, "role_hint": "auto", "download_url": "/files/paper", "content_type": "image/png", "max_pages": 10},
         ]},
     })
     assert client.completed is not None
     import_id, result = client.completed
     assert import_id == "import-1"
-    assert result["pages"][0]["role"] == "paper"
+    assert result["pages"][0]["source_id"] == "source-1"
+    assert result["pages"][0]["document_index"] == 0
     assert client.uploads[0][0:2] == ("import", "import-1")

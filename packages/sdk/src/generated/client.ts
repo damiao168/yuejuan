@@ -159,6 +159,12 @@ import type {
   AssignProcessingExceptionRequest,
   ResolveProcessingExceptionRequest,
   ProcessingExceptionResponse,
+  CreatePaperImportRequest,
+  AddPaperImportSourcesRequest,
+  ReplacePaperImportSourcesRequest,
+  ReviewPaperImportRequest,
+  PaperImportResponse,
+  PaperImportListResponse,
   ProcessingRetryResponse
 } from "./types";
 
@@ -308,6 +314,13 @@ export interface operations {
   "exportMathUnderstandingCorrections": { args: { query: { "subject": "mathematics" | "physics" | "chemistry"; "limit"?: number; }; signal?: AbortSignal; }; response: MathTrainingExportResponse; };
   "listMathPilotGates": { args: { query?: { "subject"?: "mathematics" | "physics" | "chemistry"; "limit"?: number; }; signal?: AbortSignal; }; response: MathPilotGateListResponse; };
   "evaluateMathPilotGate": { args: { body: EvaluateMathPilotGateRequest; signal?: AbortSignal; }; response: MathPilotGateResponse; };
+  "listPaperImports": { args: { path: { "examId": string; }; signal?: AbortSignal; }; response: PaperImportListResponse; };
+  "createPaperImport": { args: { path: { "examId": string; }; body: CreatePaperImportRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "getPaperImport": { args: { path: { "paperImportId": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "addPaperImportSources": { args: { path: { "paperImportId": string; }; body: AddPaperImportSourcesRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "replacePaperImportSources": { args: { path: { "paperImportId": string; }; body: ReplacePaperImportSourcesRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "savePaperImportReview": { args: { path: { "paperImportId": string; }; body: ReviewPaperImportRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "applyPaperImport": { args: { path: { "paperImportId": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
 }
 
 export class EduGradeApi {
@@ -1036,5 +1049,40 @@ export class EduGradeApi {
   evaluateMathPilotGate(args: operations["evaluateMathPilotGate"]["args"]): Promise<operations["evaluateMathPilotGate"]["response"]> {
     const requestPath = "/api/v1/math-pilot-gates/evaluate";
     return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  listPaperImports(args: operations["listPaperImports"]["args"]): Promise<operations["listPaperImports"]["response"]> {
+    const requestPath = fillPath("/api/v1/exams/{examId}/paper-imports", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  createPaperImport(args: operations["createPaperImport"]["args"]): Promise<operations["createPaperImport"]["response"]> {
+    const requestPath = fillPath("/api/v1/exams/{examId}/paper-imports", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  getPaperImport(args: operations["getPaperImport"]["args"]): Promise<operations["getPaperImport"]["response"]> {
+    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  addPaperImportSources(args: operations["addPaperImportSources"]["args"]): Promise<operations["addPaperImportSources"]["response"]> {
+    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}/sources", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  replacePaperImportSources(args: operations["replacePaperImportSources"]["args"]): Promise<operations["replacePaperImportSources"]["response"]> {
+    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}/sources", args.path);
+    return this.transport.request(requestPath, { method: "PUT", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  savePaperImportReview(args: operations["savePaperImportReview"]["args"]): Promise<operations["savePaperImportReview"]["response"]> {
+    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}/review", args.path);
+    return this.transport.request(requestPath, { method: "PUT", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  applyPaperImport(args: operations["applyPaperImport"]["args"]): Promise<operations["applyPaperImport"]["response"]> {
+    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}/apply", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal });
   }
 }

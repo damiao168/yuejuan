@@ -3,9 +3,10 @@ FROM ${AI_PYTHON_IMAGE}
 
 WORKDIR /app
 RUN addgroup -S edugrade && adduser -S -G edugrade -u 10001 edugrade
-# The grading agent is stdlib-only. Remove the package installer from the
-# runtime image instead of carrying an unused, independently vulnerable tool.
-RUN python -m pip uninstall -y pip
+
+COPY ai-services/requirements.txt /app/requirements.txt
+RUN python -m pip install --no-cache-dir -r /app/requirements.txt \
+    && python -m pip uninstall -y pip
 
 COPY ai-services/grading_agent /app/grading_agent
 COPY ai-services/prompts /app/prompts

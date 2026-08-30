@@ -159,14 +159,15 @@ class OCRRunner:
             try:
                 for page in pages:
                     heartbeat.raise_if_failed()
-                    role = str(page.get("role") or "")
+                    source_id = str(page.get("source_id") or "")
+                    document_index = int(page.get("document_index", -1))
                     page_no = int(page.get("page_no") or 0)
-                    if role not in {"paper", "answer"} or page_no <= 0:
+                    if not source_id or document_index < 0 or page_no <= 0:
                         raise ValueError("invalid_paper_ocr_page")
                     image = self.api.download(str(page["download_url"]), tenant_id)
                     for block in self.engine.recognize(image):
                         if _valid_block(block.text, block.bbox, block.confidence):
-                            blocks.append({"role": role, "page_no": page_no, "text": block.text, "bbox": block.bbox, "confidence": block.confidence})
+                            blocks.append({"source_id": source_id, "document_index": document_index, "page_no": page_no, "block_id": f"{source_id}:{page_no}:{len(blocks)+1}", "text": block.text, "bbox": block.bbox, "confidence": block.confidence})
                 if not blocks:
                     raise ValueError("empty_ocr_result")
             except AuthenticationError:

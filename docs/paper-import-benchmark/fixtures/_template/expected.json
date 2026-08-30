@@ -1,0 +1,26 @@
+{
+  "documents": [
+    {
+      "document_index": 0,
+      "detected_role": "answer"
+    }
+  ],
+  "question_candidates": [],
+  "answer_candidates": [
+    {
+      "candidate_id": "answer-1",
+      "question_no_normalized": "1",
+      "standard_answer": "A",
+      "source_refs": [
+        {
+          "document_index": 0,
+          "text_start": 0,
+          "text_end": 3
+        }
+      ]
+    }
+  ],
+  "solution_candidates": [],
+  "confirmed_issue_codes": ["UNMATCHED_ANSWER"],
+  "suspected_issue_codes": ["POSSIBLE_MISSING_QUESTION"]
+}

@@ -84,8 +84,8 @@ class RunnerTests(unittest.TestCase):
             "id": "runtime-paper", "tenant_id": "tenant-1", "source_id": "import-1",
             "source_type": "paper_import_job", "lease_token": "lease-paper",
             "payload": {"engine": "paddleocr", "engine_version": "pp-ocrv5", "pages": [
-                {"role": "paper", "page_no": 1, "download_url": "/files/paper-page"},
-                {"role": "answer", "page_no": 1, "download_url": "/files/answer-page"},
+                {"source_id": "source-paper", "document_index": 0, "page_no": 1, "download_url": "/files/paper-page"},
+                {"source_id": "source-answer", "document_index": 1, "page_no": 1, "download_url": "/files/answer-page"},
             ]},
         }]
         runner = OCRRunner(api=api, engine=FakeEngine([OCRBlock(text="Q1 answer", bbox=[1, 2, 30, 10], confidence=0.7)]), config=WorkerConfig(worker_id="worker-a"))
@@ -93,7 +93,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(api.paper_failed, [])
         import_id, payload = api.paper_completed[0]
         self.assertEqual(import_id, "import-1")
-        self.assertEqual({block["role"] for block in payload["blocks"]}, {"paper", "answer"})
+        self.assertEqual({block["source_id"] for block in payload["blocks"]}, {"source-paper", "source-answer"})
+        self.assertEqual([block["document_index"] for block in payload["blocks"]], [0, 1])
         self.assertEqual(payload["blocks"][0]["confidence"], 0.7)
 
     def test_incompatible_runtime_task_is_rejected_before_start(self):

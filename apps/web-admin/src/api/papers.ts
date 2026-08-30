@@ -1,6 +1,9 @@
+import { EduGradeApi } from "@edugrade/sdk";
 import { apiClient } from "./client";
 export { uploadFile } from "./files";
 export type { FileAsset } from "./files";
+
+const generatedApi = new EduGradeApi(apiClient);
 
 export interface PaperFile {
   original_name: string;
@@ -22,8 +25,13 @@ export interface PaperVersion {
 }
 
 export interface PaperImportDraftQuestion {
+	candidate_id?: string;
+	answer_candidate_id?: string;
+	solution_candidate_id?: string;
+	source_refs: PaperImportSourceRef[];
   question_no: string;
   question_type: string;
+  assessment_archetype?: PaperImportAssessmentArchetype;
   score: number;
   stem: string;
   knowledge_points: string[];
@@ -31,7 +39,38 @@ export interface PaperImportDraftQuestion {
   issues: string[];
   matched_question_id?: string;
   match_status?: "create" | "matched" | "matched_by_order" | "mismatch" | "extra" | "ambiguous";
+	answer_key?: AnswerKeyInput;
+	solution?: SolutionInput;
+	rubric?: RubricPayload;
+	completeness_status?: "complete" | "needs_review";
+	human_confirmed_fields?: string[];
 }
+
+export type PaperImportRole = "auto" | "question" | "answer" | "solution" | "mixed" | "unknown";
+export type PaperImportAssessmentArchetype = "selected_response" | "exact_text" | "numeric_expression" | "structured_steps" | "short_constructed" | "extended_response" | "diagram_graph" | "table_experiment";
+export interface PaperImportSource { id: string; file_asset_id: string; document_index: number; role_hint: PaperImportRole; detected_role: Exclude<PaperImportRole, "auto">; role_confidence: number; processing_status: "pending" | "processing" | "processed" | "failed"; original_name?: string; content_type?: string; }
+export interface PaperImportSourceRef { source_id: string; file_asset_id: string; document_index: number; page_no?: number; block_id?: string; bbox?: unknown; text_start?: number; text_end?: number; ocr_confidence?: number; }
+export interface QuestionCandidate {
+  candidate_id: string;
+  question_no_raw?: string;
+  question_no_normalized?: string;
+  parent_question_no?: string;
+  subquestion_no?: string;
+  section_hint?: string;
+  stem?: string;
+  options: string[];
+  question_type?: string;
+  score?: number;
+  knowledge_point_hints: string[];
+  confidence: number;
+  source_refs: PaperImportSourceRef[];
+  issues: string[];
+}
+export interface AnswerCandidate { candidate_id: string; question_no_hint?: string; question_no_normalized?: string; subquestion_no_hint?: string; standard_answer?: unknown; equivalent_answers: unknown[]; tolerance?: unknown; confidence: number; source_refs: PaperImportSourceRef[]; issues: string[]; }
+export interface SolutionCandidate { candidate_id: string; question_no_hint?: string; question_no_normalized?: string; subquestion_no_hint?: string; raw_text: string; steps: SolutionStep[]; confidence: number; source_refs: PaperImportSourceRef[]; issues: string[]; }
+export interface SolutionStep { step_no: number; content: string; }
+export interface SolutionInput { raw_text: string; steps: SolutionStep[]; source_refs: PaperImportSourceRef[]; }
+export interface PaperImportIssue { code: string; severity: "info" | "warning" | "error"; certainty: "confirmed" | "suspected" | "unknown"; question_no?: string; section?: string; message: string; confidence?: number; source_refs: PaperImportSourceRef[]; resolution_hint?: string; }
 
 export interface PaperImportJob {
   id: string;
@@ -41,6 +80,11 @@ export interface PaperImportJob {
   answer_file_asset_id: string;
   status: "processing" | "review_required" | "failed" | "applied";
   subject: string;
+	sources: PaperImportSource[];
+	question_candidates: QuestionCandidate[];
+	answer_candidates: AnswerCandidate[];
+	solution_candidates: SolutionCandidate[];
+	structured_issues: PaperImportIssue[];
   questions: PaperImportDraftQuestion[];
   issues: string[];
   error_code?: string;
@@ -58,6 +102,9 @@ export interface AnswerKey extends AnswerKeyInput {
   id: string;
   question_id: string;
   answer_version: string;
+  paper_import_id?: string;
+  paper_import_candidate_id?: string;
+  paper_import_source_refs?: PaperImportSourceRef[];
 }
 
 export interface RubricPoint {
@@ -96,6 +143,8 @@ export interface Rubric {
   points: RubricPoint[];
   deductions: unknown[];
   examples: unknown[];
+  paper_import_id?: string;
+  paper_import_source_refs?: PaperImportSourceRef[];
 }
 
 export interface Question {
@@ -111,7 +160,12 @@ export interface Question {
   answer_area?: Record<string, unknown>;
   sort_order: number;
   status: string;
+  assessment_archetype?: string;
+  paper_import_id?: string;
+  paper_import_candidate_id?: string;
+  paper_import_source_refs?: PaperImportSourceRef[];
   answer_key?: AnswerKey;
+  solution?: { id: string; question_id: string; paper_import_id?: string; solution_version: string; raw_text: string; steps: SolutionStep[]; source_refs: PaperImportSourceRef[]; verification_status: "machine" | "human_confirmed" | "conflicted" };
   rubric?: Rubric;
 }
 
@@ -157,15 +211,27 @@ export async function listPapers(examId: string) {
 }
 
 export async function listPaperImports(examId: string) {
-  return apiClient.request<{ imports: PaperImportJob[] }>(`/api/v1/exams/${encodeURIComponent(examId)}/paper-imports`);
+  return generatedApi.listPaperImports({ path: { examId } });
 }
 
-export async function createPaperImport(examId: string, payload: { exam_paper_id: string; paper_file_asset_id: string; answer_file_asset_id: string; subject: string }) {
-  return apiClient.request<{ import: PaperImportJob }>(`/api/v1/exams/${encodeURIComponent(examId)}/paper-imports`, { method: "POST", body: JSON.stringify(payload) });
+export async function createPaperImport(examId: string, payload: { exam_paper_id?: string; subject: string; sources: { file_asset_id: string; document_index: number; role_hint?: PaperImportRole }[]; paper_file_asset_id?: string; answer_file_asset_id?: string }) {
+  return generatedApi.createPaperImport({ path: { examId }, body: payload });
+}
+
+export async function addPaperImportSources(importId: string, sources: { file_asset_id: string; document_index: number; role_hint?: PaperImportRole }[]) {
+	return generatedApi.addPaperImportSources({ path: { paperImportId: importId }, body: { sources } });
+}
+
+export async function replacePaperImportSources(importId: string, sources: { id: string; document_index: number; role_hint: PaperImportRole }[]) {
+	return generatedApi.replacePaperImportSources({ path: { paperImportId: importId }, body: { sources } });
+}
+
+export async function savePaperImportReview(importId: string, questions: PaperImportDraftQuestion[]) {
+	return generatedApi.savePaperImportReview({ path: { paperImportId: importId }, body: { questions } });
 }
 
 export async function applyPaperImport(importId: string) {
-  return apiClient.request<{ import: PaperImportJob }>(`/api/v1/paper-imports/${encodeURIComponent(importId)}/apply`, { method: "POST" });
+  return generatedApi.applyPaperImport({ path: { paperImportId: importId } });
 }
 
 export async function listQuestions(examId: string) {

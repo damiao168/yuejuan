@@ -90,9 +90,10 @@ class Runner:
             raise DecodeError("unsupported_layout_task")
         results = []
         for document in payload["documents"]:
-            role = str(document.get("role") or "")
-            if role not in {"paper", "answer"}:
-                raise DecodeError("paper_import_role_invalid")
+            source_id = str(document.get("source_id") or "")
+            document_index = int(document.get("document_index", -1))
+            if not source_id or document_index < 0:
+                raise DecodeError("paper_import_source_invalid")
             source = self.client.download(str(document["download_url"]))
             heartbeat.raise_if_failed()
             pages, _ = decode_document(
@@ -104,8 +105,8 @@ class Runner:
             )
             for page in pages:
                 heartbeat.raise_if_failed()
-                asset = self.client.upload_asset(task, "import", str(payload["paper_import_id"]), f"{role}-page-{page.index:04d}.png", page.png)
-                results.append({"role": role, "page_no": page.index, "file_asset_id": asset["id"], "sha256": asset["hash_sha256"]})
+                asset = self.client.upload_asset(task, "import", str(payload["paper_import_id"]), f"source-{document_index:04d}-page-{page.index:04d}.png", page.png)
+                results.append({"source_id": source_id, "document_index": document_index, "page_no": page.index, "file_asset_id": asset["id"], "sha256": asset["hash_sha256"]})
         heartbeat.stop(raise_on_error=False)
         self.client.complete_paper_import_decode(str(payload["paper_import_id"]), {
             "task_id": task["id"], "lease_token": task["lease_token"],

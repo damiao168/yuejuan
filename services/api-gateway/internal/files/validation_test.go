@@ -28,3 +28,11 @@ func TestValidateFileTypeReturnsServerSniffedType(t *testing.T) {
 		t.Fatalf("expected server-sniffed content type, got %q", contentType)
 	}
 }
+
+func TestSniffContentTypeRecognizesTIFFByteOrders(t *testing.T) {
+	for _, sample := range [][]byte{{'I', 'I', 42, 0, 8, 0, 0, 0}, {'M', 'M', 0, 42, 0, 0, 0, 8}} {
+		if got := SniffContentType(sample); got != "image/tiff" {
+			t.Fatalf("got %q", got)
+		}
+	}
+}

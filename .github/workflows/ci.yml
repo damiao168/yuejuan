@@ -144,6 +144,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
+            ai-services/requirements.txt
             services/ocr-worker/pyproject.toml
             services/image-quality-worker/pyproject.toml
             services/page-processing-worker/pyproject.toml
@@ -152,6 +153,7 @@ jobs:
       - run: python -m pip install --upgrade pip==26.1.2 setuptools==83.0.0
       - run: >-
           python -m pip install pytest==9.1.1 pip-audit==2.10.1 ruff==0.16.0
+          -r ai-services/requirements.txt
           -e services/ocr-worker
           -e services/image-quality-worker
           -e services/page-processing-worker

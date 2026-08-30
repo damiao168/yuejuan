@@ -3,6 +3,7 @@ package paper
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -53,13 +54,149 @@ func NewMemoryStore() *MemoryStore {
 func (s *MemoryStore) CreatePaperImport(_ context.Context, tenantID, examID, userID string, input CreatePaperImportInput) (PaperImportJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.papers[input.ExamPaperID]
-	if !ok || p.TenantID != tenantID || p.ExamID != examID || input.PaperFileAssetID == "" || input.AnswerFileAssetID == "" {
+	if input.ExamPaperID != "" {
+		p, ok := s.papers[input.ExamPaperID]
+		if !ok || p.TenantID != tenantID || p.ExamID != examID {
+			return PaperImportJob{}, ErrInvalidInput
+		}
+	}
+	sources := normalizePaperImportSourceInputs(input)
+	if len(sources) == 0 || strings.TrimSpace(input.Subject) == "" {
 		return PaperImportJob{}, ErrInvalidInput
 	}
 	now := time.Now().UTC()
-	job := PaperImportJob{ID: s.id("paper-import"), TenantID: tenantID, ExamID: examID, ExamPaperID: input.ExamPaperID, PaperFileAssetID: input.PaperFileAssetID, AnswerFileAssetID: input.AnswerFileAssetID, Status: "processing", Subject: input.Subject, Questions: []PaperImportDraftQuestion{}, Issues: []string{}, CreatedBy: userID, CreatedAt: now, UpdatedAt: now}
+	job := PaperImportJob{ID: s.id("paper-import"), TenantID: tenantID, ExamID: examID, ExamPaperID: input.ExamPaperID, PaperFileAssetID: input.PaperFileAssetID, AnswerFileAssetID: input.AnswerFileAssetID, Status: "processing", Subject: input.Subject, Questions: []PaperImportDraftQuestion{}, Issues: []string{}, QuestionCandidates: []QuestionCandidate{}, AnswerCandidates: []AnswerCandidate{}, SolutionCandidates: []SolutionCandidate{}, StructuredIssues: []PaperImportIssue{}, CreatedBy: userID, CreatedAt: now, UpdatedAt: now}
+	seenAssets, seenIndexes := map[string]bool{}, map[int]bool{}
+	for _, source := range sources {
+		if source.FileAssetID == "" || source.DocumentIndex < 0 || seenAssets[source.FileAssetID] || seenIndexes[source.DocumentIndex] || !validPaperImportRole(source.RoleHint, true) {
+			return PaperImportJob{}, ErrInvalidInput
+		}
+		job.Sources = append(job.Sources, PaperImportSource{ID: s.id("paper-import-source"), FileAssetID: source.FileAssetID, DocumentIndex: source.DocumentIndex, RoleHint: source.RoleHint, DetectedRole: "unknown", ProcessingStatus: "pending", CreatedAt: now})
+		seenAssets[source.FileAssetID], seenIndexes[source.DocumentIndex] = true, true
+	}
 	s.imports[job.ID] = job
+	return job, nil
+}
+
+func (s *MemoryStore) AddPaperImportSources(_ context.Context, tenantID, id, _ string, input AddPaperImportSourcesInput) (PaperImportJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.imports[id]
+	if !ok || job.TenantID != tenantID {
+		return PaperImportJob{}, ErrNotFound
+	}
+	if job.Status == "applied" || job.Status == "processing" || len(input.Sources) == 0 {
+		return PaperImportJob{}, ErrConflict
+	}
+	seen := map[string]bool{}
+	indexes := map[int]bool{}
+	for _, source := range job.Sources {
+		seen[source.FileAssetID] = true
+		indexes[source.DocumentIndex] = true
+	}
+	now := time.Now().UTC()
+	for _, source := range input.Sources {
+		if source.FileAssetID == "" || source.DocumentIndex < 0 || seen[source.FileAssetID] || indexes[source.DocumentIndex] || !validPaperImportRole(source.RoleHint, true) {
+			return PaperImportJob{}, ErrInvalidInput
+		}
+		job.Sources = append(job.Sources, PaperImportSource{ID: s.id("paper-import-source"), FileAssetID: source.FileAssetID, DocumentIndex: source.DocumentIndex, RoleHint: defaultRoleHint(source.RoleHint), DetectedRole: "unknown", ProcessingStatus: "pending", CreatedAt: now})
+		seen[source.FileAssetID], indexes[source.DocumentIndex] = true, true
+	}
+	job.Status, job.UpdatedAt = "processing", now
+	s.imports[id] = job
+	return job, nil
+}
+
+func (s *MemoryStore) ReplacePaperImportSources(_ context.Context, tenantID, id, _ string, input ReplacePaperImportSourcesInput) (PaperImportJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.imports[id]
+	if !ok || job.TenantID != tenantID {
+		return PaperImportJob{}, ErrNotFound
+	}
+	if job.Status == "applied" || job.Status == "processing" || len(input.Sources) == 0 {
+		return PaperImportJob{}, ErrConflict
+	}
+	current := map[string]PaperImportSource{}
+	for _, source := range job.Sources {
+		current[source.ID] = source
+	}
+	seenIDs := map[string]bool{}
+	seenIndexes := map[int]bool{}
+	replaced := make([]PaperImportSource, 0, len(input.Sources))
+	now := time.Now().UTC()
+	for _, inputSource := range input.Sources {
+		source, exists := current[inputSource.ID]
+		if !exists || inputSource.DocumentIndex < 0 || seenIDs[inputSource.ID] || seenIndexes[inputSource.DocumentIndex] || !validPaperImportRole(inputSource.RoleHint, true) {
+			return PaperImportJob{}, ErrInvalidInput
+		}
+		source.DocumentIndex = inputSource.DocumentIndex
+		source.RoleHint = defaultRoleHint(inputSource.RoleHint)
+		source.DetectedRole = "unknown"
+		source.RoleConfidence = 0
+		source.ProcessingStatus = "pending"
+		replaced = append(replaced, source)
+		seenIDs[inputSource.ID], seenIndexes[inputSource.DocumentIndex] = true, true
+	}
+	sort.Slice(replaced, func(i, j int) bool { return replaced[i].DocumentIndex < replaced[j].DocumentIndex })
+	job.Sources = replaced
+	job.Status, job.UpdatedAt = "processing", now
+	s.imports[id] = job
+	return job, nil
+}
+
+func (s *MemoryStore) CompletePaperImportCandidates(_ context.Context, tenantID, id string, detected []PaperImportDetectedDocument, questions []QuestionCandidate, answers []AnswerCandidate, solutions []SolutionCandidate, issues []PaperImportIssue) (PaperImportJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.imports[id]
+	if !ok || job.TenantID != tenantID {
+		return PaperImportJob{}, ErrNotFound
+	}
+	job.QuestionCandidates, job.AnswerCandidates, job.SolutionCandidates = questions, answers, solutions
+	fresh, structured := reconcilePaperImportCandidates(questions, answers, solutions, appendDetectedRoleIssues(issues, detected))
+	structured = appendHumanConfirmationConflicts(structured, fresh, job.Questions)
+	job.Questions = preserveHumanConfirmedDrafts(fresh, job.Questions)
+	job.StructuredIssues = issuesAfterHumanReview(structured, job.Questions, false)
+	job.Issues = issueMessages(job.StructuredIssues)
+	job.Status = "review_required"
+	job.ErrorCode = ""
+	job.UpdatedAt = time.Now().UTC()
+	roles := map[string]PaperImportDetectedDocument{}
+	for _, item := range detected {
+		roles[item.SourceID] = item
+	}
+	for i := range job.Sources {
+		job.Sources[i].ProcessingStatus = "processed"
+		if item, ok := roles[job.Sources[i].ID]; ok && validPaperImportRole(item.DetectedRole, false) {
+			job.Sources[i].DetectedRole, job.Sources[i].RoleConfidence = item.DetectedRole, item.RoleConfidence
+		}
+	}
+	s.imports[id] = job
+	return job, nil
+}
+
+func (s *MemoryStore) SavePaperImportReview(_ context.Context, tenantID, id, _ string, input ReviewPaperImportInput) (PaperImportJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.imports[id]
+	if !ok || job.TenantID != tenantID {
+		return PaperImportJob{}, ErrNotFound
+	}
+	if job.Status != "review_required" {
+		return PaperImportJob{}, ErrConflict
+	}
+	for i := range input.Questions {
+		if input.Questions[i].AssessmentArchetype == "" {
+			input.Questions[i].AssessmentArchetype = defaultPaperImportArchetype(input.Questions[i].QuestionType)
+		}
+		input.Questions[i].HumanConfirmedFields = normalizeHumanConfirmedFields(input.Questions[i].HumanConfirmedFields)
+		refreshDraftCompleteness(&input.Questions[i], len(job.QuestionCandidates) > 0)
+	}
+	job.Questions = input.Questions
+	job.StructuredIssues = appendReviewedDraftIssues(issuesAfterHumanReview(job.StructuredIssues, job.Questions, true), job.Questions)
+	job.Issues = issueMessages(job.StructuredIssues)
+	job.UpdatedAt = time.Now().UTC()
+	s.imports[id] = job
 	return job, nil
 }
 
@@ -130,7 +267,11 @@ func (s *MemoryStore) ApplyPaperImport(_ context.Context, tenantID, id, userID s
 		}
 	}
 	job.Questions, job.Issues = s.reconcileMemoryPaperImport(job.ExamID, job.Questions, job.Issues)
-	for i, draft := range job.Questions {
+	if paperImportHasBlockingIssues(job) {
+		return PaperImportJob{}, ErrInvalidInput
+	}
+	for i := range job.Questions {
+		draft := &job.Questions[i]
 		if err := validateQuestionInput(draft.QuestionNo, draft.QuestionType, draft.Score); err != nil {
 			return PaperImportJob{}, ErrInvalidInput
 		}
@@ -146,15 +287,19 @@ func (s *MemoryStore) ApplyPaperImport(_ context.Context, tenantID, id, userID s
 				return PaperImportJob{}, ErrConflict
 			}
 			q.ExamPaperID, q.Stem, q.KnowledgePoints = job.ExamPaperID, draft.Stem, cloneStrings(draft.KnowledgePoints)
+			q.PaperImportID, q.PaperImportCandidateID, q.PaperImportSourceRefs = job.ID, draft.CandidateID, append([]PaperImportSourceRef{}, draft.SourceRefs...)
 			if draft.MatchStatus != "mismatch" {
 				if draft.AnswerKey != nil {
-					q.AnswerKey = &AnswerKey{ID: s.id("answer"), QuestionID: q.ID, AnswerVersion: fmt.Sprintf("v%d", 1), StandardAnswer: draft.AnswerKey.StandardAnswer, EquivalentAnswers: draft.AnswerKey.EquivalentAnswers, Tolerance: draft.AnswerKey.Tolerance}
+					q.AnswerKey = &AnswerKey{ID: s.id("answer"), QuestionID: q.ID, AnswerVersion: fmt.Sprintf("v%d", 1), StandardAnswer: draft.AnswerKey.StandardAnswer, EquivalentAnswers: draft.AnswerKey.EquivalentAnswers, Tolerance: draft.AnswerKey.Tolerance, PaperImportID: job.ID, PaperImportCandidateID: draft.AnswerCandidateID, PaperImportSourceRefs: append([]PaperImportSourceRef{}, draft.SourceRefs...)}
+				}
+				if draft.Solution != nil {
+					q.Solution = &QuestionSolution{ID: s.id("solution"), QuestionID: q.ID, PaperImportID: job.ID, SolutionVersion: "v1", RawText: draft.Solution.RawText, Steps: draft.Solution.Steps, SourceRefs: draft.Solution.SourceRefs, VerificationStatus: solutionVerificationStatus(*draft)}
 				}
 				if draft.Rubric != nil {
 					if rubrics := s.rubrics[q.ID]; len(rubrics) > 0 && rubrics[len(rubrics)-1].Status == "locked" {
 						return PaperImportJob{}, ErrRubricLocked
 					}
-					r := Rubric{ID: s.id("rubric"), QuestionID: q.ID, Version: fmt.Sprintf("v%d", len(s.rubrics[q.ID])+1), Status: "draft", MaxScore: draft.Rubric.MaxScore, Points: draft.Rubric.Points, Deductions: draft.Rubric.Deductions, Examples: draft.Rubric.Examples}
+					r := Rubric{ID: s.id("rubric"), QuestionID: q.ID, Version: fmt.Sprintf("v%d", len(s.rubrics[q.ID])+1), Status: "draft", MaxScore: draft.Rubric.MaxScore, Points: draft.Rubric.Points, Deductions: draft.Rubric.Deductions, Examples: draft.Rubric.Examples, PaperImportID: job.ID, PaperImportSourceRefs: append([]PaperImportSourceRef{}, draft.SourceRefs...)}
 					s.rubrics[q.ID] = append(s.rubrics[q.ID], r)
 				}
 			}
@@ -162,21 +307,33 @@ func (s *MemoryStore) ApplyPaperImport(_ context.Context, tenantID, id, userID s
 			continue
 		}
 		qid := s.id("question")
-		q := Question{ID: qid, TenantID: tenantID, ExamID: job.ExamID, ExamPaperID: job.ExamPaperID, QuestionNo: draft.QuestionNo, QuestionType: draft.QuestionType, Score: draft.Score, Stem: draft.Stem, KnowledgePoints: cloneStrings(draft.KnowledgePoints), AnswerArea: map[string]any{}, SortOrder: i + 1, Status: "active"}
+		q := Question{ID: qid, TenantID: tenantID, ExamID: job.ExamID, ExamPaperID: job.ExamPaperID, QuestionNo: draft.QuestionNo, QuestionType: draft.QuestionType, Score: draft.Score, Stem: draft.Stem, KnowledgePoints: cloneStrings(draft.KnowledgePoints), AnswerArea: map[string]any{}, SortOrder: i + 1, Status: "active", PaperImportID: job.ID, PaperImportCandidateID: draft.CandidateID, PaperImportSourceRefs: append([]PaperImportSourceRef{}, draft.SourceRefs...)}
 		if draft.AnswerKey != nil {
-			q.AnswerKey = &AnswerKey{ID: s.id("answer"), QuestionID: qid, AnswerVersion: "v1", StandardAnswer: draft.AnswerKey.StandardAnswer, EquivalentAnswers: draft.AnswerKey.EquivalentAnswers, Tolerance: draft.AnswerKey.Tolerance}
+			q.AnswerKey = &AnswerKey{ID: s.id("answer"), QuestionID: qid, AnswerVersion: "v1", StandardAnswer: draft.AnswerKey.StandardAnswer, EquivalentAnswers: draft.AnswerKey.EquivalentAnswers, Tolerance: draft.AnswerKey.Tolerance, PaperImportID: job.ID, PaperImportCandidateID: draft.AnswerCandidateID, PaperImportSourceRefs: append([]PaperImportSourceRef{}, draft.SourceRefs...)}
+		}
+		if draft.Solution != nil {
+			q.Solution = &QuestionSolution{ID: s.id("solution"), QuestionID: qid, PaperImportID: job.ID, SolutionVersion: "v1", RawText: draft.Solution.RawText, Steps: draft.Solution.Steps, SourceRefs: draft.Solution.SourceRefs, VerificationStatus: solutionVerificationStatus(*draft)}
 		}
 		s.questions[qid] = q
 		if draft.Rubric != nil {
-			r := Rubric{ID: s.id("rubric"), QuestionID: qid, Version: "v1", Status: "draft", MaxScore: draft.Rubric.MaxScore, Points: draft.Rubric.Points, Deductions: draft.Rubric.Deductions, Examples: draft.Rubric.Examples}
+			r := Rubric{ID: s.id("rubric"), QuestionID: qid, Version: "v1", Status: "draft", MaxScore: draft.Rubric.MaxScore, Points: draft.Rubric.Points, Deductions: draft.Rubric.Deductions, Examples: draft.Rubric.Examples, PaperImportID: job.ID, PaperImportSourceRefs: append([]PaperImportSourceRef{}, draft.SourceRefs...)}
 			s.rubrics[qid] = []Rubric{r}
 		}
+		draft.MatchedQuestionID = qid
+		draft.MatchStatus = "matched"
 	}
 	now := time.Now().UTC()
 	job.Status, job.AppliedAt, job.UpdatedAt = "applied", &now, now
 	s.imports[id] = job
 	_ = userID
 	return job, nil
+}
+
+func solutionVerificationStatus(draft PaperImportDraftQuestion) string {
+	if stringSet(draft.HumanConfirmedFields)["solution"] {
+		return "human_confirmed"
+	}
+	return "machine"
 }
 
 func (s *MemoryStore) reconcileMemoryPaperImport(examID string, drafts []PaperImportDraftQuestion, issues []string) ([]PaperImportDraftQuestion, []string) {
@@ -186,88 +343,15 @@ func (s *MemoryStore) reconcileMemoryPaperImport(examID string, drafts []PaperIm
 			existing = append(existing, question)
 		}
 	}
-	if len(existing) == 0 {
-		for i := range drafts {
-			drafts[i].MatchStatus = "create"
-			drafts[i].MatchedQuestionID = ""
-		}
-		return drafts, dedupeStrings(issues)
-	}
-	for i := 0; i < len(existing); i++ {
-		for j := i + 1; j < len(existing); j++ {
-			if existing[j].SortOrder < existing[i].SortOrder {
-				existing[i], existing[j] = existing[j], existing[i]
-			}
-		}
-	}
-	used := map[string]bool{}
-	seen := map[string]bool{}
-	for index := range drafts {
-		draft := &drafts[index]
-		draft.MatchStatus, draft.MatchedQuestionID = "extra", ""
-		key := strings.TrimSpace(draft.QuestionNo)
-		if seen[key] {
-			draft.MatchStatus = "ambiguous"
-			draft.Issues = append(draft.Issues, "AI 结果包含重复题号 "+key)
-			issues = append(issues, "AI 结果包含重复题号 "+key)
-			continue
-		}
-		seen[key] = key != ""
-		matched := -1
-		for i := range existing {
-			if strings.TrimSpace(existing[i].QuestionNo) == key && !used[existing[i].ID] {
-				if matched >= 0 {
-					matched = -2
-					break
-				}
-				matched = i
-			}
-		}
-		if matched == -1 && len(drafts) == len(existing) && index < len(existing) && !used[existing[index].ID] {
-			matched = index
-			draft.MatchStatus = "matched_by_order"
-			draft.Issues = append(draft.Issues, "题号未直接命中，已按题目顺序候选匹配，请核对")
-		}
-		if matched < 0 {
-			draft.Issues = append(draft.Issues, "未找到可唯一匹配的蓝图题目")
-			issues = append(issues, "AI 多识别题目 "+draft.QuestionNo)
-			continue
-		}
-		question := existing[matched]
-		used[question.ID] = true
-		draft.MatchedQuestionID = question.ID
-		if draft.MatchStatus == "extra" {
-			draft.MatchStatus = "matched"
-		}
-		if draft.QuestionType != question.QuestionType {
-			draft.MatchStatus = "mismatch"
-			draft.Issues = append(draft.Issues, fmt.Sprintf("题型不一致：AI=%s，蓝图=%s；将保留蓝图题型", draft.QuestionType, question.QuestionType))
-		}
-		if !scoreEqual(draft.Score, question.Score) {
-			draft.MatchStatus = "mismatch"
-			draft.Issues = append(draft.Issues, fmt.Sprintf("分值不一致：AI=%.2f，蓝图=%.2f；将保留蓝图分值", draft.Score, question.Score))
-		}
-		if draft.MatchStatus == "mismatch" {
-			issues = append(issues, "题目 "+question.QuestionNo+" 的题型或分值与蓝图不一致")
-		}
-		draft.Issues = dedupeStrings(draft.Issues)
-	}
+	blueprint := make([]paperImportExistingQuestion, 0, len(existing))
 	for _, question := range existing {
-		if !used[question.ID] {
-			issues = append(issues, "AI 漏识别蓝图题目 "+question.QuestionNo)
-		}
+		blueprint = append(blueprint, paperImportExistingQuestion{id: question.ID, number: question.QuestionNo, kind: question.QuestionType, score: question.Score, sortOrder: question.SortOrder})
 	}
-	var aiTotal, blueprintTotal float64
-	for _, draft := range drafts {
-		aiTotal += draft.Score
+	var expected *float64
+	if total, ok := s.examTotals[examID]; ok {
+		expected = &total
 	}
-	for _, question := range existing {
-		blueprintTotal += question.Score
-	}
-	if !scoreEqual(aiTotal, blueprintTotal) {
-		issues = append(issues, fmt.Sprintf("AI 识别总分 %.2f 与蓝图总分 %.2f 不一致", aiTotal, blueprintTotal))
-	}
-	return drafts, dedupeStrings(issues)
+	return reconcilePaperImportDrafts(drafts, blueprint, expected, issues)
 }
 
 func (s *MemoryStore) SetExamTotal(examID string, total float64) {

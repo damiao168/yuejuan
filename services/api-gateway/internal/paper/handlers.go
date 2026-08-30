@@ -32,8 +32,8 @@ func (h *Handler) CreatePaperImport(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if input.ExamPaperID == "" || input.PaperFileAssetID == "" || input.AnswerFileAssetID == "" || input.Subject == "" {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_paper_import", "试卷、答案和学科不能为空")
+	if len(normalizePaperImportSourceInputs(input)) == 0 || input.Subject == "" {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_paper_import", "至少需要一份考试资料和学科")
 		return
 	}
 	out, err := h.documentImport.Start(r.Context(), user.TenantID, r.PathValue("examId"), user.ID, input)
@@ -41,8 +41,73 @@ func (h *Handler) CreatePaperImport(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	h.auditAction(r, "paper.import_created", "paper_import_job", out.ID, "parse complete paper and answer documents")
+	h.auditAction(r, "paper.import_created", "paper_import_job", out.ID, "parse ordered exam material sources")
 	httpx.JSON(w, http.StatusCreated, map[string]any{"import": out})
+}
+
+func (h *Handler) AddPaperImportSources(w http.ResponseWriter, r *http.Request) {
+	if h.documentImport == nil {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "paper_import_unavailable", "考试资料解析服务未配置")
+		return
+	}
+	user := mustUser(r)
+	var input AddPaperImportSourcesInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if len(input.Sources) == 0 {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_paper_import_sources", "请选择要追加的考试资料")
+		return
+	}
+	out, err := h.documentImport.AddSources(r.Context(), user.TenantID, user.ID, r.PathValue("id"), input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.import_sources_added", "paper_import_job", out.ID, "add ordered import sources and rerun reconciliation")
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"import": out})
+}
+
+func (h *Handler) ReplacePaperImportSources(w http.ResponseWriter, r *http.Request) {
+	if h.documentImport == nil {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "paper_import_unavailable", "考试资料解析服务未配置")
+		return
+	}
+	user := mustUser(r)
+	var input ReplacePaperImportSourcesInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if len(input.Sources) == 0 {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_paper_import_sources", "至少保留一份考试资料")
+		return
+	}
+	out, err := h.documentImport.ReplaceSources(r.Context(), user.TenantID, user.ID, r.PathValue("id"), input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.import_sources_replaced", "paper_import_job", out.ID, "reorder, remove, or reclassify import sources and rerun reconciliation")
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"import": out})
+}
+
+func (h *Handler) SavePaperImportReview(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input ReviewPaperImportInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if len(input.Questions) == 0 {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_paper_import_review", "至少需要一道人工核对题目")
+		return
+	}
+	out, err := h.store.SavePaperImportReview(r.Context(), user.TenantID, r.PathValue("id"), user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.import_review_saved", "paper_import_job", out.ID, "save human-confirmed import fields")
+	httpx.JSON(w, http.StatusOK, map[string]any{"import": out})
 }
 
 func (h *Handler) ListPaperImports(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +137,7 @@ func (h *Handler) ApplyPaperImport(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	h.auditAction(r, "paper.import_applied", "paper_import_job", out.ID, "apply parsed questions answers and rubrics")
+	h.auditAction(r, "paper.import_applied", "paper_import_job", out.ID, "apply reviewed questions answers solutions and rubrics")
 	httpx.JSON(w, 200, map[string]any{"import": out})
 }
 

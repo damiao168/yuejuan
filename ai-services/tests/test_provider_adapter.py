@@ -3,6 +3,8 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 
+from helpers import settings, valid_request
+
 from grading_agent.app import GradingAgentApplication
 from grading_agent.model import DashScopeNativeAdapter, LocalLlamaCppAdapter
 from grading_agent.provider_adapter import (
@@ -11,7 +13,6 @@ from grading_agent.provider_adapter import (
     build_provider_adapter,
     default_provider_adapter_registry,
 )
-from helpers import settings, valid_request
 
 FIXTURES = Path(__file__).parent / "fixtures" / "dashscope-native"
 
@@ -23,6 +24,9 @@ class CompleteAdapter:
 
     def request(self, _grading_request, repair_reason=None):
         return {"repair_reason": repair_reason}
+
+    def request_structured(self, _request_id, _messages, _schema, _name):
+        return {}
 
     def ready(self):
         return True

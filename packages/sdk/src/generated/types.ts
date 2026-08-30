@@ -658,6 +658,50 @@ export type ProcessingWorkerAttempt = { "id": string; "tenant_id": string; "task
 
 export type ProcessingWorkerTask = { "id": string; "tenant_id": string; "task_type": string; "queue_name": string; "source_type": string; "source_id": string; "status": string; "priority": number; "payload": Record<string, unknown>; "payload_schema_version": string; "result"?: Record<string, unknown>; "result_schema_version"?: string; "idempotency_key": string; "dedupe_key"?: string; "max_attempts": number; "attempt_count": number; "retry_backoff_seconds": number; "not_before"?: string | null; "lease_expires_at"?: string | null; "leased_by"?: string; "worker_service"?: string; "worker_instance_id"?: string; "started_at"?: string | null; "completed_at"?: string | null; "cancelled_at"?: string | null; "duration_ms"?: number; "error_code"?: string; "error_detail"?: Record<string, unknown>; "revision": number; "created_by"?: string; "created_at": string; "updated_at": string; "attempts"?: Array<ProcessingWorkerAttempt>; };
 
+export type PaperImportRole = "auto" | "question" | "answer" | "solution" | "mixed" | "unknown";
+
+export type CreatePaperImportSource = { "file_asset_id": string; "document_index": number; "role_hint"?: PaperImportRole; };
+
+export type ReplacePaperImportSource = { "id": string; "document_index": number; "role_hint": PaperImportRole; };
+
+export type CreatePaperImportRequest = unknown | unknown | unknown;
+
+export type AddPaperImportSourcesRequest = { "sources": Array<CreatePaperImportSource>; };
+
+export type ReplacePaperImportSourcesRequest = { "sources": Array<ReplacePaperImportSource>; };
+
+export type PaperImportSourceRef = { "source_id": string; "file_asset_id": string; "document_index": number; "page_no"?: number; "block_id"?: string; "bbox"?: unknown; "text_start"?: number; "text_end"?: number; "ocr_confidence"?: number; };
+
+export type PaperImportSource = { "id": string; "file_asset_id": string; "document_index": number; "role_hint": PaperImportRole; "detected_role": "question" | "answer" | "solution" | "mixed" | "unknown"; "role_confidence": number; "processing_status": "pending" | "processing" | "processed" | "failed"; "original_name"?: string; "content_type"?: string; "created_at": string; };
+
+export type PaperImportQuestionCandidate = { "candidate_id": string; "question_no_raw"?: string; "question_no_normalized"?: string; "parent_question_no"?: string; "subquestion_no"?: string; "section_hint"?: string; "stem"?: string; "options": Array<string>; "question_type"?: string; "score"?: number; "knowledge_point_hints": Array<string>; "confidence": number; "source_refs": Array<PaperImportSourceRef>; "issues": Array<string>; };
+
+export type PaperImportAnswerCandidate = { "candidate_id": string; "question_no_hint"?: string; "question_no_normalized"?: string; "subquestion_no_hint"?: string; "standard_answer"?: unknown; "equivalent_answers": Array<unknown>; "tolerance"?: unknown; "confidence": number; "source_refs": Array<PaperImportSourceRef>; "issues": Array<string>; };
+
+export type PaperImportSolutionStep = { "step_no": number; "content": string; };
+
+export type PaperImportSolutionCandidate = { "candidate_id": string; "question_no_hint"?: string; "question_no_normalized"?: string; "subquestion_no_hint"?: string; "raw_text": string; "steps": Array<PaperImportSolutionStep>; "confidence": number; "source_refs": Array<PaperImportSourceRef>; "issues": Array<string>; };
+
+export type PaperImportIssue = { "code": string; "severity": "info" | "warning" | "error"; "certainty": "confirmed" | "suspected" | "unknown"; "question_no"?: string; "section"?: string; "message": string; "confidence"?: number; "source_refs": Array<PaperImportSourceRef>; "resolution_hint"?: string; };
+
+export type PaperImportAnswerKeyInput = { "standard_answer": unknown; "equivalent_answers": Array<unknown>; "tolerance": unknown; };
+
+export type PaperImportRubricPoint = { "id": string; "description": string; "score": number; "required": boolean; };
+
+export type PaperImportRubricInput = { "status": string; "max_score": number; "points": Array<PaperImportRubricPoint>; "deductions": Array<unknown>; "examples": Array<unknown>; };
+
+export type PaperImportSolutionInput = { "raw_text": string; "steps": Array<PaperImportSolutionStep>; "source_refs": Array<PaperImportSourceRef>; };
+
+export type PaperImportDraftQuestion = { "candidate_id"?: string; "answer_candidate_id"?: string; "solution_candidate_id"?: string; "source_refs": Array<PaperImportSourceRef>; "question_no": string; "question_type": string; "assessment_archetype"?: "selected_response" | "exact_text" | "numeric_expression" | "structured_steps" | "short_constructed" | "extended_response" | "diagram_graph" | "table_experiment"; "score": number; "stem": string; "knowledge_points": Array<string>; "answer_key"?: PaperImportAnswerKeyInput; "solution"?: PaperImportSolutionInput; "rubric"?: PaperImportRubricInput; "confidence": number; "issues": Array<string>; "matched_question_id"?: string; "match_status"?: "create" | "matched" | "matched_by_order" | "mismatch" | "extra" | "ambiguous"; "completeness_status"?: "complete" | "needs_review"; "human_confirmed_fields"?: Array<string>; };
+
+export type ReviewPaperImportRequest = { "questions": Array<PaperImportDraftQuestion>; };
+
+export type PaperImportJob = { "id": string; "tenant_id": string; "exam_id": string; "exam_paper_id": string; "paper_file_asset_id": string; "answer_file_asset_id": string; "status": "processing" | "review_required" | "failed" | "applied"; "subject": string; "sources": Array<PaperImportSource>; "question_candidates": Array<PaperImportQuestionCandidate>; "answer_candidates": Array<PaperImportAnswerCandidate>; "solution_candidates": Array<PaperImportSolutionCandidate>; "structured_issues": Array<PaperImportIssue>; "questions": Array<PaperImportDraftQuestion>; "issues": Array<string>; "error_code"?: string; "created_by": string; "created_at": string; "updated_at": string; "applied_at"?: string; };
+
+export type PaperImportResponse = { "import": PaperImportJob; };
+
+export type PaperImportListResponse = { "imports": Array<PaperImportJob>; };
+
 export type ProcessingRetryResponse = { "task": ProcessingWorkerTask; };
 
 export interface components {
@@ -991,6 +1035,28 @@ export interface components {
     "ProcessingExceptionResponse": ProcessingExceptionResponse;
     "ProcessingWorkerAttempt": ProcessingWorkerAttempt;
     "ProcessingWorkerTask": ProcessingWorkerTask;
+    "PaperImportRole": PaperImportRole;
+    "CreatePaperImportSource": CreatePaperImportSource;
+    "ReplacePaperImportSource": ReplacePaperImportSource;
+    "CreatePaperImportRequest": CreatePaperImportRequest;
+    "AddPaperImportSourcesRequest": AddPaperImportSourcesRequest;
+    "ReplacePaperImportSourcesRequest": ReplacePaperImportSourcesRequest;
+    "PaperImportSourceRef": PaperImportSourceRef;
+    "PaperImportSource": PaperImportSource;
+    "PaperImportQuestionCandidate": PaperImportQuestionCandidate;
+    "PaperImportAnswerCandidate": PaperImportAnswerCandidate;
+    "PaperImportSolutionStep": PaperImportSolutionStep;
+    "PaperImportSolutionCandidate": PaperImportSolutionCandidate;
+    "PaperImportIssue": PaperImportIssue;
+    "PaperImportAnswerKeyInput": PaperImportAnswerKeyInput;
+    "PaperImportRubricPoint": PaperImportRubricPoint;
+    "PaperImportRubricInput": PaperImportRubricInput;
+    "PaperImportSolutionInput": PaperImportSolutionInput;
+    "PaperImportDraftQuestion": PaperImportDraftQuestion;
+    "ReviewPaperImportRequest": ReviewPaperImportRequest;
+    "PaperImportJob": PaperImportJob;
+    "PaperImportResponse": PaperImportResponse;
+    "PaperImportListResponse": PaperImportListResponse;
     "ProcessingRetryResponse": ProcessingRetryResponse;
   };
 }

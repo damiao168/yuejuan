@@ -145,6 +145,9 @@ func SniffContentType(sample []byte) string {
 	if len(sample) == 0 {
 		return ""
 	}
+	if len(sample) >= 4 && ((sample[0] == 'I' && sample[1] == 'I' && sample[2] == 42 && sample[3] == 0) || (sample[0] == 'M' && sample[1] == 'M' && sample[2] == 0 && sample[3] == 42)) {
+		return "image/tiff"
+	}
 	return http.DetectContentType(sample)
 }
 

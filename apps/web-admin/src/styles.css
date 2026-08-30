@@ -5325,6 +5325,29 @@ select {
   gap: 14px;
 }
 
+.paper-import-dropzone .ant-upload-drag {
+  min-height: 116px;
+  background: #fafafa;
+  border-color: #cbd5e1;
+}
+
+.paper-import-dropzone .ant-upload-btn {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 20px !important;
+}
+
+.paper-import-dropzone span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.paper-import-source-list {
+  margin-top: 12px;
+  border-top: 1px solid #e5e7eb;
+}
+
 .paper-import-facts {
   display: flex;
   gap: 28px;

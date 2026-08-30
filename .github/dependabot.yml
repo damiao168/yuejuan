@@ -29,6 +29,15 @@ updates:
         update-types: ["minor", "patch"]
 
   - package-ecosystem: pip
+    directory: "/ai-services"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: pip
     directory: "/services/ocr-worker"
     schedule:
       interval: weekly

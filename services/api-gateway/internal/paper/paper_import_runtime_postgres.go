@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
@@ -16,20 +17,44 @@ func (s *PostgresStore) QueuePaperImportOCR(ctx context.Context, tenantID string
 	}
 	documents := make([]map[string]any, 0, len(assets))
 	for _, asset := range assets {
-		if asset.Role != "paper" && asset.Role != "answer" {
+		if asset.SourceID == "" || asset.DocumentIndex < 0 || !validPaperImportRole(asset.RoleHint, true) {
 			return ErrInvalidInput
 		}
 		documents = append(documents, map[string]any{
-			"role": asset.Role, "file_asset_id": asset.FileAssetID,
+			"source_id": asset.SourceID, "document_index": asset.DocumentIndex, "role_hint": asset.RoleHint, "file_asset_id": asset.FileAssetID,
 			"download_url": "/api/v1/files/" + asset.FileAssetID + "/download",
 			"content_type": asset.ContentType, "render_dpi": 220, "max_pages": 100,
 		})
 	}
-	payload, _ := json.Marshal(map[string]any{"paper_import_id": job.ID, "exam_id": job.ExamID, "documents": documents})
+	sourceRevision := paperImportSourceConfigurationHash(job.Sources)
+	payload, _ := json.Marshal(map[string]any{"paper_import_id": job.ID, "exam_id": job.ExamID, "source_revision": sourceRevision, "documents": documents})
+	idempotencyKey := "paper-import-decode:" + job.ID + ":" + contentHash(payload) + ":v2"
 	_, err := s.db.ExecContext(ctx, `INSERT INTO agent_worker_task(tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)
-VALUES($1,'layout','page-processing','paper_import_job',$2::uuid,55,$3,'paper-import-decode-v1',$4,$4,3,10,$5::uuid)
-ON CONFLICT(tenant_id,task_type,idempotency_key) DO NOTHING`, tenantID, job.ID, payload, "paper-import-decode:"+job.ID+":v1", actorID)
+VALUES($1,'layout','page-processing','paper_import_job',$2::uuid,55,$3,'paper-import-decode-v2',$4,$4,3,10,$5::uuid)
+ON CONFLICT(tenant_id,task_type,idempotency_key) DO NOTHING`, tenantID, job.ID, payload, idempotencyKey, actorID)
 	return err
+}
+
+func paperImportSourceConfigurationHash(sources []PaperImportSource) string {
+	type sourceConfiguration struct {
+		ID            string `json:"id"`
+		FileAssetID   string `json:"file_asset_id"`
+		DocumentIndex int    `json:"document_index"`
+		RoleHint      string `json:"role_hint"`
+	}
+	ordered := append([]PaperImportSource{}, sources...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].DocumentIndex == ordered[j].DocumentIndex {
+			return ordered[i].ID < ordered[j].ID
+		}
+		return ordered[i].DocumentIndex < ordered[j].DocumentIndex
+	})
+	configurations := make([]sourceConfiguration, 0, len(ordered))
+	for _, source := range ordered {
+		configurations = append(configurations, sourceConfiguration{ID: source.ID, FileAssetID: source.FileAssetID, DocumentIndex: source.DocumentIndex, RoleHint: source.RoleHint})
+	}
+	raw, _ := json.Marshal(configurations)
+	return contentHash(raw)
 }
 
 func (s *PostgresStore) CompletePaperImportDecode(ctx context.Context, tenantID, importID string, input PaperImportDecodeResult) error {
@@ -42,7 +67,7 @@ func (s *PostgresStore) CompletePaperImportDecode(ctx context.Context, tenantID,
 	}
 	defer tx.Rollback()
 	result := mapFromJSON(input)
-	if _, err = workerruntime.CompleteTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.CompleteInput{LeaseToken: input.LeaseToken, ResultSchemaVersion: "paper-import-decode-result-v1", Result: result, DurationMS: input.DurationMS}); err != nil {
+	if _, err = workerruntime.CompleteTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.CompleteInput{LeaseToken: input.LeaseToken, ResultSchemaVersion: "paper-import-decode-result-v2", Result: result, DurationMS: input.DurationMS}); err != nil {
 		return err
 	}
 	var examID, actorID string
@@ -54,15 +79,15 @@ func (s *PostgresStore) CompletePaperImportDecode(ctx context.Context, tenantID,
 	}
 	pages := make([]map[string]any, 0, len(input.Pages))
 	for _, page := range input.Pages {
-		if (page.Role != "paper" && page.Role != "answer") || page.PageNo <= 0 || page.FileAssetID == "" {
+		if page.SourceID == "" || page.DocumentIndex < 0 || page.PageNo <= 0 || page.FileAssetID == "" {
 			return ErrInvalidInput
 		}
-		pages = append(pages, map[string]any{"role": page.Role, "page_no": page.PageNo, "file_asset_id": page.FileAssetID, "download_url": "/api/v1/files/" + page.FileAssetID + "/download", "sha256": page.SHA256})
+		pages = append(pages, map[string]any{"source_id": page.SourceID, "document_index": page.DocumentIndex, "page_no": page.PageNo, "file_asset_id": page.FileAssetID, "download_url": "/api/v1/files/" + page.FileAssetID + "/download", "sha256": page.SHA256})
 	}
 	payload, _ := json.Marshal(map[string]any{"paper_import_id": importID, "exam_id": examID, "engine": "paddleocr", "engine_version": "pp-ocrv5", "pages": pages})
 	_, err = tx.ExecContext(ctx, `INSERT INTO agent_worker_task(tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)
-VALUES($1,'ocr','ocr','paper_import_job',$2::uuid,55,$3,'paper-import-ocr-v1',$4,$4,3,10,$5::uuid)
-ON CONFLICT(tenant_id,task_type,idempotency_key) DO NOTHING`, tenantID, importID, payload, "paper-import-ocr:"+importID+":v1", actorID)
+VALUES($1,'ocr','ocr','paper_import_job',$2::uuid,55,$3,'paper-import-ocr-v2',$4,$4,3,10,$5::uuid)
+ON CONFLICT(tenant_id,task_type,idempotency_key) DO NOTHING`, tenantID, importID, payload, "paper-import-ocr:"+importID+":"+input.TaskID+":v2", actorID)
 	if err != nil {
 		return err
 	}
@@ -78,7 +103,7 @@ func (s *PostgresStore) CompletePaperImportOCR(ctx context.Context, tenantID, im
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = workerruntime.CompleteTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.CompleteInput{LeaseToken: input.LeaseToken, ResultSchemaVersion: "paper-import-ocr-result-v1", Result: mapFromJSON(input), DurationMS: input.DurationMS}); err != nil {
+	if _, err = workerruntime.CompleteTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.CompleteInput{LeaseToken: input.LeaseToken, ResultSchemaVersion: "paper-import-ocr-result-v2", Result: mapFromJSON(input), DurationMS: input.DurationMS}); err != nil {
 		return err
 	}
 	var status string

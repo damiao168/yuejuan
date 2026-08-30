@@ -1,0 +1,52 @@
+import { describe, expect, it } from "vitest";
+import type { PaperImportSource } from "../../api/papers";
+import { filesFromClipboard, hasBlockingImportIssues, isSupportedPaperImportFile, markImportFieldConfirmed, orderedSourcesAfterMove, orderedSourcesAfterRemoval, paperImportSummary, sourcesAfterRoleChange } from "./materials";
+
+describe("paper import materials", () => {
+  it("accepts every supported document and image extension", () => {
+    for (const name of ["paper.pdf", "answer.docx", "a.png", "b.jpg", "c.jpeg", "d.tif", "e.tiff"]) {
+      expect(isSupportedPaperImportFile(new File(["x"], name))).toBe(true);
+    }
+    expect(isSupportedPaperImportFile(new File(["x"], "notes.txt"))).toBe(false);
+  });
+
+  it("reorders sources with contiguous stable indexes", () => {
+    const source = (id: string, document_index: number): PaperImportSource => ({ id, document_index, file_asset_id: id, role_hint: "auto", detected_role: "unknown", role_confidence: 0, processing_status: "processed" });
+    expect(orderedSourcesAfterMove([source("a", 0), source("b", 1), source("c", 2)], "b", -1).map((item) => [item.id, item.document_index])).toEqual([["b", 0], ["a", 1], ["c", 2]]);
+    expect(orderedSourcesAfterRemoval([source("a", 0), source("b", 1), source("c", 2)], "b").map((item) => [item.id, item.document_index])).toEqual([["a", 0], ["c", 1]]);
+    expect(sourcesAfterRoleChange([source("a", 0)], "a", "solution")[0].role_hint).toBe("solution");
+  });
+
+  it("reads image items and gives unnamed screenshots an auditable filename", () => {
+    const image = new File(["x"], "image.png", { type: "image/png" });
+    const files = filesFromClipboard({ files: [] as unknown as FileList, items: [{ kind: "file", getAsFile: () => image }] as unknown as DataTransferItemList }, new Date(2026, 7, 30, 13, 55, 0));
+    expect(files).toHaveLength(1);
+    expect(files[0].name).toBe("clipboard-20260830-135500-01.png");
+  });
+
+  it("accepts multiple clipboard images in their original order", () => {
+    const first = new File(["a"], "image.png", { type: "image/png" });
+    const second = new File(["b"], "image.png", { type: "image/png" });
+    const files = filesFromClipboard({ files: [first, second] as unknown as FileList, items: [] as unknown as DataTransferItemList }, new Date(2026, 7, 30, 13, 55, 0));
+    expect(files.map((file) => file.name)).toEqual(["clipboard-20260830-135500-01.png", "clipboard-20260830-135500-02.png"]);
+  });
+
+  it("does not duplicate a clipboard file exposed through both files and items", () => {
+    const image = new File(["a"], "capture.png", { type: "image/png" });
+    const files = filesFromClipboard({ files: [image] as unknown as FileList, items: [{ kind: "file", getAsFile: () => new File(["a"], "capture.png", { type: "image/png" }) }] as unknown as DataTransferItemList });
+    expect(files).toHaveLength(1);
+  });
+
+  it("tracks only fields changed by a human", () => {
+    const draft = { question_no: "1", question_type: "essay", score: 10, stem: "题干", knowledge_points: [], confidence: 1, issues: [], source_refs: [] };
+    const changed = markImportFieldConfirmed(draft, "score", { score: 12 });
+    expect(changed.score).toBe(12);
+    expect(changed.human_confirmed_fields).toEqual(["score"]);
+  });
+
+  it("summarizes partial imports and blocks apply without questions", () => {
+    const base = { id: "i", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "", status: "review_required" as const, subject: "math", sources: [], question_candidates: [], answer_candidates: [{ candidate_id: "a1", equivalent_answers: [], confidence: 1, source_refs: [], issues: [] }], solution_candidates: [], structured_issues: [], questions: [], issues: [], created_at: "2026-08-30T00:00:00Z" };
+    expect(paperImportSummary(base).answers).toBe(1);
+    expect(hasBlockingImportIssues(base)).toBe(true);
+  });
+});

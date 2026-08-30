@@ -1,0 +1,18 @@
+{
+  "case_id": "replace-with-desensitized-case-id",
+  "subject": "mathematics",
+  "material_types": ["answer_only"],
+  "image_conditions": ["clear"],
+  "sources": [
+    {
+      "document_index": 0,
+      "path": "source-01.pdf",
+      "format": "text_pdf",
+      "expected_role": "answer",
+      "requires_ocr": false
+    }
+  ],
+  "blueprint": null,
+  "annotation_version": "v1",
+  "desensitized_by": "replace-with-reviewer-id"
+}

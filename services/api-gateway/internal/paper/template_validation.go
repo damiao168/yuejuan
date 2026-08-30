@@ -15,15 +15,6 @@ const (
 	maxTemplateRegions = 2000
 )
 
-var subjectiveQuestionTypes = map[string]bool{
-	"formula":      true,
-	"short_answer": true,
-	"calculation":  true,
-	"essay":        true,
-	"discussion":   true,
-	"coding":       true,
-}
-
 func ValidateTemplateInput(name string, pageCount int, layout TemplateLayout) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("template name is required")
@@ -119,15 +110,19 @@ func buildReadiness(total float64, classCount int, studentCount int, papers []Pa
 	rubricsOK := len(questions) > 0
 	for _, question := range questions {
 		scoreTotal += question.Score
-		if question.AnswerKey == nil || emptyAnswer(question.AnswerKey.StandardAnswer) {
+		archetype := question.AssessmentArchetype
+		if archetype == "" {
+			archetype = defaultPaperImportArchetype(question.QuestionType)
+		}
+		if questionRequiresStandardAnswerForArchetype(archetype) && (question.AnswerKey == nil || emptyAnswer(question.AnswerKey.StandardAnswer)) {
 			answersOK = false
 		}
-		if subjectiveQuestionTypes[question.QuestionType] && (question.Rubric == nil || question.Rubric.Status != "locked" || !scoreEqual(question.Rubric.MaxScore, question.Score)) {
+		if questionRequiresRubricForArchetype(archetype) && (question.Rubric == nil || question.Rubric.Status != "locked" || !scoreEqual(question.Rubric.MaxScore, question.Score)) {
 			rubricsOK = false
 		}
 	}
 	add("total_score", "题目总分", len(questions) > 0 && scoreEqual(scoreTotal, total), fmt.Sprintf("题目合计 %.2f 分，考试总分 %.2f 分", scoreTotal, total), "questions")
-	add("answer_keys", "标准答案", answersOK, "每道题都需要标准答案", "questions")
+	add("answer_keys", "标准答案", answersOK, "需要唯一或参考答案的题型必须配置标准答案；开放写作题可仅使用评分细则", "questions")
 	add("rubrics", "主观题 Rubric", rubricsOK, "所有主观题需要锁定且分值匹配的 Rubric", "questions")
 
 	var locked *AnswerSheetTemplate
