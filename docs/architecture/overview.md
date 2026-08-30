@@ -1,62 +1,42 @@
 # Architecture Overview
 
-## 当前阶段
+本文描述仓库当前实现，不作为未来服务拆分清单。
 
-本文件属于 `STORY-001 企业级项目骨架`。它只定义企业级系统边界和目录职责，不代表这些服务已经实现。
-
-## 目标架构
+## 运行拓扑
 
 ```text
-Web Admin / Teacher Portal / Student Portal / Desktop Client
-  -> API Gateway
-  -> Auth / Tenant / Exam / Paper / Submission / Grading / Report / Appeal / Audit Services
-  -> PostgreSQL / Redis / MinIO / Qdrant / Observability
-  -> AI Orchestrator
-      -> OCR / Layout / Grading / Evidence / Consistency / Analytics Agents
+Web Admin / Student Portal / Desktop Client
+  -> services/api-gateway (Go modular monolith)
+       -> internal domain modules
+       -> PostgreSQL / Redis / MinIO / Qdrant / Observability
+       -> asynchronous worker tasks
+            -> OCR Worker
+            -> Page Processing Worker
+            -> Image Quality Worker
+            -> Subjective Grading Worker
+            -> Math Verification Worker
+            -> controlled AI runtimes
 ```
 
-## 应用层
+## 业务后端
 
-- `apps/web-admin`：学校、机构、阅卷、成绩、报告、审计的管理后台。
-- `apps/desktop-client`：Windows EXE 客户端，承担扫描工作站、离线阅卷和同步队列。
-- `apps/teacher-portal`：教师 Web 端预留，后续可承接轻量阅卷和报告查看。
-- `apps/student-portal`：学生端预留，后续承接成绩查看、反馈和申诉。
+`services/api-gateway` 是统一 HTTP 入口，也是当前核心业务应用运行时。认证、组织、考试、试卷、答卷、阅卷、复核、质量、成绩发布、申诉、报告、审计、AI 治理和数学理解等能力在 `services/api-gateway/internal/*` 内按领域模块化。
 
-## 服务层
+这些模块共享进程和基础设施，通过明确的 Store、Service、Handler 与路由边界协作；它们不是一组已经独立部署的网络微服务。
 
-- `api-gateway`：认证鉴权、限流、请求 ID、租户上下文、统一错误。
-- `auth-service`：登录、会话、角色、权限、OIDC/LDAP/SAML 预留。
-- `tenant-service`：租户、学校、校区、年级、班级、学生边界。
-- `exam-service`：考试、作业、状态流转和发布策略。
-- `paper-service`：试卷、题目、Rubric、标准答案、版本审批。
-- `submission-service`：答卷、页、质量状态、匿名码、采集流程。
-- `grading-service`：AI 建议分、人工复核、双评、仲裁、最终分。
-- `report-service`：学生、教师、管理者报告与导出。
-- `appeal-service`：学生申诉、处理流转、改分闭环。
-- `audit-service`：不可关闭的审计日志和导出留痕。
-- `notification-service`：站内消息、任务提醒和后续 webhook。
+## 独立 Worker
 
-## AI 服务层
-
-- `orchestrator`：可审计、可重试、可回放的 Agent 工作流编排。
-- `ocr-service`：OCR 服务接口，第一版可提供明确标记的 stub。
-- `layout-service`：版面解析、答题区域识别和切分预留。
-- `grading-agent-service`：客观题、填空题、主观题建议分服务边界。
-- `evidence-agent-service`：采分点证据校验。
-- `consistency-agent-service`：同类答案、阅卷员偏差和异常分检查。
-- `analytics-agent-service`：学情诊断和考试质量分析。
+`services/ocr-worker`、`services/page-processing-worker`、`services/image-quality-worker`、`services/subjective-grading-worker` 和 `services/math-verification-worker` 承担异步、模型或图像计算任务。独立进程边界用于不同运行时、资源隔离、长任务执行和按计算负载扩缩容。
 
 ## 数据与基础设施
 
-- PostgreSQL：核心业务数据、状态流转、审计索引。
-- Redis：缓存、任务状态、分布式锁、限流。
-- MinIO/S3：试卷、答卷图片、报告和附件。
-- Qdrant：样例答案、相似答案检索和后续向量能力。
-- Docker Compose：本地私有化演示环境。
-- Kubernetes/Helm：企业部署预留。
+- PostgreSQL：核心业务数据、状态流转、审计和任务事实。
+- Redis：缓存、限流、租约和异步协调。
+- MinIO/S3：试卷、答卷图像、报告与附件。
+- Qdrant：受控的向量检索能力。
+- Prometheus/Grafana：指标与运行监控。
+- Docker Compose：当前私有化部署与本地集成环境。
 
-## 第一版必须实现与预留
+## 拆分原则
 
-第一版必须实现：多租户、权限、审计、考试、试卷、答卷、OCR 任务边界、人工复核、双评仲裁、成绩发布、申诉、报告、私有化部署。
-
-第一版可预留接口：真实 OCR 模型、复杂公式识别、远程监考、高级模型调度、跨区域灾备。
+新增网络服务必须由独立扩缩容、故障域、安全边界、资源需求或发布生命周期等真实运行约束驱动。业务领域划分本身不是拆成微服务的充分理由。

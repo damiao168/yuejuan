@@ -9,21 +9,16 @@
 └───────────────────────┬──────────────────────────────────────┘
                         │ HTTPS / WebSocket
 ┌───────────────────────▼──────────────────────────────────────┐
-│ API Gateway                                                  │
-│  AuthN/AuthZ │ Tenant Context │ Rate Limit │ Request ID       │
+│ Go Modular Monolith (`services/api-gateway`)                 │
+│  HTTP Entry │ Domain Modules │ AuthZ │ Workflow Coordination │
 └──────────────┬───────────────────────────────────────────────┘
-               │ REST / gRPC / Internal Events
+               │ In-process domain calls / asynchronous jobs
 ┌──────────────▼───────────────────────────────────────────────┐
-│ Business Services                                             │
-│ Auth │ Tenant │ Exam │ Paper │ Submission │ Grading │ Report │
-│ Appeal │ Audit │ Notification                               │
+│ Independent Compute Workers                                  │
+│ OCR │ Page Processing │ Image Quality │ Subjective Grading   │
+│ Math Verification │ Controlled AI Runtimes                   │
 └──────────────┬───────────────────────────────────────────────┘
-               │ Events / Jobs / Signed file URLs
-┌──────────────▼───────────────────────────────────────────────┐
-│ AI Agent Layer                                                │
-│ Orchestrator │ OCR │ Layout │ Grading │ Evidence │ Quality   │
-└──────────────┬───────────────────────────────────────────────┘
-               │
+               │ Jobs / leases / signed file URLs
 ┌──────────────▼───────────────────────────────────────────────┐
 │ Data & Infra                                                  │
 │ PostgreSQL │ Redis │ MinIO/S3 │ Qdrant │ Logs │ Metrics      │
@@ -78,38 +73,21 @@ Windows EXE 推荐 Tauri 2 + React + TypeScript。
 
 可预留：真实扫描仪驱动、摄像头监考、锁屏、复杂原生插件。
 
-## 4. 后端服务架构
+## 4. 后端运行架构
 
-后端建议使用 Go。第一阶段可从模块化单体或少量服务起步，目录保留微服务边界，避免过早拆分造成复杂度失控。
+`services/api-gateway` 是当前 Go 模块化单体：它既是统一 HTTP 入口，也是核心业务应用运行时。认证、组织、考试、试卷、答卷、阅卷、复核、质量、成绩发布、申诉、报告、审计、AI 治理与数学理解等领域位于 `services/api-gateway/internal/*`，通过进程内模块边界协作。
 
-服务职责：
+OCR、页面处理、图像质量、主观题评分和数学验证使用独立 Worker。它们通过持久任务、租约、幂等结果回写和受控文件访问与 Go 后端协作。独立进程边界服务于不同运行时、资源隔离、长任务和模型/图像计算，不代表每个业务领域都应拆成网络微服务。
 
-- `api-gateway`：认证、鉴权、限流、租户上下文、统一错误、请求 ID。
-- `auth-service`：账号、密码 hash、会话/JWT、角色、权限、OIDC/LDAP/SAML 预留。
-- `tenant-service`：租户、学校、校区、年级、班级、学生、教师绑定。
-- `exam-service`：考试创建、状态流转、适用班级、发布策略。
-- `paper-service`：试卷文件、题目、答题区域、标准答案、Rubric 版本。
-- `submission-service`：答卷、页、质量标记、匿名码、采集流程。
-- `grading-service`：AI 建议分、人工分、双评、仲裁、最终分。
-- `report-service`：报告生成、导出、水印和分享。
-- `appeal-service`：申诉提交、处理、改分闭环。
-- `audit-service`：审计日志、不可篡改链、导出记录。
-- `notification-service`：站内消息、任务提醒、异步通知。
-
-通信方式：
-
-- 外部客户端到 Gateway：HTTPS REST，必要时 WebSocket。
-- Gateway 到服务：第一版可用内部 REST；高并发任务可引入 gRPC。
-- 服务间异步任务：Redis Streams、BullMQ、Celery、Temporal 或等价队列；第一版可先使用 Redis 队列抽象。
-- AI 服务调用：后端通过 Orchestrator 创建 AgentJob，不让前端直接调用 AI 服务。
+只有出现独立扩缩容、独立故障域、独立安全边界、显著不同资源需求或独立发布生命周期时，才新增可部署服务。
 
 ## 5. AI Agent 服务架构
 
 AI Agent 是受控任务节点，不是聊天式多角色系统。
 
 ```text
-Grading Service
-  -> Orchestrator
+API Gateway grading module
+  -> controlled worker runtime
       -> AgentJob
           -> OCR Agent
           -> Layout Agent
