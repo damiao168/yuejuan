@@ -1,9 +1,20 @@
 # EduGrade 当前能力与验证状态
 
-更新日期：2026-08-16
-适用范围：当前工作树（含尚未提交的 A01–A26 实现）；不是对 GitHub `main` 或学校生产环境的声明。
+- 状态更新时间：2026-08-30
+- 审阅基线：`56cf04466b163b1194400340165f338969fe0e99`（本轮修改前核验的 GitHub `main` HEAD，用于界定审阅起点，不是“本文档所在提交”）
+- 适用范围：GitHub `main` 中已提交的代码、自动化验证入口和本文已记录的验证证据。
 
 本文件只记录代码、自动验证和明确的外部边界。它不把 Mock、协议模拟器、静态检查或本机构建写成真实设备、真实模型质量或学校现场验收。
+
+本文件不代表学校生产环境验收、真实教师现场效果、真实模型准确率、真实扫描设备兼容性或外部 Provider SLA。
+
+## 证据分层
+
+| 证据类型 | 本文件可以声明 | 本文件不能据此声明 |
+| --- | --- | --- |
+| Repository implementation | 代码、配置、路由、数据结构或运行入口已经存在 | 对应能力已在生产环境有效运行 |
+| Automated verification | 仓库存在单元测试、集成测试、PostgreSQL E2E、Vitest、Playwright、类型检查、构建、安全检查或 CI 门禁 | 真实学校、教师、设备、模型、网络或容量已经验收 |
+| External evidence | 已明确留存的学校试点、教师评审、物理设备、真实模型或预生产运行证据 | 可以用 Mock、synthetic 数据或代码存在替代外部验证 |
 
 ## 状态口径
 
@@ -39,9 +50,22 @@
 | Windows 扫描工作站 | 已实现，待外部验证 | Tauri SQLite/AES-GCM/系统凭据与本地 Spool 已实现；WIA 设备发现/Profile/预检可用，直接采集能力不对未经验证的设备作保证 |
 | 私有化部署与恢复 | 已实现，待外部验证 | Compose 与运维入口存在；恢复演练、容量基线、告警闭环和长时间运行必须在预生产留存证据 |
 
-## 最近一次本机验证快照
+## 当前自动化验证入口
 
-2026-08-13 在 Windows 工作区执行的定向验证：
+审阅基线中的 `.github/workflows/ci.yml` 为 Pull Request 和 `main` push 配置了以下入口：
+
+- Web/Node：OpenAPI SDK 生成一致性、breaking-change gate、依赖审计、Biome lint、工作区 typecheck、Web Admin Vitest、工作区构建、生产路由检查、Desktop 前端测试、Story checks、基于 API mock 的 Playwright 流程以及 Lab 测试/开发门禁。
+- Go：模块校验、格式检查、全包测试、关键并发原语 race test、`go vet`、staticcheck、govulncheck、PostgreSQL 工作流 E2E 与 Lab/main 边界检查。
+- Python：依赖一致性与审计、Ruff，以及 OCR、图像质量、页面处理、主观题评分、数学验证和 MathBench 的测试入口。
+- Desktop Rust：格式、编译、测试、Clippy 和恢复脚本语法检查。
+
+这些是 CI 配置事实，不是对某次 GitHub Actions 运行结果的推测；具体成功或失败必须以对应 Actions 记录为准。
+
+Student Portal 在审阅基线中已经有 `vitest run` 测试入口和测试文件，但该基线的 CI 尚未显式执行 `npm --workspace apps/student-portal run test`，因此本文不将其写成已由 CI 强制执行。
+
+## 历史本机验证快照
+
+以下内容是 2026-08-13 在当时 Windows 工作区执行的定向验证，不代表当前 `main` 的全部测试状态：
 
 - Web：`npm --workspace @edugrade/web-admin run test`（`32` 项）、`typecheck`、`build`、`check:production-routes`、`check:story053`、`check:story057`、`check:story061`、`check:story063` 通过；Exam Workspace 在 `1366×768`、`1440×900`、`1920×1080` 的 Playwright 视觉回归与无横向溢出检查通过；构建仅有包体积提示。
 - 阅卷 E2E：20 份跨学科夹具以键盘完成领取、草稿保存、刷新恢复、提交并切换下一份；双浏览器窗口草稿 revision conflict 均通过。均为状态化 API mock 浏览器回归，不冒充真实学校数据链路。
@@ -75,5 +99,8 @@ MATH-00～08 的软件底座已接线：版本化数学工件、现有 OCR Worke
 2026-08-29 MATH-10 定向验证：`image-quality-worker` 已接入 deterministic skew、page-border、perspective 与 shadow geometry measurement，并仅对满足安全条件的小角度 skew 执行扩大画布、可追踪矩阵的 deskew。未自动 perspective rectify、shadow removal 或 page crop，未实现 Answer Perception，也未验证真实学校图像准确率。
 
 - 新增“已实现”必须同时列出代码接线、验证入口和未覆盖边界。
-- Mock、stub、合成数据和外部模型协议模拟器必须显式标识，不得写成真实模型或现场结果。
-- 发布到 GitHub、合并到 `main` 或远端 CI 通过是独立事实；本工作树状态不会自动同步到其中任何一个。
+- 必须区分 Repository implementation、Automated verification 和 External evidence，不得用前两类替代外部验收。
+- 历史本机快照必须保留日期和当时边界，不得改写成当前 CI 状态。
+- Mock、stub、synthetic 数据和外部模型协议模拟器必须显式标识，不得写成真实模型或现场结果。
+- 如填写 commit，只能作为明确核验过的审阅/验证基线；不得声称它是随后修改文档所在的提交。
+- 远端 CI 是否通过必须以对应 Actions 运行记录为准，不根据 workflow 存在或本机结果推断。
