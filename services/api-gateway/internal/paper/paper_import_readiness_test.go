@@ -27,3 +27,18 @@ func TestReadinessUsesAssessmentArchetypeOverLegacyQuestionType(t *testing.T) {
 		}
 	}
 }
+
+func TestReadinessConfigurationHashIsStableWhenDefaultArchetypeIsMaterialized(t *testing.T) {
+	implicit := Question{
+		ID: "q1", QuestionNo: "1", QuestionType: "single_choice", Score: 1,
+		AnswerKey: &AnswerKey{StandardAnswer: "A"},
+	}
+	explicit := implicit
+	explicit.AssessmentArchetype = "selected_response"
+
+	beforeConfirmation := buildReadiness(1, 1, 1, []Paper{{ID: "paper"}}, []Question{implicit}, nil)
+	afterFreezeTrigger := buildReadiness(1, 1, 1, []Paper{{ID: "paper"}}, []Question{explicit}, nil)
+	if beforeConfirmation.ConfigurationHash != afterFreezeTrigger.ConfigurationHash {
+		t.Fatalf("materializing the effective archetype changed readiness hash: before=%s after=%s", beforeConfirmation.ConfigurationHash, afterFreezeTrigger.ConfigurationHash)
+	}
+}

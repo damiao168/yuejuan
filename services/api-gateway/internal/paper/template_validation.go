@@ -105,15 +105,15 @@ func buildReadiness(total float64, classCount int, studentCount int, papers []Pa
 	add("paper_file", "试卷文件", len(papers) > 0, fmt.Sprintf("已登记 %d 个试卷版本", len(papers)), "paper")
 	add("questions", "题目结构", len(questions) > 0, fmt.Sprintf("已配置 %d 道题", len(questions)), "questions")
 
+	canonicalQuestions := append([]Question(nil), questions...)
 	scoreTotal := 0.0
-	answersOK := len(questions) > 0
-	rubricsOK := len(questions) > 0
-	for _, question := range questions {
+	answersOK := len(canonicalQuestions) > 0
+	rubricsOK := len(canonicalQuestions) > 0
+	for index := range canonicalQuestions {
+		question := &canonicalQuestions[index]
 		scoreTotal += question.Score
-		archetype := question.AssessmentArchetype
-		if archetype == "" {
-			archetype = defaultPaperImportArchetype(question.QuestionType)
-		}
+		archetype := readinessAssessmentArchetype(*question)
+		question.AssessmentArchetype = archetype
 		if questionRequiresStandardAnswerForArchetype(archetype) && (question.AnswerKey == nil || emptyAnswer(question.AnswerKey.StandardAnswer)) {
 			answersOK = false
 		}
@@ -161,8 +161,34 @@ func buildReadiness(total float64, classCount int, studentCount int, papers []Pa
 		Papers       []Paper
 		Questions    []Question
 		Templates    []AnswerSheetTemplate
-	}{total, classCount, studentCount, papers, questions, templates}
+	}{total, classCount, studentCount, papers, canonicalQuestions, templates}
 	return ReadinessResult{Ready: ready, ConfigurationHash: stableContentHash(configuration), Checks: checks}
+}
+
+// readinessAssessmentArchetype mirrors the default persisted by
+// assessment_freeze_exam_on_ready. Canonicalizing the effective value before
+// hashing keeps a readiness confirmation valid when that trigger materializes
+// an otherwise implicit assessment configuration.
+func readinessAssessmentArchetype(question Question) string {
+	if archetype := strings.TrimSpace(question.AssessmentArchetype); archetype != "" {
+		return archetype
+	}
+	switch question.QuestionType {
+	case "single_choice", "multiple_choice", "true_false":
+		return "selected_response"
+	case "fill_blank":
+		return "exact_text"
+	case "numeric", "formula":
+		return "numeric_expression"
+	case "calculation":
+		return "structured_steps"
+	case "short_answer":
+		return "short_constructed"
+	case "essay", "discussion":
+		return "extended_response"
+	default:
+		return "structured_steps"
+	}
 }
 
 func emptyAnswer(value any) bool {
