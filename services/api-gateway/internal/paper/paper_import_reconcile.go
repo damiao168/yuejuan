@@ -276,10 +276,6 @@ func reconcilePaperImportCandidates(questions []QuestionCandidate, answers []Ans
 	return drafts, dedupePaperImportIssues(issues)
 }
 
-func questionRequiresStandardAnswer(questionType string) bool {
-	return questionRequiresStandardAnswerForArchetype(defaultPaperImportArchetype(questionType))
-}
-
 func questionRequiresStandardAnswerForArchetype(archetype string) bool {
 	switch archetype {
 	case "extended_response":
@@ -287,10 +283,6 @@ func questionRequiresStandardAnswerForArchetype(archetype string) bool {
 	default:
 		return true
 	}
-}
-
-func questionRequiresRubric(questionType string) bool {
-	return questionRequiresRubricForArchetype(defaultPaperImportArchetype(questionType))
 }
 
 func questionRequiresRubricForArchetype(archetype string) bool {
