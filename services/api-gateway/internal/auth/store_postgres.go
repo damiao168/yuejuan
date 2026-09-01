@@ -467,7 +467,7 @@ RETURNING id::text
 	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO user_role (tenant_id,user_id,role_id,data_scope,deleted_at)
-VALUES ($1::uuid,$2::uuid,$3::uuid,jsonb_build_object('scope',$4),NULL)
+VALUES ($1::uuid,$2::uuid,$3::uuid,jsonb_build_object('scope',$4::text),NULL)
 ON CONFLICT (tenant_id,user_id,role_id) DO UPDATE SET data_scope=EXCLUDED.data_scope,deleted_at=NULL,updated_at=now()
 `, tenantID, userID, roleID, scope); err != nil {
 		return err

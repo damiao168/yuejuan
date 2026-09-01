@@ -332,6 +332,21 @@ WHERE tenant.code = $1 AND role.code = 'school_admin' AND permission.code = 'ten
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `
+WITH canonical_codes AS (
+  SELECT source_permission.code
+  FROM role source_role
+  JOIN role_permission source_assignment
+    ON source_assignment.tenant_id = source_role.tenant_id
+   AND source_assignment.role_id = source_role.id
+   AND source_assignment.deleted_at IS NULL
+  JOIN permission source_permission
+    ON source_permission.tenant_id = source_assignment.tenant_id
+   AND source_permission.id = source_assignment.permission_id
+   AND source_permission.deleted_at IS NULL
+  WHERE source_role.tenant_id = '00000000-0000-0000-0000-000000000001'::uuid
+    AND source_role.code = 'school_admin'
+    AND source_role.deleted_at IS NULL
+)
 UPDATE role_permission assignment
 SET deleted_at = now()
 FROM role, permission, tenant
@@ -342,6 +357,7 @@ WHERE assignment.tenant_id = role.tenant_id
   AND tenant.id = assignment.tenant_id
   AND tenant.code = $1
   AND role.code = 'school_admin'
+  AND permission.code IN (SELECT code FROM canonical_codes)
 	`, legacyTenantCode); err != nil {
 		t.Fatalf("soft-delete legacy RBAC rows: %v", err)
 	}
