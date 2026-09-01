@@ -261,7 +261,7 @@ func (s *PostgresStore) ReplacePaperImportSources(ctx context.Context, tenantID,
 		issues, _ := json.Marshal([]string{"已删除全部考试资料，请重新上传正确的资料"})
 		_, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='failed',error_code='paper_import_no_sources',issues=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, id, issues)
 	} else {
-		_, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='processing',error_code=NULL,issues='[]'::jsonb,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, id)
+		_, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='processing',error_code='',issues='[]'::jsonb,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, id)
 	}
 	if err != nil {
 		return PaperImportJob{}, err

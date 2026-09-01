@@ -326,7 +326,12 @@ WHERE tenant.code = $1 AND role.code = 'school_admin' AND permission.code = 'ten
 `, legacyTenantCode); err != nil {
 		t.Fatalf("seed tenant-specific school administrator grant: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin RBAC cleanup transaction: %v", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
 UPDATE role_permission assignment
 SET deleted_at = now()
 FROM role, permission, tenant
@@ -337,7 +342,10 @@ WHERE assignment.tenant_id = role.tenant_id
   AND tenant.id = assignment.tenant_id
   AND tenant.code = $1
   AND role.code = 'school_admin'
-  AND permission.code = 'exam:manage';
+	`, legacyTenantCode); err != nil {
+		t.Fatalf("soft-delete legacy RBAC rows: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
 UPDATE permission
 SET deleted_at = now()
 FROM tenant
@@ -345,7 +353,10 @@ WHERE permission.tenant_id = tenant.id
   AND tenant.code = $1
   AND permission.code = 'exam:manage'
 `, legacyTenantCode); err != nil {
-		t.Fatalf("soft-delete legacy RBAC rows: %v", err)
+		t.Fatalf("soft-delete legacy exam permission: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit RBAC cleanup transaction: %v", err)
 	}
 	applyBackfill()
 

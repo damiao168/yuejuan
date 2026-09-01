@@ -118,6 +118,10 @@ JOIN question_row q ON q.exam_id=e.id
 	if len(reordered.Sources) != 2 || reordered.Sources[0].FileAssetID != answerFileID || reordered.Sources[1].FileAssetID != paperFileID {
 		t.Fatalf("PostgreSQL source order was not preserved: %#v", reordered.Sources)
 	}
+	var errorCode string
+	if err := db.QueryRowContext(ctx, `SELECT error_code FROM paper_import_job WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, reorderJob.ID).Scan(&errorCode); err != nil || errorCode != "" {
+		t.Fatalf("replacing sources must clear error_code to empty string: %q (%v)", errorCode, err)
+	}
 }
 
 func postgresPaperImportDraft(number, kind string, score float64) paper.PaperImportDraftQuestion {
