@@ -47,7 +47,7 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	db := e2eOpenPostgresTestDB(t, dsn)
 	e2eApplyPostgresMigrations(t, db)
 	e2eAssertSchoolAdminRBACBackfill(t, db)
-	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin", "teacher", "grader", "arbitrator", "student"})
+	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin", "school_admin", "teacher", "grader", "student"})
 	e2eActivatePostgresUsers(t, db, "platform", []string{"platform_admin"})
 	router := e2ePostgresRouter(db)
 	suffix := time.Now().UTC().Format("20060102150405.000000000")
@@ -62,8 +62,8 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 		t.Fatalf("lookup demo tenant: %v", err)
 	}
 	graderToken := e2eLoginWithTenant(t, router, "demo", "grader", "ChangeMe123!")
-	appealReviewerID := e2eLookupUserID(t, db, "demo", "arbitrator")
-	appealReviewerToken := e2eLoginWithTenant(t, router, "demo", "arbitrator", "ChangeMe123!")
+	appealReviewerID := teacherID
+	appealReviewerToken := teacherToken
 
 	provisionedAdminUsername := "story041_admin_" + strings.ReplaceAll(suffix, ".", "_")
 	tenant := e2ePostJSON(t, router, http.MethodPost, "/api/v1/tenants", platformToken, `{"name":"Story 041 Synthetic Tenant `+suffix+`","code":"story041-`+suffix+`","admin_username":"`+provisionedAdminUsername+`","admin_display_name":"Story 041 School Admin","admin_password":"Story041Admin!"}`, http.StatusCreated)["tenant"].(map[string]any)
@@ -72,6 +72,8 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	school := e2ePostJSON(t, router, http.MethodPost, "/api/v1/schools", adminToken, `{"name":"Story 041 Synthetic School","code":"story041-`+suffix+`"}`, http.StatusCreated)["school"].(map[string]any)
 	schoolID := e2eString(t, school, "id")
+	e2eBindPostgresSchoolAdmin(t, db, "school_admin", schoolID)
+	schoolAdminToken := e2eLoginWithTenant(t, router, "demo", "school_admin", "ChangeMe123!")
 	evaluationKey := "pipeline-" + strings.ReplaceAll(suffix, ".", "-")
 	evaluation := e2ePostJSON(t, router, http.MethodPost, "/api/v1/grading-evaluations", adminToken, `{"key":"`+evaluationKey+`","display_name":"Pipeline attribution E2E","model_reference":"local-shadow-v1","prompt_version":"prompt-v1","rubric_version":"rubric-v1","dataset_reference":"authorized-pipeline-e2e","dataset_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`, http.StatusCreated)["evaluation_run"].(map[string]any)
 	evaluationID := e2eString(t, evaluation, "id")
@@ -90,6 +92,9 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	class := e2ePostJSON(t, router, http.MethodPost, "/api/v1/classes", adminToken, `{"school_id":"`+schoolID+`","grade_id":"`+gradeID+`","name":"Story 041 Class","code":"story041-`+suffix+`"}`, http.StatusCreated)["class"].(map[string]any)
 	classID := e2eString(t, class, "id")
+	if err := org.NewPostgresStore(db).BindTeacherClass(context.Background(), demoTenantID, teacherID, classID); err != nil {
+		t.Fatalf("bind appeal reviewer to synthetic class: %v", err)
+	}
 	student := e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, `{"school_id":"`+schoolID+`","class_id":"`+classID+`","student_no":"SYN-`+suffix+`","name":"Story 041 Synthetic Student"}`, http.StatusCreated)["student"].(map[string]any)
 	studentID := e2eString(t, student, "id")
 	otherStudent := e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, `{"school_id":"`+schoolID+`","class_id":"`+classID+`","student_no":"SYN-OTHER-`+suffix+`","name":"Story 041 Other Synthetic Student"}`, http.StatusCreated)["student"].(map[string]any)
@@ -260,9 +265,9 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	finalID := e2eString(t, studentGrade["items"].([]any)[0].(map[string]any), "id")
 	appealResp := e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals", studentToken, `{"exam_id":"`+examID+`","student_id":"`+studentID+`","target_type":"question","final_grade_id":"`+finalID+`","reason":"Story 041 synthetic appeal"}`, http.StatusCreated)["appeal"].(map[string]any)
 	appealID := e2eString(t, appealResp, "id")
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/assign", adminToken, `{"assigned_to":"`+appealReviewerID+`","expected_revision":1}`, http.StatusOK)
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/assign", schoolAdminToken, `{"assigned_to":"`+appealReviewerID+`","expected_revision":1}`, http.StatusOK)
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/recommendation", appealReviewerToken, `{"recommendation":"adjust_score","reason":"Story 041 synthetic independent appeal review","recommended_score":5,"expected_revision":2}`, http.StatusOK)
-	appealReviewed := e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/review", adminToken, `{"status":"score_adjusted","reason":"Story 041 synthetic appeal adjustment","adjusted_score":5,"expected_revision":3}`, http.StatusOK)
+	appealReviewed := e2ePostJSON(t, router, http.MethodPost, "/api/v1/appeals/"+appealID+"/review", schoolAdminToken, `{"status":"score_adjusted","reason":"Story 041 synthetic appeal adjustment","adjusted_score":5,"expected_revision":3}`, http.StatusOK)
 	if appealReviewed["score_adjustment"] == nil {
 		t.Fatalf("PostgreSQL appeal review should create score adjustment: %#v", appealReviewed)
 	}
@@ -720,6 +725,55 @@ DO UPDATE SET data_scope = EXCLUDED.data_scope, updated_at = now()
 func e2eActivatePostgresDemoUsers(t *testing.T, db *sql.DB, usernames []string) {
 	t.Helper()
 	e2eActivatePostgresUsers(t, db, "demo", usernames)
+}
+
+func e2eBindPostgresSchoolAdmin(t *testing.T, db *sql.DB, username, schoolID string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin PostgreSQL school administrator binding: %v", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+UPDATE app_user user_account
+SET school_id = $2::uuid, updated_at = now()
+FROM tenant
+WHERE tenant.id = user_account.tenant_id
+  AND tenant.code = 'demo'
+  AND user_account.username = $1
+  AND user_account.deleted_at IS NULL
+`, username, schoolID)
+	if err != nil {
+		t.Fatalf("bind PostgreSQL school administrator to school: %v", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		t.Fatalf("expected one PostgreSQL school administrator school binding, affected=%d err=%v", affected, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO user_role (tenant_id, user_id, role_id, data_scope, deleted_at)
+SELECT user_account.tenant_id,
+       user_account.id,
+       role.id,
+       jsonb_build_object('scope', 'school', 'school_id', $2::text),
+       NULL
+FROM app_user user_account
+JOIN tenant ON tenant.id = user_account.tenant_id
+JOIN role ON role.tenant_id = user_account.tenant_id
+WHERE tenant.code = 'demo'
+  AND user_account.username = $1
+  AND user_account.deleted_at IS NULL
+  AND role.code = 'school_admin'
+  AND role.deleted_at IS NULL
+ON CONFLICT (tenant_id, user_id, role_id) DO UPDATE
+SET data_scope = EXCLUDED.data_scope, deleted_at = NULL, updated_at = now()
+`, username, schoolID); err != nil {
+		t.Fatalf("bind PostgreSQL school administrator role scope: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit PostgreSQL school administrator binding: %v", err)
+	}
 }
 
 func e2eActivatePostgresUsers(t *testing.T, db *sql.DB, tenantCode string, usernames []string) {

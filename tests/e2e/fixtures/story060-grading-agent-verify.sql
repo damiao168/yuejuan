@@ -5,6 +5,7 @@ DO $$
 DECLARE
   expected_migration_count INT;
   migration_count INT;
+  worker_scope_count INT;
   batch_count INT;
   worker_task_count INT;
   grade_count INT;
@@ -15,6 +16,20 @@ BEGIN
   SELECT count(*) INTO migration_count FROM schema_migration;
   IF migration_count <> expected_migration_count THEN
     RAISE EXCEPTION 'expected % migrations, found %', expected_migration_count, migration_count;
+  END IF;
+
+  SELECT count(*) INTO worker_scope_count
+  FROM app_user u
+  JOIN user_role ur ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id AND ur.deleted_at IS NULL
+  JOIN role r ON r.tenant_id = ur.tenant_id AND r.id = ur.role_id AND r.deleted_at IS NULL
+  WHERE u.tenant_id = '00000000-0000-0000-0000-000000000001'
+    AND u.username = 'story060_subjective_worker'
+    AND u.status = 'active'
+    AND u.deleted_at IS NULL
+    AND r.code = 'subjective_grading_worker'
+    AND ur.data_scope->>'scope' = 'service';
+  IF worker_scope_count <> 1 THEN
+    RAISE EXCEPTION 'expected one service-scoped subjective worker assignment, found %', worker_scope_count;
   END IF;
 
   SELECT count(*) INTO batch_count

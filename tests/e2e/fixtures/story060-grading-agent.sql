@@ -225,7 +225,7 @@ BEGIN
   END IF;
 
   UPDATE user_role ur
-  SET data_scope = jsonb_build_object('scope', 'tenant', 'synthetic', true),
+  SET data_scope = jsonb_build_object('scope', 'service', 'synthetic', true),
       updated_at = now()
   FROM app_user u, role r
   WHERE ur.tenant_id = tenant_uuid

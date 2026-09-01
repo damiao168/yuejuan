@@ -22,6 +22,7 @@ const appealStudentUserID = "00000000-0000-0000-0000-000000000801"
 const appealTeacherUserID = "00000000-0000-0000-0000-000000000802"
 const appealAdminUserID = "00000000-0000-0000-0000-000000000803"
 const appealOriginalGraderUserID = "00000000-0000-0000-0000-000000000804"
+const appealTenantAdminUserID = "00000000-0000-0000-0000-000000000805"
 
 func TestAppealRoutesCreateReviewAdjustCloseAndStatistics(t *testing.T) {
 	authStore := appealAuthStore(t)
@@ -86,6 +87,7 @@ func TestAppealTeacherOnlyWorksAssignedAppealsAndCannotFinalize(t *testing.T) {
 	studentToken := appealLogin(t, router, "appeal_student")
 	teacherToken := appealLogin(t, router, "appeal_teacher")
 	adminToken := appealLogin(t, router, "appeal_admin")
+	tenantAdminToken := appealLogin(t, router, "appeal_tenant_admin")
 	originalGraderToken := appealLogin(t, router, "appeal_original_grader")
 
 	req := appealAuthedRequest(http.MethodPost, "/api/v1/appeals", `{"exam_id":"exam-1","student_id":"student-1","target_type":"question","final_grade_id":"final-1","reason":"Q1 should receive full credit"}`, studentToken)
@@ -115,6 +117,13 @@ func TestAppealTeacherOnlyWorksAssignedAppealsAndCannotFinalize(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("original grader assignment should be forbidden, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/assign", `{"assigned_to":"`+appealTeacherUserID+`","expected_revision":1}`, tenantAdminToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("canonical tenant administrator must not manage appeals, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	req = appealAuthedRequest(http.MethodPost, "/api/v1/appeals/"+appealID+"/assign", `{"assigned_to":"`+appealTeacherUserID+`","expected_revision":1}`, adminToken)
@@ -230,8 +239,19 @@ func appealAuthStore(t *testing.T) *auth.MemoryStore {
 			Username:    "appeal_admin",
 			DisplayName: "Appeal Admin",
 			Status:      "active",
-			Roles:       []string{"tenant_admin"},
+			Roles:       []string{"school_admin"},
 			Permissions: []string{"appeal:read", "appeal:manage"},
+			DataScope:   map[string]any{"scope": "school", "synthetic": true},
+		},
+		{
+			ID:          appealTenantAdminUserID,
+			TenantID:    appealTenantID,
+			TenantCode:  "demo",
+			Username:    "appeal_tenant_admin",
+			DisplayName: "Appeal Tenant Admin",
+			Status:      "active",
+			Roles:       []string{"tenant_admin"},
+			Permissions: []string{"org:manage", "exam:manage", "dashboard:read"},
 			DataScope:   map[string]any{"scope": "tenant"},
 		},
 		{
