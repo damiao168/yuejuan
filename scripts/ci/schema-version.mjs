@@ -3,25 +3,42 @@ import path from 'node:path';
 
 const root = process.cwd();
 const migrationsDir = path.join(root, 'services/api-gateway/migrations');
-const migrations = fs.readdirSync(migrationsDir).filter((name) => /^\d{6}_.*\.sql$/.test(name)).sort();
-if (!migrations.length) throw new Error('No versioned migrations found');
-const latest = migrations.at(-1).match(/^(\d{6})_/)[1];
-const targets = [
-  path.join(root, 'infra/docker-compose/.env.example'),
-  path.join(root, 'infra/docker-compose/docker-compose.yml'),
-];
-const mismatches = targets.filter((file) => !fs.readFileSync(file, 'utf8').includes(`000${latest.slice(3)}`));
+const envFile = path.join(root, 'infra/docker-compose/.env.example');
+const composeFile = path.join(root, 'infra/docker-compose/docker-compose.yml');
+
+export function readEnvSchemaVersion(source) {
+  return source.match(/^EDUGRADE_SCHEMA_VERSION=(\d{6})$/m)?.[1];
+}
+
+export function readComposeSchemaVersion(source) {
+  return source.match(/SCHEMA_VERSION:\s*\$\{EDUGRADE_SCHEMA_VERSION:-(\d{6})\}/)?.[1];
+}
+
+export function getLatestMigrationVersion() {
+  const migrations = fs.readdirSync(migrationsDir).filter((name) => /^\d{6}_.*\.sql$/.test(name)).sort();
+  if (!migrations.length) throw new Error('No versioned migrations found');
+  return migrations.at(-1).slice(0, 6);
+}
+
 export function check() {
-  if (mismatches.length) throw new Error(`Schema version ${latest} is not synchronized in: ${mismatches.join(', ')}`);
+  const latest = getLatestMigrationVersion();
+  const envVersion = readEnvSchemaVersion(fs.readFileSync(envFile, 'utf8'));
+  const composeVersion = readComposeSchemaVersion(fs.readFileSync(composeFile, 'utf8'));
+  const mismatches = [];
+  if (envVersion !== latest) mismatches.push(`.env.example=${envVersion ?? 'missing'}`);
+  if (composeVersion !== latest) mismatches.push(`docker-compose.yml=${composeVersion ?? 'missing'}`);
+  if (mismatches.length) throw new Error(`Expected schema ${latest}; found ${mismatches.join(', ')}`);
   console.log(`Schema version ${latest} is synchronized.`);
 }
+
 export function sync() {
-  for (const file of targets) {
-    const source = fs.readFileSync(file, 'utf8');
-    const updated = source
-      .replace(/(EDUGRADE_SCHEMA_VERSION=)\d{6}/, `$1${latest}`)
-      .replace(/(SCHEMA_VERSION: \$\{EDUGRADE_SCHEMA_VERSION:-)\d{6}(\})/, `$1${latest}$2`);
-    fs.writeFileSync(file, updated);
+  const latest = getLatestMigrationVersion();
+  const envSource = fs.readFileSync(envFile, 'utf8');
+  const composeSource = fs.readFileSync(composeFile, 'utf8');
+  if (!readEnvSchemaVersion(envSource) || !readComposeSchemaVersion(composeSource)) {
+    throw new Error('Schema metadata field is missing; refusing an unsafe sync');
   }
+  fs.writeFileSync(envFile, envSource.replace(/^(EDUGRADE_SCHEMA_VERSION=)\d{6}$/m, `$1${latest}`));
+  fs.writeFileSync(composeFile, composeSource.replace(/(SCHEMA_VERSION:\s*\$\{EDUGRADE_SCHEMA_VERSION:-)\d{6}(\})/, `$1${latest}$2`));
   console.log(`Synchronized schema metadata to ${latest}.`);
 }
