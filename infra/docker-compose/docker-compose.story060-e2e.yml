@@ -105,41 +105,19 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
-  bootstrap-school-admin:
+  provision-story060-users:
     build:
       context: ../..
       dockerfile: services/api-gateway/Dockerfile
-    entrypoint: ["api-gateway", "bootstrap-admin"]
+    entrypoint: ["api-gateway", "provision-story060-users"]
     environment:
       EDUGRADE_ENV: test
       EDUGRADE_LOG_LEVEL: error
       EDUGRADE_POSTGRES_DSN: postgres://edugrade:story060_e2e_postgres_only@postgres:5432/edugrade?sslmode=disable
-      EDUGRADE_BOOTSTRAP_TENANT_CODE: platform
-      EDUGRADE_BOOTSTRAP_ROLE_CODE: school_admin
-      EDUGRADE_BOOTSTRAP_USERNAME: story060_school_admin
-      EDUGRADE_BOOTSTRAP_DISPLAY_NAME: STORY-060 E2E School Admin
-      EDUGRADE_BOOTSTRAP_PASSWORD: ${EDUGRADE_E2E_SCHOOL_ADMIN_PASSWORD:?set by the STORY-060 runner}
+      EDUGRADE_E2E_SCHOOL_ADMIN_PASSWORD: ${EDUGRADE_E2E_SCHOOL_ADMIN_PASSWORD:?set by the STORY-060 runner}
+      EDUGRADE_E2E_SUBJECTIVE_WORKER_PASSWORD: ${EDUGRADE_E2E_SUBJECTIVE_WORKER_PASSWORD:?set by the STORY-060 runner}
     depends_on:
       bootstrap-admin:
-        condition: service_completed_successfully
-    restart: "no"
-
-  bootstrap-subjective-worker:
-    build:
-      context: ../..
-      dockerfile: services/api-gateway/Dockerfile
-    entrypoint: ["api-gateway", "bootstrap-admin"]
-    environment:
-      EDUGRADE_ENV: test
-      EDUGRADE_LOG_LEVEL: error
-      EDUGRADE_POSTGRES_DSN: postgres://edugrade:story060_e2e_postgres_only@postgres:5432/edugrade?sslmode=disable
-      EDUGRADE_BOOTSTRAP_TENANT_CODE: platform
-      EDUGRADE_BOOTSTRAP_ROLE_CODE: subjective_grading_worker
-      EDUGRADE_BOOTSTRAP_USERNAME: story060_subjective_worker
-      EDUGRADE_BOOTSTRAP_DISPLAY_NAME: STORY-060 E2E Subjective Worker
-      EDUGRADE_BOOTSTRAP_PASSWORD: ${EDUGRADE_E2E_SUBJECTIVE_WORKER_PASSWORD:?set by the STORY-060 runner}
-    depends_on:
-      bootstrap-school-admin:
         condition: service_completed_successfully
     restart: "no"
 
@@ -152,7 +130,7 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command: ["psql \"$${EDUGRADE_POSTGRES_DSN}\" -v ON_ERROR_STOP=1 -f /fixture.sql"]
     depends_on:
-      bootstrap-subjective-worker:
+      provision-story060-users:
         condition: service_completed_successfully
     restart: "no"
 

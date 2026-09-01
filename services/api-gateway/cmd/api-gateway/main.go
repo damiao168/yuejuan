@@ -30,6 +30,17 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "provision-story060-users" {
+		if cfg.Service.Environment != "test" {
+			logg.Error(context.Background(), "STORY-060 provisioning refused outside test", nil)
+			os.Exit(1)
+		}
+		if err := runProvisionStory060Users(context.Background(), cfg); err != nil {
+			logg.Error(context.Background(), "STORY-060 provisioning failed", map[string]any{"error": err.Error()})
+			os.Exit(1)
+		}
+		return
+	}
 	srv, cleanup, err := server.New(cfg, logg)
 	if err != nil {
 		logg.Error(context.Background(), "create server failed", map[string]any{"error": err.Error()})
@@ -73,6 +84,15 @@ func main() {
 		os.Exit(1)
 	}
 	logg.Info(context.Background(), "api gateway stopped", nil)
+}
+
+func runProvisionStory060Users(ctx context.Context, cfg config.Config) error {
+	postgresDB, closePostgres, err := db.OpenPostgres(cfg.Postgres)
+	if err != nil {
+		return err
+	}
+	defer closePostgres()
+	return auth.ProvisionStory060Users(ctx, auth.NewPostgresStore(postgresDB), os.Getenv("EDUGRADE_E2E_SCHOOL_ADMIN_PASSWORD"), os.Getenv("EDUGRADE_E2E_SUBJECTIVE_WORKER_PASSWORD"))
 }
 
 func runBootstrapAdmin(ctx context.Context, cfg config.Config, logg *logger.Logger) error {

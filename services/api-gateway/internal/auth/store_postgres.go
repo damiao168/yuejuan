@@ -435,6 +435,46 @@ VALUES ($1::uuid, NULL, 'auth.bootstrap_admin_created', 'user', $2::uuid, $3::js
 	}, nil
 }
 
+func (s *PostgresStore) ProvisionStory060User(ctx context.Context, username, displayName, roleCode, passwordHash string) error {
+	expectedScope := map[string]string{"school_admin": "school", "subjective_grading_worker": "service"}
+	scope, ok := expectedScope[roleCode]
+	if !ok {
+		return ErrStory060ProvisioningInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var tenantID, roleID, actualScope string
+	if err := tx.QueryRowContext(ctx, `SELECT id::text FROM tenant WHERE code='platform' AND deleted_at IS NULL`).Scan(&tenantID); err != nil {
+		return err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT id::text,scope_type FROM role WHERE tenant_id=$1::uuid AND code=$2 AND deleted_at IS NULL`, tenantID, roleCode).Scan(&roleID, &actualScope); err != nil {
+		return err
+	}
+	if actualScope != scope {
+		return ErrStory060ProvisioningInput
+	}
+	var userID string
+	if err := tx.QueryRowContext(ctx, `
+INSERT INTO app_user (tenant_id,username,display_name,password_hash,status,deleted_at)
+VALUES ($1::uuid,$2,$3,$4,'active',NULL)
+ON CONFLICT (tenant_id,username) DO UPDATE SET display_name=EXCLUDED.display_name,password_hash=EXCLUDED.password_hash,status='active',deleted_at=NULL,updated_at=now()
+RETURNING id::text
+`, tenantID, username, displayName, passwordHash).Scan(&userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO user_role (tenant_id,user_id,role_id,data_scope,deleted_at)
+VALUES ($1::uuid,$2::uuid,$3::uuid,jsonb_build_object('scope',$4),NULL)
+ON CONFLICT (tenant_id,user_id,role_id) DO UPDATE SET data_scope=EXCLUDED.data_scope,deleted_at=NULL,updated_at=now()
+`, tenantID, userID, roleID, scope); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *PostgresStore) Audit(ctx context.Context, event AuditEvent) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO audit_log (tenant_id, actor_id, action, target_type, target_id, before_value, after_value, reason, ip_address, user_agent, request_id)
@@ -553,7 +593,9 @@ func (s *PostgresStore) ListAssignableRoles(ctx context.Context, actor User) ([]
 	rows, err := s.db.QueryContext(ctx, `
 SELECT code, name, scope_type, COALESCE(description, '')
 FROM role
-WHERE tenant_id = $1::uuid AND deleted_at IS NULL
+WHERE tenant_id = $1::uuid
+  AND deleted_at IS NULL
+  AND code NOT IN ('platform_admin', 'tenant_admin')
 ORDER BY name, code
 `, actor.TenantID)
 	if err != nil {
