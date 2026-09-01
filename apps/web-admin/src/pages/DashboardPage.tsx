@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Button, Space } from "antd";
 import { motion } from "framer-motion";
 import { BrainCircuit, Building2, Plus, RefreshCw, ScrollText, ServerCog } from "lucide-react";
+import { getSafeUserText, getUserErrorMessage } from "../api/client";
 import { getDashboardSummary, type DashboardSummary } from "../api/dashboard";
 import { getSystemStatus, type SystemStatus } from "../api/system";
 import { hasEveryPermission, type SessionUser } from "../auth/session";
@@ -51,7 +52,7 @@ function PlatformDashboard({
     try {
       setStatus(await getSystemStatus());
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "平台状态加载失败");
+      setError(getUserErrorMessage(loadError, "平台状态加载失败"));
     } finally {
       setLoading(false);
     }
@@ -108,7 +109,7 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
     try {
       setData(await getDashboardSummary());
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "工作台加载失败");
+      setError(getUserErrorMessage(loadError, "工作台加载失败"));
     } finally {
       setLoading(false);
     }
@@ -150,7 +151,7 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
       </motion.section>
 
       {error ? <Alert type="error" showIcon message="刷新失败" description={`${error}；页面继续显示上次成功数据。`} /> : null}
-      {data.warnings.map((warning) => <Alert key={warning} type="warning" showIcon message={warning} description="其他统计仍可使用，请稍后刷新。" />)}
+      {data.warnings.map((warning) => <Alert key={warning} type="warning" showIcon message={getSafeUserText(warning, "部分统计暂时不可用")} description="其他统计仍可使用，请稍后刷新。" />)}
 
       <SchoolDashboard
         organizationStatistics={data.organization_statistics}
@@ -158,6 +159,7 @@ export function DashboardPage({ user, onNavigate }: { user: SessionUser; onNavig
         activeExamCount={stats.active_exam_count}
         exams={data.active_exams}
         workItems={todo}
+        activities={data.recent_activities}
         onNavigate={onNavigate}
       />
     </div>

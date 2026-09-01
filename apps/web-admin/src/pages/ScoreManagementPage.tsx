@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, App, Button, Divider, Empty, Input, InputNumber, List, Modal, Select, Space, type TableColumnsType } from "antd";
+import { Alert, App, Button, Checkbox, Divider, Empty, Input, InputNumber, List, Modal, Select, Space, type TableColumnsType } from "antd";
 import { Calculator, CheckCircle2, ClipboardCheck, Download, FileWarning, GitCompareArrows, LockKeyhole, RefreshCw, Search, Send, ShieldCheck, UserCheck, UserX } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getSafeUserText, getUserErrorMessage } from "../api/client";
 import { listAuditLogs, type AuditLog } from "../api/audit";
 import { examStatusLabels, examSubjectLabel } from "../constants/examStatus";
 import { listExams, type Exam } from "../api/exams";
@@ -173,12 +173,9 @@ const regradeStrategyOptions = [
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
     console.error("请求失败", error.status, error.code, error.message);
-    return error.message || "操作失败，请稍后重试";
+    return getUserErrorMessage(error, "操作失败，请稍后重试");
   }
-  if (error instanceof Error) {
-    return error.message || "操作失败，请稍后重试";
-  }
-  return "操作失败，请稍后重试";
+  return getUserErrorMessage(error, "操作失败，请稍后重试");
 }
 
 function formatScore(value?: number | null) {
@@ -311,6 +308,7 @@ export function ScoreManagementPage({
   const [attendanceEditor, setAttendanceEditor] = useState<{ entry: RosterEntry; status: "expected" | "absent" } | null>(null);
   const [attendanceReason, setAttendanceReason] = useState("");
   const [releaseReason, setReleaseReason] = useState("");
+  const [releaseHighScorePaper, setReleaseHighScorePaper] = useState(false);
   const [releaseModalOpen, setReleaseModalOpen] = useState(false);
   const [regradeModalOpen, setRegradeModalOpen] = useState(false);
   const [regradeQuestionId, setRegradeQuestionId] = useState("");
@@ -659,12 +657,19 @@ export function ScoreManagementPage({
           visibility_policy: {
             show_question_scores: true,
             show_feedback: false,
-            show_rubric_summary: false
+            show_rubric_summary: false,
+            show_cohort_statistics: true,
+            show_percentile: true,
+            show_exact_rank: true,
+            show_question_statistics: true,
+            show_answers: true,
+            show_high_score_paper: releaseHighScorePaper
           },
           appeal_window: { enabled: selectedExam?.appeal_enabled ?? false }
         });
         setReleaseModalOpen(false);
         setReleaseReason("");
+        setReleaseHighScorePaper(false);
       },
       "已创建成绩发布草稿"
     );
@@ -828,14 +833,14 @@ export function ScoreManagementPage({
       title: "对账状态",
       dataIndex: "status",
       width: 150,
-      render: (value: string) => <StatusTag tone={value === "graded" ? "success" : value === "absent" ? "neutral" : "danger"}>{rosterStatusLabels[value] ?? value}</StatusTag>
+      render: (value: string) => <StatusTag tone={value === "graded" ? "success" : value === "absent" ? "neutral" : "danger"}>{rosterStatusLabels[value] ?? "未知状态"}</StatusTag>
     },
     {
       title: "核对说明",
       dataIndex: "resolution_code",
       render: (value: string, record) => (
         <div className="score-roster-resolution">
-          <span>{rosterResolutionLabels[value] ?? value}</span>
+          <span>{rosterResolutionLabels[value] ?? "未知处理方式"}</span>
           {record.expected_page_count > 0 ? <small>{`页数 ${record.actual_page_count}/${record.expected_page_count}`}</small> : null}
           {record.attendance_reason ? <small>{`处置原因：${record.attendance_reason}`}</small> : null}
         </div>
@@ -900,7 +905,7 @@ export function ScoreManagementPage({
         <div className="score-item-strip">
           {(record.items ?? []).length > 0 ? (
             (record.items ?? []).map((item) => (
-              <span key={item.id} title={`${sourceLabels[item.source] ?? item.source} · ${statusLabels[item.status] ?? item.status}`}>
+              <span key={item.id} title={`${sourceLabels[item.source] ?? "其他来源"} · ${statusLabels[item.status] ?? "未知状态"}`}>
                 {item.question_no}: {formatScore(item.score)}/{formatScore(item.max_score)}
               </span>
             ))
@@ -955,7 +960,7 @@ export function ScoreManagementPage({
         locale={{ emptyText: <Empty description="暂无质量问题" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
         renderItem={(issue: QualityIssue) => (
           <List.Item>
-            <div className="score-quality-issue" title={issue.message}>
+            <div className="score-quality-issue" title={getSafeUserText(issue.message, "成绩质量检查未通过")}>
               <StatusTag tone={issue.blocking ? "danger" : "warning"}>{issue.blocking ? "须处理后才能发布" : "提醒"}</StatusTag>
               <strong>{qualityLabels[issue.code] ?? issue.code}</strong>
               <span>{issue.count} 项</span>
@@ -1216,7 +1221,7 @@ export function ScoreManagementPage({
           renderItem={(issue) => <List.Item>
             <div className="score-release-gate-row">
               <StatusTag tone={issue.blocking ? "danger" : "warning"}>{issue.blocking ? "阻断" : "提醒"}</StatusTag>
-              <div><strong>{issue.message}</strong><span>{issue.count} 项 · {issue.code}</span></div>
+              <div><strong>{getSafeUserText(issue.message, "成绩质量检查未通过")}</strong><span>{issue.count} 项 · {issue.code}</span></div>
               {issue.action_route === "quality" ? <Button size="small" href={selectedExamId ? `#/admin/exams/${encodeURIComponent(selectedExamId)}/quality` : undefined}>查看质量</Button> : null}
               {issue.action_route === "regrade" ? <Button size="small" onClick={() => setRegradeModalOpen(true)}>查看复评</Button> : null}
             </div>
@@ -1231,8 +1236,8 @@ export function ScoreManagementPage({
               dataSource={scoreReleases}
               renderItem={(release) => <List.Item actions={release.status === "draft" ? [<Button key="publish" size="small" type="primary" disabled={!canWrite || !releaseGate?.passed} loading={actioning === "release-publish"} onClick={() => publishRelease(release)}>发布 V{release.version}</Button>] : undefined}>
                 <div className="score-release-row">
-                  <div><strong>V{release.version} · {scoreReleaseSourceLabels[release.source] ?? release.source}</strong><span>{release.reason}</span></div>
-                  <StatusTag tone={scoreReleaseTone(release.status)}>{scoreReleaseStatusLabels[release.status] ?? release.status}</StatusTag>
+                  <div><strong>V{release.version} · {scoreReleaseSourceLabels[release.source] ?? "其他来源"}</strong><span>{release.reason}</span></div>
+                  <StatusTag tone={scoreReleaseTone(release.status)}>{scoreReleaseStatusLabels[release.status] ?? "未知状态"}</StatusTag>
                 </div>
               </List.Item>}
             /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未创建正式成绩版本" />}
@@ -1255,7 +1260,7 @@ export function ScoreManagementPage({
               ]}>
                 <div className="score-release-row">
                   <div><strong>题目复评 · 影响 {job.affected_count} 份</strong><span>{job.reason_text}</span></div>
-                  <StatusTag tone={job.status === "ready_for_release" ? "success" : job.status === "cancelled" ? "neutral" : "processing"}>{regradeStatusLabels[job.status] ?? job.status}</StatusTag>
+                  <StatusTag tone={job.status === "ready_for_release" ? "success" : job.status === "cancelled" ? "neutral" : "processing"}>{regradeStatusLabels[job.status] ?? "未知状态"}</StatusTag>
                 </div>
               </List.Item>}
             /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={publishedRelease ? "当前没有题目复评任务" : "发布首个成绩版本后，可发起题目级复评"} />}
@@ -1328,11 +1333,12 @@ export function ScoreManagementPage({
         cancelText="取消"
         confirmLoading={actioning === "release-create"}
         onOk={createRelease}
-        onCancel={() => { setReleaseModalOpen(false); setReleaseReason(""); }}
+        onCancel={() => { setReleaseModalOpen(false); setReleaseReason(""); setReleaseHighScorePaper(false); }}
       >
         <Alert type="info" showIcon message="草稿不会立即对学生生效" description="提交后会冻结当前已确认的成绩事实。请在发布门禁通过后，单独确认发布。" />
         <label className="score-attendance-label" htmlFor="score-release-reason">发布说明（必填）</label>
         <Input.TextArea id="score-release-reason" rows={3} maxLength={1000} showCount value={releaseReason} placeholder="例如：期末考试首次正式发布" onChange={(event) => setReleaseReason(event.target.value)} />
+        <Checkbox checked={releaseHighScorePaper} onChange={(event) => setReleaseHighScorePaper(event.target.checked)}>向学生开放本场最高分答卷</Checkbox>
       </Modal>
 
       <Modal

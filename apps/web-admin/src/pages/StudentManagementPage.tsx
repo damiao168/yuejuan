@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { App, Button, Form, Input, Modal, Select, Space, Upload, type TableColumnsType } from "antd";
 import { Download, Plus, RefreshCw, Search, Upload as UploadIcon } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { getUserErrorMessage } from "../api/client";
 import {
   createStudent,
   importStudentsCSV,
@@ -25,8 +25,7 @@ interface StudentFormValues {
 }
 
 function errorText(error: unknown) {
-  if (error instanceof ApiClientError) return error.message;
-  return error instanceof Error ? error.message : "操作失败";
+  return getUserErrorMessage(error, "操作失败");
 }
 
 function gradeBusinessLabel(grade?: Grade) {

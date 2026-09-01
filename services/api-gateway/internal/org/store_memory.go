@@ -3,6 +3,7 @@ package org
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -222,6 +223,9 @@ func (s *MemoryStore) ListStudents(_ context.Context, tenantID string, filter St
 	out := []Student{}
 	for _, item := range s.students {
 		if item.TenantID != tenantID || (filter.ClassID != "" && item.ClassID != filter.ClassID) {
+			continue
+		}
+		if filter.RestrictClasses && !slices.Contains(filter.ClassIDs, item.ClassID) && (filter.StudentID == "" || filter.StudentID != item.ID) {
 			continue
 		}
 		if len(ids) > 0 {

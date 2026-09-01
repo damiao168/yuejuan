@@ -51,6 +51,10 @@ RETURNING `+reviewTaskColumns+`
 }
 
 func (s *PostgresStore) ListTasks(ctx context.Context, tenantID string, filter ListFilter) ([]ReviewTask, error) {
+	scopeMode := filter.ScopeMode
+	if scopeMode == "" {
+		scopeMode = "tenant" // backwards-compatible store callers are tenant-scoped
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT `+reviewTaskColumns+`
 FROM review_task
@@ -60,10 +64,18 @@ WHERE tenant_id = $1
   AND ($3 = '' OR assigned_to::text = $3)
   AND ($4 = '' OR exam_id::text = $4)
   AND ($7 = '' OR priority < $5 OR (priority = $5 AND (created_at > $6 OR (created_at = $6 AND id::text > $7))))
+  AND (
+    $9 IN ('platform', 'tenant')
+    OR ($9 = 'school' AND EXISTS (SELECT 1 FROM exam e WHERE e.tenant_id = review_task.tenant_id AND e.id = review_task.exam_id AND e.school_id::text = ANY(string_to_array(NULLIF($10, ''), ','))))
+    OR ($9 = 'class' AND exam_id::text = ANY(string_to_array(NULLIF($11, ''), ',')))
+    OR ($9 = 'assigned' AND (assigned_to::text = $12 OR id::text = ANY(string_to_array(NULLIF($13, ''), ','))))
+  )
 ORDER BY priority DESC, created_at ASC, id::text ASC
 LIMIT NULLIF($8, 0)
 `, tenantID, filter.Status, filter.AssignedTo, filter.ExamID,
-		filter.CursorPriority, filter.CursorCreatedAt, filter.CursorID, filter.Limit)
+		filter.CursorPriority, filter.CursorCreatedAt, filter.CursorID, filter.Limit,
+		scopeMode, strings.Join(filter.ScopeSchoolIDs, ","), strings.Join(filter.ScopeExamIDs, ","),
+		filter.ScopeActorID, strings.Join(filter.ScopeTaskIDs, ","))
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +89,22 @@ LIMIT NULLIF($8, 0)
 		out = append(out, task)
 	}
 	return out, rows.Err()
+}
+
+func (s *PostgresStore) HasActiveAssignment(ctx context.Context, tenantID string, reviewerID string, answerSegmentID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM review_task
+  WHERE tenant_id = $1::uuid
+    AND assigned_to = $2::uuid
+    AND answer_segment_id = $3::uuid
+    AND deleted_at IS NULL
+    AND status NOT IN ('completed', 'cancelled')
+)
+`, tenantID, reviewerID, answerSegmentID).Scan(&exists)
+	return exists, err
 }
 
 func (s *PostgresStore) GetTask(ctx context.Context, tenantID string, id string) (ReviewTask, error) {
@@ -584,16 +612,28 @@ WHERE tenant_id = $1 AND id::text = $2
 }
 
 func (s *PostgresStore) ListArbitrationTasks(ctx context.Context, tenantID string, filter ArbitrationFilter) ([]ArbitrationTask, error) {
+	scopeMode := filter.ScopeMode
+	if scopeMode == "" {
+		scopeMode = "tenant"
+	}
 	rows, err := s.db.QueryContext(ctx, arbitrationSelect()+`
-WHERE tenant_id = $1 AND deleted_at IS NULL
+WHERE arbitration_task.tenant_id = $1 AND arbitration_task.deleted_at IS NULL
   AND ($2 = '' OR ($2 = 'active' AND status IN ('pending', 'assigned')) OR status = $2)
   AND ($3 = '' OR COALESCE(assigned_to::text, '') = $3)
   AND ($4 = '' OR exam_id::text = $4)
   AND ($6 = '' OR created_at < $5 OR (created_at = $5 AND id::text < $6))
+  AND (
+    $8 IN ('platform', 'tenant')
+    OR ($8 = 'school' AND EXISTS (SELECT 1 FROM exam e WHERE e.tenant_id = arbitration_task.tenant_id AND e.id = arbitration_task.exam_id AND e.school_id::text = ANY(string_to_array(NULLIF($9, ''), ','))))
+    OR ($8 = 'class' AND exam_id::text = ANY(string_to_array(NULLIF($10, ''), ',')))
+    OR ($8 = 'assigned' AND (COALESCE(assigned_to::text, '') = $11 OR id::text = ANY(string_to_array(NULLIF($12, ''), ','))))
+  )
 ORDER BY created_at DESC, id::text DESC
 LIMIT NULLIF($7, 0)
 `, tenantID, filter.Status, filter.AssignedTo, filter.ExamID,
-		filter.CursorCreatedAt, filter.CursorID, filter.Limit)
+		filter.CursorCreatedAt, filter.CursorID, filter.Limit,
+		scopeMode, strings.Join(filter.ScopeSchoolIDs, ","), strings.Join(filter.ScopeExamIDs, ","),
+		filter.ScopeActorID, strings.Join(filter.ScopeTaskIDs, ","))
 	if err != nil {
 		return nil, err
 	}

@@ -78,10 +78,6 @@ func (h *Handler) ReplacePaperImportSources(w http.ResponseWriter, r *http.Reque
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if len(input.Sources) == 0 {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_paper_import_sources", "至少保留一份考试资料")
-		return
-	}
 	out, err := h.documentImport.ReplaceSources(r.Context(), user.TenantID, user.ID, r.PathValue("id"), input)
 	if err != nil {
 		writeStoreError(w, r, err)

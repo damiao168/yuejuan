@@ -15,7 +15,7 @@ import {
   type UploadProps
 } from "antd";
 import { CheckCircle2, ChevronDown, ChevronUp, ExternalLink, FileUp, LockKeyhole, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getPaperImportUserMessage, getUserErrorMessage } from "../api/client";
 import { listExams, type Exam } from "../api/exams";
 import {
   createQuestion,
@@ -56,6 +56,7 @@ import { isFormulaEvidenceSubject } from "../features/grading/workbench/mathEvid
 import type { StatusTone } from "../types";
 import { questionTypeOptions } from "../constants/examCatalog";
 import { filesFromClipboard, hasBlockingImportIssues, isSupportedPaperImportFile, isTextPasteTarget, markImportFieldConfirmed, orderedSourcesAfterMove, orderedSourcesAfterRemoval, paperImportSummary, sourcesAfterRoleChange } from "../features/paper-import/materials";
+import { PaperImportReviewPanel } from "../features/paper-import/PaperImportReviewPanel";
 
 const rubricStatusOptions = [
   { label: "草稿", value: "draft" },
@@ -71,11 +72,13 @@ const importRoleOptions = [
   { label: "题目", value: "question" },
   { label: "答案", value: "answer" },
   { label: "解析", value: "solution" },
+  { label: "评分标准", value: "rubric" },
   { label: "混合资料", value: "mixed" },
   { label: "未知", value: "unknown" }
 ];
 
 const formulaEvidenceQuestionTypes = new Set(["formula", "calculation", "numeric"]);
+const rubricRequiredArchetypes = new Set(["structured_steps", "short_constructed", "extended_response", "diagram_graph", "table_experiment"]);
 
 const formulaEvidenceOptions: { label: string; value: RubricEvidenceRequirement["type"] }[] = [
   { label: "关键等价变形成立", value: "valid_transformation" },
@@ -106,14 +109,6 @@ interface QuestionFormValues {
 
 function labelFrom(options: { label: string; value: string }[], value?: string) {
   return options.find((item) => item.value === value)?.label ?? (value ? "未知类型" : "-");
-}
-
-function getSafeUserText(value: unknown, fallback: string) {
-  return typeof value === "string" && value.trim() ? value : fallback;
-}
-
-function getUserErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error && error.message.trim() ? error.message : fallback;
 }
 
 function formatError(error: unknown) {
@@ -164,6 +159,21 @@ function pointTotal(points: RubricPoint[]) {
   return points.reduce((sum, point) => sum + (Number(point.score) || 0), 0);
 }
 
+function reviewRubricHasScoreMismatch(draft: PaperImportDraftQuestion) {
+  return Boolean(draft.rubric && (Math.abs(draft.rubric.max_score - draft.score) > 0.0001 || Math.abs(pointTotal(draft.rubric.points) - draft.score) > 0.0001));
+}
+
+function confirmedImportDrafts(drafts: PaperImportDraftQuestion[]) {
+  return drafts.map((draft) => {
+    const fields = new Set(draft.human_confirmed_fields ?? []);
+    for (const field of ["question_no", "question_type", "score", "stem"]) fields.add(field);
+    if (draft.answer_key) fields.add("answer");
+    if (draft.solution) fields.add("solution");
+    if (draft.rubric) fields.add("rubric");
+    return { ...draft, human_confirmed_fields: [...fields] };
+  });
+}
+
 function formulaEvidenceEnabled(subject: string | undefined, questionType: string | undefined) {
   return isFormulaEvidenceSubject(subject) && formulaEvidenceQuestionTypes.has(questionType ?? "");
 }
@@ -172,12 +182,14 @@ export function PaperRubricPage({
   canManage,
   canManageAssessment,
   initialExamId = "",
-  onExamChanged
+  onExamChanged,
+  onNavigate
 }: {
   canManage: boolean;
   canManageAssessment: boolean;
   initialExamId?: string;
   onExamChanged?: () => void;
+  onNavigate?: (path: string) => void;
 }) {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<QuestionFormValues>();
@@ -579,7 +591,7 @@ export function PaperRubricPage({
 			const sources = uploaded.map((file, index) => ({ file_asset_id: file.id, document_index: startIndex + index, role_hint: "auto" as const }));
 			const result = activeImport ? await addPaperImportSources(activeImport.id, sources) : await createPaperImport(selectedExam.id, { exam_paper_id: papers[0]?.id, subject: selectedExam.subject, sources });
       if (result.import.status === "failed") {
-				message.error(getSafeUserText(result.import.issues[0], "考试资料识别失败"));
+				message.error(getPaperImportUserMessage(result.import.issues[0], "考试资料识别失败，请检查资料后重试"));
       } else {
 				message.success(`已添加 ${supportedFiles.length} 份资料，系统正在识别和匹配`);
       }
@@ -593,11 +605,11 @@ export function PaperRubricPage({
 	materialUploadRef.current = (files) => { void handleMaterialFiles(files); };
 
 	async function replaceImportSources(job: PaperImportJob, sources: PaperImportJob["sources"]) {
-		if (job.status !== "review_required" && job.status !== "failed") return;
+		if (job.status !== "processing" && job.status !== "review_required" && job.status !== "failed") return;
 		setUpdatingImportSources(true);
 		try {
 			await replacePaperImportSources(job.id, sources.map((source, documentIndex) => ({ id: source.id, document_index: documentIndex, role_hint: source.role_hint })));
-			message.success("资料顺序或类型已更新，系统正在重新匹配");
+			message.success(sources.length ? "资料顺序或类型已更新，系统正在重新匹配" : "已删除全部考试资料，请重新上传正确的资料");
 			if (selectedExam) await loadConfig(selectedExam.id);
 		} catch (currentError) {
 			message.error(formatError(currentError));
@@ -607,10 +619,6 @@ export function PaperRubricPage({
 	}
 
 	async function removeImportSource(job: PaperImportJob, sourceID: string) {
-		if (job.sources.length <= 1) {
-			message.warning("至少保留一份考试资料");
-			return;
-		}
 		await replaceImportSources(job, orderedSourcesAfterRemoval(job.sources, sourceID));
 	}
 
@@ -627,8 +635,11 @@ export function PaperRubricPage({
 
   async function confirmPaperImport(job: PaperImportJob) {
     if (!selectedExam) return;
+    const invalidRubric = reviewDrafts.find(reviewRubricHasScoreMismatch);
+    if (invalidRubric) { message.error(`第${invalidRubric.question_no}题评分细则分值不一致，不能确认`); return; }
     setParsing(true);
     try {
+      await savePaperImportReview(job.id, confirmedImportDrafts(reviewDrafts));
       await applyPaperImport(job.id);
       message.success("题目、标准答案、教师解析和评分点已写入当前考试");
       await loadConfig(selectedExam.id);
@@ -642,16 +653,11 @@ export function PaperRubricPage({
 
 	async function saveImportReview(job: PaperImportJob) {
 		if (!selectedExam) return;
+		const invalidRubric = reviewDrafts.find(reviewRubricHasScoreMismatch);
+		if (invalidRubric) { message.error(`第${invalidRubric.question_no}题评分细则分值不一致，不能确认`); return; }
 		setSavingImportReview(true);
 		try {
-			const confirmedDrafts = reviewDrafts.map((draft) => {
-				const fields = new Set(draft.human_confirmed_fields ?? []);
-				for (const field of ["question_no", "question_type", "score", "stem"]) fields.add(field);
-				if (draft.answer_key) fields.add("answer");
-				if (draft.solution) fields.add("solution");
-				if (draft.rubric) fields.add("rubric");
-				return { ...draft, human_confirmed_fields: [...fields] };
-			});
+			const confirmedDrafts = confirmedImportDrafts(reviewDrafts);
 			await savePaperImportReview(job.id, confirmedDrafts);
 			message.success("人工核对结果已保存，后续追加资料不会覆盖已确认字段");
 			await loadConfig(selectedExam.id);
@@ -807,20 +813,11 @@ export function PaperRubricPage({
 		? latestPaperImport.structured_issues.filter((issue) => issue.severity !== "info")
 		: (latestPaperImport?.issues ?? []).map((message) => ({ message, certainty: "unknown" as const }));
 	const importSummary = latestPaperImport ? paperImportSummary(latestPaperImport) : null;
-	const canEditImportSources = latestPaperImport?.status === "review_required" || latestPaperImport?.status === "failed";
+	const invalidReviewRubric = reviewDrafts.some(reviewRubricHasScoreMismatch);
+	const canEditImportSources = latestPaperImport?.status === "processing" || latestPaperImport?.status === "review_required" || latestPaperImport?.status === "failed";
 	function updateReviewDraft(index: number, field: string, patch: Partial<PaperImportDraftQuestion>) {
 		setReviewDrafts((current) => current.map((draft, draftIndex) => draftIndex === index ? markImportFieldConfirmed(draft, field, patch) : draft));
 	}
-	const reviewColumns: TableColumnsType<PaperImportDraftQuestion> = [
-		{ title: "题号", width: 90, render: (_, item, index) => <Input value={item.question_no} onChange={(event) => updateReviewDraft(index, "question_no", { question_no: event.target.value })} /> },
-		{ title: "题型", width: 160, render: (_, item, index) => <Select value={item.question_type || undefined} options={questionTypeOptions} onChange={(value) => updateReviewDraft(index, "question_type", { question_type: value })} /> },
-		{ title: "分值", width: 100, render: (_, item, index) => <InputNumber min={0} value={item.score} onChange={(value) => updateReviewDraft(index, "score", { score: Number(value ?? 0) })} /> },
-		{ title: "题干", width: 280, render: (_, item, index) => <Input.TextArea autoSize={{ minRows: 1, maxRows: 4 }} value={item.stem} onChange={(event) => updateReviewDraft(index, "stem", { stem: event.target.value })} /> },
-		{ title: "标准答案", width: 180, render: (_, item, index) => <Input value={String(item.answer_key?.standard_answer ?? "")} onChange={(event) => updateReviewDraft(index, "answer", { answer_key: { standard_answer: event.target.value, equivalent_answers: item.answer_key?.equivalent_answers ?? [], tolerance: item.answer_key?.tolerance ?? {} } })} /> },
-		{ title: "教师解析", width: 260, render: (_, item, index) => <Input.TextArea placeholder="可选；与评分细则分开保存" autoSize={{ minRows: 1, maxRows: 4 }} value={item.solution?.raw_text ?? ""} onChange={(event) => updateReviewDraft(index, "solution", { solution: { raw_text: event.target.value, steps: item.solution?.steps ?? [], source_refs: item.solution?.source_refs ?? item.source_refs } })} /> },
-		{ title: "评分细则", width: 280, render: (_, item, index) => <Input.TextArea placeholder="主观题必须填写给分依据" autoSize={{ minRows: 1, maxRows: 4 }} value={item.rubric?.points?.[0]?.description ?? ""} onChange={(event) => updateReviewDraft(index, "rubric", { rubric: event.target.value.trim() ? { status: "draft", max_score: item.score, points: [{ id: "human-review-p1", description: event.target.value, score: item.score, required: true }], deductions: [], examples: [] } : undefined })} /> }
-		,{ title: "证据", width: 90, render: (_, item) => item.source_refs[0]?.file_asset_id ? <Button type="link" size="small" onClick={() => void openImportSource(item.source_refs[0].file_asset_id, item.source_refs[0].page_no)}>查看来源</Button> : "—" }
-	];
   const editorVisible = !loading && !error && Boolean(selectedExam) && !configLoading && !configError;
 
   return (
@@ -879,13 +876,15 @@ export function PaperRubricPage({
             <div className="section-head">
               <div>
 						<h2>上传考试资料</h2>
-						<p>把试题、答案、解析直接放到这里，系统会自动识别内容并进行匹配。</p>
+						<p>把试题、答案、解析、评分标准直接放到这里，系统会自动识别内容并进行匹配。</p>
               </div>
             </div>
 				<Upload.Dragger {...uploadProps} disabled={!canManage || parsing} className="paper-import-dropzone">
-					<FileUp size={22} />
-					<strong>{parsing ? "正在上传并识别…" : "点击选择、拖拽，或直接 Ctrl+V / Cmd+V 粘贴"}</strong>
-					<span>PDF、Word、PNG、JPG、JPEG、TIFF；可一次添加多份资料</span>
+					<div className="paper-import-upload-content">
+						<FileUp size={22} />
+						<strong>{parsing ? "正在上传并识别…" : "点击选择、拖拽，或直接 Ctrl+V / Cmd+V 粘贴"}</strong>
+						<span>PDF、Word、PNG、JPG、JPEG、TIFF；可一次添加多份资料</span>
+					</div>
 				</Upload.Dragger>
 				{latestPaperImport?.sources.length ? (
 					<List size="small" className="paper-import-source-list" dataSource={latestPaperImport.sources} renderItem={(source, index) => (
@@ -896,7 +895,7 @@ export function PaperRubricPage({
 							<Select<PaperImportRole> key="role" size="small" aria-label="资料类型" value={source.role_hint} options={importRoleOptions} disabled={!canEditImportSources || updatingImportSources} onChange={(roleHint) => void replaceImportSources(latestPaperImport, sourcesAfterRoleChange(latestPaperImport.sources, source.id, roleHint))} />,
 							<Button key="remove" type="text" danger size="small" aria-label="删除资料" icon={<Trash2 size={14} />} disabled={!canEditImportSources || updatingImportSources} onClick={() => void removeImportSource(latestPaperImport, source.id)} />
 						]} extra={<StatusTag tone={source.processing_status === "processed" ? "success" : source.processing_status === "failed" ? "danger" : "processing"}>{source.processing_status === "processed" ? "已识别" : source.processing_status === "failed" ? "失败" : "处理中"}</StatusTag>}>
-							<List.Item.Meta title={`${source.document_index + 1}. ${source.original_name || "考试资料"}`} description={`识别内容：${source.detected_role === "question" ? "题目" : source.detected_role === "answer" ? "答案" : source.detected_role === "solution" ? "解析" : source.detected_role === "mixed" ? "混合内容" : "识别中"}${source.role_confidence ? ` · 置信度 ${Math.round(source.role_confidence * 100)}%` : ""}`} />
+							<List.Item.Meta title={`${source.document_index + 1}. ${source.original_name || "考试资料"}`} description={`识别内容：${source.detected_role === "question" ? "题目" : source.detected_role === "answer" ? "答案" : source.detected_role === "solution" ? "解析" : source.detected_role === "rubric" ? "评分标准" : source.detected_role === "mixed" ? "混合内容" : "识别中"}${source.role_confidence ? ` · 置信度 ${Math.round(source.role_confidence * 100)}%` : ""}`} />
 						</List.Item>
 					)} />
 				) : null}
@@ -909,16 +908,16 @@ export function PaperRubricPage({
                   <h2>自动识别结果</h2>
                   <p>
                     {latestPaperImport.status === "review_required"
-										? `已识别题目 ${latestPaperImport.question_candidates?.length ?? latestPaperImport.questions.length}、答案 ${latestPaperImport.answer_candidates?.length ?? 0}、解析 ${latestPaperImport.solution_candidates?.length ?? 0}`
+						? `已识别题目 ${latestPaperImport.question_candidates?.length ?? latestPaperImport.questions.length}、答案 ${latestPaperImport.answer_candidates?.length ?? 0}、解析 ${latestPaperImport.solution_candidates?.length ?? 0}、评分标准 ${latestPaperImport.rubric_candidates?.length ?? 0}`
                       : latestPaperImport.status === "applied"
                         ? "已确认并写入当前考试"
                         : latestPaperImport.status === "failed"
-                          ? getSafeUserText(latestPaperImport.issues[0], "识别失败")
+                          ? getPaperImportUserMessage(latestPaperImport.issues[0], "考试资料识别失败，请检查资料后重试")
                           : "正在识别考试资料中的题目、答案与解析"}
                   </p>
                 </div>
                 {latestPaperImport.status === "review_required" ? (
-					<Space><Button loading={savingImportReview} onClick={() => void saveImportReview(latestPaperImport)}>保存人工核对</Button><Button type="primary" loading={parsing} disabled={hasBlockingImportIssues(latestPaperImport)} onClick={() => void confirmPaperImport(latestPaperImport)}>确认导入</Button></Space>
+					<Space><Button loading={savingImportReview} onClick={() => void saveImportReview(latestPaperImport)}>保存人工核对</Button><Button type="primary" loading={parsing} disabled={hasBlockingImportIssues(latestPaperImport) || invalidReviewRubric} onClick={() => void confirmPaperImport(latestPaperImport)}>确认导入</Button></Space>
                 ) : null}
               </div>
               {latestPaperImport.status === "review_required" ? (
@@ -926,14 +925,16 @@ export function PaperRubricPage({
 					<span><strong>{importSummary?.questions ?? 0}</strong> 道题目</span>
 					<span><strong>{importSummary?.answers ?? 0}</strong> 个答案</span>
 					<span><strong>{importSummary?.solutions ?? 0}</strong> 份解析</span>
+					<span><strong>{latestPaperImport.rubric_candidates?.length ?? 0}</strong> 份评分标准</span>
 					<span><strong>{importSummary?.reviewIssues ?? 0}</strong> 项需核对</span>
                   <span><strong>{latestPaperImport.questions.reduce((sum, item) => sum + item.score, 0)}</strong> 分</span>
                 </div>
               ) : null}
-			{latestPaperImport.status === "review_required" && reviewDrafts.length ? <ResponsiveTable<PaperImportDraftQuestion> rowKey={(item) => `${item.question_no}-${reviewDrafts.indexOf(item)}`} dataSource={reviewDrafts} columns={reviewColumns} pagination={false} size="small" /> : null}
+			{latestPaperImport.status === "review_required" && reviewDrafts.length ? <PaperImportReviewPanel job={latestPaperImport} drafts={reviewDrafts} onChange={updateReviewDraft} onOpenSource={(ref) => void openImportSource(ref.file_asset_id, ref.page_no)} /> : null}
+			{latestPaperImport.status === "applied" ? <div className="paper-import-result"><div className="paper-import-facts"><span>已写入题目：<strong>{latestPaperImport.questions.length}</strong></span><span>已配置答案：<strong>{latestPaperImport.questions.filter((item) => item.answer_key).length}</strong></span><span>已导入解析：<strong>{latestPaperImport.questions.filter((item) => item.solution).length}</strong></span><span>已配置评分标准：<strong>{latestPaperImport.questions.filter((item) => item.rubric).length}</strong></span><span>已锁定评分标准：<strong>{latestPaperImport.questions.filter((item) => item.rubric?.status === "locked").length}</strong></span><span>仍需处理：<strong>{latestPaperImport.questions.filter((item) => rubricRequiredArchetypes.has(item.assessment_archetype ?? "") && item.rubric?.status !== "locked").length}</strong></span></div><Space wrap><Button onClick={() => document.getElementById("paper-question-summary")?.scrollIntoView({ behavior: "smooth", block: "start" })}>去逐题校对</Button>{initialExamId && onNavigate ? <Button type="primary" onClick={() => onNavigate(`/exams/${encodeURIComponent(initialExamId)}/settings`)}>去考试准备</Button> : null}</Space></div> : null}
 			  {visibleImportIssues.length ? (
 				<Alert type={latestPaperImport.status === "failed" || (latestPaperImport.structured_issues ?? []).some((item) => item.severity === "error") ? "error" : "warning"} showIcon message="需要核对" description={
-					<ul className="validation-issue-list">{visibleImportIssues.map((issue, index) => <li key={`${issue.message}-${index}`}><strong>{"question_no" in issue && issue.question_no ? `第${issue.question_no}题：` : ""}</strong>{getSafeUserText(issue.message, "考试资料存在需要核对的内容")}{issue.certainty === "suspected" ? "（疑似）" : ""}{"source_refs" in issue && issue.source_refs?.[0]?.file_asset_id ? <Button type="link" size="small" onClick={() => void openImportSource(issue.source_refs[0].file_asset_id, issue.source_refs[0].page_no)}>查看来源</Button> : null}</li>)}</ul>
+					<ul className="validation-issue-list">{visibleImportIssues.map((issue, index) => <li key={`${issue.message}-${index}`}><strong>{"question_no" in issue && issue.question_no ? `第${issue.question_no}题：` : ""}</strong>{getPaperImportUserMessage(issue.message, "考试资料存在需要核对的内容")}{issue.certainty === "suspected" ? "（疑似）" : ""}{"source_refs" in issue && issue.source_refs?.[0]?.file_asset_id ? <Button type="link" size="small" onClick={() => void openImportSource(issue.source_refs[0].file_asset_id, issue.source_refs[0].page_no)}>查看来源</Button> : null}</li>)}</ul>
 				} />
               ) : null}
             </section>
@@ -950,8 +951,8 @@ export function PaperRubricPage({
                 ) : (
                   <ul className="validation-issue-list">
                     {validation.issues.map((issue, index) => (
-                      <li key={`${issue.code}-${index}`} title={issue.code}>
-                        {getSafeUserText(issue.message, "考试资料存在需要核对的内容")}
+                      <li key={`${issue.code}-${index}`}>
+                        {getPaperImportUserMessage(issue.message, "考试资料存在需要核对的内容")}
                       </li>
                     ))}
                   </ul>
@@ -960,7 +961,7 @@ export function PaperRubricPage({
             />
           ) : null}
 
-          <section className="workspace-section paper-question-summary">
+          <section id="paper-question-summary" className="workspace-section paper-question-summary">
             <div>
               <strong>{questions.length}</strong>
               <span>道题目</span>

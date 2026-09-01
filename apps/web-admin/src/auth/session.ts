@@ -33,10 +33,12 @@ export function hasAnyPermission(user: SessionUser | null, permissions: string[]
 
 export function productIdentityLabel(user: SessionUser): string {
   if (user.roles.includes("platform_admin")) return "平台管理";
-  if (user.roles.some((role) => ["tenant_admin", "school_admin"].includes(role))) return "学校管理";
+  if (user.roles.includes("tenant_admin")) return "机构管理员";
+  if (user.roles.includes("school_admin")) return "学校管理员";
   if (user.roles.includes("teacher")) return "教师工作台";
   if (user.roles.includes("grader")) return "阅卷工作台";
   if (user.roles.includes("arbitrator")) return "仲裁工作台";
+  if (user.roles.includes("auditor")) return "审计工作台";
   if (user.roles.includes("student")) return "学生端";
   return "工作台";
 }

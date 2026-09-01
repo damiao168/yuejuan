@@ -109,21 +109,60 @@ func buildReadiness(total float64, classCount int, studentCount int, papers []Pa
 	scoreTotal := 0.0
 	answersOK := len(canonicalQuestions) > 0
 	rubricsOK := len(canonicalQuestions) > 0
+	requiredAnswers, configuredAnswers := 0, 0
+	requiredRubrics, configuredRubrics, lockedRubrics := 0, 0, 0
+	missingAnswers, missingRubrics, unlockedRubrics, mismatchRubrics := []string{}, []string{}, []string{}, []string{}
 	for index := range canonicalQuestions {
 		question := &canonicalQuestions[index]
 		scoreTotal += question.Score
 		archetype := readinessAssessmentArchetype(*question)
 		question.AssessmentArchetype = archetype
-		if questionRequiresStandardAnswerForArchetype(archetype) && (question.AnswerKey == nil || emptyAnswer(question.AnswerKey.StandardAnswer)) {
-			answersOK = false
+		if questionRequiresStandardAnswerForArchetype(archetype) {
+			requiredAnswers++
+			if question.AnswerKey == nil || emptyAnswer(question.AnswerKey.StandardAnswer) {
+				answersOK = false
+				missingAnswers = append(missingAnswers, question.QuestionNo)
+			} else {
+				configuredAnswers++
+			}
 		}
-		if questionRequiresRubricForArchetype(archetype) && (question.Rubric == nil || question.Rubric.Status != "locked" || !scoreEqual(question.Rubric.MaxScore, question.Score)) {
-			rubricsOK = false
+		if questionRequiresRubricForArchetype(archetype) {
+			requiredRubrics++
+			if question.Rubric == nil {
+				rubricsOK = false
+				missingRubrics = append(missingRubrics, question.QuestionNo)
+			} else {
+				configuredRubrics++
+				if question.Rubric.Status == "locked" {
+					lockedRubrics++
+				} else {
+					rubricsOK = false
+					unlockedRubrics = append(unlockedRubrics, question.QuestionNo)
+				}
+				if !scoreEqual(question.Rubric.MaxScore, question.Score) || !scoreEqual(SumRubricPoints(question.Rubric.Points), question.Score) {
+					rubricsOK = false
+					mismatchRubrics = append(mismatchRubrics, question.QuestionNo)
+				}
+			}
 		}
 	}
 	add("total_score", "题目总分", len(questions) > 0 && scoreEqual(scoreTotal, total), fmt.Sprintf("题目合计 %.2f 分，考试总分 %.2f 分", scoreTotal, total), "questions")
-	add("answer_keys", "标准答案", answersOK, "需要唯一或参考答案的题型必须配置标准答案；开放写作题可仅使用评分细则", "questions")
-	add("rubrics", "主观题 Rubric", rubricsOK, "所有主观题需要锁定且分值匹配的 Rubric", "questions")
+	answerMessage := fmt.Sprintf("需要标准答案 %d 题，已配置 %d 题", requiredAnswers, configuredAnswers)
+	if len(missingAnswers) > 0 {
+		answerMessage += "；缺少 " + compactQuestionNumbers(missingAnswers)
+	}
+	rubricMessage := fmt.Sprintf("主观题共 %d 题：已配置 %d 题，已锁定 %d 题", requiredRubrics, configuredRubrics, lockedRubrics)
+	if len(missingRubrics) > 0 {
+		rubricMessage += "；缺少评分标准 " + compactQuestionNumbers(missingRubrics)
+	}
+	if len(unlockedRubrics) > 0 {
+		rubricMessage += "；待锁定 " + compactQuestionNumbers(unlockedRubrics)
+	}
+	if len(mismatchRubrics) > 0 {
+		rubricMessage += "；分值不一致 " + compactQuestionNumbers(mismatchRubrics)
+	}
+	add("answer_keys", "标准答案", answersOK, answerMessage, "questions")
+	add("rubrics", "主观题评分标准", rubricsOK, rubricMessage, "questions")
 
 	var locked *AnswerSheetTemplate
 	for index := range templates {
@@ -163,6 +202,20 @@ func buildReadiness(total float64, classCount int, studentCount int, papers []Pa
 		Templates    []AnswerSheetTemplate
 	}{total, classCount, studentCount, papers, canonicalQuestions, templates}
 	return ReadinessResult{Ready: ready, ConfigurationHash: stableContentHash(configuration), Checks: checks}
+}
+
+func compactQuestionNumbers(values []string) string {
+	limit := len(values)
+	if limit > 5 {
+		limit = 5
+	}
+	message := strings.Join(values[:limit], "、")
+	if len(values) > limit {
+		message += fmt.Sprintf(" 等 %d 题", len(values))
+	} else {
+		message += fmt.Sprintf("（%d 题）", len(values))
+	}
+	return message
 }
 
 // readinessAssessmentArchetype mirrors the default persisted by

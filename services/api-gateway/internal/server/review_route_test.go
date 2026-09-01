@@ -231,14 +231,14 @@ func TestReviewWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 	req = reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+firstID, "", teacherToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
+	if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
 		t.Fatalf("teacher with review:manage must not read another reviewer's task, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	req = reviewAuthedRequest(http.MethodPost, "/api/v1/review-tasks/"+secondID+"/assign", `{"assigned_to":"`+reviewGraderID+`"}`, teacherToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
+	if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
 		t.Fatalf("teacher with review:manage must not assign review tasks, got %d %s", rec.Code, rec.Body.String())
 	}
 
@@ -280,14 +280,14 @@ func TestReviewWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 	req = reviewAuthedRequest(http.MethodGet, "/api/v1/answer-segments/segment-1/image", "", teacherToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
+	if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
 		t.Fatalf("non-admin teacher must not bypass task scoping through the generic segment image route, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	req = reviewAuthedRequest(http.MethodGet, "/api/v1/answer-segments/segment-1/evidence", "", teacherToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
+	if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
 		t.Fatalf("non-admin teacher must not read arbitrary segment evidence, got %d %s", rec.Code, rec.Body.String())
 	}
 
@@ -697,7 +697,7 @@ func TestReviewOriginalImageRequiresAdministratorRole(t *testing.T) {
 			req := reviewAuthedRequest(http.MethodGet, "/api/v1/review-tasks/"+taskID+"/original-image", "", token)
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
-			if rec.Code != http.StatusForbidden {
+			if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
 				t.Fatalf("%s must not access an original review image despite management permissions, got %d %s", username, rec.Code, rec.Body.String())
 			}
 		})
@@ -919,14 +919,14 @@ func TestArbitrationWorkPermissionIsScopedToAssignedTasks(t *testing.T) {
 	req = reviewAuthedRequest(http.MethodGet, "/api/v1/arbitration-tasks/"+arbitrationID, "", teacherToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
+	if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
 		t.Fatalf("teacher with arbitration:manage must not read an unassigned arbitration task, got %d %s", rec.Code, rec.Body.String())
 	}
 
 	req = reviewAuthedRequest(http.MethodPost, "/api/v1/arbitration-tasks/"+arbitrationID+"/assign", `{"assigned_to":"`+reviewArbitratorID+`","expected_revision":1}`, teacherToken)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
+	if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
 		t.Fatalf("teacher with arbitration:manage must not assign arbitration tasks, got %d %s", rec.Code, rec.Body.String())
 	}
 
@@ -1102,7 +1102,7 @@ func reviewAuthStoreByUser(t *testing.T, permissionsByUsername map[string][]stri
 			DisplayName: "Review Manager",
 			Status:      "active",
 			Roles:       []string{"school_admin"},
-			DataScope:   map[string]any{"scope": "school"},
+			DataScope:   map[string]any{"scope": "school", "synthetic": true},
 		},
 		{
 			ID:          reviewGraderID,
@@ -1112,7 +1112,7 @@ func reviewAuthStoreByUser(t *testing.T, permissionsByUsername map[string][]stri
 			DisplayName: "Review Grader",
 			Status:      "active",
 			Roles:       []string{"grader"},
-			DataScope:   map[string]any{"scope": "assigned"},
+			DataScope:   map[string]any{"scope": "assigned", "synthetic": true},
 		},
 		{
 			ID:          reviewSecondGraderID,
@@ -1122,7 +1122,7 @@ func reviewAuthStoreByUser(t *testing.T, permissionsByUsername map[string][]stri
 			DisplayName: "Review Second Grader",
 			Status:      "active",
 			Roles:       []string{"grader"},
-			DataScope:   map[string]any{"scope": "assigned"},
+			DataScope:   map[string]any{"scope": "assigned", "synthetic": true},
 		},
 		{
 			ID:          reviewArbitratorID,
@@ -1132,7 +1132,7 @@ func reviewAuthStoreByUser(t *testing.T, permissionsByUsername map[string][]stri
 			DisplayName: "Review Arbitrator",
 			Status:      "active",
 			Roles:       []string{"arbitrator"},
-			DataScope:   map[string]any{"scope": "assigned"},
+			DataScope:   map[string]any{"scope": "assigned", "synthetic": true},
 		},
 		{
 			ID:          reviewOtherArbitratorID,
@@ -1142,7 +1142,7 @@ func reviewAuthStoreByUser(t *testing.T, permissionsByUsername map[string][]stri
 			DisplayName: "Review Other Arbitrator",
 			Status:      "active",
 			Roles:       []string{"arbitrator"},
-			DataScope:   map[string]any{"scope": "assigned"},
+			DataScope:   map[string]any{"scope": "assigned", "synthetic": true},
 		},
 	} {
 		if scopedPermissions, ok := permissionsByUsername[user.Username]; ok {

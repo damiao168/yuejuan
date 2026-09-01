@@ -8,7 +8,9 @@ from urllib.parse import urlsplit
 
 
 class APIError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class AuthenticationError(APIError):
@@ -206,9 +208,9 @@ class EduGradeClient:
             with request.urlopen(req, timeout=60) as response:
                 return response.read()
         except error.HTTPError as exc:
-            if exc.code in (401, 403):
+            if exc.code == 401:
                 raise AuthenticationError(f"download unauthorized: {exc.code}") from exc
-            raise APIError(f"download failed: {exc.code}") from exc
+            raise APIError(f"download failed: {exc.code}", status_code=exc.code) from exc
         except OSError as exc:
             raise APIError("download failed") from exc
 
@@ -232,9 +234,9 @@ class EduGradeClient:
             with request.urlopen(req, timeout=timeout) as response:
                 raw = response.read()
         except error.HTTPError as exc:
-            if exc.code in (401, 403):
+            if exc.code == 401:
                 raise AuthenticationError(f"unauthorized: {exc.code}") from exc
-            raise APIError(f"api request failed: {exc.code}") from exc
+            raise APIError(f"api request failed: {exc.code}", status_code=exc.code) from exc
         except OSError as exc:
             raise APIError("api request failed") from exc
         if not raw:

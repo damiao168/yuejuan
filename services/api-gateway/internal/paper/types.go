@@ -45,6 +45,7 @@ type PaperImportDraftQuestion struct {
 	CandidateID          string                 `json:"candidate_id,omitempty"`
 	AnswerCandidateID    string                 `json:"answer_candidate_id,omitempty"`
 	SolutionCandidateID  string                 `json:"solution_candidate_id,omitempty"`
+	RubricCandidateID    string                 `json:"rubric_candidate_id,omitempty"`
 	SourceRefs           []PaperImportSourceRef `json:"source_refs"`
 	QuestionNo           string                 `json:"question_no"`
 	QuestionType         string                 `json:"question_type"`
@@ -140,6 +141,27 @@ type SolutionCandidate struct {
 	Issues               []string               `json:"issues"`
 }
 
+type RubricCandidatePoint struct {
+	ID                   string                `json:"id"`
+	Description          string                `json:"description"`
+	Score                *float64              `json:"score,omitempty"`
+	Required             *bool                 `json:"required,omitempty"`
+	EvidenceRequirements []EvidenceRequirement `json:"evidence_requirements,omitempty"`
+}
+
+type RubricCandidate struct {
+	CandidateID          string                 `json:"candidate_id"`
+	QuestionNoHint       string                 `json:"question_no_hint,omitempty"`
+	QuestionNoNormalized string                 `json:"question_no_normalized,omitempty"`
+	MaxScore             *float64               `json:"max_score,omitempty"`
+	Points               []RubricCandidatePoint `json:"points"`
+	Deductions           []any                  `json:"deductions"`
+	Examples             []any                  `json:"examples"`
+	Confidence           float64                `json:"confidence"`
+	SourceRefs           []PaperImportSourceRef `json:"source_refs"`
+	Issues               []string               `json:"issues"`
+}
+
 type SolutionInput struct {
 	RawText    string                 `json:"raw_text"`
 	Steps      []SolutionStep         `json:"steps"`
@@ -171,6 +193,7 @@ type PaperImportJob struct {
 	QuestionCandidates []QuestionCandidate        `json:"question_candidates"`
 	AnswerCandidates   []AnswerCandidate          `json:"answer_candidates"`
 	SolutionCandidates []SolutionCandidate        `json:"solution_candidates"`
+	RubricCandidates   []RubricCandidate          `json:"rubric_candidates"`
 	StructuredIssues   []PaperImportIssue         `json:"structured_issues"`
 	Questions          []PaperImportDraftQuestion `json:"questions"`
 	Issues             []string                   `json:"issues"`
@@ -362,16 +385,17 @@ type EvidenceRequirement struct {
 }
 
 type Rubric struct {
-	ID                    string                 `json:"id"`
-	QuestionID            string                 `json:"question_id"`
-	Version               string                 `json:"version"`
-	Status                string                 `json:"status"`
-	MaxScore              float64                `json:"max_score"`
-	Points                []RubricPoint          `json:"points"`
-	Deductions            []any                  `json:"deductions"`
-	Examples              []any                  `json:"examples"`
-	PaperImportID         string                 `json:"paper_import_id,omitempty"`
-	PaperImportSourceRefs []PaperImportSourceRef `json:"paper_import_source_refs,omitempty"`
+	ID                     string                 `json:"id"`
+	QuestionID             string                 `json:"question_id"`
+	Version                string                 `json:"version"`
+	Status                 string                 `json:"status"`
+	MaxScore               float64                `json:"max_score"`
+	Points                 []RubricPoint          `json:"points"`
+	Deductions             []any                  `json:"deductions"`
+	Examples               []any                  `json:"examples"`
+	PaperImportID          string                 `json:"paper_import_id,omitempty"`
+	PaperImportCandidateID string                 `json:"paper_import_candidate_id,omitempty"`
+	PaperImportSourceRefs  []PaperImportSourceRef `json:"paper_import_source_refs,omitempty"`
 }
 
 type RubricInput struct {
@@ -485,7 +509,7 @@ type Store interface {
 	CreatePaperImport(ctx context.Context, tenantID string, examID string, userID string, input CreatePaperImportInput) (PaperImportJob, error)
 	AddPaperImportSources(ctx context.Context, tenantID string, id string, userID string, input AddPaperImportSourcesInput) (PaperImportJob, error)
 	ReplacePaperImportSources(ctx context.Context, tenantID string, id string, userID string, input ReplacePaperImportSourcesInput) (PaperImportJob, error)
-	CompletePaperImportCandidates(ctx context.Context, tenantID string, id string, detected []PaperImportDetectedDocument, questions []QuestionCandidate, answers []AnswerCandidate, solutions []SolutionCandidate, issues []PaperImportIssue) (PaperImportJob, error)
+	CompletePaperImportCandidates(ctx context.Context, tenantID string, id string, detected []PaperImportDetectedDocument, questions []QuestionCandidate, answers []AnswerCandidate, solutions []SolutionCandidate, rubrics []RubricCandidate, issues []PaperImportIssue) (PaperImportJob, error)
 	SavePaperImportReview(ctx context.Context, tenantID string, id string, userID string, input ReviewPaperImportInput) (PaperImportJob, error)
 	CompletePaperImport(ctx context.Context, tenantID string, id string, questions []PaperImportDraftQuestion, issues []string) (PaperImportJob, error)
 	FailPaperImport(ctx context.Context, tenantID string, id string, errorCode string, issues []string) (PaperImportJob, error)

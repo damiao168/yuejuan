@@ -64,6 +64,23 @@ func TestBootstrapInitialAdminRejectsWeakPassword(t *testing.T) {
 	}
 }
 
+func TestBootstrapInitialAdminRejectsNonPlatformIdentities(t *testing.T) {
+	for _, input := range []auth.BootstrapAdminInput{
+		{TenantCode: "demo", RoleCode: "tenant_admin", Username: "admin", Password: "StrongStart123!"},
+		{TenantCode: "platform", RoleCode: "school_admin", Username: "admin", Password: "StrongStart123!"},
+		{TenantCode: "platform", RoleCode: "page_processing_worker", Username: "worker", Password: "StrongStart123!"},
+	} {
+		store := &fakeBootstrapStore{}
+		_, err := auth.BootstrapInitialAdmin(context.Background(), store, input)
+		if !errors.Is(err, auth.ErrInvalidBootstrapInput) {
+			t.Fatalf("%s/%s expected invalid bootstrap input, got %v", input.TenantCode, input.RoleCode, err)
+		}
+		if store.checkedTenantCode != "" || store.upsertCalled {
+			t.Fatal("invalid bootstrap identity must be rejected before store access")
+		}
+	}
+}
+
 func TestBootstrapInitialAdminRejectsOversizedInputBeforeStoreAccess(t *testing.T) {
 	store := &fakeBootstrapStore{}
 

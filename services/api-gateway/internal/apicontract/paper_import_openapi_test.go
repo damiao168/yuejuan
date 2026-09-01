@@ -49,5 +49,49 @@ func TestPaperImportOpenAPIContract(t *testing.T) {
 	assertRequired(t, object(t, schemas, "PaperImportQuestionCandidate"), []string{"candidate_id", "source_refs", "confidence"})
 	assertRequired(t, object(t, schemas, "PaperImportAnswerCandidate"), []string{"candidate_id", "source_refs", "confidence"})
 	assertRequired(t, object(t, schemas, "PaperImportSolutionCandidate"), []string{"candidate_id", "raw_text", "steps", "source_refs", "confidence"})
-	assertRequired(t, object(t, schemas, "PaperImportJob"), []string{"sources", "question_candidates", "answer_candidates", "solution_candidates", "structured_issues", "questions"})
+	assertEnumContains(t, object(t, schemas, "PaperImportRole"), "rubric")
+	assertEnumContains(t, object(t, object(t, object(t, schemas, "PaperImportSource"), "properties"), "detected_role"), "rubric")
+	assertRequired(t, object(t, schemas, "PaperImportRubricEvidenceRequirement"), []string{"type"})
+	assertRequired(t, object(t, schemas, "PaperImportRubricCandidatePoint"), []string{"id", "description"})
+	assertRequired(t, object(t, schemas, "PaperImportRubricCandidate"), []string{"candidate_id", "points", "source_refs", "confidence"})
+	assertPropertyRef(t, object(t, schemas, "PaperImportRubricCandidatePoint"), "evidence_requirements", "#/components/schemas/PaperImportRubricEvidenceRequirement")
+	assertProperty(t, object(t, schemas, "PaperImportDraftQuestion"), "rubric_candidate_id")
+	job := object(t, schemas, "PaperImportJob")
+	assertRequired(t, job, []string{"sources", "question_candidates", "answer_candidates", "solution_candidates", "rubric_candidates", "structured_issues", "questions"})
+	assertPropertyRef(t, job, "rubric_candidates", "#/components/schemas/PaperImportRubricCandidate")
+}
+
+func assertProperty(t *testing.T, schema map[string]any, property string) map[string]any {
+	t.Helper()
+	properties := object(t, schema, "properties")
+	value, ok := properties[property].(map[string]any)
+	if !ok {
+		t.Fatalf("schema property %q must be an object", property)
+	}
+	return value
+}
+
+func assertPropertyRef(t *testing.T, schema map[string]any, property, expected string) {
+	t.Helper()
+	propertySchema := assertProperty(t, schema, property)
+	if items, ok := propertySchema["items"].(map[string]any); ok {
+		propertySchema = items
+	}
+	if propertySchema["$ref"] != expected {
+		t.Fatalf("schema property %q ref = %#v, want %q", property, propertySchema["$ref"], expected)
+	}
+}
+
+func assertEnumContains(t *testing.T, schema map[string]any, expected string) {
+	t.Helper()
+	values, ok := schema["enum"].([]any)
+	if !ok {
+		t.Fatalf("schema enum must be an array: %#v", schema["enum"])
+	}
+	for _, value := range values {
+		if value == expected {
+			return
+		}
+	}
+	t.Fatalf("schema enum %#v is missing %q", values, expected)
 }

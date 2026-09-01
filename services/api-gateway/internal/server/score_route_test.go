@@ -234,7 +234,7 @@ func scoreAuthStoreWithStudents(t *testing.T) *auth.MemoryStore {
 			Status:      "active",
 			Roles:       []string{"teacher"},
 			Permissions: []string{"score:manage"},
-			DataScope:   map[string]any{"scope": "school"},
+			DataScope:   map[string]any{"scope": "school", "synthetic": true},
 		},
 		{
 			ID:          "00000000-0000-0000-0000-000000000951",
@@ -245,7 +245,7 @@ func scoreAuthStoreWithStudents(t *testing.T) *auth.MemoryStore {
 			Status:      "active",
 			Roles:       []string{"student"},
 			Permissions: []string{"student:grade:read"},
-			DataScope:   map[string]any{"scope": "self", "student_id": "student-1"},
+			DataScope:   map[string]any{"scope": "self", "student_id": "student-1", "synthetic": true},
 		},
 		{
 			ID:          "00000000-0000-0000-0000-000000000952",
@@ -256,7 +256,7 @@ func scoreAuthStoreWithStudents(t *testing.T) *auth.MemoryStore {
 			Status:      "active",
 			Roles:       []string{"student"},
 			Permissions: []string{"student:grade:read"},
-			DataScope:   map[string]any{"scope": "self", "student_id": "student-2"},
+			DataScope:   map[string]any{"scope": "self", "student_id": "student-2", "synthetic": true},
 		},
 	} {
 		store.AddUser(auth.UserWithPassword{User: user, PasswordHash: hash})

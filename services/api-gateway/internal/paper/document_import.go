@@ -42,6 +42,7 @@ type documentParseResponse struct {
 	QuestionCandidates []QuestionCandidate           `json:"question_candidates"`
 	AnswerCandidates   []AnswerCandidate             `json:"answer_candidates"`
 	SolutionCandidates []SolutionCandidate           `json:"solution_candidates"`
+	RubricCandidates   []RubricCandidate             `json:"rubric_candidates"`
 	Issues             []PaperImportIssue            `json:"issues"`
 }
 
@@ -125,7 +126,7 @@ func (s *DocumentImportService) completeParsedDocuments(ctx context.Context, ten
 		return failed, nil
 	}
 	parsed.Issues = append(parsed.Issues, extraIssues...)
-	return s.store.CompletePaperImportCandidates(ctx, tenantID, job.ID, parsed.Documents, parsed.QuestionCandidates, parsed.AnswerCandidates, parsed.SolutionCandidates, parsed.Issues)
+	return s.store.CompletePaperImportCandidates(ctx, tenantID, job.ID, parsed.Documents, parsed.QuestionCandidates, parsed.AnswerCandidates, parsed.SolutionCandidates, parsed.RubricCandidates, parsed.Issues)
 }
 
 func (s *DocumentImportService) CompleteOCR(ctx context.Context, tenantID, importID string, blocks []PaperImportOCRBlock) (PaperImportJob, error) {

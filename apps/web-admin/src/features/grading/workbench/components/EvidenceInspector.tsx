@@ -1,5 +1,6 @@
 import { Button, Empty, List, Space, Tabs, Tooltip } from "antd";
 import { BadgeCheck } from "lucide-react";
+import { getSafeUserText } from "../../../../api/client";
 import type { AiGrade } from "../../../../api/review";
 import { StatusTag } from "../../../../components/StatusTag";
 import { MathEvidenceInspector } from "../MathEvidenceInspector";
@@ -114,7 +115,7 @@ export function EvidenceInspector({
     return (
       <div className="evidence-job">
         <Space><StatusTag tone={job.result.passed ? "success" : "danger"}>{job.result.passed ? "通过" : "未通过"}</StatusTag>{job.needs_human_review ? <StatusTag tone="warning">需人工复核</StatusTag> : null}</Space>
-        <List size="small" dataSource={[...job.result.failed, ...job.result.warnings]} locale={{ emptyText: <Empty description="无失败项或警告" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }} renderItem={(item) => <List.Item><span title={item.code}>{item.message || "校验未通过"}</span></List.Item>} />
+        <List size="small" dataSource={[...job.result.failed, ...job.result.warnings]} locale={{ emptyText: <Empty description="无失败项或警告" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }} renderItem={(item) => <List.Item><span title={item.code}>{getSafeUserText(item.message, "校验未通过")}</span></List.Item>} />
       </div>
     );
   };

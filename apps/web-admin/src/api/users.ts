@@ -22,6 +22,8 @@ export interface CreateManagedUserPayload {
   display_name: string;
   password: string;
   role_code: string;
+  school_id?: string;
+  class_ids?: string[];
 }
 
 export async function listManagedUsers(filter: { q?: string; role?: string; limit?: number; cursor?: string } = {}) {

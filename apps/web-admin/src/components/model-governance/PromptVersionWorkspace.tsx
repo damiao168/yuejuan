@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Tag } from "antd";
 import { BookOpenText, FileText, LockKeyhole, RefreshCw, ShieldCheck } from "lucide-react";
-import { ApiClientError } from "../../api/client";
+import { ApiClientError, getUserErrorMessage } from "../../api/client";
 import {
   getCurrentRuntimePrompt,
   type RuntimePrompt,
@@ -44,15 +44,15 @@ function promptParts(component?: RuntimePromptComponent) {
 function promptLabel(component?: RuntimePromptComponent) {
   if (!component) return "系统提示词";
   const parts = promptParts(component);
-  if (!parts) return commonLabels[component.key] ?? component.key;
-  return `${subjectLabels[parts.subject] ?? parts.subject} · ${questionTypeLabels[parts.questionType] ?? parts.questionType}`;
+  if (!parts) return commonLabels[component.key] ?? "其他提示词";
+  return `${subjectLabels[parts.subject] ?? "其他学科"} · ${questionTypeLabels[parts.questionType] ?? "其他题型"}`;
 }
 
 function promptError(error: unknown) {
   if (error instanceof ApiClientError && error.code === "runtime_prompt_unavailable") {
     return "评分服务当前不可用，无法核对它实际加载的提示词。";
   }
-  return error instanceof Error ? error.message : "读取系统提示词失败。";
+  return getUserErrorMessage(error, "读取系统提示词失败。");
 }
 
 export function PromptVersionWorkspace() {
@@ -133,7 +133,7 @@ export function PromptVersionWorkspace() {
               onClick={() => setSelected(component.key)}
             >
               {component.key === "base" ? <ShieldCheck size={15} /> : <FileText size={15} />}
-              <span>{commonLabels[component.key] ?? component.key}</span>
+              <span>{commonLabels[component.key] ?? "其他提示词"}</span>
               <small>{component.filename}</small>
             </button>
           ))}
@@ -148,7 +148,7 @@ export function PromptVersionWorkspace() {
               onClick={() => selectSubject(subject, components)}
             >
               <BookOpenText size={15} />
-              <span>{subjectLabels[subject] ?? subject}</span>
+              <span>{subjectLabels[subject] ?? "其他学科"}</span>
               <small>{components.length} 种题型</small>
             </button>
           ))}
@@ -157,12 +157,12 @@ export function PromptVersionWorkspace() {
 
       <section className="prompt-version-inspector">
         {promptParts(active ?? selectedSubjectPrompts[0]) && (
-          <div className="prompt-question-types" aria-label={`${subjectLabels[selectedSubject] ?? selectedSubject}题型`}>
+          <div className="prompt-question-types" aria-label={`${subjectLabels[selectedSubject] ?? "其他学科"}题型`}>
             {selectedSubjectPrompts.map((component) => {
               const parts = promptParts(component);
               return (
                 <button type="button" key={component.key} className={component.key === selected ? "active" : ""} onClick={() => setSelected(component.key)}>
-                  {questionTypeLabels[parts?.questionType ?? ""] ?? parts?.questionType}
+                  {questionTypeLabels[parts?.questionType ?? ""] ?? "其他题型"}
                 </button>
               );
             })}

@@ -94,6 +94,7 @@ type ExamPreparationStores struct {
 	Segments               segment.Store
 	Assessments            assessment.Store
 	DashboardOrganizations dashboard.OrganizationSummaryStore
+	DashboardActivities    dashboard.ActivityStore
 }
 
 type ExamPreparationModule struct {
@@ -116,6 +117,7 @@ type ExamPreparationModule struct {
 
 	authStore              auth.Store
 	dashboardOrganizations dashboard.OrganizationSummaryStore
+	dashboardActivities    dashboard.ActivityStore
 }
 
 type ExamPreparationDependencies struct {
@@ -144,25 +146,26 @@ func NewExamPreparationModule(cfg config.Config, stores ExamPreparationStores, d
 		SegmentHandler:    segmentHandler,
 		AssessmentHandler: assessment.NewHandler(stores.Assessments, dependencies.AuthStore),
 		WorkspaceHandler: workspace.NewHandler(workspace.Dependencies{
-			Exams: stores.Exam, Papers: stores.Paper, Submissions: stores.Submissions, Assessments: stores.Assessments,
+			Exams: stores.Exam, Papers: stores.Paper, PaperImports: stores.Paper, Submissions: stores.Submissions, Assessments: stores.Assessments,
 		}),
 		DashboardHandler: dashboard.NewHandler(dashboard.Dependencies{
 			Exams: stores.Exam, Submissions: stores.Submissions, Audits: dependencies.AuthStore,
-			Organizations: stores.DashboardOrganizations,
+			Organizations: stores.DashboardOrganizations, Activities: stores.DashboardActivities,
 		}),
 		authStore:              dependencies.AuthStore,
 		dashboardOrganizations: stores.DashboardOrganizations,
+		dashboardActivities:    stores.DashboardActivities,
 	}
 }
 
 func (m *ExamPreparationModule) ConnectOperations(reviews review.Store, processingService *processing.Service) {
 	m.WorkspaceHandler = workspace.NewHandler(workspace.Dependencies{
-		Exams: m.ExamStore, Papers: m.PaperStore, Submissions: m.SubmissionStore,
+		Exams: m.ExamStore, Papers: m.PaperStore, PaperImports: m.PaperStore, Submissions: m.SubmissionStore,
 		Reviews: reviews, Assessments: m.AssessmentStore, Processing: processingService,
 	})
 	m.DashboardHandler = dashboard.NewHandler(dashboard.Dependencies{
 		Exams: m.ExamStore, Submissions: m.SubmissionStore, Reviews: reviews,
-		Audits: m.authStore, Organizations: m.dashboardOrganizations,
+		Audits: m.authStore, Organizations: m.dashboardOrganizations, Activities: m.dashboardActivities,
 	})
 }
 
@@ -175,6 +178,7 @@ func NewPostgresExamPreparationModule(infra *Infrastructure, identity *IdentityM
 		Segments:               segment.NewPostgresStore(infra.DB),
 		Assessments:            assessment.NewPostgresStore(infra.DB),
 		DashboardOrganizations: dashboard.NewPostgresOrganizationSummaryStore(infra.DB),
+		DashboardActivities:    dashboard.NewPostgresActivityStore(infra.DB),
 	}, ExamPreparationDependencies{
 		AuthStore: identity.AuthStore, ObjectStore: infra.ObjectStore, Reconciliation: infra.FileReconciler,
 	})
@@ -476,7 +480,8 @@ func NewReleaseModule(stores ReleaseStores, identity *IdentityModule, examModule
 			WithPublicationPublisher(releaseGatePublisher{
 				coordinator: releasegate.NewPublicationCoordinator(releaseGateService, scoreReleaseService),
 			}).
-			WithStudentQuestionImage(examModule.SegmentHandler.GetImage),
+			WithStudentQuestionImage(examModule.SegmentHandler.GetImage).
+			WithStudentPaperPageImage(examModule.SegmentHandler.GetPageImage),
 		ReleaseGateHandler:   releasegate.NewHandler(releaseGateService, identity.AuthStore),
 		StudentPortalHandler: studentportal.NewHandler(studentportal.NewService(stores.StudentPortal)),
 		RegradeReleaseHandler: regraderelease.NewHandler(

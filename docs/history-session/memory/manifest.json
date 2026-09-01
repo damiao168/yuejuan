@@ -1,0 +1,66 @@
+{
+  "version": 2,
+  "archive_revision": "sha256:420256b1b2a694f29e8fb5cb4f1ff3935bb12739799e16fdca72fe674a14639c",
+  "entries": [
+    {
+      "number": 1,
+      "path": "docs/history-session/1.md",
+      "title": "开发会话",
+      "created_at": "unix:1787910633",
+      "updated_at": "unix:1787910671",
+      "bytes": 1414,
+      "sha256": "8e3e94cc5567b8c7b00533f9ce740820852dcfad5caa26632fdbe0bfc39f75b4",
+      "keywords": [
+        "coding",
+        "tools",
+        "了解",
+        "你能做什么",
+        "开发会话",
+        "插件在当前工作区中的能力范围"
+      ]
+    },
+    {
+      "number": 2,
+      "path": "docs/history-session/2.md",
+      "title": "开发会话",
+      "created_at": "unix:1787911081",
+      "updated_at": "unix:1787911481",
+      "bytes": 5542,
+      "sha256": "1a11fa93ed06b4e7ee514d620484dbb5e9793cdd3240a5fd974231632cd163f0",
+      "keywords": [
+        "bootstrap",
+        "checkpoint",
+        "coding",
+        "current",
+        "cursor",
+        "history",
+        "initial",
+        "input",
+        "key",
+        "markdown",
+        "next",
+        "ok",
+        "path",
+        "raw",
+        "read",
+        "search",
+        "session",
+        "state",
+        "tools",
+        "true",
+        "user",
+        "yuejuan",
+        "不要要求",
+        "且会话目标一致后才能确认进度已保存",
+        "以及我本轮请求的逐字",
+        "先不要改动",
+        "先调用",
+        "先阅读返回的有界",
+        "再用",
+        "分页读取相关原始",
+        "则创建首个",
+        "初始化或恢复当前项目的"
+      ]
+    }
+  ]
+}

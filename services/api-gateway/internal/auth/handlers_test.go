@@ -38,7 +38,7 @@ func newTestStore(t *testing.T) *auth.MemoryStore {
 			Status:      "active",
 			Roles:       []string{"teacher"},
 			Permissions: []string{"system:read", "grading:review", "exam:manage"},
-			DataScope:   map[string]any{"scope": "school"},
+			DataScope:   map[string]any{"scope": "class", "class_ids": []any{"class-1"}},
 		},
 		PasswordHash: hash,
 	})
@@ -68,7 +68,11 @@ func newOrganizationAdminStore(t *testing.T) *auth.MemoryStore {
 		t.Fatalf("hash password: %v", err)
 	}
 	store := auth.NewMemoryStore()
-	store.AddRole("t-1", auth.AssignableRole{Code: "teacher", Name: "教师", ScopeType: "school"})
+	store.AddRole("t-1", auth.AssignableRole{Code: "teacher", Name: "教师", ScopeType: "class"})
+	store.AddRole("t-1", auth.AssignableRole{Code: "grader", Name: "阅卷员", ScopeType: "exam_task"})
+	store.AddRole("t-1", auth.AssignableRole{Code: "arbitrator", Name: "仲裁员", ScopeType: "exam_task"})
+	store.AddRole("t-1", auth.AssignableRole{Code: "student", Name: "学生", ScopeType: "self"})
+	store.AddRole("t-1", auth.AssignableRole{Code: "page_processing_worker", Name: "Worker", ScopeType: "service"})
 	store.AddRole("t-1", auth.AssignableRole{Code: "tenant_admin", Name: "租户管理员", ScopeType: "tenant"})
 	store.AddRole("t-2", auth.AssignableRole{Code: "grader", Name: "阅卷员", ScopeType: "exam_task"})
 	store.AddUser(auth.UserWithPassword{
@@ -95,7 +99,7 @@ func TestLoginMeLogout(t *testing.T) {
 	if meRec.Code != http.StatusOK {
 		t.Fatalf("me expected 200, got %d: %s", meRec.Code, meRec.Body.String())
 	}
-	if !strings.Contains(meRec.Body.String(), `"organization_scope"`) || !strings.Contains(meRec.Body.String(), `"tenant_wide":true`) {
+	if !strings.Contains(meRec.Body.String(), `"organization_scope"`) || !strings.Contains(meRec.Body.String(), `"tenant_wide":false`) || !strings.Contains(meRec.Body.String(), `"class_ids":["class-1"]`) {
 		t.Fatalf("me should expose resolved organization scope: %s", meRec.Body.String())
 	}
 
@@ -206,6 +210,7 @@ func TestOrganizationUserCreationRejectsOversizedFields(t *testing.T) {
 		"display_name": "Teacher",
 		"password":     "TeacherStart123!",
 		"role_code":    "teacher",
+		"school_id":    "school-1",
 	})
 	if err != nil {
 		t.Fatalf("marshal user payload: %v", err)
@@ -229,6 +234,7 @@ func TestOrganizationUserCreationRejectsOversizedRequestBody(t *testing.T) {
 		"display_name": strings.Repeat("T", 5*1024),
 		"password":     "TeacherStart123!",
 		"role_code":    "teacher",
+		"school_id":    "school-1",
 	})
 	if err != nil {
 		t.Fatalf("marshal user payload: %v", err)
@@ -247,7 +253,7 @@ func TestOrganizationUserCreationRejectsTrailingJSONValue(t *testing.T) {
 	store := newOrganizationAdminStore(t)
 	router := newTestRouter(store)
 	token := login(t, router, "demo", "admin", "AdminStart123!")
-	body := `{"username":"teacher","display_name":"Teacher","password":"TeacherStart123!","role_code":"teacher"}{}`
+	body := `{"username":"teacher","display_name":"Teacher","password":"TeacherStart123!","role_code":"teacher","school_id":"school-1"}{}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
@@ -264,7 +270,7 @@ func TestOrganizationAdminCreatesAndListsTenantUser(t *testing.T) {
 	token := login(t, router, "demo", "admin", "AdminStart123!")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{
-		"username":"teacher01","display_name":"张老师","password":"TeacherStart123!","role_code":"teacher"
+		"username":"teacher01","display_name":"张老师","password":"TeacherStart123!","role_code":"teacher","school_id":"school-1"
 	}`))
 	createReq.Header.Set("Authorization", "Bearer "+token)
 	createReq.Header.Set("Content-Type", "application/json")
@@ -289,7 +295,7 @@ func TestOrganizationAdminCreatesAndListsTenantUser(t *testing.T) {
 	rolesReq.Header.Set("Authorization", "Bearer "+token)
 	rolesRec := httptest.NewRecorder()
 	router.ServeHTTP(rolesRec, rolesReq)
-	if rolesRec.Code != http.StatusOK || !strings.Contains(rolesRec.Body.String(), `"code":"teacher"`) || strings.Contains(rolesRec.Body.String(), `"code":"grader"`) {
+	if rolesRec.Code != http.StatusOK || !strings.Contains(rolesRec.Body.String(), `"code":"teacher"`) || !strings.Contains(rolesRec.Body.String(), `"code":"grader"`) || strings.Contains(rolesRec.Body.String(), `"code":"tenant_admin"`) || strings.Contains(rolesRec.Body.String(), `"code":"page_processing_worker"`) {
 		t.Fatalf("roles must stay in current tenant, got %d: %s", rolesRec.Code, rolesRec.Body.String())
 	}
 
@@ -320,11 +326,11 @@ func TestOrganizationUserCreationRejectsDuplicateCrossTenantRoleAndTenantField(t
 		return rec
 	}
 
-	first := request(`{"username":"teacher01","display_name":"Teacher","password":"TeacherStart123!","role_code":"teacher"}`)
+	first := request(`{"username":"teacher01","display_name":"Teacher","password":"TeacherStart123!","role_code":"teacher","school_id":"school-1"}`)
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first create expected 201, got %d: %s", first.Code, first.Body.String())
 	}
-	duplicate := request(`{"username":"teacher01","display_name":"Teacher 2","password":"TeacherStart123!","role_code":"teacher"}`)
+	duplicate := request(`{"username":"teacher01","display_name":"Teacher 2","password":"TeacherStart123!","role_code":"teacher","school_id":"school-1"}`)
 	if duplicate.Code != http.StatusConflict {
 		t.Fatalf("duplicate expected 409, got %d: %s", duplicate.Code, duplicate.Body.String())
 	}
@@ -333,8 +339,8 @@ func TestOrganizationUserCreationRejectsDuplicateCrossTenantRoleAndTenantField(t
 		t.Fatalf("cross tenant role expected 400, got %d: %s", crossTenantRole.Code, crossTenantRole.Body.String())
 	}
 	privilegedRole := request(`{"username":"admin02","display_name":"Admin","password":"AdminStart123!","role_code":"tenant_admin"}`)
-	if privilegedRole.Code != http.StatusBadRequest {
-		t.Fatalf("privileged role expected 400, got %d: %s", privilegedRole.Code, privilegedRole.Body.String())
+	if privilegedRole.Code != http.StatusForbidden {
+		t.Fatalf("privileged role expected 403, got %d: %s", privilegedRole.Code, privilegedRole.Body.String())
 	}
 	forgedTenant := request(`{"tenant_id":"t-2","username":"teacher02","display_name":"Teacher","password":"TeacherStart123!","role_code":"teacher"}`)
 	if forgedTenant.Code != http.StatusBadRequest {

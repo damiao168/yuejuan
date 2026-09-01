@@ -254,7 +254,7 @@ export function ScoringPaperMonitor({ run, items, loading, onRefresh }: ScoringP
                       return <span
                         key={item.answer_segment_id}
                         className={`scoring-score-mark ${item.grade_source === "ai_suggestion" ? "suggestion" : ""}`}
-                        title={`${item.question_no} · ${stateLabel[item.state] ?? item.state}`}
+                        title={`${item.question_no} · ${stateLabel[item.state] ?? "未知状态"}`}
                         style={{
                           left: `${Math.min(98, (box.x + box.width) * 100)}%`,
                           top: `${Math.max(1, box.y * 100)}%`

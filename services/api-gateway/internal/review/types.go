@@ -201,6 +201,14 @@ type ListFilter struct {
 	CursorPriority  int
 	CursorCreatedAt time.Time
 	CursorID        string
+	// Scope fields are populated by HTTP handlers from the server-derived
+	// authentication scope.  They are intentionally plain values so the
+	// review package remains independent of the auth package.
+	ScopeMode      string
+	ScopeActorID   string
+	ScopeSchoolIDs []string
+	ScopeExamIDs   []string
+	ScopeTaskIDs   []string
 }
 
 type DoubleMarkPolicy struct {
@@ -330,6 +338,11 @@ type ArbitrationFilter struct {
 	Limit           int
 	CursorCreatedAt time.Time
 	CursorID        string
+	ScopeMode       string
+	ScopeActorID    string
+	ScopeSchoolIDs  []string
+	ScopeExamIDs    []string
+	ScopeTaskIDs    []string
 }
 
 type FinalGrade struct {
@@ -356,6 +369,7 @@ type FinalGrade struct {
 type Store interface {
 	CreateTask(ctx context.Context, tenantID string, actorID string, input CreateTaskInput) (ReviewTask, error)
 	ListTasks(ctx context.Context, tenantID string, filter ListFilter) ([]ReviewTask, error)
+	HasActiveAssignment(ctx context.Context, tenantID string, reviewerID string, answerSegmentID string) (bool, error)
 	GetTask(ctx context.Context, tenantID string, id string) (ReviewTask, error)
 	AssignTask(ctx context.Context, tenantID string, id string, actorID string, input AssignTaskInput) (ReviewTask, error)
 	BatchAssignTasks(ctx context.Context, tenantID string, actorID string, input BatchAssignInput) ([]ReviewTask, error)

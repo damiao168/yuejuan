@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Checkbox, Progress, Space } from "antd";
 import { ArrowRight, CheckCircle2, CircleAlert, ClipboardCheck, Play, RefreshCw, Save } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getSafeUserText, getUserErrorMessage } from "../api/client";
 import { confirmExamReadiness, getExamReadiness, startExamCollection, type ExamReadiness } from "../api/configuration";
 import { getExam, refreshExamCandidates, updateExam, type Exam } from "../api/exams";
 import { listClasses, listGrades, type Grade, type SchoolClass } from "../api/org";
@@ -9,12 +9,24 @@ import { ErrorState, LoadingState } from "../components/PageState";
 import { StatusTag } from "../components/StatusTag";
 import { gradingLabel } from "../features/exams/create/presentation";
 
+const readinessSectionRoutes: Record<string, string> = {
+  students: "students",
+  paper: "paper",
+  questions: "questions",
+  template: "template"
+};
+
+export function readinessCheckRoute(examId: string, section: string) {
+  const routeSection = readinessSectionRoutes[section] ?? "settings";
+  return `/exams/${encodeURIComponent(examId)}/${routeSection}`;
+}
+
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
     console.error(`开考准备操作失败：${error.status} ${error.code}`, error);
-    return error.message || "操作失败，请稍后重试";
+    return getUserErrorMessage(error, "操作失败，请稍后重试");
   }
-  return error instanceof Error && error.message ? error.message : "操作失败，请稍后重试";
+  return getUserErrorMessage(error, "操作失败，请稍后重试");
 }
 
 export function ExamStudentScopePage({ examId, canManage, onExamChanged }: { examId: string; canManage: boolean; onExamChanged?: () => void }) {
@@ -146,15 +158,18 @@ export function ExamReadinessPage({ examId, canManage, onNavigate, onExamChanged
       <section className="readiness-summary"><div><span>准备进度</span><strong>{passed}/{total}</strong></div><Progress percent={percent} status={readiness.ready ? "success" : "active"} /><div className="readiness-summary-state"><StatusTag tone={exam.status === "collecting" ? "processing" : readiness.confirmed ? "success" : readiness.ready ? "processing" : "warning"}>{exam.status === "collecting" ? "采集中" : readiness.confirmed ? "准备完成" : readiness.ready ? "等待确认" : "存在阻断项"}</StatusTag>{readiness.confirmed_at ? <span>确认时间：{new Date(readiness.confirmed_at).toLocaleString("zh-CN", { hour12: false })}</span> : null}</div></section>
 
       <section className="preparation-overview" aria-label="考试准备分组">
-        <button type="button" onClick={() => onNavigate(`/exams/${encodeURIComponent(examId)}/students`)}><span><strong>学生范围</strong><small>{studentChecks[0]?.message ?? "检查参加考试的班级和学生"}</small></span><StatusTag tone={studentChecks.length > 0 && studentChecks.every((item) => item.passed) ? "success" : "warning"}>{studentChecks.length > 0 && studentChecks.every((item) => item.passed) ? "已完成" : "待完成"}</StatusTag><ArrowRight size={16} /></button>
+        <button type="button" onClick={() => onNavigate(`/exams/${encodeURIComponent(examId)}/students`)}><span><strong>学生范围</strong><small>{getSafeUserText(studentChecks[0]?.message, "检查参加考试的班级和学生")}</small></span><StatusTag tone={studentChecks.length > 0 && studentChecks.every((item) => item.passed) ? "success" : "warning"}>{studentChecks.length > 0 && studentChecks.every((item) => item.passed) ? "已完成" : "待完成"}</StatusTag><ArrowRight size={16} /></button>
         <button type="button" onClick={() => onNavigate(`/exams/${encodeURIComponent(examId)}/paper`)}><span><strong>考试资料</strong><small>试卷、题目、标准答案、评分标准和答题卡</small></span><StatusTag tone={materialChecks.length > 0 && materialChecks.every((item) => item.passed) ? "success" : "warning"}>{`${materialChecks.filter((item) => item.passed).length}/${materialChecks.length} 项`}</StatusTag><ArrowRight size={16} /></button>
         <div><span><strong>阅卷设置</strong><small>{gradingLabel(exam.grading_mode)}</small></span><StatusTag tone="info">已设置</StatusTag></div>
         <div><span><strong>开考检查</strong><small>{readiness.ready ? "所有真实检查项均已通过" : `${total - passed} 项仍需完成`}</small></span><StatusTag tone={readiness.ready ? "success" : "warning"}>{readiness.ready ? "可确认" : "待完成"}</StatusTag></div>
       </section>
 
-      <div className="readiness-check-list" aria-label="开考检查明细">
-        {readiness.checks.map((check) => <button type="button" key={check.code} className={check.passed ? "passed" : "failed"} onClick={() => !check.passed && onNavigate(`/exams/${encodeURIComponent(examId)}/${check.section}`)}><span className="readiness-icon">{check.passed ? <CheckCircle2 size={20} /> : <CircleAlert size={20} />}</span><span><strong>{check.label}</strong><small>{check.message}</small></span>{!check.passed ? <><span>去处理</span><ArrowRight size={17} /></> : null}</button>)}
-      </div>
+      <section className="readiness-details" aria-labelledby="readiness-details-title">
+        <div className="readiness-details-heading"><h3 id="readiness-details-title">配置明细</h3><span>状态与说明来自开考检查</span></div>
+        <div className="readiness-check-list">
+          {readiness.checks.map((check) => <button type="button" key={check.code} className={check.passed ? "passed" : "failed"} onClick={() => onNavigate(readinessCheckRoute(examId, check.section))}><span className="readiness-icon">{check.passed ? <CheckCircle2 size={20} /> : <CircleAlert size={20} />}</span><span><strong>{getSafeUserText(check.label, "准备检查")}</strong><small>{getSafeUserText(check.message, check.passed ? "检查已通过" : "检查未通过，请完成相关设置")}</small></span><StatusTag tone={check.passed ? "success" : "warning"}>{check.passed ? "已完成" : "待完成"}</StatusTag><span>{check.passed ? "查看" : "去处理"}</span><ArrowRight size={17} /></button>)}
+        </div>
+      </section>
 
       {readiness.ready && !readiness.confirmed ? <Alert type="info" showIcon message="所有检查已通过" description="请由考试负责人确认准备完成。确认后若修改题目、答案、模板或学生范围，系统会自动撤销本次确认。" /> : null}
       {exam.status === "collecting" ? <Alert type="success" showIcon message="考试已进入答卷导入阶段" description="后续答卷导入与页面处理将在答卷导入工作区完成。" /> : null}

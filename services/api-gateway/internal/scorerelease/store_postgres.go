@@ -328,17 +328,83 @@ func (s *PostgresStore) StudentResult(ctx context.Context, tenantID, examID, stu
 		if item.StudentID != studentID {
 			continue
 		}
-		result := StudentResult{ExamID: examID, ReleaseID: detail.Release.ID, ReleaseVersion: detail.Release.Version, TotalScore: item.TotalScore, MaxScore: item.MaxScore,
+		result := StudentResult{ExamID: examID, ReleaseID: detail.Release.ID, ReleaseVersion: detail.Release.Version, TotalScore: item.TotalScore, MaxScore: item.MaxScore, OverallTotalScore: item.TotalScore, OverallMaxScore: item.MaxScore, ScoreRate: scoreRate(item.TotalScore, item.MaxScore),
 			AppealWindow: appealView(detail.Release.AppealWindow, s.now().UTC())}
+		if overallScore, overallMax, overallErr := s.studentSessionTotal(ctx, tenantID, examID, studentID); overallErr != nil {
+			return StudentResult{}, overallErr
+		} else if overallMax > 0 {
+			result.OverallTotalScore, result.OverallMaxScore = overallScore, overallMax
+		}
+		var exam StudentExam
+		if err := s.db.QueryRowContext(ctx, `SELECT name, subject, exam_type FROM exam WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL`, tenantID, examID).Scan(&exam.Name, &exam.Subject, &exam.ExamType); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return StudentResult{}, err
+		} else if err == nil {
+			exam.PublishedAt = *detail.Release.PublishedAt
+			result.Exam = &exam
+		}
+		result.Reference = buildStudentReference(detail.Items, item.TotalScore, detail.Release.VisibilityPolicy)
+		if detail.Release.VisibilityPolicy.ShowCohortStatistics {
+			result.SubjectBalance, err = s.studentSubjectBalance(ctx, tenantID, examID, studentID)
+			if err != nil {
+				return StudentResult{}, err
+			}
+		}
+		if detail.Release.VisibilityPolicy.ShowExactRank {
+			result.Rankings, err = s.studentRankings(ctx, tenantID, examID, detail.Release.ID, studentID, item.TotalScore)
+			if err != nil {
+				return StudentResult{}, err
+			}
+		}
 		if !detail.Release.VisibilityPolicy.ShowQuestionScores {
 			return result, nil
+		}
+		presentation, pages, err := s.studentPaperPresentation(ctx, tenantID, item.SubmissionID)
+		if err != nil {
+			return StudentResult{}, err
+		}
+		result.PaperPages = pages
+		questionStats := map[string]*StudentQuestionReference{}
+		if detail.Release.VisibilityPolicy.ShowQuestionStatistics {
+			questionStats, err = s.studentQuestionStatistics(ctx, tenantID, examID, detail.Release.ID, studentID)
+			if err != nil {
+				return StudentResult{}, err
+			}
+		}
+		if detail.Release.VisibilityPolicy.ShowHighScorePaper {
+			if top, found := highestScoreItem(detail.Items); found {
+				highPresentation, highPages, pageErr := s.studentPaperPresentation(ctx, tenantID, top.SubmissionID)
+				if pageErr != nil {
+					return StudentResult{}, pageErr
+				}
+				highPaper := &StudentHighScorePaper{Available: len(highPages) > 0, TotalScore: top.TotalScore, MaxScore: top.MaxScore, Pages: highPages}
+				for _, question := range detail.Questions {
+					if question.SubmissionID != top.SubmissionID {
+						continue
+					}
+					mark := StudentPaperScoreMark{QuestionID: question.QuestionID, QuestionNo: question.QuestionNo, Score: question.Score, MaxScore: question.MaxScore}
+					if position, ok := highPresentation[question.QuestionID]; ok {
+						mark.PageNo, mark.AnswerGeometry = position.PageNo, position.Geometry
+					}
+					highPaper.ScoreMarks = append(highPaper.ScoreMarks, mark)
+				}
+				result.HighScorePaper = highPaper
+			}
 		}
 		result.Questions = []StudentQuestion{}
 		for _, question := range detail.Questions {
 			if question.SubmissionID != item.SubmissionID {
 				continue
 			}
-			view := StudentQuestion{QuestionID: question.QuestionID, QuestionNo: question.QuestionNo, Score: question.Score, MaxScore: question.MaxScore}
+			view := studentQuestionView(question, detail.Questions, detail.Release.VisibilityPolicy)
+			if result.Exam != nil {
+				view.Subject = result.Exam.Subject
+			}
+			if item, ok := presentation[question.QuestionID]; ok {
+				view.PageNo, view.SubmissionPageID, view.AnswerGeometry = item.PageNo, item.SubmissionPageID, item.Geometry
+			}
+			if stat, ok := questionStats[question.QuestionID]; ok {
+				view.Cohort = stat
+			}
 			if detail.Release.VisibilityPolicy.ShowFeedback {
 				view.Feedback = question.Explanation.Feedback
 			}
@@ -351,6 +417,201 @@ func (s *PostgresStore) StudentResult(ctx context.Context, tenantID, examID, stu
 		return result, nil
 	}
 	return StudentResult{}, ErrNotFound
+}
+
+type studentQuestionPresentation struct {
+	PageNo           int
+	SubmissionPageID string
+	Geometry         *StudentImageGeometry
+}
+
+func (s *PostgresStore) studentRankings(ctx context.Context, tenantID, examID, releaseID, studentID string, score float64) (*StudentRankings, error) {
+	var out StudentRankings
+	err := s.db.QueryRowContext(ctx, `
+WITH target AS (
+  SELECT class_id_snapshot,grade_id_snapshot FROM exam_candidate_snapshot
+  WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND student_id=$3::uuid
+), population AS (
+  SELECT item.total_score::float8,c.class_id_snapshot,c.grade_id_snapshot
+  FROM score_release_item item
+  JOIN exam_candidate_snapshot c ON c.tenant_id=item.tenant_id AND c.exam_id=$2::uuid AND c.student_id=item.student_id
+  WHERE item.tenant_id=$1::uuid AND item.release_id=$4::uuid
+)
+SELECT 1+count(*) FILTER(WHERE p.class_id_snapshot=t.class_id_snapshot AND p.total_score>$5),
+       count(*) FILTER(WHERE p.class_id_snapshot=t.class_id_snapshot),
+       1+count(*) FILTER(WHERE p.grade_id_snapshot=t.grade_id_snapshot AND p.total_score>$5),
+       count(*) FILTER(WHERE p.grade_id_snapshot=t.grade_id_snapshot)
+FROM population p CROSS JOIN target t
+`, tenantID, examID, studentID, releaseID, score).Scan(&out.ClassRank, &out.ClassSize, &out.GradeRank, &out.GradeSize)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if out.ClassSize < privacyMinCohortSize {
+		out.ClassRank, out.ClassSize = 0, 0
+	}
+	if out.GradeSize < privacyMinCohortSize {
+		out.GradeRank, out.GradeSize = 0, 0
+	}
+	return &out, err
+}
+
+func (s *PostgresStore) studentSessionTotal(ctx context.Context, tenantID, examID, studentID string) (float64, float64, error) {
+	var score, maxScore float64
+	err := s.db.QueryRowContext(ctx, `
+SELECT COALESCE(sum(mine.total_score),0)::float8,COALESCE(sum(mine.max_score),0)::float8
+FROM exam target
+JOIN exam sibling ON sibling.tenant_id=target.tenant_id AND sibling.deleted_at IS NULL
+ AND ((target.exam_session_id IS NOT NULL AND sibling.exam_session_id=target.exam_session_id) OR sibling.id=target.id)
+JOIN score_release_current current_release ON current_release.tenant_id=sibling.tenant_id AND current_release.exam_id=sibling.id
+JOIN score_release release ON release.tenant_id=current_release.tenant_id AND release.id=current_release.release_id AND release.status='published'
+JOIN score_release_item mine ON mine.tenant_id=release.tenant_id AND mine.release_id=release.id AND mine.student_id=$3::uuid
+WHERE target.tenant_id=$1::uuid AND target.id=$2::uuid AND target.deleted_at IS NULL
+`, tenantID, examID, studentID).Scan(&score, &maxScore)
+	return score, maxScore, err
+}
+
+func (s *PostgresStore) studentSubjectBalance(ctx context.Context, tenantID, examID, studentID string) ([]StudentSubjectBalance, error) {
+	rows, err := s.db.QueryContext(ctx, `
+WITH target AS (
+  SELECT id,exam_session_id FROM exam WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL
+), latest_subject_release AS (
+  SELECT DISTINCT ON(lower(e.subject)) e.subject,current_release.release_id
+  FROM target
+  JOIN exam e ON e.tenant_id=$1::uuid AND e.deleted_at IS NULL
+   AND ((target.exam_session_id IS NOT NULL AND e.exam_session_id=target.exam_session_id) OR e.id=target.id)
+  JOIN score_release_current current_release ON current_release.tenant_id=e.tenant_id AND current_release.exam_id=e.id
+  JOIN score_release release ON release.tenant_id=current_release.tenant_id AND release.id=current_release.release_id AND release.status='published'
+  JOIN score_release_item mine ON mine.tenant_id=release.tenant_id AND mine.release_id=release.id AND mine.student_id=$3::uuid
+  WHERE current_release.tenant_id=$1::uuid AND COALESCE((release.visibility_policy->>'show_cohort_statistics')::boolean,false)
+  ORDER BY lower(e.subject),release.published_at DESC,release.id DESC
+)
+SELECT latest.subject,
+       CASE WHEN mine.max_score>0 THEN mine.total_score/mine.max_score ELSE 0 END::float8,
+       avg(CASE WHEN cohort.max_score>0 THEN cohort.total_score/cohort.max_score ELSE 0 END)::float8,
+       count(cohort.student_id)::int
+FROM latest_subject_release latest
+JOIN score_release_item mine ON mine.tenant_id=$1::uuid AND mine.release_id=latest.release_id AND mine.student_id=$3::uuid
+JOIN score_release_item cohort ON cohort.tenant_id=mine.tenant_id AND cohort.release_id=mine.release_id AND cohort.student_id IS NOT NULL
+GROUP BY latest.subject,mine.total_score,mine.max_score
+HAVING count(cohort.student_id)>=$4
+ORDER BY latest.subject
+`, tenantID, examID, studentID, privacyMinCohortSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []StudentSubjectBalance{}
+	for rows.Next() {
+		var item StudentSubjectBalance
+		if err := rows.Scan(&item.Subject, &item.StudentScoreRate, &item.SchoolMeanScoreRate, &item.SampleSize); err != nil {
+			return nil, err
+		}
+		item.Subject = strings.TrimSpace(item.Subject)
+		item.StudentScoreRate = math.Round(item.StudentScoreRate*1000) / 1000
+		item.SchoolMeanScoreRate = math.Round(item.SchoolMeanScoreRate*1000) / 1000
+		if item.Subject != "" {
+			out = append(out, item)
+		}
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) studentQuestionStatistics(ctx context.Context, tenantID, examID, releaseID, studentID string) (map[string]*StudentQuestionReference, error) {
+	rows, err := s.db.QueryContext(ctx, `
+WITH target AS (
+  SELECT class_id_snapshot FROM exam_candidate_snapshot
+  WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND student_id=$4::uuid
+), facts AS (
+  SELECT q.question_id,q.score::float8,q.max_score::float8,c.class_id_snapshot
+  FROM score_release_question q
+  JOIN score_release_item item ON item.tenant_id=q.tenant_id AND item.release_id=q.release_id AND item.submission_id=q.submission_id
+  JOIN exam_candidate_snapshot c ON c.tenant_id=item.tenant_id AND c.exam_id=$2::uuid AND c.student_id=item.student_id
+  WHERE q.tenant_id=$1::uuid AND q.release_id=$3::uuid
+)
+SELECT f.question_id::text,
+       count(*)::int,
+       count(*) FILTER(WHERE f.class_id_snapshot=t.class_id_snapshot)::int,
+       avg(f.score) FILTER(WHERE f.class_id_snapshot=t.class_id_snapshot)::float8,
+       avg(f.score)::float8,
+       percentile_cont(.5) WITHIN GROUP(ORDER BY f.score)::float8,
+       avg(CASE WHEN f.max_score>0 THEN f.score/f.max_score ELSE 0 END)::float8,
+       avg(CASE WHEN f.score=f.max_score THEN 1 ELSE 0 END)::float8,
+       avg(CASE WHEN f.score=0 THEN 1 ELSE 0 END)::float8
+FROM facts f CROSS JOIN target t GROUP BY f.question_id
+`, tenantID, examID, releaseID, studentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]*StudentQuestionReference{}
+	for rows.Next() {
+		var id string
+		var ref StudentQuestionReference
+		var classSize int
+		var classMean, schoolMean, median float64
+		if err := rows.Scan(&id, &ref.SampleSize, &classSize, &classMean, &schoolMean, &median, &ref.MeanScoreRate, &ref.FullScoreRate, &ref.ZeroScoreRate); err != nil {
+			return nil, err
+		}
+		if ref.SampleSize >= privacyMinCohortSize {
+			ref.SchoolMeanScore, ref.MedianScore = &schoolMean, &median
+			if classSize >= privacyMinCohortSize {
+				ref.ClassMeanScore = &classMean
+			}
+			out[id] = &ref
+		}
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) studentPaperPresentation(ctx context.Context, tenantID, submissionID string) (map[string]studentQuestionPresentation, []StudentPaperPage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT DISTINCT ON(seg.question_id) seg.question_id::text,sp.page_no,sp.id::text,COALESCE(seg.normalized_bbox,'{}'::jsonb)
+FROM answer_segment seg JOIN submission_page sp ON sp.tenant_id=seg.tenant_id AND sp.id=seg.submission_page_id AND sp.deleted_at IS NULL
+WHERE seg.tenant_id=$1::uuid AND seg.submission_id=$2::uuid AND seg.deleted_at IS NULL
+ORDER BY seg.question_id,seg.updated_at DESC,seg.id DESC
+`, tenantID, submissionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	out := map[string]studentQuestionPresentation{}
+	pageByNo := map[int]StudentPaperPage{}
+	for rows.Next() {
+		var id, pageID string
+		var pageNo int
+		var raw []byte
+		if err := rows.Scan(&id, &pageNo, &pageID, &raw); err != nil {
+			return nil, nil, err
+		}
+		var values map[string]float64
+		_ = json.Unmarshal(raw, &values)
+		var geometry *StudentImageGeometry
+		if values["width"] > 0 && values["height"] > 0 {
+			geometry = &StudentImageGeometry{X: values["x"], Y: values["y"], Width: values["width"], Height: values["height"]}
+		}
+		out[id] = studentQuestionPresentation{PageNo: pageNo, SubmissionPageID: pageID, Geometry: geometry}
+		if _, exists := pageByNo[pageNo]; !exists {
+			pageByNo[pageNo] = StudentPaperPage{PageNo: pageNo, QuestionID: id, SubmissionPageID: pageID}
+		}
+	}
+	pages := make([]StudentPaperPage, 0, len(pageByNo))
+	for _, page := range pageByNo {
+		pages = append(pages, page)
+	}
+	sort.Slice(pages, func(i, j int) bool { return pages[i].PageNo < pages[j].PageNo })
+	return out, pages, rows.Err()
+}
+
+func highestScoreItem(items []ReleaseItem) (ReleaseItem, bool) {
+	var top ReleaseItem
+	found := false
+	for _, item := range items {
+		if item.StudentID != "" && (!found || item.TotalScore > top.TotalScore) {
+			top = item
+			found = true
+		}
+	}
+	return top, found
 }
 
 func (s *PostgresStore) StudentQuestion(ctx context.Context, tenantID, examID, studentID, questionID string) (StudentQuestion, error) {
@@ -407,6 +668,29 @@ LIMIT 1
 	return source, nil
 }
 
+func (s *PostgresStore) StudentPaperPageImage(ctx context.Context, tenantID, examID, studentID, questionID string, highScore bool) (StudentQuestionImageSource, error) {
+	var source StudentQuestionImageSource
+	err := s.db.QueryRowContext(ctx, `
+WITH selected_item AS (
+  SELECT item.* FROM score_release_current current_release
+  JOIN score_release release ON release.tenant_id=current_release.tenant_id AND release.id=current_release.release_id AND release.status='published'
+  JOIN score_release_item item ON item.tenant_id=release.tenant_id AND item.release_id=release.id
+  WHERE current_release.tenant_id=$1::uuid AND current_release.exam_id=$2::uuid
+    AND COALESCE((release.visibility_policy->>'show_question_scores')::boolean,false)
+    AND ((NOT $5::boolean AND item.student_id=$3::uuid) OR ($5::boolean AND COALESCE((release.visibility_policy->>'show_high_score_paper')::boolean,false)))
+  ORDER BY CASE WHEN $5::boolean THEN item.total_score ELSE 0 END DESC,item.submission_id
+  LIMIT 1
+)
+SELECT seg.id::text FROM selected_item item
+JOIN answer_segment seg ON seg.tenant_id=item.tenant_id AND seg.submission_id=item.submission_id AND seg.question_id=$4::uuid AND seg.deleted_at IS NULL
+ORDER BY seg.updated_at DESC,seg.id DESC LIMIT 1
+`, tenantID, examID, studentID, questionID, highScore).Scan(&source.AnswerSegmentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return StudentQuestionImageSource{}, ErrNotFound
+	}
+	return source, err
+}
+
 func (s *PostgresStore) currentFactsTx(ctx context.Context, tx *sql.Tx, tenantID, examID string) ([]SubmissionFact, error) {
 	rows, err := tx.QueryContext(ctx, `
 SELECT sg.student_id::text, sg.submission_id::text, sg.total_score::float8, sg.max_score::float8, sg.status,
@@ -415,9 +699,17 @@ SELECT sg.student_id::text, sg.submission_id::text, sg.total_score::float8, sg.m
   COALESCE((SELECT NULLIF(hg.student_feedback, '') FROM human_grade hg
     WHERE hg.tenant_id = fg.tenant_id AND hg.answer_segment_id = fg.answer_segment_id AND hg.deleted_at IS NULL
     ORDER BY hg.created_at DESC, hg.id DESC LIMIT 1),
-    (SELECT NULLIF(at.student_feedback, '') FROM arbitration_task at WHERE at.tenant_id = fg.tenant_id AND at.id = fg.arbitration_task_id AND at.deleted_at IS NULL), '')
+    (SELECT NULLIF(at.student_feedback, '') FROM arbitration_task at WHERE at.tenant_id = fg.tenant_id AND at.id = fg.arbitration_task_id AND at.deleted_at IS NULL), ''),
+  COALESCE(q.question_type, ''), COALESCE(q.stem, ''), COALESCE(q.knowledge_points, '[]'::jsonb),
+  COALESCE((SELECT ak.standard_answer::text FROM question_answer_key ak
+    WHERE ak.tenant_id=q.tenant_id AND ak.question_id=q.id AND ak.deleted_at IS NULL
+    ORDER BY ak.created_at DESC,ak.id DESC LIMIT 1), ''),
+  COALESCE((SELECT NULLIF(asa.answer_text, '') FROM answer_segment_answer asa
+    WHERE asa.tenant_id=fg.tenant_id AND asa.answer_segment_id=fg.answer_segment_id AND asa.deleted_at IS NULL
+    ORDER BY asa.created_at DESC,asa.id DESC LIMIT 1), '')
 FROM submission_grade sg
 JOIN final_grade fg ON fg.tenant_id = sg.tenant_id AND fg.exam_id = sg.exam_id AND fg.submission_id = sg.submission_id AND fg.deleted_at IS NULL
+JOIN question q ON q.tenant_id = fg.tenant_id AND q.id = fg.question_id AND q.deleted_at IS NULL
 WHERE sg.tenant_id = $1 AND sg.exam_id = $2::uuid AND sg.deleted_at IS NULL
 ORDER BY sg.submission_id, fg.question_no, fg.id
 `, tenantID, examID)
@@ -431,11 +723,18 @@ ORDER BY sg.submission_id, fg.question_no, fg.id
 		var studentID sql.NullString
 		var fact SubmissionFact
 		var question QuestionFact
-		var feedback string
-		if err := rows.Scan(&studentID, &fact.SubmissionID, &fact.TotalScore, &fact.MaxScore, &fact.Status, &question.QuestionID, &question.QuestionNo, &question.FinalGradeID, &question.Score, &question.MaxScore, &question.SourceType, &question.SourceID, &feedback); err != nil {
+		var feedback, questionType, stem, correctAnswer, actualAnswer string
+		var knowledgePoints []byte
+		if err := rows.Scan(&studentID, &fact.SubmissionID, &fact.TotalScore, &fact.MaxScore, &fact.Status, &question.QuestionID, &question.QuestionNo, &question.FinalGradeID, &question.Score, &question.MaxScore, &question.SourceType, &question.SourceID, &feedback, &questionType, &stem, &knowledgePoints, &correctAnswer, &actualAnswer); err != nil {
 			return nil, err
 		}
 		fact.StudentID, question.Explanation.Feedback = studentID.String, strings.TrimSpace(feedback)
+		question.Explanation.QuestionType, question.Explanation.Stem = strings.TrimSpace(questionType), strings.TrimSpace(stem)
+		question.Explanation.CorrectAnswer = displayAnswer(correctAnswer)
+		question.Explanation.ActualAnswer = strings.TrimSpace(actualAnswer)
+		if err := json.Unmarshal(knowledgePoints, &question.Explanation.KnowledgePoints); err != nil {
+			return nil, err
+		}
 		if existing, ok := bySubmission[fact.SubmissionID]; ok {
 			existing.Questions = append(existing.Questions, question)
 			bySubmission[fact.SubmissionID] = existing
@@ -453,6 +752,18 @@ ORDER BY sg.submission_id, fg.question_no, fg.id
 		out = append(out, bySubmission[id])
 	}
 	return out, nil
+}
+
+func displayAnswer(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "null" {
+		return ""
+	}
+	var scalar string
+	if json.Unmarshal([]byte(value), &scalar) == nil {
+		return strings.TrimSpace(scalar)
+	}
+	return value
 }
 
 func (s *PostgresStore) insertReleaseTx(ctx context.Context, tx *sql.Tx, tenantID, examID, actorID string, version int, source, reason, idempotencyKey string, visibility VisibilityPolicy, window AppealWindow, sourceReleaseID string) (Release, error) {

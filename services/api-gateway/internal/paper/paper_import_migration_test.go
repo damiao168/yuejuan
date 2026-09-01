@@ -31,3 +31,24 @@ func TestPaperImportMigrationAddsSourcesCandidatesAndFormalProvenance(t *testing
 		}
 	}
 }
+
+func TestPaperImportRubricCandidateMigrationExtendsRolesAndProvenance(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000116_paper_import_rubric_candidates.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(raw)
+	for _, required := range []string{
+		"rubric_candidates jsonb NOT NULL DEFAULT '[]'::jsonb",
+		"DROP CONSTRAINT IF EXISTS paper_import_source_role_hint_check",
+		"DROP CONSTRAINT IF EXISTS paper_import_source_detected_role_check",
+		"('auto','question','answer','solution','rubric','mixed','unknown')",
+		"('question','answer','solution','rubric','mixed','unknown')",
+		"question_rubric",
+		"paper_import_candidate_id text",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Fatalf("rubric candidate migration is missing %q", required)
+		}
+	}
+}

@@ -38,6 +38,9 @@ func (s *MemoryStore) ClaimNextTask(_ context.Context, tenantID, reviewerID stri
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].Priority == candidates[j].Priority {
+			if candidates[i].CreatedAt.Equal(candidates[j].CreatedAt) {
+				return candidates[i].ID < candidates[j].ID
+			}
 			return candidates[i].CreatedAt.Before(candidates[j].CreatedAt)
 		}
 		return candidates[i].Priority > candidates[j].Priority

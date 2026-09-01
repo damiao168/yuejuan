@@ -17,7 +17,7 @@ import {
   type TableColumnsType
 } from "antd";
 import { Archive, Eye, FileClock, LayoutDashboard, MoreHorizontal, Pencil, RefreshCw, Save, Search } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getUserErrorMessage } from "../api/client";
 import type { SessionUser } from "../auth/session";
 import {
   archiveExam,
@@ -84,7 +84,7 @@ interface Filters {
 }
 
 function labelFrom(options: { label: string; value: string }[], value: string) {
-  return options.find((item) => item.value === value)?.label ?? value;
+  return options.find((item) => item.value === value)?.label ?? "其他类型";
 }
 
 function nextStatus(status: string) {
@@ -102,12 +102,9 @@ function isLocked(status: string) {
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
     console.error(`考试操作失败：${error.status} ${error.code}`, error);
-    return error.message || "操作失败，请稍后重试";
+    return getUserErrorMessage(error, "操作失败，请稍后重试");
   }
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "操作失败，请稍后重试";
+  return getUserErrorMessage(error, "操作失败，请稍后重试");
 }
 
 function formatTime(value?: string) {

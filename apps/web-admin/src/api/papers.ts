@@ -28,6 +28,7 @@ export interface PaperImportDraftQuestion {
 	candidate_id?: string;
 	answer_candidate_id?: string;
 	solution_candidate_id?: string;
+	rubric_candidate_id?: string;
 	source_refs: PaperImportSourceRef[];
   question_no: string;
   question_type: string;
@@ -46,7 +47,7 @@ export interface PaperImportDraftQuestion {
 	human_confirmed_fields?: string[];
 }
 
-export type PaperImportRole = "auto" | "question" | "answer" | "solution" | "mixed" | "unknown";
+export type PaperImportRole = "auto" | "question" | "answer" | "solution" | "rubric" | "mixed" | "unknown";
 export type PaperImportAssessmentArchetype = "selected_response" | "exact_text" | "numeric_expression" | "structured_steps" | "short_constructed" | "extended_response" | "diagram_graph" | "table_experiment";
 export interface PaperImportSource { id: string; file_asset_id: string; document_index: number; role_hint: PaperImportRole; detected_role: Exclude<PaperImportRole, "auto">; role_confidence: number; processing_status: "pending" | "processing" | "processed" | "failed"; original_name?: string; content_type?: string; }
 export interface PaperImportSourceRef { source_id: string; file_asset_id: string; document_index: number; page_no?: number; block_id?: string; bbox?: unknown; text_start?: number; text_end?: number; ocr_confidence?: number; }
@@ -68,6 +69,8 @@ export interface QuestionCandidate {
 }
 export interface AnswerCandidate { candidate_id: string; question_no_hint?: string; question_no_normalized?: string; subquestion_no_hint?: string; standard_answer?: unknown; equivalent_answers: unknown[]; tolerance?: unknown; confidence: number; source_refs: PaperImportSourceRef[]; issues: string[]; }
 export interface SolutionCandidate { candidate_id: string; question_no_hint?: string; question_no_normalized?: string; subquestion_no_hint?: string; raw_text: string; steps: SolutionStep[]; confidence: number; source_refs: PaperImportSourceRef[]; issues: string[]; }
+export interface RubricCandidatePoint { id: string; description: string; score?: number | null; required?: boolean | null; evidence_requirements?: RubricEvidenceRequirement[]; }
+export interface RubricCandidate { candidate_id: string; question_no_hint?: string; question_no_normalized?: string; max_score?: number | null; points: RubricCandidatePoint[]; deductions: unknown[]; examples: unknown[]; confidence: number; source_refs: PaperImportSourceRef[]; issues: string[]; }
 export interface SolutionStep { step_no: number; content: string; }
 export interface SolutionInput { raw_text: string; steps: SolutionStep[]; source_refs: PaperImportSourceRef[]; }
 export interface PaperImportIssue { code: string; severity: "info" | "warning" | "error"; certainty: "confirmed" | "suspected" | "unknown"; question_no?: string; section?: string; message: string; confidence?: number; source_refs: PaperImportSourceRef[]; resolution_hint?: string; }
@@ -84,6 +87,7 @@ export interface PaperImportJob {
 	question_candidates: QuestionCandidate[];
 	answer_candidates: AnswerCandidate[];
 	solution_candidates: SolutionCandidate[];
+	rubric_candidates: RubricCandidate[];
 	structured_issues: PaperImportIssue[];
   questions: PaperImportDraftQuestion[];
   issues: string[];

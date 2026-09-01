@@ -386,7 +386,7 @@ export type ScoreReleaseStatus = "draft" | "published";
 
 export type ScoreReleaseAppealWindow = { "enabled": boolean; "opens_at"?: string | null; "closes_at"?: string | null; "allowed_reason_codes"?: Array<string>; };
 
-export type ScoreReleaseVisibilityPolicy = { "show_question_scores": boolean; "show_feedback": boolean; "show_rubric_summary": boolean; };
+export type ScoreReleaseVisibilityPolicy = { "show_question_scores": boolean; "show_feedback": boolean; "show_rubric_summary": boolean; "show_cohort_statistics"?: boolean; "show_score_distribution"?: boolean; "show_percentile"?: boolean; "show_exact_rank"?: boolean; "show_question_statistics"?: boolean; "show_knowledge_analysis"?: boolean; "show_question_stem"?: boolean; "show_answers"?: boolean; "show_high_score_paper"?: boolean; };
 
 export type ScoreReleaseGateIssue = { "code": string; "message": string; "blocking": boolean; "count": number; "action_route"?: string; };
 
@@ -658,7 +658,7 @@ export type ProcessingWorkerAttempt = { "id": string; "tenant_id": string; "task
 
 export type ProcessingWorkerTask = { "id": string; "tenant_id": string; "task_type": string; "queue_name": string; "source_type": string; "source_id": string; "status": string; "priority": number; "payload": Record<string, unknown>; "payload_schema_version": string; "result"?: Record<string, unknown>; "result_schema_version"?: string; "idempotency_key": string; "dedupe_key"?: string; "max_attempts": number; "attempt_count": number; "retry_backoff_seconds": number; "not_before"?: string | null; "lease_expires_at"?: string | null; "leased_by"?: string; "worker_service"?: string; "worker_instance_id"?: string; "started_at"?: string | null; "completed_at"?: string | null; "cancelled_at"?: string | null; "duration_ms"?: number; "error_code"?: string; "error_detail"?: Record<string, unknown>; "revision": number; "created_by"?: string; "created_at": string; "updated_at": string; "attempts"?: Array<ProcessingWorkerAttempt>; };
 
-export type PaperImportRole = "auto" | "question" | "answer" | "solution" | "mixed" | "unknown";
+export type PaperImportRole = "auto" | "question" | "answer" | "solution" | "rubric" | "mixed" | "unknown";
 
 export type CreatePaperImportSource = { "file_asset_id": string; "document_index": number; "role_hint"?: PaperImportRole; };
 
@@ -672,7 +672,7 @@ export type ReplacePaperImportSourcesRequest = { "sources": Array<ReplacePaperIm
 
 export type PaperImportSourceRef = { "source_id": string; "file_asset_id": string; "document_index": number; "page_no"?: number; "block_id"?: string; "bbox"?: unknown; "text_start"?: number; "text_end"?: number; "ocr_confidence"?: number; };
 
-export type PaperImportSource = { "id": string; "file_asset_id": string; "document_index": number; "role_hint": PaperImportRole; "detected_role": "question" | "answer" | "solution" | "mixed" | "unknown"; "role_confidence": number; "processing_status": "pending" | "processing" | "processed" | "failed"; "original_name"?: string; "content_type"?: string; "created_at": string; };
+export type PaperImportSource = { "id": string; "file_asset_id": string; "document_index": number; "role_hint": PaperImportRole; "detected_role": "question" | "answer" | "solution" | "rubric" | "mixed" | "unknown"; "role_confidence": number; "processing_status": "pending" | "processing" | "processed" | "failed"; "original_name"?: string; "content_type"?: string; "created_at": string; };
 
 export type PaperImportQuestionCandidate = { "candidate_id": string; "question_no_raw"?: string; "question_no_normalized"?: string; "parent_question_no"?: string; "subquestion_no"?: string; "section_hint"?: string; "stem"?: string; "options": Array<string>; "question_type"?: string; "score"?: number; "knowledge_point_hints": Array<string>; "confidence": number; "source_refs": Array<PaperImportSourceRef>; "issues": Array<string>; };
 
@@ -681,6 +681,12 @@ export type PaperImportAnswerCandidate = { "candidate_id": string; "question_no_
 export type PaperImportSolutionStep = { "step_no": number; "content": string; };
 
 export type PaperImportSolutionCandidate = { "candidate_id": string; "question_no_hint"?: string; "question_no_normalized"?: string; "subquestion_no_hint"?: string; "raw_text": string; "steps": Array<PaperImportSolutionStep>; "confidence": number; "source_refs": Array<PaperImportSourceRef>; "issues": Array<string>; };
+
+export type PaperImportRubricEvidenceRequirement = { "type": "all_of" | "any_of" | "at_least" | "valid_transformation" | "final_result" | "concept" | "unit" | "domain"; "target"?: string; "minimum"?: number; "children"?: Array<PaperImportRubricEvidenceRequirement>; };
+
+export type PaperImportRubricCandidatePoint = { "id": string; "description": string; "score"?: number | null; "required"?: boolean | null; "evidence_requirements"?: Array<PaperImportRubricEvidenceRequirement>; };
+
+export type PaperImportRubricCandidate = { "candidate_id": string; "question_no_hint"?: string; "question_no_normalized"?: string; "max_score"?: number | null; "points": Array<PaperImportRubricCandidatePoint>; "deductions": Array<unknown>; "examples": Array<unknown>; "confidence": number; "source_refs": Array<PaperImportSourceRef>; "issues": Array<string>; };
 
 export type PaperImportIssue = { "code": string; "severity": "info" | "warning" | "error"; "certainty": "confirmed" | "suspected" | "unknown"; "question_no"?: string; "section"?: string; "message": string; "confidence"?: number; "source_refs": Array<PaperImportSourceRef>; "resolution_hint"?: string; };
 
@@ -692,11 +698,11 @@ export type PaperImportRubricInput = { "status": string; "max_score": number; "p
 
 export type PaperImportSolutionInput = { "raw_text": string; "steps": Array<PaperImportSolutionStep>; "source_refs": Array<PaperImportSourceRef>; };
 
-export type PaperImportDraftQuestion = { "candidate_id"?: string; "answer_candidate_id"?: string; "solution_candidate_id"?: string; "source_refs": Array<PaperImportSourceRef>; "question_no": string; "question_type": string; "assessment_archetype"?: "selected_response" | "exact_text" | "numeric_expression" | "structured_steps" | "short_constructed" | "extended_response" | "diagram_graph" | "table_experiment"; "score": number; "stem": string; "knowledge_points": Array<string>; "answer_key"?: PaperImportAnswerKeyInput; "solution"?: PaperImportSolutionInput; "rubric"?: PaperImportRubricInput; "confidence": number; "issues": Array<string>; "matched_question_id"?: string; "match_status"?: "create" | "matched" | "matched_by_order" | "mismatch" | "extra" | "ambiguous"; "completeness_status"?: "complete" | "needs_review"; "human_confirmed_fields"?: Array<string>; };
+export type PaperImportDraftQuestion = { "candidate_id"?: string; "answer_candidate_id"?: string; "solution_candidate_id"?: string; "rubric_candidate_id"?: string; "source_refs": Array<PaperImportSourceRef>; "question_no": string; "question_type": string; "assessment_archetype"?: "selected_response" | "exact_text" | "numeric_expression" | "structured_steps" | "short_constructed" | "extended_response" | "diagram_graph" | "table_experiment"; "score": number; "stem": string; "knowledge_points": Array<string>; "answer_key"?: PaperImportAnswerKeyInput; "solution"?: PaperImportSolutionInput; "rubric"?: PaperImportRubricInput; "confidence": number; "issues": Array<string>; "matched_question_id"?: string; "match_status"?: "create" | "matched" | "matched_by_order" | "mismatch" | "extra" | "ambiguous"; "completeness_status"?: "complete" | "needs_review"; "human_confirmed_fields"?: Array<string>; };
 
 export type ReviewPaperImportRequest = { "questions": Array<PaperImportDraftQuestion>; };
 
-export type PaperImportJob = { "id": string; "tenant_id": string; "exam_id": string; "exam_paper_id": string; "paper_file_asset_id": string; "answer_file_asset_id": string; "status": "processing" | "review_required" | "failed" | "applied"; "subject": string; "sources": Array<PaperImportSource>; "question_candidates": Array<PaperImportQuestionCandidate>; "answer_candidates": Array<PaperImportAnswerCandidate>; "solution_candidates": Array<PaperImportSolutionCandidate>; "structured_issues": Array<PaperImportIssue>; "questions": Array<PaperImportDraftQuestion>; "issues": Array<string>; "error_code"?: string; "created_by": string; "created_at": string; "updated_at": string; "applied_at"?: string; };
+export type PaperImportJob = { "id": string; "tenant_id": string; "exam_id": string; "exam_paper_id": string; "paper_file_asset_id": string; "answer_file_asset_id": string; "status": "processing" | "review_required" | "failed" | "applied"; "subject": string; "sources": Array<PaperImportSource>; "question_candidates": Array<PaperImportQuestionCandidate>; "answer_candidates": Array<PaperImportAnswerCandidate>; "solution_candidates": Array<PaperImportSolutionCandidate>; "rubric_candidates": Array<PaperImportRubricCandidate>; "structured_issues": Array<PaperImportIssue>; "questions": Array<PaperImportDraftQuestion>; "issues": Array<string>; "error_code"?: string; "created_by": string; "created_at": string; "updated_at": string; "applied_at"?: string; };
 
 export type PaperImportResponse = { "import": PaperImportJob; };
 
@@ -1047,6 +1053,9 @@ export interface components {
     "PaperImportAnswerCandidate": PaperImportAnswerCandidate;
     "PaperImportSolutionStep": PaperImportSolutionStep;
     "PaperImportSolutionCandidate": PaperImportSolutionCandidate;
+    "PaperImportRubricEvidenceRequirement": PaperImportRubricEvidenceRequirement;
+    "PaperImportRubricCandidatePoint": PaperImportRubricCandidatePoint;
+    "PaperImportRubricCandidate": PaperImportRubricCandidate;
     "PaperImportIssue": PaperImportIssue;
     "PaperImportAnswerKeyInput": PaperImportAnswerKeyInput;
     "PaperImportRubricPoint": PaperImportRubricPoint;

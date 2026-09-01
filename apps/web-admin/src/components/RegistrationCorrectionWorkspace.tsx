@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { ApiClientError } from "../api/client";
+import { getUserErrorMessage } from "../api/client";
 import {
   applyRegistrationCorrection,
   createRegistrationCorrection,
@@ -44,12 +44,7 @@ const correctionErrorLabels: Record<string, string> = {
 };
 const correctionErrorText = (code: string) =>
   correctionErrorLabels[code] ?? "预览失败，请调整对应点后重试";
-const errorText = (error: unknown) =>
-  error instanceof ApiClientError
-    ? error.message
-    : error instanceof Error
-      ? error.message
-      : "操作失败，请重试";
+const errorText = (error: unknown) => getUserErrorMessage(error, "操作失败，请重试");
 
 async function imageURL(fileId: string, pageNo = 1) {
   const download = await downloadFileBlob(fileId);

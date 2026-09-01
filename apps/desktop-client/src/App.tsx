@@ -17,6 +17,7 @@ import {
   Tooltip,
   type TableColumnsType
 } from "antd";
+import zhCN from "antd/locale/zh_CN";
 import {
   BookOpenCheck,
   CloudUpload,
@@ -37,6 +38,7 @@ import {
 import { motion } from "framer-motion";
 import { getCurrentUser, login } from "./api/auth";
 import { DesktopApiClient, normalizeBaseUrl } from "./api/client";
+import { getSafeUserText, getUserErrorMessage } from "./api/userError";
 import { listCaptureBatches, listExams, type CaptureBatch } from "./api/exams";
 import { listReviewTasks } from "./api/review";
 import { runSubmissionQualityCheck } from "./api/submissions";
@@ -90,6 +92,7 @@ import type {
   SystemStatus,
   WorkspaceKey
 } from "./types";
+import { genericStatusLabel, queueStatusLabels, subjectLabels } from "./statusLabels";
 
 const defaultServer = "http://127.0.0.1:8080";
 const scanQueueStorageKey = "edugrade.desktop.scan_queue";
@@ -117,15 +120,6 @@ const sourceLabels: Record<string, string> = {
   double_mark_required: "双评任务",
   score_anomaly: "分数异常",
   manual_sample: "人工抽检"
-};
-
-const queueStatusLabels: Record<SyncQueueItem["status"], string> = {
-  pending: "pending",
-  uploading: "uploading",
-  succeeded: "succeeded",
-  failed: "failed",
-  conflict: "需要处理",
-  not_configured: "未配置/待接入"
 };
 
 function App() {
@@ -249,7 +243,7 @@ function App() {
           queueRef.current = items;
           setQueue(items);
         })
-        .catch((error) => setDiagnosticError(error instanceof Error ? error.message : "本地耐久队列无法恢复"));
+        .catch((error) => setDiagnosticError(getUserErrorMessage(error, "本地耐久队列无法恢复")));
     }
     void listOfflineDraftEnvelopes().then((drafts) => setOfflineDraftCount(drafts.length)).catch(() => undefined);
   }, []);
@@ -289,7 +283,7 @@ function App() {
       window.sessionStorage.setItem("edugrade.desktop.server_url", normalizedServerUrl);
       await logEvent("info", "server url saved for current session", normalizedServerUrl);
     } catch (error) {
-      setDiagnosticError(error instanceof Error ? error.message : "服务器地址无效");
+      setDiagnosticError(getUserErrorMessage(error, "服务器地址无效"));
     }
   };
 
@@ -318,20 +312,20 @@ function App() {
           setCredentialStoreMessage("登录信息已保存到当前 Windows 用户的系统凭据库。");
         } catch (error) {
           setCredentialStoreReady(false);
-          setCredentialStoreMessage(error instanceof Error ? error.message : "系统凭据库保存失败；未写入其他本地存储。");
+          setCredentialStoreMessage(getUserErrorMessage(error, "系统凭据库保存失败；未写入其他本地存储。"));
         }
       } else if (persistence === "delete") {
         try {
           await deleteStoredCredentials();
           setCredentialStoreMessage("未保存登录信息，已有系统凭据已清除。");
         } catch (error) {
-          setCredentialStoreMessage(error instanceof Error ? error.message : "系统凭据清除失败。");
+          setCredentialStoreMessage(getUserErrorMessage(error, "系统凭据清除失败。"));
         }
       }
       await logEvent("info", "login succeeded", `${result.user.username}@${result.user.tenant_code}`);
       return true;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "登录请求失败";
+      const message = getUserErrorMessage(error, "登录请求失败");
       setAuthError(message);
       await logEvent("error", "login failed", message);
       return false;
@@ -378,7 +372,7 @@ function App() {
       })
       .catch((error) => {
         setCredentialStoreReady(false);
-        setCredentialStoreMessage(error instanceof Error ? error.message : "Windows 系统凭据库不可用；已停止自动登录。");
+        setCredentialStoreMessage(getUserErrorMessage(error, "Windows 系统凭据库不可用；已停止自动登录。"));
       });
   }, [performLogin]);
 
@@ -388,7 +382,7 @@ function App() {
       setRememberLogin(false);
       setCredentialStoreMessage("已从 Windows 系统凭据库清除保存的登录信息。");
     } catch (error) {
-      setCredentialStoreMessage(error instanceof Error ? error.message : "系统凭据清除失败。");
+      setCredentialStoreMessage(getUserErrorMessage(error, "系统凭据清除失败。"));
     }
   };
 
@@ -399,7 +393,7 @@ function App() {
       setUser(result.user);
       await logEvent("info", "session verified", result.user.username);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Session 校验失败";
+      const message = getUserErrorMessage(error, "登录状态校验失败");
       setAuthError(message);
       await logEvent("warning", "session verification failed", message);
     }
@@ -413,7 +407,7 @@ function App() {
       setTasks(result.tasks);
       await logEvent("info", "review tasks loaded", `${result.tasks.length} tasks`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "任务列表读取失败";
+      const message = getUserErrorMessage(error, "任务列表读取失败");
       setTaskError(message);
       setTasks([]);
       await logEvent("warning", "review task load failed", message);
@@ -428,7 +422,7 @@ function App() {
       const result = await client.health();
       await logEvent("info", "server health checked", JSON.stringify(result));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "服务端健康检查失败";
+      const message = getUserErrorMessage(error, "服务端健康检查失败");
       setDiagnosticError(message);
       await logEvent("warning", "server health check failed", message);
     }
@@ -442,7 +436,7 @@ function App() {
       setServiceStatus(result);
       await logEvent("info", "server system status checked", result.status);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "系统状态检查失败";
+      const message = getUserErrorMessage(error, "系统状态检查失败");
       setDiagnosticError(message);
       await logEvent("warning", "server system status check failed", message);
     } finally {
@@ -461,7 +455,7 @@ function App() {
       }
       await logEvent("info", "exam list loaded for scan workstation", `${result.exams.length} exams`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "考试列表读取失败";
+      const message = getUserErrorMessage(error, "考试列表读取失败");
       setExamError(message);
       setExams([]);
       await logEvent("warning", "exam list load failed", message);
@@ -489,7 +483,7 @@ function App() {
       await logEvent("info", "capture batches loaded for scan workstation", `${usable.length} usable batches`);
     } catch (error) {
       if (requestID !== captureBatchLoadRef.current) return;
-      const message = error instanceof Error ? error.message : "采集批次读取失败";
+      const message = getUserErrorMessage(error, "采集批次读取失败");
       setCaptureBatches([]);
       setExamError(message);
       await logEvent("warning", "capture batch list load failed", message);
@@ -510,7 +504,7 @@ function App() {
         setSelectedScannerProfileId(profiles[0].id);
       }
     } catch (error) {
-      setScannerPreflightError(error instanceof Error ? error.message : "扫描设备 Profile 无法读取");
+      setScannerPreflightError(getUserErrorMessage(error, "扫描设备配置无法读取"));
     }
   };
 
@@ -527,7 +521,7 @@ function App() {
       }
       setIsScannerProfileModalOpen(true);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "无法读取 Windows 扫描设备。";
+      const message = getUserErrorMessage(error, "无法读取 Windows 扫描设备。");
       setScannerPreflightError(message);
       await logEvent("warning", "scanner device inventory failed", message);
     } finally {
@@ -562,7 +556,7 @@ function App() {
       setIsScannerProfileModalOpen(false);
       await logEvent("info", "scanner profile saved", profile.name);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "扫描设备档案保存失败。";
+      const message = getUserErrorMessage(error, "扫描设备档案保存失败。");
       setScannerPreflightError(message);
       await logEvent("warning", "scanner profile save failed", message);
     } finally {
@@ -590,7 +584,7 @@ function App() {
       setScannerPreflight(result);
       await logEvent("info", "scanner preflight completed", result.readyToScan ? "ready" : "blocked");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "扫描前检查失败";
+      const message = getUserErrorMessage(error, "扫描前检查失败");
       setScannerPreflightError(message);
       await logEvent("warning", "scanner preflight failed", message);
     } finally {
@@ -640,7 +634,7 @@ function App() {
           });
         } catch (error) {
           await logEvent("error", "scan asset durable spool failed", error instanceof Error ? error.message : String(error));
-          setDiagnosticError(error instanceof Error ? error.message : "扫描原件无法写入耐久本地存储，已停止加入上传队列");
+          setDiagnosticError(getUserErrorMessage(error, "扫描原件无法写入耐久本地存储，已停止加入上传队列"));
         }
         continue;
       }
@@ -746,7 +740,7 @@ function App() {
           file = await loadDurableSpoolFile(item.localAssetId);
           fileBufferRef.current.set(id, file);
         } catch (error) {
-          const message = error instanceof Error ? error.message : "本地加密扫描原件无法恢复";
+          const message = getUserErrorMessage(error, "本地加密扫描原件无法恢复");
           updateQueue((current) => current.map((candidate) => candidate.id === id ? { ...candidate, status: "failed", detail: message, updatedAt: new Date().toISOString() } : candidate));
           await logEvent("error", "durable spool recovery failed", message);
           return;
@@ -813,7 +807,7 @@ function App() {
           updateQueue((current) => current.map((candidate) => candidate.id === id ? {
             ...candidate,
             status: "pending",
-            detail: `服务端状态为 ${completed.status}，将在下次同步继续确认`,
+            detail: `服务端状态为${genericStatusLabel(completed.status)}，将在下次同步继续确认`,
             updatedAt: new Date().toISOString()
           } : candidate));
           return;
@@ -838,7 +832,7 @@ function App() {
         fileBufferRef.current.delete(id);
         await logEvent("info", "scan queue item uploaded", `${item.fileName ?? item.title} -> ${completed.capture_file_id ?? completed.remote_upload_id}`);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "上传失败";
+        const message = getUserErrorMessage(error, "上传失败");
         updateQueue((current) =>
           current.map((candidate) =>
             candidate.id === id
@@ -908,7 +902,7 @@ function App() {
       setQualityResult(result.result);
       await logEvent("info", "submission quality check completed", JSON.stringify(result.result));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "服务端质量门禁失败";
+      const message = getUserErrorMessage(error, "服务端质量门禁失败");
       setQualityError(message);
       await logEvent("warning", "submission quality check failed", message);
     } finally {
@@ -924,7 +918,7 @@ function App() {
       try {
         await archiveDurableScanQueueItems(succeededIds);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "本地已确认扫描件无法归档";
+        const message = getUserErrorMessage(error, "本地已确认扫描件无法归档");
         setDiagnosticError(message);
         await logEvent("warning", "durable scan archive failed", message);
         return;
@@ -944,6 +938,7 @@ function App() {
 
   return (
     <ConfigProvider
+      locale={zhCN}
       theme={{
         token: {
           colorPrimary: "#1677ff",
@@ -965,7 +960,7 @@ function App() {
               <p>扫描与离线工作站</p>
             </div>
           </div>
-          <nav className="desktop-nav" aria-label="Desktop workspace">
+          <nav className="desktop-nav" aria-label="桌面工作区">
             {navItems.map((item) => (
               <button
                 className={workspace === item.key ? "active" : ""}
@@ -987,7 +982,7 @@ function App() {
         <main className="desktop-main">
           <header className="desktop-topbar">
             <div>
-              <p className="eyebrow">Windows EXE Client Skeleton</p>
+              <p className="eyebrow">Windows 桌面客户端</p>
               <h2>{navItems.find((item) => item.key === workspace)?.label}</h2>
             </div>
             <div className="topbar-actions">
@@ -1093,7 +1088,7 @@ function App() {
       {
         title: "来源",
         dataIndex: "source",
-        render: (value: string) => sourceLabels[value] ?? value
+        render: (value: string) => sourceLabels[value] ?? "其他来源"
       },
       {
         title: "状态",
@@ -1242,7 +1237,7 @@ function App() {
                     }}
                     options={exams.map((exam) => ({
                       value: exam.id,
-                      label: `${exam.name} / ${exam.subject} / ${exam.status}`
+                      label: `${exam.name} / ${subjectLabels[exam.subject] ?? "其他学科"} / ${genericStatusLabel(exam.status)}`
                     }))}
                   />
                   <Button icon={<RefreshCw size={16} />} disabled={!token} loading={isLoadingExams} onClick={handleLoadExams}>
@@ -1263,7 +1258,7 @@ function App() {
                     onChange={setCaptureBatchId}
                     options={captureBatches.map((batch) => ({
                       value: batch.id,
-                      label: `${batch.name} · ${batch.status} · ${batch.file_count} 个文件`
+                      label: `${batch.name} · ${genericStatusLabel(batch.status)} · ${batch.file_count} 个文件`
                     }))}
                   />
                   <Button
@@ -1302,10 +1297,10 @@ function App() {
                 批量选择 PDF/图片（含 TIFF）
               </Button>
               <Button type="primary" icon={<UploadCloud size={16} />} disabled={!token || !isOnline || readyCount === 0} onClick={() => void uploadQueueItems("pending")}>
-                上传 pending
+                上传等待中的项目
               </Button>
               <Button icon={<RotateCcw size={16} />} disabled={!token || !isOnline || failedCount === 0} onClick={() => void uploadQueueItems("failed")}>
-                重试 failed
+                重试失败项目
               </Button>
               <Button danger disabled={!scanItems.some((item) => item.status === "succeeded")} onClick={() => void clearSucceededQueueItems()}>
                 归档已确认项
@@ -1315,7 +1310,7 @@ function App() {
           {examError && <Alert className="section-alert" type="error" message={examError} showIcon />}
           {!token && <Alert className="section-alert" type="warning" message="未登录：不会读取考试，也不会上传文件。" showIcon />}
           {(!selectedExamId || !captureBatchId.trim()) && token && <p className="muted">请先选择真实考试和可继续上传的采集批次；客户端不会创建假考试上下文。</p>}
-          {selectedExam && <p className="muted">当前考试：{selectedExam.name} / {selectedExam.subject} / {selectedExam.status}</p>}
+          {selectedExam && <p className="muted">当前考试：{selectedExam.name} / {subjectLabels[selectedExam.subject] ?? "其他学科"} / {genericStatusLabel(selectedExam.status)}</p>}
         </section>
 
         <section className="panel full">
@@ -1341,7 +1336,7 @@ function App() {
               {qualityResult.issues.length ? (
                 qualityResult.issues.map((issue) => (
                   <p key={`${issue.code}-${issue.message}`}>
-                    {issue.code}: {issue.message}
+                    {getSafeUserText(issue.message, "扫描质量检查未通过")}
                   </p>
                 ))
               ) : (
@@ -1476,7 +1471,7 @@ function App() {
             <div>
               <span>待上传</span>
               <strong>{pendingUploads}</strong>
-              <small>pending/uploading</small>
+              <small>等待上传/上传中</small>
             </div>
             <div>
               <span>失败队列</span>
@@ -1538,7 +1533,7 @@ function App() {
               danger
               onClick={() => void clearLocalLogs()
                 .then(refreshLogs)
-                .catch((error) => setDiagnosticError(error instanceof Error ? error.message : "本地日志清除失败"))}
+                .catch((error) => setDiagnosticError(getUserErrorMessage(error, "本地日志清除失败")))}
             >
               清空本地日志
             </Button>

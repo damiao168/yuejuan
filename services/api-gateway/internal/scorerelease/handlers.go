@@ -14,10 +14,11 @@ import (
 )
 
 type Handler struct {
-	service                     *Service
-	audit                       auth.Store
-	publisher                   PublicationPublisher
-	studentQuestionImageHandler http.HandlerFunc
+	service                      *Service
+	audit                        auth.Store
+	publisher                    PublicationPublisher
+	studentQuestionImageHandler  http.HandlerFunc
+	studentPaperPageImageHandler http.HandlerFunc
 }
 
 // PublicationPublisher lets the composition root require an independently
@@ -41,6 +42,11 @@ func (h *Handler) WithStudentQuestionImage(handler http.HandlerFunc) *Handler {
 	return h
 }
 
+func (h *Handler) WithStudentPaperPageImage(handler http.HandlerFunc) *Handler {
+	h.studentPaperPageImageHandler = handler
+	return h
+}
+
 // RegisterRoutes keeps exam-scoped routes distinct from release-id routes.
 // The composition root can therefore apply withScopedExam only where an
 // examId is present, without accidentally rejecting a valid release-id URL.
@@ -57,6 +63,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireExamManage, requireRe
 	mux.Handle("GET /api/v1/student/exams/{examId}/result", requireStudentRead(h.StudentResult))
 	mux.Handle("GET /api/v1/student/exams/{examId}/questions/{questionId}", requireStudentRead(h.StudentQuestion))
 	mux.Handle("GET /api/v1/student/exams/{examId}/questions/{questionId}/answer-image", requireStudentRead(h.StudentQuestionImage))
+	mux.Handle("GET /api/v1/student/exams/{examId}/questions/{questionId}/page-image", requireStudentRead(h.StudentPaperPageImage))
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
@@ -244,6 +251,25 @@ func (h *Handler) StudentQuestionImage(w http.ResponseWriter, r *http.Request) {
 	// file-integrity checks before serving the crop.
 	r.SetPathValue("id", source.AnswerSegmentID)
 	h.studentQuestionImageHandler(w, r)
+}
+
+func (h *Handler) StudentPaperPageImage(w http.ResponseWriter, r *http.Request) {
+	user, studentID, ok := studentReleaseUser(w, r)
+	if !ok {
+		return
+	}
+	highScore := r.URL.Query().Get("variant") == "high_score"
+	source, err := h.service.StudentPaperPageImage(r.Context(), user.TenantID, r.PathValue("examId"), studentID, r.PathValue("questionId"), highScore)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if h.studentPaperPageImageHandler == nil {
+		httpx.Error(w, r, http.StatusNotFound, "student_paper_page_unavailable", "paper page is not available")
+		return
+	}
+	r.SetPathValue("id", source.AnswerSegmentID)
+	h.studentPaperPageImageHandler(w, r)
 }
 
 func releaseUser(w http.ResponseWriter, r *http.Request) (auth.User, bool) {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Drawer, Empty, Input, List, Space, Spin, Tag } from "antd";
 import { ClipboardCheck, RefreshCw } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { getUserErrorMessage } from "../api/client";
 import {
   claimBackmarkItem,
   downloadBackmarkSegmentImage,
@@ -14,7 +14,7 @@ import {
 import { SharedScoreControl, type SharedScoreValue } from "../features/grading/SharedScoreControl";
 
 function errorMessage(error: unknown) {
-  return error instanceof ApiClientError ? error.message : "回标任务暂时无法处理，请稍后重试";
+  return getUserErrorMessage(error, "回标任务暂时无法处理，请稍后重试");
 }
 
 function rubricPoints(context?: BackmarkGraderContext) {

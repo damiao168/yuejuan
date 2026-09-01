@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Button, Descriptions, Space, Tag, Tooltip, type TableColumnsType } from "antd";
 import { Activity, Database, RefreshCw, ScanText, ShieldCheck, Signal } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getUserErrorMessage } from "../api/client";
 import { getSystemStatus, type DependencyStatus, type SystemStatus } from "../api/system";
 import { ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
@@ -18,12 +18,9 @@ const dependencyNames: Record<string, string> = {
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
     console.warn("系统状态请求失败", error.status, error.code);
-    return error.message || "操作失败，请稍后重试";
+    return getUserErrorMessage(error, "操作失败，请稍后重试");
   }
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "操作失败，请稍后重试";
+  return getUserErrorMessage(error, "操作失败，请稍后重试");
 }
 
 function formatTime(value: string) {

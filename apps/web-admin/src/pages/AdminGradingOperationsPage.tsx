@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Button, Input, Progress, Space } from "antd";
 import { ArrowRight, CircleAlert, RefreshCw, Search, ShieldCheck } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getUserErrorMessage } from "../api/client";
 import { listExams, type Exam } from "../api/exams";
 import { getScoringSummary, type ScoringSummary } from "../api/review";
 import { getAIGradingStatus, type AIGradingRuntimeStatus } from "../api/system";
@@ -28,10 +28,9 @@ const runStatusLabels: Record<string, string> = {
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
     console.warn("阅卷请求失败", error.status, error.code);
-    return error.message || "操作失败，请稍后重试";
+    return getUserErrorMessage(error, "操作失败，请稍后重试");
   }
-  if (error instanceof Error && error.message) return error.message;
-  return "阅卷数据加载失败";
+  return getUserErrorMessage(error, "阅卷数据加载失败");
 }
 
 function completion(summary?: ScoringSummary) {

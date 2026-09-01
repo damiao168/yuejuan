@@ -105,7 +105,7 @@ JOIN question_row q ON q.exam_id=e.id
 	if err != nil {
 		t.Fatalf("create source reorder fixture: %v", err)
 	}
-	if _, err = store.CompletePaperImportCandidates(ctx, tenantID, reorderJob.ID, nil, nil, []paper.AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "42"}}, nil, nil); err != nil {
+	if _, err = store.CompletePaperImportCandidates(ctx, tenantID, reorderJob.ID, nil, nil, []paper.AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "42"}}, nil, nil, nil); err != nil {
 		t.Fatalf("complete source reorder fixture: %v", err)
 	}
 	reordered, err := store.ReplacePaperImportSources(ctx, tenantID, reorderJob.ID, userID, paper.ReplacePaperImportSourcesInput{Sources: []paper.ReplacePaperImportSourceInput{

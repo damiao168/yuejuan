@@ -1,0 +1,53 @@
+import { describe, expect, it } from "vitest";
+import zhCN from "antd/locale/zh_CN";
+import { ApiClient, ApiClientError } from "./client";
+import { getPaperImportUserMessage, getUserErrorMessage, NETWORK_USER_ERROR_MESSAGE } from "./userError";
+
+function response(body: unknown, status: number, statusText = "") {
+  return new Response(typeof body === "string" ? body : JSON.stringify(body), {
+    status,
+    statusText,
+    headers: { "Content-Type": typeof body === "string" ? "text/plain" : "application/json" }
+  });
+}
+
+describe("user-facing API errors", () => {
+  it.each([
+    ["exam_not_collecting", "当前考试尚未进入答卷采集阶段，请先完成考试准备并开始采集。"],
+    ["capture_duplicate_file", "该文件已加入当前批次，无需重复导入。"]
+  ])("maps %s to Chinese", (code, expected) => {
+    expect(getUserErrorMessage(new ApiClientError(409, code, "English backend message"))).toBe(expected);
+  });
+
+  it("uses the HTTP fallback for an unknown conflict code", () => {
+    expect(getUserErrorMessage(new ApiClientError(409, "new_conflict", "resource changed")))
+      .toBe("当前数据状态已发生变化，请刷新后重试。");
+  });
+
+  it("never exposes raw 5xx messages or status text", async () => {
+    const client = new ApiClient({ baseUrl: "https://example.test" });
+    const fetchMock = (body: unknown, statusText: string) => {
+      globalThis.fetch = async () => response(body, 500, statusText);
+    };
+    fetchMock({ error: { code: "unknown_backend", message: "Internal Server Error" } }, "Internal Server Error");
+    await expect(client.request("/json")).rejects.toMatchObject({ message: "系统暂时无法完成操作，请稍后重试。" });
+    fetchMock("Internal Server Error", "Internal Server Error");
+    await expect(client.request("/text")).rejects.toMatchObject({ message: "系统暂时无法完成操作，请稍后重试。" });
+  });
+
+  it("maps fetch failures and unknown native errors without exposing Error.message", () => {
+    expect(getUserErrorMessage(new TypeError("Failed to fetch"))).toBe(NETWORK_USER_ERROR_MESSAGE);
+    expect(getUserErrorMessage(new Error("Unexpected English error"))).toBe("操作失败，请稍后重试。");
+  });
+
+  it("translates paper import and OCR machine messages to Chinese", () => {
+    expect(getPaperImportUserMessage("扫描文档 OCR 失败：page_processing_failed"))
+      .toBe("扫描文档文字识别失败：页面处理失败");
+    expect(getPaperImportUserMessage("exam has no questions")).toBe("试卷尚未配置题目");
+  });
+
+  it("provides Chinese Ant Design modal defaults", () => {
+    expect(zhCN.Modal?.cancelText).toBe("取消");
+    expect(zhCN.Modal?.okText).toBe("确定");
+  });
+});

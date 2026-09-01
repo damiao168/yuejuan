@@ -2,6 +2,8 @@ package auth
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -23,7 +25,7 @@ func TestResolveDeclaredAccessScopeCombinesRoleKeyedScopes(t *testing.T) {
 	user := User{
 		ID: "teacher-1", TenantID: "tenant-1", Roles: []string{"teacher", "grader"},
 		DataScope: map[string]any{
-			"teacher": map[string]any{"scope": "school", "school_id": "school-1", "class_ids": []any{"class-2", "class-1"}},
+			"teacher": map[string]any{"scope": "class", "school_id": "school-1", "class_ids": []any{"class-2", "class-1"}},
 			"grader":  map[string]any{"scope": "exam_task", "review_task_id": "task-1"},
 		},
 	}
@@ -34,6 +36,23 @@ func TestResolveDeclaredAccessScopeCombinesRoleKeyedScopes(t *testing.T) {
 	if scope.TenantWide || !scope.AssignedOnly || !scope.AllowsSchool("school-1") ||
 		!scope.AllowsClass("class-1") || !scope.AllowsReviewTask("task-1") {
 		t.Fatalf("unexpected combined access scope: %#v", scope)
+	}
+}
+
+func TestResolveDeclaredAccessScopeCombinesSchoolAdminAndGraderWithoutTenantUpgrade(t *testing.T) {
+	user := User{
+		ID: "admin-grader-1", TenantID: "tenant-1", Roles: []string{"school_admin", "grader"},
+		DataScope: map[string]any{
+			"school_admin": map[string]any{"scope": "school", "school_id": "school-1"},
+			"grader":       map[string]any{"scope": "exam_task", "review_task_id": "task-1"},
+		},
+	}
+	scope, err := ResolveDeclaredAccessScope(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope.TenantWide || !scope.schoolWide || !scope.AssignedOnly || !scope.AllowsSchool("school-1") || !scope.AllowsReviewTask("task-1") {
+		t.Fatalf("unexpected school administrator + grader union: %#v", scope)
 	}
 }
 
@@ -70,5 +89,40 @@ func TestOrganizationScopeProjectsResolvedBoundary(t *testing.T) {
 	if resolved.TenantWide || len(resolved.SchoolIDs) != 2 || resolved.SchoolIDs[0] != "school-1" ||
 		len(resolved.GradeIDs) != 1 || resolved.GradeIDs[0] != "grade-2" {
 		t.Fatalf("unexpected organization scope: %#v", resolved)
+	}
+}
+
+func TestAssignedOnlyIsNotATaskWildcard(t *testing.T) {
+	for _, resource := range []string{"review_task", "arbitration_task"} {
+		handler := RequireScopedResource(resource, "id")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+		req := httptest.NewRequest(http.MethodGet, "/tasks/unassigned", nil)
+		req.SetPathValue("id", "unassigned")
+		req = req.WithContext(WithAccessScope(req.Context(), AccessScope{TenantID: "t-1", ActorID: "u-1", AssignedOnly: true}))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s AssignedOnly wildcard expected 403, got %d", resource, rec.Code)
+		}
+	}
+}
+
+func TestStudentIdentityIsNotAnExamWildcard(t *testing.T) {
+	handler := RequireScopedResource("exam", "id")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	req := httptest.NewRequest(http.MethodGet, "/exams/other", nil)
+	req.SetPathValue("id", "other")
+	req = req.WithContext(WithAccessScope(req.Context(), AccessScope{TenantID: "t-1", ActorID: "u-1", StudentID: "student-1"}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("student exam wildcard expected 403, got %d", rec.Code)
+	}
+}
+
+func TestRoleKeyedScopeRejectsRoleScopeDrift(t *testing.T) {
+	_, err := ResolveDeclaredAccessScope(User{ID: "grader-1", TenantID: "t-1", Roles: []string{"grader"}, DataScope: map[string]any{
+		"grader": map[string]any{"scope": "school", "school_id": "school-a"},
+	}})
+	if !errors.Is(err, ErrAccessScopeInvalid) {
+		t.Fatalf("grader school scope must fail closed, got %v", err)
 	}
 }

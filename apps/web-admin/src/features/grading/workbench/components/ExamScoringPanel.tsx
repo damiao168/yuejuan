@@ -1,5 +1,6 @@
 import { Alert, Button, Drawer, Input, Modal, Popconfirm, Segmented, Select, Space, Tooltip } from "antd";
 import { Award, BadgeCheck, CircleStop, Eye, Play, RefreshCw, RotateCcw, Search } from "lucide-react";
+import { getSafeUserText } from "../../../../api/client";
 import type { ScoringRunItem } from "../../../../api/review";
 import { OcrWorkerAlert } from "../../../../components/OcrWorkerAlert";
 import { ResponsiveTable } from "../../../../components/ResponsiveTable";
@@ -84,7 +85,7 @@ export function ExamScoringPanel({
                   {(scoring.hasUnresolvedRun ? scoring.blockingChecks.filter((check) => check.code === "active_run_clear") : [...scoring.blockingChecks, ...scoring.warningChecks]).length ? (
                     <ul className="grading-readiness-issues">
                       {(scoring.hasUnresolvedRun ? scoring.blockingChecks.filter((check) => check.code === "active_run_clear") : [...scoring.blockingChecks, ...scoring.warningChecks]).map((check) => (
-                        <li key={check.code} className={check.severity}><strong>{check.label}</strong><span>{check.message}</span></li>
+                        <li key={check.code} className={check.severity}><strong>{getSafeUserText(check.label, "评分准备检查")}</strong><span>{getSafeUserText(check.message, "检查未通过，请完成相关设置")}</span></li>
                       ))}
                     </ul>
                   ) : <span className="grading-readiness-ok">全部题块均可进入自动处理或人工复核。</span>}

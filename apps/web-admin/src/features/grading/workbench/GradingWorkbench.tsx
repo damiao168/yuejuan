@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Modal } from "antd";
-import { ApiClientError } from "../../../api/client";
+import { ApiClientError, getSafeUserText } from "../../../api/client";
 import { loadReviewDraftFallback, removeReviewDraftFallback, saveReviewDraftFallback } from "../../../auth/reviewDraftFallback";
 import { displayNameOrUsername } from "../../../auth/session";
 import {
@@ -862,8 +862,8 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
           </main>
         ) : (
           <main className="grading-main">
-            {ctx.warnings.length > 0 ? <Alert type="warning" showIcon message="AI 辅助不可用" description={ctx.warnings.join("；")} /> : null}
-            <section className="grading-reason-banner"><div><span>为什么需要我处理？</span><strong>{sourceLabels[ctx.task.source] ?? "本题需要人工确认"}</strong><p>{ctx.warnings[0] ?? sourceDescriptions[ctx.task.source] ?? "请结合学生原始答案和评分细则完成确认。"}</p></div>{selectedGrade ? <div><span>系统建议</span><strong>{selectedGrade.suggested_score} / {selectedGrade.max_score}</strong></div> : null}</section>
+            {ctx.warnings.length > 0 ? <Alert type="warning" showIcon message="AI 辅助不可用" description={ctx.warnings.map((warning) => getSafeUserText(warning, "智能辅助暂时不可用")).join("；")} /> : null}
+            <section className="grading-reason-banner"><div><span>为什么需要我处理？</span><strong>{sourceLabels[ctx.task.source] ?? "本题需要人工确认"}</strong><p>{ctx.warnings[0] ? getSafeUserText(ctx.warnings[0], "智能辅助暂时不可用，请人工确认。") : sourceDescriptions[ctx.task.source] ?? "请结合学生原始答案和评分细则完成确认。"}</p></div>{selectedGrade ? <div><span>系统建议</span><strong>{selectedGrade.suggested_score} / {selectedGrade.max_score}</strong></div> : null}</section>
 
             <section className="grading-panels">
               <AnswerEvidencePane

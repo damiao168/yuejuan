@@ -1,6 +1,6 @@
 import { Button } from "antd";
-import { ArrowRight, Check, GraduationCap, UserCog, UsersRound } from "lucide-react";
-import type { DashboardActiveExam, DashboardOrganizationStatistics, DashboardStatistics } from "../../api/dashboard";
+import { ArrowRight, Check, Clock3, GraduationCap, UserCog, UsersRound } from "lucide-react";
+import type { DashboardActiveExam, DashboardActivity, DashboardOrganizationStatistics, DashboardStatistics } from "../../api/dashboard";
 import { StatusTag } from "../../components/StatusTag";
 import { examStatusLabels, examStatusTone, examSubjectLabel } from "../../constants/examStatus";
 import type { StatusTone } from "../../types";
@@ -147,12 +147,36 @@ function GradingResultsSection({ statistics, workItems, onNavigate }: { statisti
   );
 }
 
-export function SchoolDashboard({ organizationStatistics, statistics, activeExamCount, exams, workItems, onNavigate }: {
+function KeyProgressSection({ activities, onNavigate }: { activities: DashboardActivity[]; onNavigate: (path: string) => void }) {
+  if (!activities.length) return null;
+  return (
+    <section className="school-dashboard-section key-progress-section">
+      <div className="school-dashboard-section-head">
+        <div className="school-dashboard-section-title"><span>04</span><div><h2>关键进展</h2><p>仅展示会影响考试推进的重要变化</p></div></div>
+      </div>
+      <div className="dashboard-link-list">
+        {activities.slice(0, 5).map((activity) => (
+          <button type="button" key={activity.id} onClick={() => activity.drilldown_path && onNavigate(activity.drilldown_path)} disabled={!activity.drilldown_path}>
+            <Clock3 size={15} />
+            <span>
+              <strong>{activity.title || "考试进展已更新"}</strong>
+              <small>{activity.summary || "查看相关考试的最新状态"} · {new Date(activity.created_at).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}</small>
+            </span>
+            {activity.drilldown_path ? <ArrowRight size={14} /> : null}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function SchoolDashboard({ organizationStatistics, statistics, activeExamCount, exams, workItems, activities, onNavigate }: {
   organizationStatistics: DashboardOrganizationStatistics;
   statistics: DashboardStatistics;
   activeExamCount: number;
   exams: DashboardActiveExam[];
   workItems: DashboardWorkItem[];
+  activities: DashboardActivity[];
   onNavigate: (path: string) => void;
 }) {
   return (
@@ -160,6 +184,7 @@ export function SchoolDashboard({ organizationStatistics, statistics, activeExam
       <MembersSection statistics={organizationStatistics} onNavigate={onNavigate} />
       <ExamsSection exams={exams} activeExamCount={activeExamCount} onNavigate={onNavigate} />
       <GradingResultsSection statistics={statistics} workItems={workItems} onNavigate={onNavigate} />
+      <KeyProgressSection activities={activities} onNavigate={onNavigate} />
     </div>
   );
 }

@@ -55,14 +55,14 @@ export interface AppRoute {
 const productionRouteDefinitions: AppRoute[] = [
   {
     key: "dashboard", path: "/dashboard", title: "工作总览", group: "工作台", icon: <Home size={18} />, permissions: [], mock: false, productionReady: true,
-    workspaces: ["platform", "school_admin", "exam_owner", "teacher", "grader", "arbitrator"],
-    experiences: { admin: { title: "工作台", group: "工作台" }, teacher: { title: "我的工作", group: "工作台" } }
+    workspaces: ["platform", "tenant_admin", "school_admin", "exam_owner", "teacher", "grader", "arbitrator", "auditor", "student"],
+    experiences: { admin: { title: "工作台", group: "工作台" }, teacher: { title: "我的工作", group: "工作台" }, auditor: { title: "审计总览", group: "工作台" }, student: { title: "我的学习", group: "工作台" } }
   },
   {
     key: "sessions", path: "/account/sessions", title: "账户安全", group: "账号", icon: <LockKeyhole size={18} />, permissions: [],
     navigation: false, mock: false, productionReady: true,
-    workspaces: ["platform", "school_admin", "exam_owner", "teacher", "grader", "arbitrator"],
-    experiences: { admin: { title: "账户安全", group: "账号" }, teacher: { title: "账户安全", group: "账号" } }
+    workspaces: ["platform", "tenant_admin", "school_admin", "exam_owner", "teacher", "grader", "arbitrator", "auditor", "student"],
+    experiences: { admin: { title: "账户安全", group: "账号" }, teacher: { title: "账户安全", group: "账号" }, auditor: { title: "账户安全", group: "账号" }, student: { title: "账户安全", group: "账号" } }
   },
   {
     key: "platformSchools", path: "/platform/schools", title: "学校管理", group: "平台管理", icon: <Building2 size={18} />, permissions: ["tenant:manage"], allowedRoles: ["platform_admin"], mock: false, productionReady: true,
@@ -71,17 +71,17 @@ const productionRouteDefinitions: AppRoute[] = [
   {
     key: "exams", path: "/exams", title: "考试管理", group: "考试组织", icon: <ClipboardCheck size={18} />, permissions: ["exam:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin", "exam_owner"], experiences: { admin: { title: "考试列表", group: "考试管理" } }
+    workspaces: ["tenant_admin", "school_admin", "exam_owner"], experiences: { admin: { title: "考试列表", group: "考试管理" } }
   },
   {
     key: "examCreate", path: "/exams/new", title: "新建考试", group: "考试组织", icon: <ClipboardCheck size={18} />, permissions: ["exam:manage"], navigation: false, mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin", "exam_owner"], experiences: { admin: { title: "新建考试", group: "考试管理" } }
+    workspaces: ["tenant_admin", "school_admin", "exam_owner"], experiences: { admin: { title: "新建考试", group: "考试管理" } }
   },
   {
     key: "papers", path: "/papers", title: "试卷管理", group: "考试组织", icon: <FileText size={18} />, permissions: ["exam:manage", "file:manage"], navigation: false, mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin", "exam_owner"], experiences: { admin: { title: "试卷管理", group: "考试管理" } }
+    workspaces: ["tenant_admin", "school_admin", "exam_owner"], experiences: { admin: { title: "试卷管理", group: "考试管理" } }
   },
   {
     key: "capture",
@@ -93,7 +93,7 @@ const productionRouteDefinitions: AppRoute[] = [
     excludedRoles: ["platform_admin"],
     mock: false,
     productionReady: true,
-    workspaces: ["school_admin", "exam_owner"], experiences: { admin: { title: "答题卡导入", group: "考试管理" } }
+    workspaces: ["tenant_admin", "school_admin", "exam_owner"], experiences: { admin: { title: "答题卡导入", group: "考试管理" } }
   },
   {
     key: "grading",
@@ -106,51 +106,51 @@ const productionRouteDefinitions: AppRoute[] = [
     excludedRoles: ["platform_admin"],
     mock: false,
     productionReady: true,
-    workspaces: ["school_admin", "exam_owner", "teacher", "grader"],
+    workspaces: ["tenant_admin", "school_admin", "exam_owner", "teacher", "grader"],
     experiences: { admin: { title: "阅卷任务", group: "阅卷与成绩" }, teacher: { title: "我的阅卷", group: "阅卷工作" } }
   },
   {
     key: "arbitration", path: "/arbitration", title: "质量与仲裁", group: "阅卷与质量", icon: <Gavel size={18} />, permissions: [], anyPermissions: ["arbitration:manage", "arbitration:work"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin", "exam_owner", "arbitrator"],
+    workspaces: ["tenant_admin", "school_admin", "exam_owner", "arbitrator"],
     experiences: { admin: { title: "复核与异常", group: "阅卷与成绩" }, teacher: { title: "我的仲裁", group: "阅卷工作" } }
   },
   {
     key: "scores", path: "/scores", title: "成绩发布", group: "结果管理", icon: <Gauge size={18} />, permissions: ["score:manage", "exam:manage", "submission:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin", "exam_owner"], experiences: { admin: { title: "成绩发布", group: "阅卷与成绩" } }
+    workspaces: ["tenant_admin", "school_admin", "exam_owner"], experiences: { admin: { title: "成绩发布", group: "阅卷与成绩" } }
   },
   {
     key: "reports", path: "/reports", title: "统计报告", group: "结果管理", icon: <BarChart3 size={18} />, permissions: ["report:read"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin", "exam_owner", "teacher"],
+    workspaces: ["tenant_admin", "school_admin", "exam_owner", "teacher"],
     experiences: { admin: { title: "成绩分析", group: "阅卷与成绩" }, teacher: { title: "班级成绩", group: "教学工作" } }
   },
   {
     key: "appeals", path: "/appeals", title: "申诉管理", group: "结果管理", icon: <Inbox size={18} />, permissions: ["appeal:read"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin", "exam_owner", "teacher"],
+    workspaces: ["tenant_admin", "school_admin", "exam_owner", "teacher"],
     experiences: { admin: { title: "申诉处理", group: "阅卷与成绩" }, teacher: { title: "学生反馈", group: "教学工作" } }
   },
   {
     key: "membersStudents", path: "/members/students", title: "学生管理", group: "学校管理", icon: <Users size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin"], experiences: { admin: { title: "学生管理", group: "成员管理" } }
+    workspaces: ["tenant_admin", "school_admin"], experiences: { admin: { title: "学生管理", group: "成员管理" } }
   },
   {
     key: "membersClasses", path: "/members/classes", title: "年级与班级", group: "学校管理", icon: <GraduationCap size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin"], experiences: { admin: { title: "年级与班级", group: "成员管理" } }
+    workspaces: ["tenant_admin", "school_admin"], experiences: { admin: { title: "年级与班级", group: "成员管理" } }
   },
   {
     key: "membersTeachers", path: "/members/teachers", title: "教师与阅卷人员", group: "学校管理", icon: <UserCog size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin"], experiences: { admin: { title: "教师与阅卷人员", group: "成员管理" } }
+    workspaces: ["tenant_admin", "school_admin"], experiences: { admin: { title: "教师与阅卷人员", group: "成员管理" } }
   },
   {
     key: "organization", path: "/organization/setup", title: "学校初始化", group: "学校管理", icon: <Settings size={18} />, permissions: ["org:manage"], navigation: false, mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["school_admin"], experiences: { admin: { title: "学校初始化", group: "学校管理" } }
+    workspaces: ["tenant_admin", "school_admin"], experiences: { admin: { title: "学校初始化", group: "学校管理" } }
   },
   {
     key: "modelGovernance", path: "/system/models", title: "模型治理", group: "系统管理", icon: <BrainCircuit size={18} />, permissions: ["model:read"], mock: false, productionReady: true,
@@ -169,7 +169,7 @@ const productionRouteDefinitions: AppRoute[] = [
   },
   {
     key: "audit", path: "/audit", title: "操作审计", group: "系统管理", icon: <ScrollText size={18} />, permissions: ["audit:read"], mock: false, productionReady: true,
-    workspaces: ["platform", "school_admin"], experiences: { admin: { title: "操作审计", group: "设置" } }
+    workspaces: ["platform", "tenant_admin", "school_admin", "auditor"], experiences: { admin: { title: "操作审计", group: "设置" }, auditor: { title: "操作审计", group: "审计" } }
   }
 ];
 
@@ -223,7 +223,7 @@ export const examWorkspaceRoute: AppRoute = {
 
 export const examWorkspaceSections: Record<ProductExperience, readonly string[]> = {
   admin: ["overview", "students", "paper", "questions", "template", "capture", "processing", "grading", "quality", "scores", "appeals", "reports", "settings"],
-  teacher: []
+  teacher: [], auditor: [], student: []
 };
 
 export function hasExamWorkspaceSectionAccess(experience: ProductExperience, section: string): boolean {
@@ -239,7 +239,7 @@ export const forbiddenRoute: AppRoute = {
   permissions: [],
   mock: false,
   productionReady: true,
-  experiences: { admin: { title: "无权限", group: "系统" }, teacher: { title: "无权限", group: "系统" } }
+  experiences: { admin: { title: "无权限", group: "系统" }, teacher: { title: "无权限", group: "系统" }, auditor: { title: "无权限", group: "系统" }, student: { title: "无权限", group: "系统" } }
 };
 
 export const notFoundRoute: AppRoute = {
@@ -251,7 +251,7 @@ export const notFoundRoute: AppRoute = {
   permissions: [],
   mock: false,
   productionReady: true,
-  experiences: { admin: { title: "未找到", group: "系统" }, teacher: { title: "未找到", group: "系统" } }
+  experiences: { admin: { title: "未找到", group: "系统" }, teacher: { title: "未找到", group: "系统" }, auditor: { title: "未找到", group: "系统" }, student: { title: "未找到", group: "系统" } }
 };
 
 export interface RouteBuildEnvironment {

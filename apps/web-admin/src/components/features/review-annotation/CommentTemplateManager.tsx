@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Drawer, Empty, Input, List, Popconfirm, Space, Tag } from "antd";
 import { Pencil, Plus, Trash2 } from "lucide-react";
+import { getUserErrorMessage } from "../../../api/client";
 import type { ReviewCommentTemplate } from "../../../api/reviewAnnotations";
 
 interface TemplateDraft {
@@ -65,7 +66,7 @@ export function CommentTemplateManager({
       else await onCreate(draft);
       reset();
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "保存常用评语失败");
+      setError(getUserErrorMessage(saveError, "保存常用评语失败"));
     } finally {
       setSaving(false);
     }

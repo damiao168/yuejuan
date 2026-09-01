@@ -57,6 +57,9 @@ type RecentActivity struct {
 	Action        string    `json:"action"`
 	TargetType    string    `json:"target_type"`
 	TargetID      string    `json:"target_id,omitempty"`
+	Title         string    `json:"title,omitempty"`
+	Summary       string    `json:"summary,omitempty"`
+	Severity      string    `json:"severity,omitempty"`
 	Reason        string    `json:"reason,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	DrilldownPath string    `json:"drilldown_path,omitempty"`

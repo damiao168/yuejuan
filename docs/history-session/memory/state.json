@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "state_revision": 5,
+  "archive_revision": "sha256:420256b1b2a694f29e8fb5cb4f1ff3935bb12739799e16fdca72fe674a14639c",
+  "generated_at": "unix:1787911481",
+  "current_session": {
+    "number": 2,
+    "path": "docs/history-session/2.md",
+    "reason": "当前 ChatGPT 会话档案"
+  },
+  "current_focus": "看一下项目，给出建议，先不要改动",
+  "recent_changes": [],
+  "open_items": [
+    "若继续保持只读，可进一步输出按 P0/P1/P2 排序的产品与技术整改清单。",
+    "可重点做一次完整的黄金主流程审查：创建考试→试卷配置→考生→扫描识别→人工复核→发布分析。",
+    "后续每轮任务结束前，使用相同 session_key 与 expected_path，并逐字传入当轮 raw_user_input 调用 history_session_checkpoint。",
+    "若后续任务需要早期精确细节，先 history_session_search，再 history_session_read，并按 next_cursor 分页直到所需原文读取完整。",
+    "如用户指定具体项目，可检查默认工作目录和仓库状态后直接开始分析或修改。"
+  ],
+  "references": [
+    {
+      "number": 1,
+      "path": "docs/history-session/1.md",
+      "reason": "最近历史档案；可按需读取原文"
+    }
+  ]
+}

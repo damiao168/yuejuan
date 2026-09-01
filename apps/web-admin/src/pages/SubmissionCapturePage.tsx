@@ -28,7 +28,7 @@ import {
   RotateCcw,
   Search,
 } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getSafeUserText, getUserErrorMessage } from "../api/client";
 import {
   assignProcessingException,
   getProcessingSummary,
@@ -154,12 +154,9 @@ const ocrStatusLabels: Record<string, string> = {
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
     console.warn(`API 请求失败 ${error.status} ${error.code}`, error);
-    return error.message || "操作失败，请稍后重试";
+    return getUserErrorMessage(error, "操作失败，请稍后重试");
   }
-  if (error instanceof Error) {
-    return error.message || "操作失败，请稍后重试";
-  }
-  return "操作失败，请稍后重试";
+  return getUserErrorMessage(error, "操作失败，请稍后重试");
 }
 
 function formatTime(value?: string) {
@@ -250,13 +247,13 @@ function ocrLabel(tasks: OcrTask[]) {
     return "未触发";
   }
   const suffix = task.requires_human_review ? " / 需人工" : "";
-  return `${ocrStatusLabels[task.status] ?? task.status}${suffix}`;
+  return `${ocrStatusLabels[task.status] ?? "未知状态"}${suffix}`;
 }
 
 function derivedIssues(row: SubmissionView): QualityIssue[] {
   const issues = [...(row.submission.quality_issues ?? [])];
   for (const page of row.pages) {
-    issues.push(...(page.quality_issues ?? []).map((issue) => ({ code: issue.code, message: `第 ${page.page_no} 页：${issue.message}` })));
+    issues.push(...(page.quality_issues ?? []).map((issue) => ({ code: issue.code, message: `第 ${page.page_no} 页：${getSafeUserText(issue.message, "图片质量检查未通过")}` })));
   }
   if (row.ocrTasks.some((task) => task.status === "failed")) {
     issues.push({ code: "ocr_failed", message: "文字识别失败" });
@@ -903,7 +900,7 @@ export function SubmissionCapturePage({
         if (selectedExam) await loadCaptureData(selectedExam.id);
       } else {
         patchUpload(uploadId, { status: "error", phase: "上传失败", error: errorMessage });
-        request.onError?.(currentError instanceof Error ? currentError : new Error(errorMessage));
+        request.onError?.(new Error(getUserErrorMessage(currentError, errorMessage)));
       }
     }
   };
@@ -1104,7 +1101,7 @@ export function SubmissionCapturePage({
           <Space wrap size={[0, 4]}>
             {issues.slice(0, 3).map((issue, index) => (
               <StatusTag key={`${issue.code}-${index}`} tone={issueTone(issue.code)}>
-                {issue.message || issue.code}
+                {getSafeUserText(issue.message, "处理检查未通过")}
               </StatusTag>
             ))}
             {issues.length > 3 ? <StatusTag tone="neutral">{`+${issues.length - 3}`}</StatusTag> : null}
@@ -1196,7 +1193,7 @@ export function SubmissionCapturePage({
 
   const pageColumns: TableColumnsType<SubmissionPage> = [
     { title: "页码", dataIndex: "page_no", width: 72 },
-    { title: "状态", dataIndex: "status", width: 110, render: (value: string) => <StatusTag tone={pageStatusTone(value)}>{pageStatusLabels[value] ?? value}</StatusTag> },
+    { title: "状态", dataIndex: "status", width: 110, render: (value: string) => <StatusTag tone={pageStatusTone(value)}>{pageStatusLabels[value] ?? "未知状态"}</StatusTag> },
     {
       title: "质量问题",
       width: 180,
@@ -1205,7 +1202,7 @@ export function SubmissionCapturePage({
           <Space wrap>
             {page.quality_issues.map((issue, index) => (
               <StatusTag key={`${issue.code}-${index}`} tone={issueTone(issue.code)}>
-                {issue.message}
+                {getSafeUserText(issue.message, "图片质量检查未通过")}
               </StatusTag>
             ))}
           </Space>
@@ -1412,7 +1409,7 @@ export function SubmissionCapturePage({
             <Descriptions bordered size="small" column={2}>
               <Descriptions.Item label="答题卡编号">{pageDrawer.submission.candidate_no || "暂未生成"}</Descriptions.Item>
               <Descriptions.Item label="学生姓名">{studentName(pageDrawer.submission)}</Descriptions.Item>
-              <Descriptions.Item label="采集状态">{submissionStatusLabels[pageDrawer.submission.status] ?? pageDrawer.submission.status}</Descriptions.Item>
+              <Descriptions.Item label="采集状态">{submissionStatusLabels[pageDrawer.submission.status] ?? "未知状态"}</Descriptions.Item>
               <Descriptions.Item label="质量状态">{qualityStatusLabels[pageDrawer.submission.quality_status] ?? pageDrawer.submission.quality_status}</Descriptions.Item>
             </Descriptions>
             <ResponsiveTable<SubmissionPage>

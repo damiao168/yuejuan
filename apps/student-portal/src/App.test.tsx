@@ -88,7 +88,7 @@ async function renderReleasedResult(handler: ApiHandler = (call) => resultRoute(
   window.location.hash = "/exams/exam-1";
   installApi(handler);
   render(<App />);
-  await screen.findByText("本次考试成绩");
+  await screen.findByLabelText("总分");
 }
 
 describe("Student Portal released-score boundaries", () => {
@@ -141,6 +141,117 @@ describe("Student Portal released-score boundaries", () => {
     expect(screen.getByLabelText("总分").textContent).toContain("82");
     expect(screen.getByLabelText("总分").textContent).not.toContain("91");
     expect(screen.getByRole("button", { name: /14 \/ 20 分/ }).textContent).not.toContain("19");
+  });
+
+  it("renders subject balance radar and grouped bar charts from released aggregates", async () => {
+    await renderReleasedResult((call) => resultRoute(call, {
+      ...releasedResult,
+      subject_balance: [
+        { subject: "chinese", student_score_rate: .76, school_mean_score_rate: .72, sample_size: 80 },
+        { subject: "math", student_score_rate: .82, school_mean_score_rate: .74, sample_size: 80 },
+        { subject: "english", student_score_rate: .69, school_mean_score_rate: .71, sample_size: 80 },
+        { subject: "physics", student_score_rate: .88, school_mean_score_rate: .77, sample_size: 80 }
+      ]
+    }));
+
+    expect(screen.getByRole("heading", { name: "学科均衡" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "我的各科得分率与学校平均雷达图" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "各科得分率分组柱状图" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /我的得分率/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /学校平均/ })).toBeTruthy();
+  });
+
+  it("uses the shared legend to toggle both radar and bar chart series", async () => {
+    await renderReleasedResult((call) => resultRoute(call, {
+      ...releasedResult,
+      subject_balance: [
+        { subject: "chinese", student_score_rate: .76, school_mean_score_rate: .72, sample_size: 80 },
+        { subject: "math", student_score_rate: .82, school_mean_score_rate: .74, sample_size: 80 },
+        { subject: "english", student_score_rate: .69, school_mean_score_rate: .71, sample_size: 80 }
+      ]
+    }));
+
+    const radar = screen.getByRole("img", { name: "我的各科得分率与学校平均雷达图" });
+    const bars = screen.getByRole("img", { name: "各科得分率分组柱状图" });
+    expect(radar.querySelector(".radar-series.student")).toBeTruthy();
+    expect(bars.querySelector(".subject-bar.student")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /我的得分率/ }));
+
+    expect(radar.querySelector(".radar-series.student")).toBeNull();
+    expect(bars.querySelector(".subject-bar.student")).toBeNull();
+    expect(radar.querySelector(".radar-series.average")).toBeTruthy();
+    expect(bars.querySelector(".subject-bar.average")).toBeTruthy();
+  });
+
+  it("classifies dense question rows against each released median score", async () => {
+    await renderReleasedResult((call) => resultRoute(call, {
+      ...releasedResult,
+      exam: { name: "数学月考", subject: "math", exam_type: "monthly", published_at: "2026-08-30T00:00:00Z" },
+      questions: [
+        {
+          question_id: "question-1", question_no: "1", score: 5, max_score: 10,
+          correct_answer: "B", actual_answer: "B",
+          cohort: { sample_size: 40, mean_score_rate: .5, full_score_rate: .1, zero_score_rate: .1, class_mean_score: 4.8, school_mean_score: 4.6, median_score: 5 }
+        },
+        {
+          question_id: "question-2", question_no: "2", score: 4.5, max_score: 10,
+          correct_answer: "AC", actual_answer: "A",
+          cohort: { sample_size: 40, mean_score_rate: .6, full_score_rate: .2, zero_score_rate: .05, class_mean_score: 6.1, school_mean_score: 5.9, median_score: 5 }
+        }
+      ]
+    }));
+
+    expect(screen.getByRole("heading", { name: "数学逐题分析" })).toBeTruthy();
+    expect(screen.getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual([
+      "题号", "正确答案", "实际答案", "得分", "班级平均分", "学校平均分", "掌握程度"
+    ]);
+    expect(screen.getByText("已掌握")).toBeTruthy();
+    expect(screen.getByText("待巩固")).toBeTruthy();
+  });
+
+  it("pages through annotated paper images and switches to the released high-score paper", async () => {
+    await renderReleasedResult((call) => {
+      const released = resultRoute(call, {
+        ...releasedResult,
+        questions: [
+          { ...releasedResult.questions[0], page_no: 1, answer_geometry: { x: .1, y: .15, width: .35, height: .2 } },
+          { question_id: "question-2", question_no: "2", score: 18, max_score: 20, page_no: 2, answer_geometry: { x: .2, y: .25, width: .4, height: .2 } }
+        ],
+        paper_pages: [
+          { page_no: 1, question_id: "question-1", submission_page_id: "page-1" },
+          { page_no: 2, question_id: "question-2", submission_page_id: "page-2" }
+        ],
+        high_score_paper: {
+          available: true,
+          total_score: 98,
+          max_score: 100,
+          pages: [
+            { page_no: 1, question_id: "high-question-1", submission_page_id: "high-page-1" },
+            { page_no: 2, question_id: "high-question-2", submission_page_id: "high-page-2" }
+          ]
+        }
+      });
+      if (released) return released;
+      if (call.url.pathname.endsWith("/annotations")) {
+        return jsonResponse({ annotations: [{
+          id: "annotation-paper-1", answer_segment_id: "segment-1", submission_page_id: "page-1",
+          type: "rectangle", geometry: { kind: "rectangle", x: .1, y: .15, width: .35, height: .2 },
+          content: "步骤批注", created_at: "2026-08-30T00:00:00Z", updated_at: "2026-08-30T00:00:00Z"
+        }] });
+      }
+      return undefined;
+    });
+
+    expect(screen.getByRole("img", { name: "本人试卷第 1 页" })).toBeTruthy();
+    expect(await screen.findByTitle("步骤批注")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    expect(screen.getByRole("img", { name: "本人试卷第 2 页" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看高分试卷" }));
+    const highScoreImage = screen.getByRole("img", { name: "高分试卷第 1 页" });
+    expect(highScoreImage.getAttribute("src")).toContain("variant=high_score");
+    expect(screen.getByRole("button", { name: "查看我的试卷" })).toBeTruthy();
   });
 
   it("renders public question feedback without exposing internal grading metadata", async () => {

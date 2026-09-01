@@ -80,6 +80,19 @@ func (s *MemoryStore) ListTasks(_ context.Context, tenantID string, filter ListF
 		if filter.ExamID != "" && task.ExamID != filter.ExamID {
 			continue
 		}
+		mode := filter.ScopeMode
+		if mode == "" {
+			mode = "tenant"
+		}
+		if mode == "none" {
+			continue
+		}
+		if mode == "assigned" && filter.AssignedTo == "" && task.AssignedTo != filter.ScopeActorID && !containsString(filter.ScopeTaskIDs, task.ID) {
+			continue
+		}
+		if (mode == "class" || mode == "school") && len(filter.ScopeExamIDs) > 0 && !containsString(filter.ScopeExamIDs, task.ExamID) {
+			continue
+		}
 		out = append(out, cloneTask(task))
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -108,6 +121,26 @@ func (s *MemoryStore) ListTasks(_ context.Context, tenantID string, filter ListF
 		out = out[:filter.Limit]
 	}
 	return out, nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *MemoryStore) HasActiveAssignment(_ context.Context, tenantID string, reviewerID string, answerSegmentID string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, task := range s.tasks {
+		if task.TenantID == tenantID && task.AssignedTo == reviewerID && task.AnswerSegmentID == answerSegmentID && task.Status != "completed" && task.Status != "cancelled" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *MemoryStore) GetTask(_ context.Context, tenantID string, id string) (ReviewTask, error) {
@@ -495,6 +528,19 @@ func (s *MemoryStore) ListArbitrationTasks(_ context.Context, tenantID string, f
 			continue
 		}
 		if filter.ExamID != "" && task.ExamID != filter.ExamID {
+			continue
+		}
+		mode := filter.ScopeMode
+		if mode == "" {
+			mode = "tenant"
+		}
+		if mode == "none" {
+			continue
+		}
+		if mode == "assigned" && filter.AssignedTo == "" && task.AssignedTo != filter.ScopeActorID && !containsString(filter.ScopeTaskIDs, task.ID) {
+			continue
+		}
+		if (mode == "class" || mode == "school") && len(filter.ScopeExamIDs) > 0 && !containsString(filter.ScopeExamIDs, task.ExamID) {
 			continue
 		}
 		out = append(out, cloneArbitration(task))

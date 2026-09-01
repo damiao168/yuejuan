@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
@@ -128,11 +129,24 @@ func (s *PostgresStore) FailPaperImportRuntime(ctx context.Context, tenantID, im
 	if _, err = workerruntime.FailTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: input.Retryable, ErrorCode: input.ErrorCode, ErrorDetail: input.ErrorDetail, DurationMS: input.DurationMS}); err != nil {
 		return err
 	}
-	issues, _ := json.Marshal([]string{"扫描文档 OCR 失败：" + input.ErrorCode})
+	issues, _ := json.Marshal([]string{"扫描文档文字识别失败：" + paperImportRuntimeErrorMessage(input.ErrorCode)})
 	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='failed',error_code='paper_ocr_failed',issues=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND status='processing' AND deleted_at IS NULL`, tenantID, importID, issues); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func paperImportRuntimeErrorMessage(code string) string {
+	switch strings.TrimSpace(code) {
+	case "page_processing_failed":
+		return "页面处理失败"
+	case "source_ocr_failed":
+		return "图片文字识别失败"
+	case "paper_ocr_unavailable":
+		return "文字识别服务暂不可用"
+	default:
+		return "处理失败，请检查资料后重试"
+	}
 }
 
 func mapFromJSON(value any) map[string]any {

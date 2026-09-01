@@ -147,6 +147,153 @@ func TestStudentQuestionImageRequiresCurrentPublishedQuestionAndStudentScope(t *
 	}
 }
 
+func TestStudentReferenceIsReleaseBoundAndPrivacyProtected(t *testing.T) {
+	store := NewMemoryStore()
+	service := NewService(store)
+	facts := make([]SubmissionFact, 0, 12)
+	for index := 1; index <= 12; index++ {
+		score := float64(index * 5)
+		facts = append(facts, SubmissionFact{
+			StudentID: "student-" + string(rune('a'+index-1)), SubmissionID: "submission-" + string(rune('a'+index-1)),
+			TotalScore: score, MaxScore: 100, Status: "confirmed",
+			Questions: []QuestionFact{{QuestionID: "question-1", QuestionNo: "1", FinalGradeID: "final-" + string(rune('a'+index-1)), Score: score, MaxScore: 100, SourceType: "single_review"}},
+		})
+	}
+	store.SeedFacts(exam, facts)
+	release, err := service.Create(context.Background(), tenant, exam, actor, CreateInput{
+		Reason: "student analytics", IdempotencyKey: "release-key-analytics-1",
+		VisibilityPolicy: VisibilityPolicy{ShowQuestionScores: true, ShowCohortStatistics: true, ShowScoreDistribution: true, ShowPercentile: true, ShowQuestionStatistics: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Publish(context.Background(), tenant, release.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.StudentResult(context.Background(), tenant, exam, "student-l")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Reference == nil || !result.Reference.StatisticsAvailable || result.Reference.SampleSize != 12 || result.Reference.Percentile == nil {
+		t.Fatalf("expected aggregate-only reference, got %#v", result.Reference)
+	}
+	if result.Reference.Rank != nil {
+		t.Fatalf("exact rank must remain hidden unless explicitly released: %#v", result.Reference)
+	}
+	if len(result.Questions) != 1 || result.Questions[0].Cohort == nil || result.Questions[0].Cohort.SampleSize != 12 {
+		t.Fatalf("expected privacy-safe question aggregate: %#v", result.Questions)
+	}
+}
+
+func TestStudentTableFieldsRequireExplicitReleasePolicy(t *testing.T) {
+	store := NewMemoryStore()
+	service := NewService(store)
+	facts := make([]SubmissionFact, 0, 12)
+	for index := 1; index <= 12; index++ {
+		fact := fixtureFact(float64(index % 6))
+		fact.StudentID = "student-" + string(rune('a'+index-1))
+		fact.SubmissionID = "submission-" + string(rune('a'+index-1))
+		fact.Questions[0].Explanation.CorrectAnswer = "B"
+		fact.Questions[0].Explanation.ActualAnswer = "A"
+		facts = append(facts, fact)
+	}
+	store.SeedFacts(exam, facts)
+	release, err := service.Create(context.Background(), tenant, exam, actor, CreateInput{
+		Reason: "table fields", IdempotencyKey: "release-key-table-fields",
+		VisibilityPolicy: VisibilityPolicy{ShowQuestionScores: true, ShowQuestionStatistics: true, ShowExactRank: true, ShowAnswers: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Publish(context.Background(), tenant, release.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.StudentResult(context.Background(), tenant, exam, "student-l")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Rankings == nil || result.Rankings.GradeSize != 12 {
+		t.Fatalf("expected released rankings, got %#v", result.Rankings)
+	}
+	if len(result.Questions) != 1 || result.Questions[0].CorrectAnswer != "B" || result.Questions[0].ActualAnswer != "A" || result.Questions[0].Cohort == nil || result.Questions[0].Cohort.MedianScore == nil {
+		t.Fatalf("expected released table fields, got %#v", result.Questions)
+	}
+}
+
+func TestStudentTableFieldsStayHiddenAndSmallCohortsSuppressStatistics(t *testing.T) {
+	store := NewMemoryStore()
+	service := NewService(store)
+	facts := make([]SubmissionFact, 0, 9)
+	for index := 1; index <= 9; index++ {
+		fact := fixtureFact(float64(index % 6))
+		fact.StudentID = "student-" + string(rune('a'+index-1))
+		fact.SubmissionID = "submission-" + string(rune('a'+index-1))
+		fact.Questions[0].Explanation.CorrectAnswer = "B"
+		fact.Questions[0].Explanation.ActualAnswer = "A"
+		facts = append(facts, fact)
+	}
+	store.SeedFacts(exam, facts)
+	release, err := service.Create(context.Background(), tenant, exam, actor, CreateInput{
+		Reason: "privacy protected table", IdempotencyKey: "release-key-table-private",
+		VisibilityPolicy: VisibilityPolicy{ShowQuestionScores: true, ShowQuestionStatistics: true, ShowCohortStatistics: true, ShowExactRank: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Publish(context.Background(), tenant, release.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.StudentResult(context.Background(), tenant, exam, "student-i")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Questions[0].CorrectAnswer != "" || result.Questions[0].ActualAnswer != "" {
+		t.Fatalf("answers must require ShowAnswers: %#v", result.Questions[0])
+	}
+	if result.Reference == nil || result.Reference.StatisticsAvailable || result.Reference.UnavailableReason != "small_cohort" {
+		t.Fatalf("small cohort should expose only an unavailable marker: %#v", result.Reference)
+	}
+	if result.Rankings != nil || result.Questions[0].Cohort != nil {
+		t.Fatalf("small cohort leaked exact rank or question statistics: rankings=%#v question=%#v", result.Rankings, result.Questions[0])
+	}
+}
+
+func TestStudentPaperPageImageRequiresPublishedQuestionAndStudentScope(t *testing.T) {
+	store := NewMemoryStore()
+	service := NewService(store)
+	store.SeedFacts(exam, []SubmissionFact{fixtureFact(4)})
+	release, err := service.Create(context.Background(), tenant, exam, actor, CreateInput{
+		Reason: "student paper page", IdempotencyKey: "release-key-paper-page", VisibilityPolicy: VisibilityPolicy{ShowQuestionScores: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Publish(context.Background(), tenant, release.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+	store.SeedStudentQuestionImage(tenant, exam, "student-1", "question-1", "segment-1")
+
+	source, err := service.StudentPaperPageImage(context.Background(), tenant, exam, "student-1", "question-1", false)
+	if err != nil || source.AnswerSegmentID != "segment-1" {
+		t.Fatalf("own released paper page = %#v, %v", source, err)
+	}
+	for name, tc := range map[string]struct {
+		studentID  string
+		questionID string
+		highScore  bool
+	}{
+		"other student":               {studentID: "student-2", questionID: "question-1"},
+		"unreleased question":         {studentID: "student-1", questionID: "question-2"},
+		"unreleased high score paper": {studentID: "student-1", questionID: "question-1", highScore: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := service.StudentPaperPageImage(context.Background(), tenant, exam, tc.studentID, tc.questionID, tc.highScore); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("StudentPaperPageImage error = %v, want ErrNotFound", err)
+			}
+		})
+	}
+}
+
 func fixtureFact(score float64) SubmissionFact {
 	return SubmissionFact{StudentID: "student-1", SubmissionID: "submission-1", TotalScore: score, MaxScore: 5, Status: "confirmed", Questions: []QuestionFact{{QuestionID: "question-1", QuestionNo: "Q1", FinalGradeID: "final-1", Score: score, MaxScore: 5, SourceType: "single_review", SourceID: "human-grade-1", Explanation: StudentExplanation{Feedback: "Teacher feedback", RubricSummary: []string{"Shows the required method"}}}}}
 }

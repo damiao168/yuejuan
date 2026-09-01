@@ -139,6 +139,11 @@ func isPlatformTenant(r *http.Request) bool {
 
 func (h *Handler) CreateSchool(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
+	scope, _ := auth.AccessScopeFromContext(r.Context())
+	if !(scope.IsPlatform || scope.TenantWide) || (!auth.HasRole(user, "tenant_admin") && !auth.HasRole(user, "platform_admin")) {
+		httpx.Error(w, r, http.StatusForbidden, "organization_scope_forbidden", "current identity cannot create schools")
+		return
+	}
 	var input School
 	if !decodeJSON(w, r, &input) {
 		return
@@ -158,32 +163,63 @@ func (h *Handler) CreateSchool(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListSchools(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
+	scope, _ := auth.AccessScopeFromContext(r.Context())
 	out, err := h.store.ListSchools(r.Context(), user.TenantID)
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "school_list_failed", "failed to list schools")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"schools": out})
+	filtered := out[:0]
+	for _, item := range out {
+		if auth.AllowsResourceBoundary(scope, auth.ResourceBoundary{TenantID: user.TenantID, SchoolID: item.ID}) {
+			filtered = append(filtered, item)
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"schools": filtered})
 }
 
 func (h *Handler) ListAcademicYears(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	out, err := h.store.ListAcademicYears(r.Context(), user.TenantID, r.URL.Query().Get("school_id"))
+	scope, _ := auth.AccessScopeFromContext(r.Context())
+	schoolID := strings.TrimSpace(r.URL.Query().Get("school_id"))
+	if schoolID != "" && !allowsSchool(scope, schoolID) {
+		httpx.Error(w, r, http.StatusForbidden, "organization_scope_forbidden", "school is outside the current data access scope")
+		return
+	}
+	out, err := h.store.ListAcademicYears(r.Context(), user.TenantID, schoolID)
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "academic_year_list_failed", "failed to list academic years")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"academic_years": out})
+	filtered := out[:0]
+	for _, item := range out {
+		if allowsSchool(scope, item.SchoolID) {
+			filtered = append(filtered, item)
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"academic_years": filtered})
 }
 
 func (h *Handler) ListGradeCohorts(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	out, err := h.store.ListGradeCohorts(r.Context(), user.TenantID, r.URL.Query().Get("school_id"))
+	scope, _ := auth.AccessScopeFromContext(r.Context())
+	schoolID := strings.TrimSpace(r.URL.Query().Get("school_id"))
+	if schoolID != "" && !allowsSchool(scope, schoolID) {
+		httpx.Error(w, r, http.StatusForbidden, "organization_scope_forbidden", "school is outside the current data access scope")
+		return
+	}
+	out, err := h.store.ListGradeCohorts(r.Context(), user.TenantID, schoolID)
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "grade_cohort_list_failed", "failed to list grade cohorts")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"grade_cohorts": out})
+	filtered := out[:0]
+	for _, item := range out {
+		if allowsSchool(scope, item.SchoolID) {
+			filtered = append(filtered, item)
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"grade_cohorts": filtered})
 }
 
 func (h *Handler) CreateGrade(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +230,10 @@ func (h *Handler) CreateGrade(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.SchoolID == "" || input.Name == "" {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "school_id and name are required")
+		return
+	}
+	if scope, _ := auth.AccessScopeFromContext(r.Context()); !allowsSchool(scope, input.SchoolID) {
+		httpx.Error(w, r, http.StatusForbidden, "organization_scope_forbidden", "school is outside the current data access scope")
 		return
 	}
 	if input.EducationStage != "" && input.EducationStage != "junior" && input.EducationStage != "senior" {
@@ -211,12 +251,24 @@ func (h *Handler) CreateGrade(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListGrades(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	out, err := h.store.ListGrades(r.Context(), user.TenantID, r.URL.Query().Get("school_id"))
+	scope, _ := auth.AccessScopeFromContext(r.Context())
+	schoolID := strings.TrimSpace(r.URL.Query().Get("school_id"))
+	if schoolID != "" && !allowsSchool(scope, schoolID) {
+		httpx.Error(w, r, http.StatusForbidden, "organization_scope_forbidden", "school is outside the current data access scope")
+		return
+	}
+	out, err := h.store.ListGrades(r.Context(), user.TenantID, schoolID)
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "grade_list_failed", "failed to list grades")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"grades": out})
+	filtered := out[:0]
+	for _, item := range out {
+		if allowsSchool(scope, item.SchoolID) {
+			filtered = append(filtered, item)
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"grades": filtered})
 }
 
 func (h *Handler) CreateClass(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +279,10 @@ func (h *Handler) CreateClass(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.SchoolID == "" || input.GradeID == "" || input.Name == "" || input.Code == "" {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "school_id, grade_id, name and code are required")
+		return
+	}
+	if scope, _ := auth.AccessScopeFromContext(r.Context()); !allowsSchool(scope, input.SchoolID) {
+		httpx.Error(w, r, http.StatusForbidden, "organization_scope_forbidden", "school is outside the current data access scope")
 		return
 	}
 	out, err := h.store.CreateClass(r.Context(), user.TenantID, input)
@@ -240,12 +296,20 @@ func (h *Handler) CreateClass(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListClasses(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	out, err := h.store.ListClasses(r.Context(), user.TenantID, r.URL.Query().Get("grade_id"))
+	scope, _ := auth.AccessScopeFromContext(r.Context())
+	gradeID := strings.TrimSpace(r.URL.Query().Get("grade_id"))
+	out, err := h.store.ListClasses(r.Context(), user.TenantID, gradeID)
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "class_list_failed", "failed to list classes")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"classes": out})
+	filtered := out[:0]
+	for _, item := range out {
+		if auth.AllowsResourceBoundary(scope, auth.ResourceBoundary{TenantID: user.TenantID, SchoolID: item.SchoolID, GradeID: item.GradeID, ClassIDs: []string{item.ID}}) {
+			filtered = append(filtered, item)
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"classes": filtered})
 }
 
 func (h *Handler) CreateStudent(w http.ResponseWriter, r *http.Request) {
@@ -256,6 +320,10 @@ func (h *Handler) CreateStudent(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.SchoolID == "" || input.ClassID == "" || input.StudentNo == "" || input.Name == "" {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "school_id, class_id, student_no and name are required")
+		return
+	}
+	if scope, _ := auth.AccessScopeFromContext(r.Context()); !allowsSchool(scope, input.SchoolID) || !h.allowsResource(r, scope, "school_class", input.ClassID) {
+		httpx.Error(w, r, http.StatusForbidden, "organization_scope_forbidden", "student organization is outside the current data access scope")
 		return
 	}
 	out, err := h.store.CreateStudent(r.Context(), user.TenantID, input)
@@ -269,6 +337,7 @@ func (h *Handler) CreateStudent(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListStudents(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
+	scope, _ := auth.AccessScopeFromContext(r.Context())
 	limit, err := pagination.Limit(r.URL.Query().Get("limit"), 100, 200)
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 200")
@@ -294,6 +363,11 @@ func (h *Handler) ListStudents(w http.ResponseWriter, r *http.Request) {
 	filter := StudentListFilter{
 		ClassID: r.URL.Query().Get("class_id"), StudentIDs: studentIDs,
 		Query: strings.TrimSpace(r.URL.Query().Get("q")), Limit: limit + 1,
+	}
+	if !scope.IsPlatform && !scope.TenantWide {
+		filter.RestrictClasses = true
+		filter.ClassIDs = append([]string(nil), scope.ClassIDs...)
+		filter.StudentID = scope.StudentID
 	}
 	if len(parts) == 2 {
 		filter.CursorStudentNo, filter.CursorID = parts[0], parts[1]
@@ -345,6 +419,10 @@ func (h *Handler) TransferStudent(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "class_id is required")
 		return
 	}
+	if scope, _ := auth.AccessScopeFromContext(r.Context()); !h.allowsResource(r, scope, "school_class", input.ClassID) {
+		httpx.Error(w, r, http.StatusForbidden, "organization_scope_forbidden", "target class is outside the current data access scope")
+		return
+	}
 	out, err := h.store.TransferStudent(r.Context(), user.TenantID, r.PathValue("id"), input.ClassID, input.StartDate)
 	if err != nil {
 		writeStoreError(w, r, err, "student_transfer_failed", "failed to transfer student")
@@ -387,6 +465,11 @@ func (h *Handler) ImportStudentsCSV(w http.ResponseWriter, r *http.Request) {
 			result.Errors = append(result.Errors, CSVImportError{Row: i + 1, Message: "student_no, name, school_id and class_id are required"})
 			continue
 		}
+		scope, _ := auth.AccessScopeFromContext(r.Context())
+		if !allowsSchool(scope, student.SchoolID) || !h.allowsResource(r, scope, "school_class", student.ClassID) {
+			result.Errors = append(result.Errors, CSVImportError{Row: i + 1, Message: "organization scope forbidden"})
+			continue
+		}
 		if _, err := h.store.CreateStudent(r.Context(), user.TenantID, student); err != nil {
 			result.Errors = append(result.Errors, CSVImportError{Row: i + 1, Message: err.Error()})
 			continue
@@ -411,6 +494,10 @@ func (h *Handler) BindTeacherClass(w http.ResponseWriter, r *http.Request) {
 	}
 	classID := r.PathValue("id")
 	if err := h.store.BindTeacherClass(r.Context(), user.TenantID, input.TeacherID, classID); err != nil {
+		if errors.Is(err, ErrInvalidTeacherBinding) {
+			httpx.Error(w, r, http.StatusBadRequest, "invalid_teacher_binding", "target user must have an active teacher role")
+			return
+		}
 		httpx.Error(w, r, http.StatusInternalServerError, "teacher_bind_failed", "failed to bind teacher to class")
 		return
 	}
@@ -461,4 +548,17 @@ func (h *Handler) auditAction(r *http.Request, action string, targetType string,
 		UserAgent:  r.UserAgent(),
 		RequestID:  logger.RequestID(r.Context()),
 	})
+}
+
+func allowsSchool(scope auth.AccessScope, schoolID string) bool {
+	return scope.IsPlatform || scope.AllowsSchool(strings.TrimSpace(schoolID))
+}
+
+func (h *Handler) allowsResource(r *http.Request, scope auth.AccessScope, resourceType, resourceID string) bool {
+	resolver, ok := h.audit.(auth.ResourceBoundaryResolver)
+	if !ok {
+		return false
+	}
+	boundary, err := resolver.ResolveResourceBoundary(r.Context(), scope, resourceType, strings.TrimSpace(resourceID))
+	return err == nil && auth.AllowsResourceBoundary(scope, boundary)
 }

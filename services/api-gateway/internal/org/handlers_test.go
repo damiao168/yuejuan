@@ -64,6 +64,36 @@ func TestMemoryStoreTenantIsolation(t *testing.T) {
 	}
 }
 
+func TestSchoolAdministratorListsOnlyOwnSchoolAndCannotCreateAnother(t *testing.T) {
+	orgStore := org.NewMemoryStore()
+	schoolA, _ := orgStore.CreateSchool(context.Background(), "tenant-org", org.School{Name: "A", Code: "a"})
+	schoolB, _ := orgStore.CreateSchool(context.Background(), "tenant-org", org.School{Name: "B", Code: "b"})
+	hash, _ := auth.HashPassword("ChangeMe123!")
+	authStore := auth.NewMemoryStore()
+	authStore.AddUser(auth.UserWithPassword{User: auth.User{
+		ID: "admin-a", TenantID: "tenant-org", TenantCode: "demo", Username: "school_admin", DisplayName: "School A Admin", Status: "active",
+		Roles: []string{"school_admin"}, Permissions: []string{"org:manage"}, DataScope: map[string]any{"scope": "school", "school_id": schoolA.ID},
+	}, PasswordHash: hash})
+	router := testRouter(authStore, orgStore)
+	token := login(t, router)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/schools", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), schoolA.ID) || strings.Contains(rec.Body.String(), schoolB.ID) {
+		t.Fatalf("school scoped list leaked another school: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/schools", bytes.NewBufferString(`{"name":"C","code":"c"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("school administrator create school expected 403, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCSVImportReportsRowErrors(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"org:manage", "student:import"})
 	orgStore := org.NewMemoryStore()
@@ -167,11 +197,11 @@ func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemorySt
 			TenantID:    "tenant-org",
 			TenantCode:  "demo",
 			Username:    "school_admin",
-			DisplayName: "School Admin",
+			DisplayName: "Tenant Admin",
 			Status:      "active",
-			Roles:       []string{"school_admin"},
+			Roles:       []string{"tenant_admin"},
 			Permissions: permissions,
-			DataScope:   map[string]any{"scope": "school"},
+			DataScope:   map[string]any{"scope": "tenant"},
 		},
 		PasswordHash: hash,
 	})

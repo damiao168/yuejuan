@@ -45,7 +45,7 @@ describe("paper import materials", () => {
   });
 
   it("summarizes partial imports and blocks apply without questions", () => {
-    const base = { id: "i", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "", status: "review_required" as const, subject: "math", sources: [], question_candidates: [], answer_candidates: [{ candidate_id: "a1", equivalent_answers: [], confidence: 1, source_refs: [], issues: [] }], solution_candidates: [], structured_issues: [], questions: [], issues: [], created_at: "2026-08-30T00:00:00Z" };
+    const base = { id: "i", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "", status: "review_required" as const, subject: "math", sources: [], question_candidates: [], answer_candidates: [{ candidate_id: "a1", equivalent_answers: [], confidence: 1, source_refs: [], issues: [] }], solution_candidates: [], rubric_candidates: [], structured_issues: [], questions: [], issues: [], created_at: "2026-08-30T00:00:00Z" };
     expect(paperImportSummary(base).answers).toBe(1);
     expect(hasBlockingImportIssues(base)).toBe(true);
   });

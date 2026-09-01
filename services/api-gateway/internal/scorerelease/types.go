@@ -41,9 +41,18 @@ type AppealWindow struct {
 // VisibilityPolicy is intentionally small. More granular A21 policy can be
 // added without exposing internal scoring data from this package.
 type VisibilityPolicy struct {
-	ShowQuestionScores bool `json:"show_question_scores"`
-	ShowFeedback       bool `json:"show_feedback"`
-	ShowRubricSummary  bool `json:"show_rubric_summary"`
+	ShowQuestionScores     bool `json:"show_question_scores"`
+	ShowFeedback           bool `json:"show_feedback"`
+	ShowRubricSummary      bool `json:"show_rubric_summary"`
+	ShowCohortStatistics   bool `json:"show_cohort_statistics"`
+	ShowScoreDistribution  bool `json:"show_score_distribution"`
+	ShowPercentile         bool `json:"show_percentile"`
+	ShowExactRank          bool `json:"show_exact_rank"`
+	ShowQuestionStatistics bool `json:"show_question_statistics"`
+	ShowKnowledgeAnalysis  bool `json:"show_knowledge_analysis"`
+	ShowQuestionStem       bool `json:"show_question_stem"`
+	ShowAnswers            bool `json:"show_answers"`
+	ShowHighScorePaper     bool `json:"show_high_score_paper"`
 }
 
 type GateIssue struct {
@@ -64,8 +73,13 @@ type Gate struct {
 }
 
 type StudentExplanation struct {
-	Feedback      string   `json:"feedback,omitempty"`
-	RubricSummary []string `json:"rubric_summary,omitempty"`
+	Feedback        string   `json:"feedback,omitempty"`
+	RubricSummary   []string `json:"rubric_summary,omitempty"`
+	QuestionType    string   `json:"question_type,omitempty"`
+	Stem            string   `json:"stem,omitempty"`
+	KnowledgePoints []string `json:"knowledge_points,omitempty"`
+	CorrectAnswer   string   `json:"correct_answer,omitempty"`
+	ActualAnswer    string   `json:"actual_answer,omitempty"`
 }
 
 type QuestionFact struct {
@@ -187,22 +201,122 @@ type CreateRegradeInput struct {
 // StudentResult deliberately has no final-grade IDs, source IDs, reviewer
 // identities, quality warnings, model prompts, raw AI output or private notes.
 type StudentResult struct {
-	ExamID         string            `json:"exam_id"`
-	ReleaseID      string            `json:"release_id"`
-	ReleaseVersion int               `json:"release_version"`
-	TotalScore     float64           `json:"total_score"`
-	MaxScore       float64           `json:"max_score"`
-	Questions      []StudentQuestion `json:"questions,omitempty"`
-	AppealWindow   StudentAppealView `json:"appeal_window"`
+	ExamID            string                  `json:"exam_id"`
+	ReleaseID         string                  `json:"release_id"`
+	ReleaseVersion    int                     `json:"release_version"`
+	Exam              *StudentExam            `json:"exam,omitempty"`
+	TotalScore        float64                 `json:"total_score"`
+	MaxScore          float64                 `json:"max_score"`
+	OverallTotalScore float64                 `json:"overall_total_score"`
+	OverallMaxScore   float64                 `json:"overall_max_score"`
+	ScoreRate         float64                 `json:"score_rate"`
+	Reference         *StudentReference       `json:"reference,omitempty"`
+	Rankings          *StudentRankings        `json:"rankings,omitempty"`
+	PaperPages        []StudentPaperPage      `json:"paper_pages,omitempty"`
+	HighScorePaper    *StudentHighScorePaper  `json:"high_score_paper,omitempty"`
+	SubjectBalance    []StudentSubjectBalance `json:"subject_balance,omitempty"`
+	Questions         []StudentQuestion       `json:"questions,omitempty"`
+	AppealWindow      StudentAppealView       `json:"appeal_window"`
+}
+
+// StudentExam is public context for a released result. PublishedAt is taken
+// from the immutable release, not from the mutable exam record.
+type StudentExam struct {
+	Name        string    `json:"name"`
+	Subject     string    `json:"subject"`
+	ExamType    string    `json:"exam_type"`
+	PublishedAt time.Time `json:"published_at"`
+}
+
+// StudentReference contains aggregate facts only. No peer score or identity
+// ever crosses the student boundary. Small cohorts return availability=false.
+type StudentReference struct {
+	Scope               string   `json:"scope"`
+	SampleSize          int      `json:"sample_size"`
+	StatisticsAvailable bool     `json:"statistics_available"`
+	UnavailableReason   string   `json:"unavailable_reason,omitempty"`
+	MeanScore           *float64 `json:"mean_score,omitempty"`
+	MedianScore         *float64 `json:"median_score,omitempty"`
+	Q1                  *float64 `json:"q1,omitempty"`
+	Q3                  *float64 `json:"q3,omitempty"`
+	MinScore            *float64 `json:"min_score,omitempty"`
+	MaxScore            *float64 `json:"max_score,omitempty"`
+	Percentile          *float64 `json:"percentile,omitempty"`
+	Rank                *int     `json:"rank,omitempty"`
+}
+
+type StudentRankings struct {
+	ClassRank int `json:"class_rank"`
+	ClassSize int `json:"class_size"`
+	GradeRank int `json:"grade_rank"`
+	GradeSize int `json:"grade_size"`
+}
+
+type StudentSubjectBalance struct {
+	Subject             string  `json:"subject"`
+	StudentScoreRate    float64 `json:"student_score_rate"`
+	SchoolMeanScoreRate float64 `json:"school_mean_score_rate"`
+	SampleSize          int     `json:"sample_size"`
+}
+
+type StudentPaperPage struct {
+	PageNo           int    `json:"page_no"`
+	QuestionID       string `json:"question_id"`
+	SubmissionPageID string `json:"submission_page_id,omitempty"`
+}
+
+type StudentHighScorePaper struct {
+	Available  bool                    `json:"available"`
+	TotalScore float64                 `json:"total_score,omitempty"`
+	MaxScore   float64                 `json:"max_score,omitempty"`
+	Pages      []StudentPaperPage      `json:"pages,omitempty"`
+	ScoreMarks []StudentPaperScoreMark `json:"score_marks,omitempty"`
+}
+
+type StudentPaperScoreMark struct {
+	QuestionID     string                `json:"question_id"`
+	QuestionNo     string                `json:"question_no"`
+	Score          float64               `json:"score"`
+	MaxScore       float64               `json:"max_score"`
+	PageNo         int                   `json:"page_no"`
+	AnswerGeometry *StudentImageGeometry `json:"answer_geometry,omitempty"`
 }
 
 type StudentQuestion struct {
-	QuestionID    string   `json:"question_id"`
-	QuestionNo    string   `json:"question_no"`
-	Score         float64  `json:"score"`
-	MaxScore      float64  `json:"max_score"`
-	Feedback      string   `json:"feedback,omitempty"`
-	RubricSummary []string `json:"rubric_summary,omitempty"`
+	QuestionID       string                    `json:"question_id"`
+	QuestionNo       string                    `json:"question_no"`
+	Subject          string                    `json:"subject,omitempty"`
+	QuestionType     string                    `json:"question_type,omitempty"`
+	Stem             string                    `json:"stem,omitempty"`
+	Score            float64                   `json:"score"`
+	MaxScore         float64                   `json:"max_score"`
+	ScoreRate        float64                   `json:"score_rate"`
+	KnowledgePoints  []string                  `json:"knowledge_points,omitempty"`
+	Cohort           *StudentQuestionReference `json:"cohort,omitempty"`
+	CorrectAnswer    string                    `json:"correct_answer,omitempty"`
+	ActualAnswer     string                    `json:"actual_answer,omitempty"`
+	PageNo           int                       `json:"page_no,omitempty"`
+	SubmissionPageID string                    `json:"submission_page_id,omitempty"`
+	AnswerGeometry   *StudentImageGeometry     `json:"answer_geometry,omitempty"`
+	Feedback         string                    `json:"feedback,omitempty"`
+	RubricSummary    []string                  `json:"rubric_summary,omitempty"`
+}
+
+type StudentQuestionReference struct {
+	SampleSize      int      `json:"sample_size"`
+	MeanScoreRate   float64  `json:"mean_score_rate"`
+	FullScoreRate   float64  `json:"full_score_rate"`
+	ZeroScoreRate   float64  `json:"zero_score_rate"`
+	ClassMeanScore  *float64 `json:"class_mean_score,omitempty"`
+	SchoolMeanScore *float64 `json:"school_mean_score,omitempty"`
+	MedianScore     *float64 `json:"median_score,omitempty"`
+}
+
+type StudentImageGeometry struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 // StudentQuestionImageSource is an internal authorization result. The answer
@@ -232,4 +346,5 @@ type Store interface {
 	StudentResult(context.Context, string, string, string) (StudentResult, error)
 	StudentQuestion(context.Context, string, string, string, string) (StudentQuestion, error)
 	StudentQuestionImage(context.Context, string, string, string, string) (StudentQuestionImageSource, error)
+	StudentPaperPageImage(context.Context, string, string, string, string, bool) (StudentQuestionImageSource, error)
 }

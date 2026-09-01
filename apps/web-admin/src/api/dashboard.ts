@@ -50,6 +50,9 @@ export interface DashboardActivity {
   action: string;
   target_type: string;
   target_id?: string;
+  title?: string;
+  summary?: string;
+  severity?: "info" | "success" | "warning";
   reason?: string;
   created_at: string;
   drilldown_path?: string;

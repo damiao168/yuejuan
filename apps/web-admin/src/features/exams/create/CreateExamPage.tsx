@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, App } from "antd";
+import { getUserErrorMessage } from "../../../api/client";
 import { createExamSession } from "../../../api/exams";
 import { listExamTemplates, type ExamTemplate } from "../../../api/examTemplates";
 import { listClasses, listGrades, listSchools, type Grade, type School, type SchoolClass } from "../../../api/org";
@@ -79,7 +80,7 @@ export function CreateExamPage({ user, onNavigate }: { user: SessionUser; onNavi
         setDraft(fallback);
       }
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "考试创建信息加载失败");
+      setError(getUserErrorMessage(loadError, "考试创建信息加载失败"));
     } finally {
       setLoading(false);
     }
@@ -129,7 +130,7 @@ export function CreateExamPage({ user, onNavigate }: { user: SessionUser; onNavi
       message.success(`已创建 ${result.exam_session.exams.length} 个科目工作区`);
       onNavigate(firstExam ? `/exams/${encodeURIComponent(firstExam.id)}/settings` : "/exams");
     } catch (submitError) {
-      message.error(submitError instanceof Error ? submitError.message : "考试创建失败");
+      message.error(getUserErrorMessage(submitError, "考试创建失败"));
     } finally {
       setSubmitting(false);
     }

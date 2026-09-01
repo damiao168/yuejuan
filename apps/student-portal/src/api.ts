@@ -15,15 +15,52 @@ export interface PublishedExam {
   exam_id: string;
   name: string;
   subject: string;
+  exam_type?: string;
   release_version: number;
   published_at: string;
+  total_score?: number;
+  max_score?: number;
+}
+
+export interface StudentScoreReference {
+  scope: "grade" | "class";
+  sample_size: number;
+  statistics_available: boolean;
+  unavailable_reason?: "small_cohort" | string;
+  mean_score?: number;
+  median_score?: number;
+  q1?: number;
+  q3?: number;
+  min_score?: number;
+  max_score?: number;
+  percentile?: number;
+  rank?: number;
 }
 
 export interface StudentQuestion {
   question_id: string;
   question_no: string;
+  subject?: string;
+  question_type?: string;
+  stem?: string;
   score: number;
   max_score: number;
+  score_rate?: number;
+  knowledge_points?: string[];
+  cohort?: {
+    sample_size: number;
+    mean_score_rate: number;
+    full_score_rate: number;
+    zero_score_rate: number;
+    class_mean_score: number;
+    school_mean_score: number;
+    median_score: number;
+  };
+  correct_answer?: string;
+  actual_answer?: string;
+  page_no?: number;
+  submission_page_id?: string;
+  answer_geometry?: { x: number; y: number; width: number; height: number };
   feedback?: string;
   rubric_summary?: string[];
 }
@@ -35,8 +72,33 @@ export interface StudentResult {
   // the original score from that release rather than trusting the browser.
   release_id: string;
   release_version: number;
+  exam?: {
+    name: string;
+    subject: string;
+    exam_type: string;
+    published_at: string;
+  };
   total_score: number;
   max_score: number;
+  overall_total_score?: number;
+  overall_max_score?: number;
+  score_rate?: number;
+  reference?: StudentScoreReference;
+  rankings?: { class_rank: number; class_size: number; grade_rank: number; grade_size: number };
+  paper_pages?: Array<{ page_no: number; question_id: string; submission_page_id?: string }>;
+  high_score_paper?: {
+    available: boolean;
+    total_score?: number;
+    max_score?: number;
+    pages?: Array<{ page_no: number; question_id: string; submission_page_id?: string }>;
+    score_marks?: Array<{ question_id: string; question_no: string; score: number; max_score: number; page_no: number; answer_geometry?: { x: number; y: number; width: number; height: number } }>;
+  };
+  subject_balance?: Array<{
+    subject: string;
+    student_score_rate: number;
+    school_mean_score_rate: number;
+    sample_size: number;
+  }>;
   questions?: StudentQuestion[];
   appeal_window: {
     open: boolean;
@@ -145,6 +207,11 @@ export function getQuestion(examID: string, questionID: string) {
 // or storage URL is exposed to the portal.
 export function studentQuestionAnswerImageURL(examID: string, questionID: string) {
   return `${baseUrl}/api/v1/student/exams/${encodeURIComponent(examID)}/questions/${encodeURIComponent(questionID)}/answer-image`;
+}
+
+export function studentPaperPageImageURL(examID: string, questionID: string, highScore = false) {
+  const query = highScore ? "?variant=high_score" : "";
+  return `${baseUrl}/api/v1/student/exams/${encodeURIComponent(examID)}/questions/${encodeURIComponent(questionID)}/page-image${query}`;
 }
 
 export function listQuestionAnnotations(examID: string, questionID: string) {

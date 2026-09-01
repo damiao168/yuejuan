@@ -210,7 +210,7 @@ func appealAuthStore(t *testing.T) *auth.MemoryStore {
 			Status:      "active",
 			Roles:       []string{"student"},
 			Permissions: []string{"appeal:create", "appeal:read"},
-			DataScope:   map[string]any{"scope": "self", "student_id": "student-1"},
+			DataScope:   map[string]any{"scope": "self", "student_id": "student-1", "synthetic": true},
 		},
 		{
 			ID:          appealTeacherUserID,
@@ -221,7 +221,7 @@ func appealAuthStore(t *testing.T) *auth.MemoryStore {
 			Status:      "active",
 			Roles:       []string{"teacher"},
 			Permissions: []string{"appeal:read", "appeal:work"},
-			DataScope:   map[string]any{"scope": "school"},
+			DataScope:   map[string]any{"scope": "school", "synthetic": true},
 		},
 		{
 			ID:          appealAdminUserID,
@@ -243,7 +243,7 @@ func appealAuthStore(t *testing.T) *auth.MemoryStore {
 			Status:      "active",
 			Roles:       []string{"grader"},
 			Permissions: []string{"appeal:read", "appeal:work"},
-			DataScope:   map[string]any{"scope": "assigned"},
+			DataScope:   map[string]any{"scope": "assigned", "synthetic": true},
 		},
 	}
 	for _, user := range users {

@@ -1,11 +1,19 @@
 package auth_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+type authorizationRoleContract struct {
+	Scope                 string   `json:"scope"`
+	Human                 bool     `json:"human"`
+	ManagedUserAssignable bool     `json:"managed_user_assignable"`
+	Permissions           []string `json:"permissions"`
+}
 
 func TestMigrationsDoNotSeedKnownDefaultPasswords(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("..", "..", "migrations", "*.sql"))
@@ -188,6 +196,90 @@ func TestHumanGradeAILinkMigrationAddsNullableForeignKeyAndLookupIndex(t *testin
 	} {
 		if !strings.Contains(sqlText, want) {
 			t.Fatalf("human grade AI link migration must contain %q", want)
+		}
+	}
+}
+
+func TestAuthorizationHardeningDefinesFinalRoleMatrix(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000111_authorization_model_hardening.sql"))
+	if err != nil {
+		t.Fatalf("read authorization hardening migration: %v", err)
+	}
+	contractRaw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "contracts", "authorization", "role-matrix.json"))
+	if err != nil {
+		t.Fatalf("read authorization role contract: %v", err)
+	}
+	contract := map[string]authorizationRoleContract{}
+	if err := json.Unmarshal(contractRaw, &contract); err != nil {
+		t.Fatalf("decode authorization role contract: %v", err)
+	}
+	wantScopes := map[string]string{
+		"platform_admin": "platform", "tenant_admin": "tenant", "school_admin": "school",
+		"teacher": "class", "grader": "exam_task", "arbitrator": "exam_task",
+		"student": "self", "auditor": "tenant", "page_processing_worker": "service",
+	}
+	for role, scope := range wantScopes {
+		if contract[role].Scope != scope {
+			t.Fatalf("contract role %s scope=%q want %q", role, contract[role].Scope, scope)
+		}
+	}
+	contains := func(values []string, target string) bool {
+		for _, value := range values {
+			if value == target {
+				return true
+			}
+		}
+		return false
+	}
+	for _, permission := range []string{"org:manage", "exam:manage", "file:manage", "submission:manage", "capture:manage", "review:manage", "review:work", "arbitration:manage", "score:manage", "report:read", "appeal:manage", "audit:read", "dashboard:read"} {
+		if !contains(contract["school_admin"].Permissions, permission) {
+			t.Fatalf("school_admin contract missing %s", permission)
+		}
+	}
+	for _, role := range []string{"teacher", "grader", "arbitrator"} {
+		for _, forbidden := range []string{"tenant:manage", "org:manage", "exam:manage", "system:read", "review:manage", "arbitration:manage", "score:manage"} {
+			if contains(contract[role].Permissions, forbidden) {
+				t.Fatalf("%s contract retains management permission %s", role, forbidden)
+			}
+		}
+	}
+	if contract["page_processing_worker"].Human || contract["page_processing_worker"].ManagedUserAssignable {
+		t.Fatal("service role must not be human managed-user assignable")
+	}
+	sqlText := compactMigrationSQL(string(raw))
+	for _, want := range []string{"'dashboard:read'", "('teacher','class')", "('grader','exam_task')", "('arbitrator','exam_task')", "declared_school_binding", "HAVING COUNT(DISTINCT school_id)=1", "u.school_id IS NULL", "jsonb_build_object('scope','none')", "jsonb_build_object('scope','service')", "FROM student st", "UPDATE teacher_class"} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("authorization hardening migration missing %q", want)
+		}
+	}
+}
+
+func TestSchoolAdminRBACBackfillRepairsExistingTenantsAdditively(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000112_backfill_school_admin_rbac.sql"))
+	if err != nil {
+		t.Fatalf("read school administrator RBAC backfill migration: %v", err)
+	}
+	sqlText := compactMigrationSQL(string(raw))
+	for _, want := range []string{
+		"source_role.code = 'school_admin'",
+		"source_tenant.code = 'platform'",
+		"CROSS JOIN school_admin_template template",
+		"WHERE target_tenant.deleted_at IS NULL",
+		"ON CONFLICT (tenant_id, code) DO UPDATE",
+		"description = EXCLUDED.description",
+		"INSERT INTO role_permission (tenant_id, role_id, permission_id)",
+		"JOIN school_admin_template_codes template",
+		"target_role.code = 'school_admin'",
+		"ON CONFLICT (tenant_id, role_id, permission_id) DO UPDATE",
+		"SET deleted_at = NULL",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("school administrator RBAC backfill migration must contain %q", want)
+		}
+	}
+	for _, forbidden := range []string{"DELETE FROM permission", "DELETE FROM role_permission", "TRUNCATE"} {
+		if strings.Contains(strings.ToUpper(sqlText), forbidden) {
+			t.Fatalf("school administrator RBAC backfill must remain additive; found %q", forbidden)
 		}
 	}
 }

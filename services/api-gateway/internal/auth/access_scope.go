@@ -34,6 +34,13 @@ type AccessScope struct {
 	ReviewTaskIDs      []string
 	ArbitrationTaskIDs []string
 	StudentID          string
+	// schoolWide records a trusted school-scoped role. It is deliberately
+	// separate from SchoolIDs because class-scoped roles also expand to their
+	// parent school for read filtering, but must not gain school-level task
+	// management authority.
+	schoolWide bool
+	// syntheticUnbounded is only available to explicit in-memory test fixtures.
+	syntheticUnbounded bool
 }
 
 func (s AccessScope) OrganizationScope() OrganizationScope {
@@ -89,6 +96,34 @@ func (s AccessScope) HasDataAccess() bool {
 		len(s.ReviewTaskIDs) > 0 || len(s.ArbitrationTaskIDs) > 0
 }
 
+// IsSchoolWide reports whether the scope came from a trusted school-scoped
+// role.  It intentionally does not expose the backing field so callers cannot
+// manufacture a school-wide scope from request data.
+func (s AccessScope) IsSchoolWide() bool { return s.schoolWide }
+
+// QueryMode returns the coarse-grained mode repositories should use when
+// applying collection filters.  Collection endpoints must apply this mode in
+// addition to the direct-resource boundary middleware; otherwise a scoped
+// identity could still receive another school's rows from a list endpoint.
+func (s AccessScope) QueryMode() string {
+	if s.IsPlatform {
+		return "platform"
+	}
+	if s.TenantWide {
+		return "tenant"
+	}
+	if s.schoolWide {
+		return "school"
+	}
+	if s.AssignedOnly {
+		return "assigned"
+	}
+	if len(s.ClassIDs) > 0 || len(s.ExamIDs) > 0 {
+		return "class"
+	}
+	return "none"
+}
+
 func (s AccessScope) normalized() AccessScope {
 	s.SchoolIDs = uniqueSortedIDs(s.SchoolIDs)
 	s.GradeIDs = uniqueSortedIDs(s.GradeIDs)
@@ -128,6 +163,9 @@ func ResolveDeclaredAccessScope(user User) (AccessScope, error) {
 			if !ok {
 				return AccessScope{}, fmt.Errorf("%w: role scope %q is not an object", ErrAccessScopeInvalid, role)
 			}
+			if !declaredRoleScopeAllowed(role, nested) {
+				return AccessScope{}, fmt.Errorf("%w: role %q has non-canonical scope", ErrAccessScopeInvalid, role)
+			}
 			scopes = append(scopes, nested)
 		}
 	}
@@ -144,6 +182,16 @@ func ResolveDeclaredAccessScope(user User) (AccessScope, error) {
 		return AccessScope{}, fmt.Errorf("%w: platform scope requires platform administrator", ErrAccessScopeInvalid)
 	}
 	return out.normalized(), nil
+}
+
+func declaredRoleScopeAllowed(role string, scope map[string]any) bool {
+	kind, _ := scope["scope"].(string)
+	kind = strings.TrimSpace(kind)
+	if kind == "none" {
+		return true
+	}
+	policy := RolePolicy(role)
+	return policy.CanonicalScope != "" && kind == policy.CanonicalScope
 }
 
 func mergeDeclaredScope(out *AccessScope, raw map[string]any) error {
@@ -169,12 +217,14 @@ func mergeDeclaredScope(out *AccessScope, raw map[string]any) error {
 	case "tenant":
 		out.TenantWide = true
 	case "school":
+		out.schoolWide = true
 		// The PostgreSQL resolver adds the trusted app_user/teacher_class
 		// school relationship. Explicit IDs remain useful for migrations and
 		// in-memory tests.
 	case "grade", "class", "exam":
 	case "assigned", "exam_task":
 		out.AssignedOnly = true
+	case "service":
 	case "self":
 		studentID, _ := raw["student_id"].(string)
 		if strings.TrimSpace(studentID) == "" {
@@ -291,11 +341,11 @@ func RequireScopedResource(resource string, pathParam string) func(http.Handler)
 			allowed := false
 			switch resource {
 			case "exam":
-				allowed = scope.IsPlatform || scope.AllowsExam(id) || scope.StudentID != ""
+				allowed = scope.IsPlatform || scope.AllowsExam(id)
 			case "review_task":
-				allowed = scope.IsPlatform || scope.AllowsReviewTask(id) || scope.AssignedOnly
+				allowed = scope.IsPlatform || scope.AllowsReviewTask(id)
 			case "arbitration_task":
-				allowed = scope.IsPlatform || scope.AllowsArbitrationTask(id) || scope.AssignedOnly
+				allowed = scope.IsPlatform || scope.AllowsArbitrationTask(id)
 			case "student":
 				allowed = scope.IsPlatform || scope.AllowsStudent(id)
 			}

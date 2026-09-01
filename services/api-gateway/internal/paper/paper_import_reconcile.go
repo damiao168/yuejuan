@@ -113,7 +113,7 @@ func defaultRoleHint(value string) string {
 }
 func validPaperImportRole(value string, allowAuto bool) bool {
 	switch defaultRoleHint(value) {
-	case "question", "answer", "solution", "mixed", "unknown":
+	case "question", "answer", "solution", "rubric", "mixed", "unknown":
 		return true
 	case "auto":
 		return allowAuto
@@ -152,11 +152,12 @@ func appendDetectedRoleIssues(base []PaperImportIssue, detected []PaperImportDet
 
 // reconcilePaperImportCandidates only decides deterministic facts. Semantic
 // extraction and ambiguous matching remain explicit candidates for review.
-func reconcilePaperImportCandidates(questions []QuestionCandidate, answers []AnswerCandidate, solutions []SolutionCandidate, base []PaperImportIssue) ([]PaperImportDraftQuestion, []PaperImportIssue) {
+func reconcilePaperImportCandidates(questions []QuestionCandidate, answers []AnswerCandidate, solutions []SolutionCandidate, rubrics []RubricCandidate, base []PaperImportIssue) ([]PaperImportDraftQuestion, []PaperImportIssue) {
 	issues := append([]PaperImportIssue{}, base...)
 	questionByNo := map[string][]int{}
 	answerByNo := map[string][]int{}
 	solutionByNo := map[string][]int{}
+	rubricByNo := map[string][]int{}
 	for i := range questions {
 		questions[i].QuestionNoNormalized = normalizePaperImportQuestionNumber(firstNonEmpty(questions[i].QuestionNoNormalized, questions[i].QuestionNoRaw))
 		if questions[i].QuestionNoNormalized != "" {
@@ -179,6 +180,14 @@ func reconcilePaperImportCandidates(questions []QuestionCandidate, answers []Ans
 			solutionByNo[solutions[i].QuestionNoNormalized] = append(solutionByNo[solutions[i].QuestionNoNormalized], i)
 		} else {
 			issues = append(issues, candidateIssue("UNMATCHED_SOLUTION", "warning", "unknown", "", "有一份解析缺少题号，尚未自动匹配", "请对照来源手动匹配", solutions[i].SourceRefs))
+		}
+	}
+	for i := range rubrics {
+		rubrics[i].QuestionNoNormalized = normalizePaperImportQuestionNumber(firstNonEmpty(rubrics[i].QuestionNoNormalized, rubrics[i].QuestionNoHint))
+		if rubrics[i].QuestionNoNormalized != "" {
+			rubricByNo[rubrics[i].QuestionNoNormalized] = append(rubricByNo[rubrics[i].QuestionNoNormalized], i)
+		} else {
+			issues = append(issues, candidateIssue("AMBIGUOUS_RUBRIC_MATCH", "error", "unknown", "", "评分标准缺少题号，尚未自动匹配", "请人工匹配评分标准", rubrics[i].SourceRefs))
 		}
 	}
 
@@ -217,6 +226,26 @@ func reconcilePaperImportCandidates(questions []QuestionCandidate, answers []Ans
 		indexes := solutionByNo[no]
 		if len(questionByNo[no]) == 0 {
 			issues = append(issues, candidateIssue("UNMATCHED_SOLUTION", "error", "confirmed", no, "解析资料尚未匹配到对应题目", "继续上传试题资料或手动匹配", solutions[indexes[0]].SourceRefs))
+		}
+	}
+	for _, no := range sortedPaperImportKeys(rubricByNo) {
+		indexes := rubricByNo[no]
+		if len(questionByNo[no]) == 0 {
+			issues = append(issues, candidateIssue("UNMATCHED_RUBRIC", "error", "confirmed", no, "评分标准中检测到第"+no+"题，但尚未检测到对应题目", "继续上传试题资料或人工匹配", rubrics[indexes[0]].SourceRefs))
+		}
+		if len(indexes) > 1 {
+			first := rubricCandidateContentKey(rubrics[indexes[0]])
+			conflict := false
+			refs := []PaperImportSourceRef{}
+			for _, i := range indexes {
+				refs = append(refs, rubrics[i].SourceRefs...)
+				if rubricCandidateContentKey(rubrics[i]) != first {
+					conflict = true
+				}
+			}
+			if conflict {
+				issues = append(issues, candidateIssue("CONFLICTING_RUBRICS", "error", "confirmed", no, "不同资料中的评分标准存在冲突", "请对照来源选择正确评分标准", refs))
+			}
 		}
 	}
 
@@ -260,7 +289,38 @@ func reconcilePaperImportCandidates(questions []QuestionCandidate, answers []Ans
 		} else if len(indexes) == 0 {
 			issues = append(issues, candidateIssue("MISSING_SOLUTION", "info", "confirmed", no, "第"+no+"题未检测到教师解析", "解析不是所有题型的导入前置条件，可按需继续补充", q.SourceRefs))
 		}
-		if objectiveRubricEligible(draft) {
+		if indexes := rubricByNo[no]; len(indexes) >= 1 && rubricCandidatesEquivalent(rubrics, indexes) {
+			r := rubrics[indexes[0]]
+			for _, i := range indexes[1:] {
+				r.SourceRefs = append(r.SourceRefs, rubrics[i].SourceRefs...)
+			}
+			draft.RubricCandidateID = r.CandidateID
+			draft.SourceRefs = append(draft.SourceRefs, r.SourceRefs...)
+			points := make([]RubricPoint, 0, len(r.Points))
+			for _, p := range r.Points {
+				if p.Score == nil {
+					issues = append(issues, candidateIssue("RUBRIC_POINT_SCORE_MISSING", "error", "confirmed", no, "第"+no+"题存在采分点但缺少分值", "请根据教师资料补充采分点分值", r.SourceRefs))
+					continue
+				}
+				req := true
+				if p.Required != nil {
+					req = *p.Required
+				}
+				points = append(points, RubricPoint{ID: p.ID, Description: p.Description, Score: *p.Score, Required: req, EvidenceRequirements: p.EvidenceRequirements})
+			}
+			if r.MaxScore != nil {
+				draft.Rubric = &RubricInput{Status: "draft", MaxScore: *r.MaxScore, Points: points, Deductions: r.Deductions, Examples: r.Examples}
+				if q.Score != nil && !scoreEqual(*r.MaxScore, *q.Score) {
+					issues = append(issues, candidateIssue("RUBRIC_SCORE_MISMATCH", "error", "confirmed", no, "第"+no+"题评分标准满分与题目分值不一致", "请核对评分标准满分", r.SourceRefs))
+				}
+				if q.Score != nil && len(points) == len(r.Points) && !scoreEqual(SumRubricPoints(points), *q.Score) {
+					issues = append(issues, candidateIssue("RUBRIC_POINTS_SCORE_MISMATCH", "error", "confirmed", no, "第"+no+"题采分点合计与题目分值不一致", "请调整采分点分值", r.SourceRefs))
+				}
+			}
+		} else if len(indexes) > 1 {
+			issues = append(issues, candidateIssue("CONFLICTING_RUBRICS", "error", "confirmed", no, "评分标准候选不唯一", "请人工选择评分标准", draft.SourceRefs))
+		}
+		if draft.Rubric == nil && objectiveRubricEligible(draft) {
 			draft.Rubric = deterministicObjectiveRubric(draft.QuestionType, draft.Score)
 		}
 		if questionRequiresRubricForArchetype(draftAssessmentArchetype(draft)) && draft.Rubric == nil {
@@ -270,10 +330,31 @@ func reconcilePaperImportCandidates(questions []QuestionCandidate, answers []Ans
 		drafts = append(drafts, draft)
 	}
 	addQuestionNumberGapIssues(questionByNo, &issues)
-	if len(questions) == 0 && len(answers) == 0 && len(solutions) == 0 {
+	if len(questions) == 0 && len(answers) == 0 && len(solutions) == 0 && len(rubrics) == 0 {
 		issues = append(issues, candidateIssue("UNKNOWN_DOCUMENT_ROLE", "error", "unknown", "", "未从资料中识别到题目、答案或解析", "请核对文件内容和清晰度", nil))
 	}
 	return drafts, dedupePaperImportIssues(issues)
+}
+
+func rubricCandidatesEquivalent(values []RubricCandidate, indexes []int) bool {
+	if len(indexes) < 2 {
+		return true
+	}
+	first := values[indexes[0]]
+	for _, index := range indexes[1:] {
+		if rubricCandidateContentKey(first) != rubricCandidateContentKey(values[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func rubricCandidateContentKey(value RubricCandidate) string {
+	return stableJSON(struct {
+		MaxScore             *float64
+		Points               []RubricCandidatePoint
+		Deductions, Examples []any
+	}{value.MaxScore, value.Points, value.Deductions, value.Examples})
 }
 
 func questionRequiresStandardAnswerForArchetype(archetype string) bool {
@@ -504,7 +585,7 @@ func normalizeHumanConfirmedFields(values []string) []string {
 		"answer": true, "solution": true, "rubric": true,
 	}
 	if len(values) == 0 {
-		return []string{"question_no", "question_type", "score", "stem", "answer", "solution", "rubric"}
+		return []string{}
 	}
 	out := []string{}
 	seen := map[string]bool{}
@@ -568,15 +649,26 @@ func issuesAfterHumanReview(issues []PaperImportIssue, drafts []PaperImportDraft
 	for _, issue := range issues {
 		d, ok := confirmed[normalizePaperImportQuestionNumber(issue.QuestionNo)]
 		fields := stringSet(d.HumanConfirmedFields)
+		rubricCandidateResolved := false
+		if resolveConflicts && (issue.Code == "AMBIGUOUS_RUBRIC_MATCH" || issue.Code == "UNMATCHED_RUBRIC" || issue.Code == "CONFLICTING_RUBRICS") {
+			for _, reviewed := range drafts {
+				if reviewed.RubricCandidateID != "" && stringSet(reviewed.HumanConfirmedFields)["rubric"] && reviewed.Rubric != nil && scoreEqual(reviewed.Rubric.MaxScore, reviewed.Score) && scoreEqual(SumRubricPoints(reviewed.Rubric.Points), reviewed.Score) && sourceRefsOverlap(issue.SourceRefs, reviewed.SourceRefs) {
+					rubricCandidateResolved = true
+					break
+				}
+			}
+		}
 		resolved := ok && ((issue.Code == "MISSING_ANSWER" && d.AnswerKey != nil && !emptyAnswer(d.AnswerKey.StandardAnswer)) ||
 			(issue.Code == "MISSING_SCORE" && d.Score > 0) ||
 			(issue.Code == "MISSING_QUESTION_TYPE" && d.QuestionType != "") ||
 			(issue.Code == "MISSING_QUESTION" && strings.TrimSpace(d.Stem) != "") ||
 			(issue.Code == "MISSING_RUBRIC" && d.Rubric != nil) ||
+			((issue.Code == "RUBRIC_SCORE_MISMATCH" || issue.Code == "RUBRIC_POINTS_SCORE_MISMATCH" || issue.Code == "RUBRIC_POINT_SCORE_MISSING") && d.Rubric != nil && scoreEqual(d.Rubric.MaxScore, d.Score) && scoreEqual(SumRubricPoints(d.Rubric.Points), d.Score) && fields["rubric"]) ||
 			(issue.Code == "MISSING_SOLUTION" && d.Solution != nil) ||
 			(issue.Code == "HUMAN_REVIEW_REQUIRED" && humanReviewComplete(d)) ||
 			(resolveConflicts && issue.Code == "CONFLICTING_ANSWERS" && fields["answer"]) ||
 			(resolveConflicts && issue.Code == "HUMAN_CONFIRMED_CONFLICT" && len(fields) > 0))
+		resolved = resolved || rubricCandidateResolved
 		if !resolved {
 			out = append(out, issue)
 		}
@@ -584,11 +676,22 @@ func issuesAfterHumanReview(issues []PaperImportIssue, drafts []PaperImportDraft
 	return out
 }
 
+func sourceRefsOverlap(left, right []PaperImportSourceRef) bool {
+	for _, a := range left {
+		for _, b := range right {
+			if a.SourceID != "" && a.SourceID == b.SourceID && a.FileAssetID == b.FileAssetID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func appendReviewedDraftIssues(issues []PaperImportIssue, drafts []PaperImportDraftQuestion) []PaperImportIssue {
 	validationCodes := map[string]bool{
 		"MISSING_ANSWER": true, "MISSING_SCORE": true, "MISSING_QUESTION_TYPE": true,
 		"MISSING_QUESTION": true, "MISSING_RUBRIC": true, "DUPLICATE_QUESTION_NO": true,
-		"RUBRIC_SCORE_MISMATCH": true,
+		"RUBRIC_SCORE_MISMATCH": true, "RUBRIC_POINTS_SCORE_MISMATCH": true, "RUBRIC_POINT_SCORE_MISSING": true,
 	}
 	out := make([]PaperImportIssue, 0, len(issues)+len(drafts))
 	for _, issue := range issues {
@@ -619,8 +722,11 @@ func appendReviewedDraftIssues(issues []PaperImportIssue, drafts []PaperImportDr
 		if questionRequiresRubricForArchetype(draftAssessmentArchetype(*draft)) && draft.Rubric == nil {
 			out = append(out, candidateIssue("MISSING_RUBRIC", "error", "confirmed", no, "第"+no+"题缺少评分细则", "请填写评分依据", draft.SourceRefs))
 		}
-		if draft.Rubric != nil && (!scoreEqual(draft.Rubric.MaxScore, draft.Score) || !scoreEqual(SumRubricPoints(draft.Rubric.Points), draft.Score)) {
-			out = append(out, candidateIssue("RUBRIC_SCORE_MISMATCH", "error", "confirmed", no, "第"+no+"题评分细则分值与题目分值不一致", "请调整评分点合计和满分", draft.SourceRefs))
+		if draft.Rubric != nil && !scoreEqual(draft.Rubric.MaxScore, draft.Score) {
+			out = append(out, candidateIssue("RUBRIC_SCORE_MISMATCH", "error", "confirmed", no, "第"+no+"题评分细则满分与题目分值不一致", "请调整评分标准满分", draft.SourceRefs))
+		}
+		if draft.Rubric != nil && !scoreEqual(SumRubricPoints(draft.Rubric.Points), draft.Score) {
+			out = append(out, candidateIssue("RUBRIC_POINTS_SCORE_MISMATCH", "error", "confirmed", no, "第"+no+"题采分点合计与题目分值不一致", "请调整采分点分值", draft.SourceRefs))
 		}
 	}
 	return dedupePaperImportIssues(out)
@@ -804,6 +910,9 @@ func paperImportHasBlockingIssues(job PaperImportJob) bool {
 		return true
 	}
 	for _, draft := range job.Questions {
+		if len(job.QuestionCandidates) > 0 && draft.Rubric != nil && !stringSet(draft.HumanConfirmedFields)["rubric"] {
+			return true
+		}
 		if len(draft.Issues) > 0 || draft.MatchStatus == "extra" || draft.MatchStatus == "ambiguous" || draft.MatchStatus == "mismatch" {
 			return true
 		}

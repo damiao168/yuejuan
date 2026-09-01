@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Collapse, Descriptions, Empty, Input, InputNumber, List, Select, Space, Tabs, type TableColumnsType } from "antd";
 import { CheckCircle2, ClipboardCheck, Gavel, RefreshCw, ScrollText, Search, UserCheck } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getSafeUserText, getUserErrorMessage } from "../api/client";
 import { listAuditLogs, type AuditLog } from "../api/audit";
 import { listExams } from "../api/exams";
 import { listQuestions, type Question, type RubricPoint } from "../api/papers";
@@ -78,12 +78,9 @@ const finalGradeSourceLabels: Record<string, string> = {
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
     console.warn("仲裁页请求失败", error.status, error.code, error.message);
-    return error.message || "操作失败，请稍后重试";
+    return getUserErrorMessage(error, "操作失败，请稍后重试");
   }
-  if (error instanceof Error) {
-    return error.message || "操作失败，请稍后重试";
-  }
-  return "操作失败，请稍后重试";
+  return getUserErrorMessage(error, "操作失败，请稍后重试");
 }
 
 function formatTime(value?: string) {
@@ -660,7 +657,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
           </main>
         ) : (
           <main className="arbitration-main">
-            {detail.warnings.length > 0 ? <Alert type="warning" showIcon message="部分评卷材料缺失" description={detail.warnings.join("；")} /> : null}
+            {detail.warnings.length > 0 ? <Alert type="warning" showIcon message="部分评卷材料缺失" description={detail.warnings.map((warning) => getSafeUserText(warning, "评卷材料暂时不可用")).join("；")} /> : null}
 
             <section className="arbitration-context-row">
               <Descriptions bordered size="small" column={4}>

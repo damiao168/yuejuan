@@ -151,74 +151,88 @@ func (s *PostgresStore) ResolveAccessScope(ctx context.Context, user User) (Acce
 		return scope, nil
 	}
 
-	var schoolIDs, gradeIDs, classIDs, examIDs, reviewTaskIDs, arbitrationTaskIDs, assignedExamIDs, submissionIDs []string
-	err = s.db.QueryRowContext(ctx, `
+	kinds := declaredRelationshipKinds(user.DataScope)
+	if kinds["school"] {
+		var schoolIDs, gradeIDs, classIDs, examIDs []string
+		err = s.db.QueryRowContext(ctx, `
+WITH scoped_school AS (
+  SELECT u.school_id::text AS id FROM app_user u
+  WHERE u.tenant_id=$1::uuid AND u.id=$2::uuid AND u.school_id IS NOT NULL AND u.deleted_at IS NULL
+  UNION SELECT unnest(string_to_array(NULLIF($3,''), ','))
+)
 SELECT
-  COALESCE(array_agg(DISTINCT scoped.school_id) FILTER (WHERE scoped.school_id <> ''), '{}'),
-  COALESCE(array_agg(DISTINCT scoped.grade_id) FILTER (WHERE scoped.grade_id <> ''), '{}'),
-  COALESCE(array_agg(DISTINCT scoped.class_id) FILTER (WHERE scoped.class_id <> ''), '{}'),
-  COALESCE(array_agg(DISTINCT scoped.exam_id) FILTER (WHERE scoped.exam_id <> ''), '{}'),
-  COALESCE((SELECT array_agg(rt.id::text ORDER BY rt.id::text)
-            FROM review_task rt
-            WHERE rt.tenant_id=$1::uuid AND rt.assigned_to=$2::uuid
-              AND rt.status IN ('assigned','in_progress','returned') AND rt.deleted_at IS NULL), '{}'),
-  COALESCE((SELECT array_agg(at.id::text ORDER BY at.id::text)
-            FROM arbitration_task at
-            WHERE at.tenant_id=$1::uuid AND at.assigned_to=$2::uuid
-              AND at.status IN ('assigned','in_progress') AND at.deleted_at IS NULL), '{}'),
-  COALESCE((SELECT array_agg(DISTINCT assigned.exam_id ORDER BY assigned.exam_id)
-            FROM (
-              SELECT rt.exam_id::text AS exam_id
-              FROM review_task rt
-              WHERE rt.tenant_id=$1::uuid AND rt.assigned_to=$2::uuid
-                AND rt.status IN ('assigned','in_progress','returned') AND rt.deleted_at IS NULL
-              UNION
-              SELECT at.exam_id::text
-              FROM arbitration_task at
-              WHERE at.tenant_id=$1::uuid AND at.assigned_to=$2::uuid
-                AND at.status IN ('assigned','in_progress') AND at.deleted_at IS NULL
-            ) assigned), '{}'),
-  COALESCE((SELECT array_agg(DISTINCT assigned.submission_id ORDER BY assigned.submission_id)
-            FROM (
-              SELECT rt.submission_id::text AS submission_id
-              FROM review_task rt
-              WHERE rt.tenant_id=$1::uuid AND rt.assigned_to=$2::uuid
-                AND rt.status IN ('assigned','in_progress','returned') AND rt.deleted_at IS NULL
-              UNION
-              SELECT at.submission_id::text
-              FROM arbitration_task at
-              WHERE at.tenant_id=$1::uuid AND at.assigned_to=$2::uuid
-                AND at.status IN ('assigned','in_progress') AND at.deleted_at IS NULL
-            ) assigned), '{}')
-FROM (
-  SELECT COALESCE(u.school_id::text, '') AS school_id, ''::text AS grade_id,
-         ''::text AS class_id, ''::text AS exam_id
-  FROM app_user u
-  WHERE u.tenant_id=$1::uuid AND u.id=$2::uuid AND u.deleted_at IS NULL
-  UNION ALL
-  SELECT sc.school_id::text, sc.grade_id::text, tc.class_id::text,
-         COALESCE(ec.exam_id::text, '')
-  FROM teacher_class tc
-  JOIN school_class sc ON sc.tenant_id=tc.tenant_id AND sc.id=tc.class_id AND sc.deleted_at IS NULL
-  LEFT JOIN exam_class ec ON ec.tenant_id=tc.tenant_id AND ec.class_id=tc.class_id AND ec.deleted_at IS NULL
-  WHERE tc.tenant_id=$1::uuid AND tc.teacher_id=$2::uuid AND tc.deleted_at IS NULL
-) scoped
-`, user.TenantID, user.ID).Scan(
-		pqArray(&schoolIDs), pqArray(&gradeIDs), pqArray(&classIDs), pqArray(&examIDs),
-		pqArray(&reviewTaskIDs), pqArray(&arbitrationTaskIDs), pqArray(&assignedExamIDs), pqArray(&submissionIDs),
-	)
-	if err != nil {
-		return AccessScope{}, err
+  COALESCE((SELECT array_agg(DISTINCT id) FROM scoped_school WHERE id<>''), '{}'),
+  COALESCE((SELECT array_agg(DISTINCT g.id::text) FROM grade g JOIN scoped_school ss ON ss.id=g.school_id::text WHERE g.tenant_id=$1::uuid AND g.deleted_at IS NULL), '{}'),
+  COALESCE((SELECT array_agg(DISTINCT c.id::text) FROM school_class c JOIN scoped_school ss ON ss.id=c.school_id::text WHERE c.tenant_id=$1::uuid AND c.deleted_at IS NULL), '{}'),
+  COALESCE((SELECT array_agg(DISTINCT e.id::text) FROM exam e JOIN scoped_school ss ON ss.id=e.school_id::text WHERE e.tenant_id=$1::uuid AND e.deleted_at IS NULL), '{}')
+`, user.TenantID, user.ID, strings.Join(scope.SchoolIDs, ",")).Scan(pqArray(&schoolIDs), pqArray(&gradeIDs), pqArray(&classIDs), pqArray(&examIDs))
+		if err != nil {
+			return AccessScope{}, err
+		}
+		scope.SchoolIDs = append(scope.SchoolIDs, schoolIDs...)
+		scope.GradeIDs = append(scope.GradeIDs, gradeIDs...)
+		scope.ClassIDs = append(scope.ClassIDs, classIDs...)
+		scope.ExamIDs = append(scope.ExamIDs, examIDs...)
 	}
-	scope.SchoolIDs = append(scope.SchoolIDs, schoolIDs...)
-	scope.GradeIDs = append(scope.GradeIDs, gradeIDs...)
-	scope.ClassIDs = append(scope.ClassIDs, classIDs...)
-	scope.ExamIDs = append(scope.ExamIDs, examIDs...)
-	scope.ExamIDs = append(scope.ExamIDs, assignedExamIDs...)
-	scope.SubmissionIDs = append(scope.SubmissionIDs, submissionIDs...)
-	scope.ReviewTaskIDs = append(scope.ReviewTaskIDs, reviewTaskIDs...)
-	scope.ArbitrationTaskIDs = append(scope.ArbitrationTaskIDs, arbitrationTaskIDs...)
+	if kinds["class"] {
+		var schoolIDs, gradeIDs, classIDs, examIDs []string
+		err = s.db.QueryRowContext(ctx, `
+WITH scoped_class AS (
+  SELECT tc.class_id FROM teacher_class tc
+  WHERE tc.tenant_id=$1::uuid AND tc.teacher_id=$2::uuid AND tc.deleted_at IS NULL
+  UNION SELECT unnest(string_to_array(NULLIF($3,''), ','))::uuid
+)
+SELECT COALESCE(array_agg(DISTINCT c.school_id::text), '{}'),
+       COALESCE(array_agg(DISTINCT c.grade_id::text), '{}'),
+       COALESCE(array_agg(DISTINCT c.id::text), '{}'),
+       COALESCE(array_agg(DISTINCT ec.exam_id::text) FILTER (WHERE ec.exam_id IS NOT NULL), '{}')
+FROM scoped_class sc
+JOIN school_class c ON c.tenant_id=$1::uuid AND c.id=sc.class_id AND c.deleted_at IS NULL
+LEFT JOIN exam_class ec ON ec.tenant_id=c.tenant_id AND ec.class_id=c.id AND ec.deleted_at IS NULL
+`, user.TenantID, user.ID, strings.Join(scope.ClassIDs, ",")).Scan(pqArray(&schoolIDs), pqArray(&gradeIDs), pqArray(&classIDs), pqArray(&examIDs))
+		if err != nil {
+			return AccessScope{}, err
+		}
+		scope.SchoolIDs = append(scope.SchoolIDs, schoolIDs...)
+		scope.GradeIDs = append(scope.GradeIDs, gradeIDs...)
+		scope.ClassIDs = append(scope.ClassIDs, classIDs...)
+		scope.ExamIDs = append(scope.ExamIDs, examIDs...)
+	}
+	if kinds["assigned"] || kinds["exam_task"] {
+		var reviewTaskIDs, arbitrationTaskIDs, examIDs, submissionIDs []string
+		err = s.db.QueryRowContext(ctx, `
+SELECT
+  COALESCE((SELECT array_agg(rt.id::text) FROM review_task rt WHERE rt.tenant_id=$1::uuid AND rt.assigned_to=$2::uuid AND rt.status IN ('assigned','in_progress','returned') AND rt.deleted_at IS NULL), '{}'),
+  COALESCE((SELECT array_agg(at.id::text) FROM arbitration_task at WHERE at.tenant_id=$1::uuid AND at.assigned_to=$2::uuid AND at.status IN ('assigned','in_progress') AND at.deleted_at IS NULL), '{}'),
+  COALESCE((SELECT array_agg(DISTINCT x.exam_id) FROM (SELECT rt.exam_id::text exam_id FROM review_task rt WHERE rt.tenant_id=$1::uuid AND rt.assigned_to=$2::uuid AND rt.status IN ('assigned','in_progress','returned') AND rt.deleted_at IS NULL UNION SELECT at.exam_id::text FROM arbitration_task at WHERE at.tenant_id=$1::uuid AND at.assigned_to=$2::uuid AND at.status IN ('assigned','in_progress') AND at.deleted_at IS NULL) x), '{}'),
+  COALESCE((SELECT array_agg(DISTINCT x.submission_id) FROM (SELECT rt.submission_id::text submission_id FROM review_task rt WHERE rt.tenant_id=$1::uuid AND rt.assigned_to=$2::uuid AND rt.status IN ('assigned','in_progress','returned') AND rt.deleted_at IS NULL UNION SELECT at.submission_id::text FROM arbitration_task at WHERE at.tenant_id=$1::uuid AND at.assigned_to=$2::uuid AND at.status IN ('assigned','in_progress') AND at.deleted_at IS NULL) x), '{}')
+`, user.TenantID, user.ID).Scan(pqArray(&reviewTaskIDs), pqArray(&arbitrationTaskIDs), pqArray(&examIDs), pqArray(&submissionIDs))
+		if err != nil {
+			return AccessScope{}, err
+		}
+		scope.ReviewTaskIDs = append(scope.ReviewTaskIDs, reviewTaskIDs...)
+		scope.ArbitrationTaskIDs = append(scope.ArbitrationTaskIDs, arbitrationTaskIDs...)
+		scope.ExamIDs = append(scope.ExamIDs, examIDs...)
+		scope.SubmissionIDs = append(scope.SubmissionIDs, submissionIDs...)
+	}
 	return scope.normalized(), nil
+}
+
+func declaredRelationshipKinds(dataScope map[string]any) map[string]bool {
+	out := map[string]bool{}
+	var visit func(map[string]any)
+	visit = func(scope map[string]any) {
+		if kind, ok := scope["scope"].(string); ok {
+			out[strings.TrimSpace(kind)] = true
+		}
+		for _, raw := range scope {
+			if nested, ok := raw.(map[string]any); ok {
+				visit(nested)
+			}
+		}
+	}
+	visit(dataScope)
+	return out
 }
 
 func (s *PostgresStore) DeleteSession(ctx context.Context, tokenHash string, reason string) error {
@@ -345,6 +359,9 @@ SELECT EXISTS (
 }
 
 func (s *PostgresStore) UpsertBootstrapAdmin(ctx context.Context, input BootstrapAdminInput, passwordHash string) (BootstrapAdminResult, error) {
+	if input.TenantCode != "platform" || input.RoleCode != "platform_admin" {
+		return BootstrapAdminResult{}, ErrInvalidBootstrapInput
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return BootstrapAdminResult{}, err
@@ -427,6 +444,12 @@ VALUES ($1, NULLIF($2, '')::uuid, $3, $4, NULLIF($5, '')::uuid, $6::jsonb, $7::j
 }
 
 func (s *PostgresStore) ListAudits(ctx context.Context, tenantID string, filter AuditFilter) ([]AuditRecord, error) {
+	if filter.ScopeMode != "" && filter.ScopeMode != "tenant" && filter.ScopeMode != "platform" {
+		return []AuditRecord{}, nil
+	}
+	if filter.ScopeMode != "" && filter.ScopeMode != "tenant" && filter.ScopeMode != "platform" {
+		return []AuditRecord{}, nil
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
   id::text,
@@ -493,6 +516,7 @@ func (s *PostgresStore) ListManagedUsers(ctx context.Context, tenantID string, f
 	rows, err := s.db.QueryContext(ctx, `
 SELECT u.id::text, u.username, u.display_name, u.status,
        COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}'),
+	   COALESCE(u.school_id::text, ''),
        u.created_at
 FROM app_user u
 LEFT JOIN user_role ur ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id AND ur.deleted_at IS NULL
@@ -505,10 +529,11 @@ WHERE u.tenant_id = $1::uuid AND u.deleted_at IS NULL
     WHERE fur.tenant_id=u.tenant_id AND fur.user_id=u.id AND fur.deleted_at IS NULL AND fr.code=$4
   ))
   AND ($6 = '' OR u.created_at < $5 OR (u.created_at = $5 AND u.id::text < $6))
+  AND (NOT $8 OR u.school_id::text = ANY(string_to_array($9, ',')))
 GROUP BY u.id
 ORDER BY u.created_at DESC, u.id::text DESC
 LIMIT NULLIF($7, 0)
-`, tenantID, filter.UserID, filter.Query, filter.Role, filter.CursorCreatedAt, filter.CursorID, filter.Limit)
+`, tenantID, filter.UserID, filter.Query, filter.Role, filter.CursorCreatedAt, filter.CursorID, filter.Limit, filter.RestrictSchools, strings.Join(filter.SchoolIDs, ","))
 	if err != nil {
 		return nil, err
 	}
@@ -516,7 +541,7 @@ LIMIT NULLIF($7, 0)
 	out := []ManagedUser{}
 	for rows.Next() {
 		var user ManagedUser
-		if err := rows.Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, pqArray(&user.Roles), &user.CreatedAt); err != nil {
+		if err := rows.Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, pqArray(&user.Roles), &user.SchoolID, &user.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, user)
@@ -524,13 +549,13 @@ LIMIT NULLIF($7, 0)
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) ListAssignableRoles(ctx context.Context, tenantID string) ([]AssignableRole, error) {
+func (s *PostgresStore) ListAssignableRoles(ctx context.Context, actor User) ([]AssignableRole, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT code, name, scope_type, COALESCE(description, '')
 FROM role
-WHERE tenant_id = $1::uuid AND deleted_at IS NULL AND code NOT IN ('platform_admin', 'tenant_admin')
+WHERE tenant_id = $1::uuid AND deleted_at IS NULL
 ORDER BY name, code
-`, tenantID)
+`, actor.TenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -541,35 +566,86 @@ ORDER BY name, code
 		if err := rows.Scan(&role.Code, &role.Name, &role.ScopeType, &role.Description); err != nil {
 			return nil, err
 		}
-		out = append(out, role)
+		if policy := RolePolicy(role.Code); CanAssignManagedRole(actor, role.Code) && role.ScopeType == policy.CanonicalScope {
+			out = append(out, role)
+		}
 	}
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) CreateManagedUser(ctx context.Context, tenantID string, tenantCode string, input CreateManagedUserInput, passwordHash string) (ManagedUser, error) {
+func (s *PostgresStore) CreateManagedUser(ctx context.Context, actor User, actorScope AccessScope, input CreateManagedUserInput, passwordHash string) (ManagedUser, error) {
+	policy := RolePolicy(input.RoleCode)
+	if !CanAssignManagedRole(actor, input.RoleCode) {
+		return ManagedUser{}, ErrRoleAssignment
+	}
+	if len(input.ClassIDs) > 0 && !policy.ClassBinding {
+		return ManagedUser{}, ErrInvalidRoleBinding
+	}
+	schoolID := strings.TrimSpace(input.SchoolID)
+	if schoolID == "" && HasRole(actor, "school_admin") && len(actorScope.SchoolIDs) == 1 {
+		schoolID = actorScope.SchoolIDs[0]
+	}
+	if policy.SchoolRequired && schoolID == "" {
+		return ManagedUser{}, ErrInvalidRoleBinding
+	}
+	if schoolID != "" && !actorScope.AllowsSchool(schoolID) {
+		return ManagedUser{}, ErrOrganizationScope
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ManagedUser{}, err
 	}
 	defer tx.Rollback()
 
-	var roleID string
+	var roleID, roleScopeType string
 	if err := tx.QueryRowContext(ctx, `
-SELECT id::text FROM role
-WHERE tenant_id = $1::uuid AND code = $2 AND code NOT IN ('platform_admin', 'tenant_admin') AND deleted_at IS NULL
-`, tenantID, input.RoleCode).Scan(&roleID); err != nil {
+SELECT id::text, scope_type FROM role
+WHERE tenant_id = $1::uuid AND code = $2 AND deleted_at IS NULL
+`, actor.TenantID, input.RoleCode).Scan(&roleID, &roleScopeType); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ManagedUser{}, ErrRoleNotFound
 		}
 		return ManagedUser{}, err
 	}
+	if roleScopeType != policy.CanonicalScope {
+		return ManagedUser{}, ErrRoleAssignment
+	}
+	if schoolID != "" {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM school WHERE tenant_id=$1::uuid AND id::text=$2 AND deleted_at IS NULL)`, actor.TenantID, schoolID).Scan(&exists); err != nil {
+			return ManagedUser{}, err
+		}
+		if !exists {
+			return ManagedUser{}, ErrInvalidRoleBinding
+		}
+	}
+	if len(input.ClassIDs) > 0 {
+		var count int
+		var minSchoolID, maxSchoolID string
+		if err := tx.QueryRowContext(ctx, `
+SELECT count(*), COALESCE(min(school_id::text), ''), COALESCE(max(school_id::text), '')
+FROM school_class
+WHERE tenant_id=$1::uuid AND id::text=ANY(string_to_array($2, ',')) AND deleted_at IS NULL
+`, actor.TenantID, strings.Join(input.ClassIDs, ",")).Scan(&count, &minSchoolID, &maxSchoolID); err != nil {
+			return ManagedUser{}, err
+		}
+		if count != len(input.ClassIDs) || minSchoolID == "" || minSchoolID != maxSchoolID || minSchoolID != schoolID {
+			return ManagedUser{}, ErrInvalidRoleBinding
+		}
+		for _, classID := range input.ClassIDs {
+			if !actorScope.TenantWide && !actorScope.AllowsSchool(schoolID) && !actorScope.AllowsClass(classID) {
+				return ManagedUser{}, ErrOrganizationScope
+			}
+		}
+	}
 
 	var user ManagedUser
 	err = tx.QueryRowContext(ctx, `
-INSERT INTO app_user (tenant_id, username, display_name, password_hash, status)
-VALUES ($1::uuid, $2, $3, $4, 'active')
-RETURNING id::text, username, display_name, status, created_at
-`, tenantID, input.Username, input.DisplayName, passwordHash).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, &user.CreatedAt)
+INSERT INTO app_user (tenant_id, school_id, username, display_name, password_hash, status)
+VALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4, $5, 'active')
+RETURNING id::text, username, display_name, status, COALESCE(school_id::text,''), created_at
+`, actor.TenantID, schoolID, input.Username, input.DisplayName, passwordHash).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, &user.SchoolID, &user.CreatedAt)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") || strings.Contains(strings.ToLower(err.Error()), "duplicate") {
 			return ManagedUser{}, ErrUsernameExists
@@ -578,9 +654,18 @@ RETURNING id::text, username, display_name, status, created_at
 	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO user_role (tenant_id, user_id, role_id, data_scope)
-VALUES ($1::uuid, $2::uuid, $3::uuid, jsonb_build_object('scope', 'tenant'))
-`, tenantID, user.ID, roleID); err != nil {
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4::jsonb)
+`, actor.TenantID, user.ID, roleID, auditJSON(canonicalRoleDataScope(input.RoleCode, schoolID))); err != nil {
 		return ManagedUser{}, err
+	}
+	if len(input.ClassIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO teacher_class (tenant_id, teacher_id, class_id)
+SELECT $1::uuid, $2::uuid, value::uuid FROM unnest(string_to_array($3, ',')) AS value
+ON CONFLICT (tenant_id, teacher_id, class_id) DO UPDATE SET deleted_at=NULL, updated_at=now()
+`, actor.TenantID, user.ID, strings.Join(input.ClassIDs, ",")); err != nil {
+			return ManagedUser{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return ManagedUser{}, err

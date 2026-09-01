@@ -3,6 +3,7 @@ import { ErrorState, LoadingState } from "../components/PageState";
 import type { SessionUser } from "../auth/session";
 import type { ProductExperience } from "../router/experience";
 import { useExamWorkspace } from "../query/examWorkspace";
+import { getUserErrorMessage } from "../api/client";
 import { ExamWorkspaceLayout } from "../features/exams/workspace/ExamWorkspaceLayout";
 
 export function ExamWorkspacePage({ examId, section, experience, currentUser, moduleContent, onNavigate }: {
@@ -16,7 +17,7 @@ export function ExamWorkspacePage({ examId, section, experience, currentUser, mo
   const { data, error, isPending, isFetching, refetch } = useExamWorkspace(examId);
 
   if (!data && isPending) return <LoadingState label="正在加载考试工作区" />;
-  if (!data && error) return <ErrorState message={error instanceof Error ? error.message : "考试工作区加载失败"} onRetry={() => void refetch()} />;
+  if (!data && error) return <ErrorState message={getUserErrorMessage(error, "考试工作区加载失败")} onRetry={() => void refetch()} />;
   if (!data) return null;
 
   return <ExamWorkspaceLayout

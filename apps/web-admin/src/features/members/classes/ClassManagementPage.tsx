@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { App, Button, Form, Input, InputNumber, Modal, Select } from "antd";
 import type { TableColumnsType } from "antd";
 import { Plus, RefreshCw } from "lucide-react";
+import { getUserErrorMessage } from "../../../api/client";
 import { createClass, createGrade, listClasses, listGrades, listSchools, listStudents, type Grade, type School, type SchoolClass, type Student } from "../../../api/org";
 import { ErrorState, LoadingState } from "../../../components/PageState";
 import { ResponsiveTable } from "../../../components/ResponsiveTable";
@@ -47,7 +48,7 @@ export function ClassManagementPage() {
       setClasses(classResult.classes);
       setStudents(studentResult);
       setGradeId((current) => current || gradeResult.grades.find((item) => item.status === "active")?.id || "");
-    } catch (loadError) { setError(loadError instanceof Error ? loadError.message : "年级与班级加载失败"); }
+    } catch (loadError) { setError(getUserErrorMessage(loadError, "年级与班级加载失败")); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
@@ -65,13 +66,13 @@ export function ClassManagementPage() {
   async function submitGrade(values: Pick<Grade, "school_id" | "name" | "level_no" | "academic_year" | "education_stage">) {
     setSaving(true);
     try { const result = await createGrade(values); message.success("年级已新增"); setDialog(null); await load(); setGradeId(result.grade.id); }
-    catch (saveError) { message.error(saveError instanceof Error ? saveError.message : "新增年级失败"); }
+    catch (saveError) { message.error(getUserErrorMessage(saveError, "新增年级失败")); }
     finally { setSaving(false); }
   }
   async function submitClass(values: Pick<SchoolClass, "school_id" | "grade_id" | "name" | "code">) {
     setSaving(true);
     try { await createClass(values); message.success("班级已新增"); setDialog(null); await load(); }
-    catch (saveError) { message.error(saveError instanceof Error ? saveError.message : "新增班级失败"); }
+    catch (saveError) { message.error(getUserErrorMessage(saveError, "新增班级失败")); }
     finally { setSaving(false); }
   }
 

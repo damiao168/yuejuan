@@ -5,7 +5,10 @@ import (
 	"errors"
 )
 
-var ErrInvalidParent = errors.New("organization parent does not belong to tenant")
+var (
+	ErrInvalidParent         = errors.New("organization parent does not belong to tenant")
+	ErrInvalidTeacherBinding = errors.New("target user is not an active teacher in the class tenant")
+)
 
 type Tenant struct {
 	ID     string `json:"id"`
@@ -114,6 +117,9 @@ type StudentEnrollment struct {
 type StudentListFilter struct {
 	ClassID         string
 	StudentIDs      []string
+	RestrictClasses bool
+	ClassIDs        []string
+	StudentID       string
 	Query           string
 	Limit           int
 	CursorStudentNo string

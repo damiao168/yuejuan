@@ -22,8 +22,11 @@ type PublishedExam struct {
 	ExamID         string    `json:"exam_id"`
 	Name           string    `json:"name"`
 	Subject        string    `json:"subject"`
+	ExamType       string    `json:"exam_type,omitempty"`
 	ReleaseVersion int       `json:"release_version"`
 	PublishedAt    time.Time `json:"published_at"`
+	TotalScore     float64   `json:"total_score,omitempty"`
+	MaxScore       float64   `json:"max_score,omitempty"`
 }
 
 type Store interface {

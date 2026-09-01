@@ -14,7 +14,7 @@ import {
 } from "antd";
 import { Ban, Clock3, Plus, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
-import { ApiClientError } from "../../api/client";
+import { getUserErrorMessage } from "../../api/client";
 import {
   createModelApproval,
   revokeModelApproval,
@@ -63,8 +63,7 @@ function localDateTimeValue(value: Date) {
 }
 
 function errorMessage(error: unknown) {
-  if (error instanceof ApiClientError) return error.message || "模型批准操作失败";
-  return error instanceof Error ? error.message : "模型批准操作失败";
+  return getUserErrorMessage(error, "模型批准操作失败");
 }
 
 export function ModelApprovalWorkspace({

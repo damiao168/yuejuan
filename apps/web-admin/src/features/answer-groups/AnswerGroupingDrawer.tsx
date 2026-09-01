@@ -20,7 +20,7 @@ import {
   Tooltip
 } from "antd";
 import type { AnswerGroup, AnswerGroupMetrics, TeacherReferenceCase } from "@edugrade/sdk";
-import { ApiClientError } from "../../api/client";
+import { ApiClientError, getUserErrorMessage } from "../../api/client";
 import { listQuestions, type Question } from "../../api/papers";
 import {
   buildAnswerGroups,
@@ -38,9 +38,9 @@ function errorMessage(error: unknown) {
     if (error.code === "answer_group_sampling_incomplete") return "抽检未满足策略：请完成最低抽检数量并检查全部异常样本。";
     if (error.code === "answer_group_revision_conflict") return "候选已被其他人更新，请刷新后再操作。";
     if (error.code === "answer_group_no_eligible_answers") return "该题没有可可靠文本化的短答或精确文本答案，不能分组。";
-    return error.message || "答案分组操作失败";
+    return getUserErrorMessage(error, "答案分组操作失败");
   }
-  return error instanceof Error ? error.message : "答案分组操作失败";
+  return getUserErrorMessage(error, "答案分组操作失败");
 }
 
 const statusLabels: Record<string, string> = {
@@ -206,7 +206,7 @@ export function AnswerGroupingDrawer({ open, examId, initialQuestionId = "", can
                 renderItem={(group) => (
                   <List.Item onClick={() => setSelectedGroupId(group.id)} style={{ cursor: "pointer", background: group.id === selectedGroup?.id ? "#f0f7ff" : undefined }}>
                     <List.Item.Meta
-                      title={<Space><span>{group.member_count} 份答案</span><Tag>{statusLabels[group.status] ?? group.status}</Tag></Space>}
+                      title={<Space><span>{group.member_count} 份答案</span><Tag>{statusLabels[group.status] ?? "未知状态"}</Tag></Space>}
                       description={`同质性 ${(group.homogeneity * 100).toFixed(1)}% · 抽检 ${group.reviewed_sample_count}/${group.minimum_sample}`}
                     />
                   </List.Item>
@@ -243,7 +243,7 @@ export function AnswerGroupingDrawer({ open, examId, initialQuestionId = "", can
                         <Divider orientation="left">组评分候选</Divider>
                         <Space wrap>
                           <InputNumber min={0} value={score} onChange={(value) => setScore(value === null ? null : Number(value))} placeholder="候选分数" />
-                          <Select mode="tags" style={{ minWidth: 320 }} value={rubricPoints} onChange={setRubricPoints} tokenSeparators={[","]} placeholder="Rubric 采分点（输入后回车）" />
+                          <Select mode="tags" style={{ minWidth: 320 }} value={rubricPoints} onChange={setRubricPoints} tokenSeparators={[","]} placeholder="评分细则采分点（输入后回车）" />
                           <Button loading={acting} onClick={saveDecision}>保存候选</Button>
                           <Tooltip title={blockReason ?? "抽检策略已满足"}>
                             <span>
@@ -266,13 +266,13 @@ export function AnswerGroupingDrawer({ open, examId, initialQuestionId = "", can
           )}
         </Spin>
 
-        <Divider orientation="left">教师参考案例（仅已批准 Gold）</Divider>
+        <Divider orientation="left">教师参考案例（仅已批准标准卷）</Divider>
         <List
           size="small"
           bordered
           dataSource={references}
-          locale={{ emptyText: "当前题目暂无已批准 Gold 参考案例" }}
-          renderItem={(item) => <List.Item><List.Item.Meta title={`${item.reference_score} / ${item.max_score} 分 · Gold v${item.version}`} description={<Space direction="vertical" size={2}><span>{item.explanation}</span>{item.error_tags.length ? <span>{item.error_tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</span> : null}</Space>} /></List.Item>}
+          locale={{ emptyText: "当前题目暂无已批准标准卷参考案例" }}
+          renderItem={(item) => <List.Item><List.Item.Meta title={`${item.reference_score} / ${item.max_score} 分 · 标准卷 v${item.version}`} description={<Space direction="vertical" size={2}><span>{item.explanation}</span>{item.error_tags.length ? <span>{item.error_tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</span> : null}</Space>} /></List.Item>}
         />
       </Drawer>
       <Modal title="回滚整组候选" open={rollbackOpen} confirmLoading={acting} okButtonProps={{ danger: true }} onOk={() => void rollback()} onCancel={() => setRollbackOpen(false)}>

@@ -1,4 +1,4 @@
-import { ApiClientError } from "../../../api/client";
+import { ApiClientError, getUserErrorMessage } from "../../../api/client";
 import type { RubricPoint } from "../../../api/papers";
 import type { AiGrade, ScoringRunItem } from "../../../api/review";
 import type { StatusTone } from "../../../types";
@@ -148,10 +148,9 @@ export const commentPresets = ["答案完整，逻辑清晰", "关键步骤缺�
 export function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
     console.error("接口请求失败", error.status, error.code, error.message);
-    return error.message || "操作失败，请稍后重试";
+    return getUserErrorMessage(error, "操作失败，请稍后重试");
   }
-  if (error instanceof Error) return error.message || "操作失败，请稍后重试";
-  return "操作失败，请稍后重试";
+  return getUserErrorMessage(error, "操作失败，请稍后重试");
 }
 
 export function taskTone(status: string): StatusTone {

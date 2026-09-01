@@ -11,6 +11,7 @@ import {
   logout,
   PortalApiError,
   studentQuestionAnswerImageURL,
+  studentPaperPageImageURL,
   type AuthUser,
   type PublishedExam,
   type StudentQuestionAppeal,
@@ -19,6 +20,9 @@ import {
   type SelectedAppealRegion,
   type StudentResult
 } from "./api";
+import { ScoreHero, displaySubject } from "./features/results/ResultOverview";
+import { AnswerReview } from "./features/questions/AnswerReview";
+import { SubjectPerformance } from "./features/results/SubjectPerformance";
 
 type Page = { kind: "home" } | { kind: "exam"; examID: string };
 
@@ -85,7 +89,7 @@ export default function App() {
         </div>
       </header>
       <main className="portal-content">
-        {page.kind === "home" ? <ExamList onOpen={goExam} /> : <ResultDetail examID={page.examID} onBack={goHome} />}
+        {page.kind === "home" ? <ExamList userName={user.display_name || user.username} onOpen={goExam} /> : <ResultDetail examID={page.examID} onBack={goHome} />}
       </main>
     </div>
   );
@@ -141,7 +145,7 @@ function AccessDenied({ user, onLogout }: { user: AuthUser; onLogout: () => void
   );
 }
 
-function ExamList({ onOpen }: { onOpen: (examID: string) => void }) {
+function ExamList({ userName, onOpen }: { userName: string; onOpen: (examID: string) => void }) {
   const [items, setItems] = useState<PublishedExam[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -160,30 +164,42 @@ function ExamList({ onOpen }: { onOpen: (examID: string) => void }) {
   }, []);
   useEffect(() => { void load(); }, [load]);
 
+  const latest = items[0];
+  const latestRate = latest?.max_score ? Math.round((latest.total_score ?? 0) / latest.max_score * 1000) / 10 : undefined;
   return (
     <section className="exam-list-page" aria-labelledby="exam-list-title">
       <div className="page-heading">
-        <div><p className="eyebrow">我的考试</p><h1 id="exam-list-title">已发布成绩</h1><p>只展示学校已正式发布的成绩版本。</p></div>
+        <div><p className="eyebrow">学习概览</p><h1 id="exam-list-title">{greeting(userName)}</h1><p>从最近发布的考试开始复盘。</p></div>
         <button type="button" className="secondary-button" onClick={() => void load()} disabled={loading}>刷新</button>
       </div>
       {error ? <ErrorNotice message={error} onRetry={load} /> : null}
       {loading ? <div className="inline-status">正在加载已发布考试…</div> : null}
       {!loading && !error && items.length === 0 ? <EmptyState /> : null}
-      {!loading && !error && items.length > 0 ? <div className="exam-list">
+      {!loading && !error && latest ? <section className="latest-release" aria-labelledby="latest-release-title">
+        <div><p>最近发布 · {displaySubject(latest.subject)}</p><h2 id="latest-release-title">{latest.name}</h2><span>{formatDate(latest.published_at)} · 第 {latest.release_version} 版</span></div>
+        {latest.total_score !== undefined && latest.max_score ? <div className="latest-score"><strong>{formatScore(latest.total_score)}<small> / {formatScore(latest.max_score)}</small></strong><span>得分率 {latestRate}%</span></div> : null}
+        <button type="button" className="primary-action" onClick={() => onOpen(latest.exam_id)}>查看考试分析 <span>→</span></button>
+      </section> : null}
+      {!loading && !error && items.length > 0 ? <section className="published-exams"><div className="section-heading"><div><p className="section-kicker">我的考试</p><h2>已发布成绩</h2></div><span>{items.length} 场考试</span></div><div className="exam-list">
         {items.map((exam) => <button className="exam-row" type="button" key={exam.exam_id} onClick={() => onOpen(exam.exam_id)}>
-          <div><strong>{exam.name}</strong><span>{exam.subject || "考试"} · 已发布 {formatDate(exam.published_at)}</span></div>
+          <div><strong>{exam.name}</strong><span>{displaySubject(exam.subject)} · 已发布 {formatDate(exam.published_at)}</span></div>
           <div className="exam-row-action"><small>第 {exam.release_version} 版</small><span>查看成绩 →</span></div>
         </button>)}
-      </div> : null}
+      </div></section> : null}
     </section>
   );
+}
+
+function greeting(name: string) {
+  const hour = new Date().getHours();
+  const time = hour < 6 ? "夜深了" : hour < 11 ? "早上好" : hour < 14 ? "中午好" : hour < 18 ? "下午好" : "晚上好";
+  return `${name}，${time}`;
 }
 
 function ResultDetail({ examID, onBack }: { examID: string; onBack: () => void }) {
   const [result, setResult] = useState<StudentResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [appealRevision, setAppealRevision] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -201,100 +217,133 @@ function ResultDetail({ examID, onBack }: { examID: string; onBack: () => void }
 
   if (loading) return <div className="inline-status">正在加载成绩详情…</div>;
   if (error || !result) return <ErrorNotice message={error || "暂时无法取得成绩"} onRetry={load} onBack={onBack} />;
-  const percentage = result.max_score > 0 ? Math.round(result.total_score / result.max_score * 100) : 0;
   const questionsVisible = Array.isArray(result.questions);
+  const examName = result.exam?.name || "本次考试成绩";
   return (
     <section className="result-page" aria-labelledby="result-title">
       <button type="button" className="back-button" onClick={onBack}>← 返回我的考试</button>
       <div className="result-heading">
-        <div><p className="eyebrow">已发布成绩 · 第 {result.release_version} 版</p><h1 id="result-title">本次考试成绩</h1><p>该成绩为学校当前正式发布版本。</p></div>
-        <div className="release-state"><span>已发布</span><small>成绩如有更正，将以新版本显示</small></div>
+        <div><span className="sr-only">已发布成绩 · 第 {result.release_version} 版</span><p className="eyebrow">考试位次</p><h1 id="result-title">{examName}</h1></div>
       </div>
-      <section className="score-summary" aria-label="总分">
-        <div><span>总分</span><strong>{formatScore(result.total_score)}<small> / {formatScore(result.max_score)}</small></strong></div>
-        <div className="score-rate"><span>得分率</span><strong>{percentage}%</strong><div><i style={{ width: `${Math.max(0, Math.min(100, percentage))}%` }} /></div></div>
-      </section>
-      <section className="question-section" aria-labelledby="questions-title">
-        <header><div><h2 id="questions-title">题目反馈</h2><p>{questionsVisible ? "点击题目查看学校公开的反馈与评分要点。" : "本次考试仅公开总分，题目得分与反馈未对学生公开。"}</p></div></header>
-        {questionsVisible && result.questions && result.questions.length > 0 ? <QuestionList examID={examID} releaseID={result.release_id} releaseVersion={result.release_version} appealWindow={result.appeal_window} questions={result.questions} onAppealSubmitted={() => setAppealRevision((current) => current + 1)} /> : null}
+      <ScoreHero result={result} />
+      {result.subject_balance?.length ? <SubjectPerformance items={result.subject_balance} /> : null}
+      <section className="question-section" aria-labelledby="questions-title" id="question-review">
+        {questionsVisible && result.questions && result.questions.length > 0 ? <QuestionTables examID={examID} result={result} questions={result.questions} fallbackSubject={result.exam?.subject} /> : null}
         {questionsVisible && result.questions?.length === 0 ? <p className="muted section-empty">学校暂未提供逐题结果。</p> : null}
       </section>
-      <AppealWindow result={result} />
-      <AppealStatus examID={examID} revision={appealRevision} />
+      <PaperViewer examID={examID} result={result} />
     </section>
   );
 }
 
-function QuestionList({ examID, releaseID, releaseVersion, appealWindow, questions, onAppealSubmitted }: {
-  examID: string;
-  releaseID: string;
-  releaseVersion: number;
-  appealWindow: StudentResult["appeal_window"];
-  questions: StudentQuestion[];
-  onAppealSubmitted: () => void;
-}) {
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [details, setDetails] = useState<Record<string, StudentQuestion>>({});
-  const [annotations, setAnnotations] = useState<Record<string, StudentQuestionAnnotation[]>>({});
-  const [loadingID, setLoadingID] = useState<string | null>(null);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const sorted = useMemo(() => [...questions].sort((left, right) => left.question_no.localeCompare(right.question_no, "zh-CN", { numeric: true })), [questions]);
-
-  const toggle = async (question: StudentQuestion) => {
-    if (expanded === question.question_id) { setExpanded(null); return; }
-    setExpanded(question.question_id);
-    if (details[question.question_id] || loadingID === question.question_id) return;
-    setLoadingID(question.question_id);
-    setErrors((current) => ({ ...current, [question.question_id]: "" }));
-    try {
-      const detailResponse = await getQuestion(examID, question.question_id);
-      setDetails((current) => ({ ...current, [question.question_id]: detailResponse.question }));
-      try {
-        const annotationResponse = await listQuestionAnnotations(examID, question.question_id);
-        setAnnotations((current) => ({ ...current, [question.question_id]: annotationResponse.annotations }));
-      } catch {
-        // Annotation availability must not hide an already-published question result.
-        setAnnotations((current) => ({ ...current, [question.question_id]: [] }));
-      }
-    } catch (reason) {
-      setErrors((current) => ({ ...current, [question.question_id]: friendlyError(reason) }));
-    } finally {
-      setLoadingID(null);
+function QuestionTables({ examID, result, questions, fallbackSubject }: { examID: string; result: StudentResult; questions: StudentQuestion[]; fallbackSubject?: string }) {
+  const groups = useMemo(() => {
+    const values = new Map<string, StudentQuestion[]>();
+    for (const question of questions) {
+      const subject = displaySubject(question.subject || fallbackSubject);
+      values.set(subject, [...(values.get(subject) ?? []), question]);
     }
+    return [...values.entries()].map(([subject, items]) => [subject, items.sort((a, b) => a.question_no.localeCompare(b.question_no, "zh-CN", { numeric: true }))] as const);
+  }, [fallbackSubject, questions]);
+  const [activeSubject, setActiveSubject] = useState(groups[0]?.[0] ?? "");
+  const [selected, setSelected] = useState<StudentQuestion | null>(null);
+  const [detail, setDetail] = useState<StudentQuestion | null>(null);
+  const [annotations, setAnnotations] = useState<StudentQuestionAnnotation[]>([]);
+  const [detailError, setDetailError] = useState("");
+  const [detailLoading, setDetailLoading] = useState(false);
+  const activeGroups = groups.filter(([subject]) => subject === activeSubject || groups.length === 1);
+  const openQuestion = async (question: StudentQuestion) => {
+    if (selected?.question_id === question.question_id) { setSelected(null); return; }
+    setSelected(question); setDetail(null); setAnnotations([]); setDetailError(""); setDetailLoading(true);
+    try {
+      const [questionResponse, annotationResponse] = await Promise.all([
+        getQuestion(examID, question.question_id),
+        listQuestionAnnotations(examID, question.question_id).catch(() => ({ annotations: [] }))
+      ]);
+      setDetail(questionResponse.question); setAnnotations(annotationResponse.annotations);
+    } catch (reason) { setDetailError(friendlyError(reason)); }
+    finally { setDetailLoading(false); }
   };
-
-  return <div className="question-list">{sorted.map((question) => {
-    const open = expanded === question.question_id;
-    const detail = details[question.question_id] ?? question;
-    const publicAnnotations = annotations[question.question_id] ?? [];
-    return <article className={`question-row ${open ? "open" : ""}`} key={question.question_id}>
-      <button type="button" className="question-toggle" onClick={() => void toggle(question)} aria-expanded={open}>
-        <span className="question-number">{question.question_no}</span>
-        <span className="question-score">{formatScore(question.score)} <small>/ {formatScore(question.max_score)} 分</small></span>
-        <span className="chevron">{open ? "⌃" : "⌄"}</span>
-      </button>
-      {open ? <div className="question-detail">
-        {loadingID === question.question_id ? <p className="muted">正在加载本题反馈…</p> : null}
-        {errors[question.question_id] ? <p className="detail-error">{errors[question.question_id]}</p> : null}
-        {!loadingID && !errors[question.question_id] ? <>
-          {detail.feedback ? <div><h3>教师反馈</h3><p>{detail.feedback}</p></div> : null}
-          {detail.rubric_summary && detail.rubric_summary.length > 0 ? <div><h3>评分要点</h3><ul>{detail.rubric_summary.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
-          {publicAnnotations.length > 0 ? <div className="question-annotations"><h3>教师批注</h3><ul>{publicAnnotations.map((annotation) => <li key={annotation.id}><span className="annotation-type">{annotationTypeLabel(annotation.type)}</span><span>{annotation.content || "教师标注"}</span></li>)}</ul></div> : null}
-          {!detail.feedback && !(detail.rubric_summary?.length) ? <p className="muted">本题未公开文字反馈。</p> : null}
-          {appealWindow.open ? <QuestionAppealForm examID={examID} releaseID={releaseID} releaseVersion={releaseVersion} question={question} allowedReasonCodes={appealWindow.allowed_reason_codes ?? []} onSubmitted={onAppealSubmitted} /> : null}
-        </> : null}
-      </div> : null}
-    </article>;
-  })}</div>;
+  return <div className="subject-tables">
+    {groups.length > 1 ? <nav className="subject-tabs" aria-label="科目">{groups.map(([subject]) => <button type="button" className={activeSubject === subject ? "active" : ""} onClick={() => setActiveSubject(subject)} key={subject}>{subject}</button>)}</nav> : null}
+    {activeGroups.map(([subject, items]) => <section className="subject-table" key={subject}>
+    <header><h2 id="questions-title">{subject}逐题分析</h2><span>学生得分：{formatScore(items.reduce((sum, item) => sum + item.score, 0))} 分　满分：{formatScore(items.reduce((sum, item) => sum + item.max_score, 0))} 分</span></header>
+    <div className="paper-table-scroll"><table className="paper-score-table">
+      <thead><tr><th>题号</th><th>正确答案</th><th>实际答案</th><th>得分</th><th>班级平均分</th><th>学校平均分</th><th>掌握程度</th></tr></thead>
+      <tbody>{items.map((question) => {
+        const known = question.cohort?.median_score !== undefined;
+        const mastered = known && question.score >= Number(question.cohort?.median_score);
+        const lost = question.score < question.max_score;
+        return <tr key={question.question_id} className={lost ? "lost" : ""}>
+          <td><button type="button" className="question-cell-link" aria-label={`第 ${question.question_no} 题，${formatScore(question.score)} / ${formatScore(question.max_score)} 分`} onClick={() => void openQuestion(question)}>{question.question_no}</button></td><td title={question.correct_answer}>{answerText(question.correct_answer)}</td><td className="actual-answer" title={question.actual_answer}>{answerText(question.actual_answer)}</td>
+          <td className="student-cell"><strong>{formatScore(question.score)}</strong><small> / {formatScore(question.max_score)}</small></td>
+          <td>{scoreOrDash(question.cohort?.class_mean_score)}</td><td>{scoreOrDash(question.cohort?.school_mean_score)}</td>
+          <td><span className={`mastery ${known ? (mastered ? "mastered" : "review") : "unknown"}`}>{known ? (mastered ? "已掌握" : "待巩固") : "—"}</span></td>
+        </tr>;
+      })}</tbody>
+    </table></div>
+    {selected && items.some((item) => item.question_id === selected.question_id) ? <div className="question-drilldown">
+      {detailLoading ? <p className="muted">正在加载本题…</p> : null}
+      {detailError ? <p className="detail-error">{detailError}</p> : null}
+      {detail ? <><AnswerReview question={detail} annotations={annotations} imageURL={studentQuestionAnswerImageURL(examID,selected.question_id)} />{result.appeal_window.open ? <QuestionAppealForm examID={examID} releaseID={result.release_id} releaseVersion={result.release_version} question={selected} allowedReasonCodes={result.appeal_window.allowed_reason_codes ?? []} onSubmitted={() => undefined} /> : null}</> : null}
+    </div> : null}
+  </section>)}</div>;
 }
 
-function annotationTypeLabel(type: StudentQuestionAnnotation["type"]) {
-  switch (type) {
-    case "highlight": return "重点标注";
-    case "rectangle": return "圈画标注";
-    case "freehand": return "手写标注";
-    default: return "教师批注";
+function answerText(value?: string) { return value?.trim() || "—"; }
+function scoreOrDash(value?: number) { return value === undefined ? "—" : formatScore(value); }
+
+function PaperViewer({ examID, result }: { examID: string; result: StudentResult }) {
+  const ownPages = useMemo(() => result.paper_pages?.length ? result.paper_pages : fallbackPaperPages(result.questions ?? []), [result.paper_pages, result.questions]);
+  const highPages = result.high_score_paper?.pages ?? [];
+  const [highScore, setHighScore] = useState(false);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [zoom, setZoom] = useState(1);
+  const [annotations, setAnnotations] = useState<StudentQuestionAnnotation[]>([]);
+  const pages = highScore ? highPages : ownPages;
+  const page = pages[Math.min(pageIndex, Math.max(0, pages.length - 1))];
+  const pageQuestions = (result.questions ?? []).filter((question) => question.page_no === page?.page_no);
+  const scoreMarks = highScore ? (result.high_score_paper?.score_marks ?? []).filter((mark) => mark.page_no === page?.page_no) : pageQuestions;
+
+  useEffect(() => {
+    setPageIndex(0);
+    setAnnotations([]);
+  }, [highScore]);
+  useEffect(() => {
+    let active = true;
+    if (!page || highScore) { setAnnotations([]); return () => { active = false; }; }
+    void Promise.all(pageQuestions.map((question) => listQuestionAnnotations(examID, question.question_id).then((response) => response.annotations).catch(() => [])))
+      .then((values) => { if (active) setAnnotations(values.flat()); });
+    return () => { active = false; };
+  }, [examID, highScore, page?.page_no]);
+
+  return <section className="paper-viewer" aria-labelledby="paper-viewer-title">
+    <header><h2 id="paper-viewer-title">答卷图像</h2></header>
+    <div className="paper-toolbar">
+      <div className="zoom-controls"><button type="button" onClick={() => setZoom((value) => Math.min(1.6, value + .15))}>放大</button><button type="button" onClick={() => setZoom(1)}>默认</button><button type="button" onClick={() => setZoom((value) => Math.max(.7, value - .15))}>缩小</button></div>
+      <div className="page-controls"><button type="button" disabled={pageIndex <= 0} onClick={() => setPageIndex((value) => value - 1)}>上一页</button><label>第 <select value={pageIndex} onChange={(event) => setPageIndex(Number(event.target.value))}>{pages.map((item, index) => <option key={`${item.page_no}-${index}`} value={index}>{item.page_no}</option>)}</select> 页</label><button type="button" disabled={pageIndex >= pages.length - 1} onClick={() => setPageIndex((value) => value + 1)}>下一页</button></div>
+      <div className="paper-actions"><button type="button" className={highScore ? "high-score active" : "high-score"} disabled={!result.high_score_paper?.available} onClick={() => setHighScore((value) => !value)}>{highScore ? "查看我的试卷" : "查看高分试卷"}</button>{page ? <a href={studentPaperPageImageURL(examID, page.question_id, highScore)} download>下载当前页</a> : null}</div>
+    </div>
+    <div className="paper-stage">
+      {page ? <div className="paper-page" style={{ width: `${zoom * 100}%` }}>
+        <img src={studentPaperPageImageURL(examID, page.question_id, highScore)} alt={`${highScore ? "高分" : "本人"}试卷第 ${page.page_no} 页`} />
+        {scoreMarks.map((question) => question.answer_geometry ? <span className={`paper-score-mark ${question.score < question.max_score ? "lost" : ""}`} key={question.question_id} style={{ left: `${Math.min(.96, question.answer_geometry.x + question.answer_geometry.width) * 100}%`, top: `${question.answer_geometry.y * 100}%` }}>{question.question_no}：{formatScore(question.score)}分（满分{formatScore(question.max_score)}分）</span> : null)}
+        {!highScore ? annotations.map((annotation) => <span className={`paper-annotation ${annotation.type}`} key={annotation.id} title={annotation.content} style={{ left: `${annotation.geometry.x * 100}%`, top: `${annotation.geometry.y * 100}%`, width: `${annotation.geometry.width * 100}%`, height: `${annotation.geometry.height * 100}%` }}><span className="paper-annotation-text">{annotation.content}</span></span>) : null}
+      </div> : <div className="paper-empty">暂无答卷图像</div>}
+    </div>
+  </section>;
+}
+
+function fallbackPaperPages(questions: StudentQuestion[]) {
+  const byPage = new Map<number, { page_no: number; question_id: string; submission_page_id?: string }>();
+  for (const question of questions) {
+    if (question.page_no && !byPage.has(question.page_no)) byPage.set(question.page_no, { page_no: question.page_no, question_id: question.question_id, submission_page_id: question.submission_page_id });
   }
+  return [...byPage.values()].sort((a, b) => a.page_no - b.page_no);
+}
+
+export function questionTypeLabel(type: string) {
+  return ({ single_choice: "单选题", multiple_choice: "多选题", true_false: "判断题", fill_blank: "填空题", numeric: "数值题", formula: "公式题", short_answer: "简答题", calculation: "计算题", essay: "解答题", discussion: "论述题", coding: "编程题" } as Record<string, string>)[type] ?? type;
 }
 
 const appealReasonLabels: Record<string, string> = {
@@ -306,7 +355,7 @@ const appealReasonLabels: Record<string, string> = {
   other: "其他明确评分问题"
 };
 
-function QuestionAppealForm({ examID, releaseID, releaseVersion, question, allowedReasonCodes, onSubmitted }: {
+export function QuestionAppealForm({ examID, releaseID, releaseVersion, question, allowedReasonCodes, onSubmitted }: {
   examID: string;
   releaseID: string;
   releaseVersion: number;
@@ -423,7 +472,7 @@ function AppealRegionSelector({ imageURL, value, onChange }: {
   </section>;
 }
 
-function AppealWindow({ result }: { result: StudentResult }) {
+export function AppealWindow({ result }: { result: StudentResult }) {
   const windowState = result.appeal_window;
   if (windowState.open) {
     return <section className="appeal-notice open"><div><h2>成绩复核</h2><p>本次成绩的复核窗口已开启{windowState.closes_at ? `，截止至 ${formatDateTime(windowState.closes_at)}` : ""}。请在需要复核的题目下提交申请。</p></div><span>锚定第 {result.release_version} 版</span></section>;
@@ -431,7 +480,7 @@ function AppealWindow({ result }: { result: StudentResult }) {
   return <section className="appeal-notice"><div><h2>成绩复核</h2><p>{windowState.closes_at ? `本次成绩的复核窗口已于 ${formatDateTime(windowState.closes_at)} 结束。` : "学校未开放本次成绩的复核窗口。"}</p></div></section>;
 }
 
-function AppealStatus({ examID, revision }: { examID: string; revision: number }) {
+export function AppealStatus({ examID, revision }: { examID: string; revision: number }) {
   const [appeals, setAppeals] = useState<StudentQuestionAppeal[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");

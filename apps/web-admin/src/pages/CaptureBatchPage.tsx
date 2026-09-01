@@ -33,7 +33,7 @@ import {
   UserCheck,
   Workflow,
 } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { getUserErrorMessage } from "../api/client";
 import {
   confirmPageMatch,
   confirmRegistration,
@@ -101,8 +101,7 @@ const contentTypeLabels: Record<string, string> = {
 };
 
 function formatError(error: unknown) {
-  if (error instanceof ApiClientError) return error.message;
-  return error instanceof Error ? error.message : "操作失败，请重试";
+  return getUserErrorMessage(error, "操作失败，请重试");
 }
 
 function statusTone(
@@ -249,7 +248,7 @@ function MatchingWorkspace({
             />
             <Space>
               <StatusTag tone={statusTone(page.status)}>
-                {statusLabels[page.status] ?? page.status}
+                {statusLabels[page.status] ?? "未知状态"}
               </StatusTag>
               {selected.pages.length > 1 && index > 0 && onSplit ? (
                 <Button
@@ -816,7 +815,7 @@ export function CaptureBatchPage({
       width: 110,
       render: (_, item) => (
         <StatusTag tone={statusTone(item.status)}>
-          {statusLabels[item.status] ?? item.status}
+          {statusLabels[item.status] ?? "未知状态"}
         </StatusTag>
       ),
     },
@@ -852,7 +851,7 @@ export function CaptureBatchPage({
       width: 110,
       render: (_, item) => (
         <StatusTag tone={statusTone(item.status)}>
-          {statusLabels[item.status] ?? item.status}
+          {statusLabels[item.status] ?? "未知状态"}
         </StatusTag>
       ),
     },

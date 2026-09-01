@@ -21,7 +21,7 @@ import {
   type TableColumnsType
 } from "antd";
 import { CheckCircle2, ClipboardCheck, FlaskConical, RefreshCw, ShieldAlert, SlidersHorizontal } from "lucide-react";
-import { ApiClientError } from "../../api/client";
+import { ApiClientError, getSafeUserText, getUserErrorMessage } from "../../api/client";
 import {
   addGradingEvaluationObservation,
   addModelCalibrationEvidence,
@@ -109,8 +109,7 @@ const defaultPolicy = (axis: EligibilityAxis): PutAIEligibilityPolicyRequest => 
 });
 
 function asErrorMessage(error: unknown) {
-  if (error instanceof ApiClientError) return error.message || "请求失败，请稍后重试";
-  return error instanceof Error ? error.message : "请求失败，请稍后重试";
+  return getUserErrorMessage(error, "请求失败，请稍后重试");
 }
 
 function percentage(value: number) {
@@ -319,7 +318,7 @@ export function ScoringAssuranceWorkspace({
       evaluationForm.resetFields();
       await loadAssurance();
       setSelectedEvaluationID(response.evaluation_run.id);
-      message.success("离线评测已创建；请先录入对齐的 Gold 或人工裁决观察，再冻结评测。");
+      message.success("离线评测已创建；请先录入对齐的标准卷或人工裁决观察，再冻结评测。");
     } catch (error) {
       message.error(asErrorMessage(error));
     } finally {
@@ -525,7 +524,7 @@ export function ScoringAssuranceWorkspace({
               { key: "formula", label: "公式精确率", children: `${optionalPercentage(qualitySummary.formula_exact_rate.rate)} · n=${qualitySummary.formula_exact_rate.observed_count}` },
               { key: "rubric", label: "Rubric 评分点一致", children: `${optionalPercentage(qualitySummary.mean_rubric_criterion_agreement.mean)} · n=${qualitySummary.mean_rubric_criterion_agreement.observed_count}` },
               { key: "routing", label: "错误转人工召回", children: optionalPercentage(qualitySummary.risky_error_routing_recall) }
-            ]} />{qualitySummary.error_attribution.length ? <List size="small" dataSource={qualitySummary.error_attribution} renderItem={(item) => <List.Item><span>{errorSourceOptions.find((option) => option.value === item.source)?.label ?? item.source}</span><Space size={4}><Tag>n={item.count}</Tag><Tag color={item.human_routing_recall < 1 ? "error" : "success"}>转人工 {percentage(item.human_routing_recall)}</Tag></Space></List.Item>} /> : <Typography.Text type="secondary">尚未发现或归因错误。</Typography.Text>}</> : <Typography.Text type="secondary">录入观察后显示图像、裁切、转录、公式、Rubric 与路由指标。</Typography.Text>}</section>
+            ]} />{qualitySummary.error_attribution.length ? <List size="small" dataSource={qualitySummary.error_attribution} renderItem={(item) => <List.Item><span>{errorSourceOptions.find((option) => option.value === item.source)?.label ?? "其他来源"}</span><Space size={4}><Tag>n={item.count}</Tag><Tag color={item.human_routing_recall < 1 ? "error" : "success"}>转人工 {percentage(item.human_routing_recall)}</Tag></Space></List.Item>} /> : <Typography.Text type="secondary">尚未发现或归因错误。</Typography.Text>}</> : <Typography.Text type="secondary">录入观察后显示图像、裁切、转录、公式、Rubric 与路由指标。</Typography.Text>}</section>
             <section><h4>切片指标</h4>{sliceMetrics.length ? <List size="small" dataSource={sliceMetrics.slice(0, 12)} renderItem={(item) => <List.Item><span>{item.dimension}: {item.value}</span><Space size={4}><Tag>n={item.metrics.sample_count}</Tag><Tag color={item.metrics.severe_error_rate > 0 ? "error" : "success"}>严重误差 {percentage(item.metrics.severe_error_rate)}</Tag></Space></List.Item>} /> : <Typography.Text type="secondary">完成评测后生成按题型、分段和 OCR 质量的切片。</Typography.Text>}</section>
             <section><h4>困难答卷</h4>{responseDifficulty.length ? <List size="small" dataSource={responseDifficulty.slice(0, 8)} renderItem={(item) => <List.Item><span>{item.difficulty_band} · {shortID(item.response_key)}</span><Tag color={item.severe_error ? "error" : "default"}>归一化误差 {percentage(item.normalized_error)}</Tag></List.Item>} /> : <Typography.Text type="secondary">完成评测后显示经验性难例，不代表学生能力。</Typography.Text>}</section>
           </div>
@@ -573,7 +572,7 @@ export function ScoringAssuranceWorkspace({
       </Drawer>
 
       <Drawer title="新建离线评分评测" width={620} open={evaluationDrawerOpen} onClose={() => setEvaluationDrawerOpen(false)} extra={<Button type="primary" loading={actioning} onClick={() => void createEvaluation()}>创建</Button>}>
-        <Alert type="info" showIcon message="仅登记已授权的脱敏数据集引用和版本轴" description="评测不会在浏览器中调用模型，也不接收学生答案、原图或 Gold 解析。" />
+        <Alert type="info" showIcon message="仅登记已授权的脱敏数据集引用和版本轴" description="评测不会在浏览器中调用模型，也不接收学生答案、原图或标准卷解析。" />
         <Form form={evaluationForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="key" label="评测键" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]}><Input placeholder="math-r2-v1" /></Form.Item>
           <Form.Item name="display_name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
@@ -585,11 +584,11 @@ export function ScoringAssuranceWorkspace({
       </Drawer>
 
       <Drawer title="录入对齐观察" width={650} open={observationDrawerOpen} onClose={() => setObservationDrawerOpen(false)} extra={<Button type="primary" loading={actioning} onClick={() => void addObservation()}>保存观察</Button>}>
-        <Alert type="info" showIcon message="只记录脱敏键、指纹、切片标签与对齐分数" description="系统不接收答题文本、图片或 Gold 解析内容。" />
+        <Alert type="info" showIcon message="只记录脱敏键、指纹、切片标签与对齐分数" description="系统不接收答题文本、图片或标准卷解析内容。" />
         <Form form={observationForm} layout="vertical" style={{ marginTop: 16 }} initialValues={{ reference_kind: "gold", ocr_quality: "high", answer_length: "medium", rubric_complexity: "medium", error_source: "none", needs_human_review: false, reference_reviewer_count: 1, reference_adjudicated: false }}>
           <Space.Compact block><Form.Item name="response_key" label="脱敏答卷键" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]} style={{ width: "50%" }}><Input /></Form.Item><Form.Item name="response_fingerprint" label="答卷指纹 SHA-256" rules={[{ required: true, pattern: /^[a-f0-9]{64}$/ }]} style={{ width: "50%" }}><Input /></Form.Item></Space.Compact>
-          <Space.Compact block><Form.Item name="reference_kind" label="参考来源" rules={[{ required: true }]} style={{ width: "33%" }}><Select options={[{ value: "gold", label: "Gold" }, { value: "human_adjudicated", label: "双人裁决" }]} onChange={(value) => observationForm.setFieldsValue(value === "human_adjudicated" ? { reference_reviewer_count: 2, reference_adjudicated: true } : { reference_reviewer_count: 1, reference_adjudicated: false })} /></Form.Item><Form.Item name="subject" label="学科切片" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]} style={{ width: "33%" }}><Input placeholder="mathematics" /></Form.Item><Form.Item name="archetype" label="题型切片" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]} style={{ width: "34%" }}><Input placeholder="structured_steps" /></Form.Item></Space.Compact>
-          <Space.Compact block><Form.Item name="ocr_quality" label="OCR 质量" rules={[{ required: true }]} style={{ width: "33%" }}><Select options={["high", "medium", "low", "unknown"].map((value) => ({ value, label: value }))} /></Form.Item><Form.Item name="answer_length" label="答案长度" rules={[{ required: true }]} style={{ width: "33%" }}><Select options={["short", "medium", "long", "unknown"].map((value) => ({ value, label: value }))} /></Form.Item><Form.Item name="rubric_complexity" label="细则复杂度" rules={[{ required: true }]} style={{ width: "34%" }}><Select options={["low", "medium", "high", "unknown"].map((value) => ({ value, label: value }))} /></Form.Item></Space.Compact>
+          <Space.Compact block><Form.Item name="reference_kind" label="参考来源" rules={[{ required: true }]} style={{ width: "33%" }}><Select options={[{ value: "gold", label: "标准卷" }, { value: "human_adjudicated", label: "双人裁决" }]} onChange={(value) => observationForm.setFieldsValue(value === "human_adjudicated" ? { reference_reviewer_count: 2, reference_adjudicated: true } : { reference_reviewer_count: 1, reference_adjudicated: false })} /></Form.Item><Form.Item name="subject" label="学科切片" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]} style={{ width: "33%" }}><Input placeholder="mathematics" /></Form.Item><Form.Item name="archetype" label="题型切片" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,127}$/ }]} style={{ width: "34%" }}><Input placeholder="structured_steps" /></Form.Item></Space.Compact>
+          <Space.Compact block><Form.Item name="ocr_quality" label="OCR 质量" rules={[{ required: true }]} style={{ width: "33%" }}><Select options={[{ value: "high", label: "高" }, { value: "medium", label: "中" }, { value: "low", label: "低" }, { value: "unknown", label: "未知" }]} /></Form.Item><Form.Item name="answer_length" label="答案长度" rules={[{ required: true }]} style={{ width: "33%" }}><Select options={[{ value: "short", label: "短" }, { value: "medium", label: "中" }, { value: "long", label: "长" }, { value: "unknown", label: "未知" }]} /></Form.Item><Form.Item name="rubric_complexity" label="细则复杂度" rules={[{ required: true }]} style={{ width: "34%" }}><Select options={[{ value: "low", label: "低" }, { value: "medium", label: "中" }, { value: "high", label: "高" }, { value: "unknown", label: "未知" }]} /></Form.Item></Space.Compact>
           <Space.Compact block><Form.Item name="reference_score" label="参考分" rules={[{ required: true }]} style={{ width: "33%" }}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item><Form.Item name="model_score" label="模型分" rules={[{ required: true }]} style={{ width: "33%" }}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item><Form.Item name="max_score" label="满分" rules={[{ required: true }]} style={{ width: "34%" }}><InputNumber min={0.1} style={{ width: "100%" }} /></Form.Item></Space.Compact>
           <Divider orientation="left">链路证据（按实际采集填写）</Divider>
           <Space.Compact block><Form.Item name="page_match_correct" label="页面匹配正确" style={{ width: "33%" }}><Select allowClear options={[{ value: true, label: "正确" }, { value: false, label: "错误" }]} /></Form.Item><Form.Item name="crop_iou" label="Crop IoU" style={{ width: "33%" }}><InputNumber min={0} max={1} step={0.01} style={{ width: "100%" }} /></Form.Item><Form.Item name="transcription_cer" label="转录 CER" style={{ width: "34%" }}><InputNumber min={0} max={1} step={0.01} style={{ width: "100%" }} /></Form.Item></Space.Compact>
@@ -642,5 +641,5 @@ function DecisionLookup({ canRead }: { canRead: boolean }) {
     }
   };
 
-  return <section className="model-assurance-decision"><Divider orientation="left">运行准入审计</Divider><Space.Compact style={{ maxWidth: 560, width: "100%" }}><Input value={runItemID} onChange={(event) => setRunItemID(event.target.value)} placeholder="输入 AI 评分运行项编号" /><Button loading={loading} onClick={() => void load()} disabled={!runItemID.trim()}>查看决策</Button></Space.Compact>{decision ? <Descriptions size="small" column={2} style={{ marginTop: 12 }} items={[{ key: "decision", label: "决策", children: decision.decision }, { key: "external", label: "外部调用", children: decision.external_ai_allowed ? <Tag color="success">允许</Tag> : <Tag color="warning">禁止</Tag> }, { key: "reason", label: "原因", span: 2, children: decision.reasons.map((item) => item.message).join("；") || "无额外阻断原因" }]} /> : null}</section>;
+  return <section className="model-assurance-decision"><Divider orientation="left">运行准入审计</Divider><Space.Compact style={{ maxWidth: 560, width: "100%" }}><Input value={runItemID} onChange={(event) => setRunItemID(event.target.value)} placeholder="输入 AI 评分运行项编号" /><Button loading={loading} onClick={() => void load()} disabled={!runItemID.trim()}>查看决策</Button></Space.Compact>{decision ? <Descriptions size="small" column={2} style={{ marginTop: 12 }} items={[{ key: "decision", label: "评分方式", children: scoringModeOptions.find((option) => option.value === decision.decision)?.label ?? "未知方式" }, { key: "external", label: "外部调用", children: decision.external_ai_allowed ? <Tag color="success">允许</Tag> : <Tag color="warning">禁止</Tag> }, { key: "reason", label: "原因", span: 2, children: decision.reasons.map((item) => getSafeUserText(item.message, "运行条件未满足")).join("；") || "无额外阻断原因" }]} /> : null}</section>;
 }

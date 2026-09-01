@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { App, Button, Form, Input, List, Popconfirm, Tag } from "antd";
 import { KeyRound, LogOut, RefreshCw, Smartphone } from "lucide-react";
+import { getUserErrorMessage } from "../api/client";
 import { changePassword, listSessions, logoutAll, revokeSession, type DeviceSession } from "../api/auth";
 import { ErrorState, LoadingState } from "../components/PageState";
 
@@ -31,7 +32,7 @@ export function SessionManagementPage({ onLoggedOut }: { onLoggedOut: () => void
     try {
       setSessions((await listSessions()).sessions);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "登录设备加载失败");
+      setError(getUserErrorMessage(loadError, "登录设备加载失败"));
     } finally {
       setLoading(false);
     }
@@ -50,7 +51,7 @@ export function SessionManagementPage({ onLoggedOut }: { onLoggedOut: () => void
       setSessions((current) => current.filter((item) => item.id !== session.id));
       message.success("该设备已退出");
     } catch (actionError) {
-      message.error(actionError instanceof Error ? actionError.message : "退出设备失败");
+      message.error(getUserErrorMessage(actionError, "退出设备失败"));
     } finally {
       setActioning(undefined);
     }
@@ -62,7 +63,7 @@ export function SessionManagementPage({ onLoggedOut }: { onLoggedOut: () => void
       await logoutAll();
       onLoggedOut();
     } catch (actionError) {
-      message.error(actionError instanceof Error ? actionError.message : "退出全部设备失败");
+      message.error(getUserErrorMessage(actionError, "退出全部设备失败"));
     } finally {
       setActioning(undefined);
     }
@@ -76,7 +77,7 @@ export function SessionManagementPage({ onLoggedOut }: { onLoggedOut: () => void
       message.success("密码已更新，请重新登录");
       onLoggedOut();
     } catch (actionError) {
-      message.error(actionError instanceof Error ? actionError.message : "修改密码失败");
+      message.error(getUserErrorMessage(actionError, "修改密码失败"));
     } finally {
       setActioning(undefined);
     }

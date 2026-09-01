@@ -105,6 +105,13 @@ func (s *Service) StudentQuestionImage(ctx context.Context, tenantID, examID, st
 	return s.store.StudentQuestionImage(ctx, tenantID, examID, studentID, questionID)
 }
 
+func (s *Service) StudentPaperPageImage(ctx context.Context, tenantID, examID, studentID, questionID string, highScore bool) (StudentQuestionImageSource, error) {
+	if !validIDs(tenantID, examID, studentID, questionID) {
+		return StudentQuestionImageSource{}, ErrInvalidInput
+	}
+	return s.store.StudentPaperPageImage(ctx, tenantID, examID, studentID, questionID, highScore)
+}
+
 func normalizeCreate(input *CreateInput) bool {
 	input.Source = strings.ToLower(strings.TrimSpace(input.Source))
 	input.Reason = strings.TrimSpace(input.Reason)

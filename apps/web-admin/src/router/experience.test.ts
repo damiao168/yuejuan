@@ -36,9 +36,21 @@ describe("role-specific product experience", () => {
     expect(defaultExperience(grader)).toBe("teacher");
   });
 
+	it("never promotes a business identity to admin from a permission", () => {
+		expect(availableExperiences(user(["teacher"], ["exam:manage"]))).toEqual(["teacher"]);
+	});
+
   it("preserves the canonical path and query when changing product experience", () => {
     expect(canonicalPathFromPath("/teacher/grading?exam_id=exam-1")).toBe("/grading");
     expect(pathForExperience("/teacher/grading?exam_id=exam-1", "admin"))
       .toBe("/admin/grading?exam_id=exam-1");
+  });
+
+  it("projects auditor and student identities into isolated read-only entries", () => {
+    expect(availableExperiences(user(["auditor"], ["audit:read"]))).toEqual(["auditor"]);
+    expect(defaultExperience(user(["auditor"], ["audit:read"]))).toBe("auditor");
+    expect(pathForExperience("/dashboard", "auditor")).toBe("/auditor/dashboard");
+    expect(availableExperiences(user(["student"], ["student:read"]))).toEqual(["student"]);
+    expect(pathForExperience("/dashboard", "student")).toBe("/student/dashboard");
   });
 });

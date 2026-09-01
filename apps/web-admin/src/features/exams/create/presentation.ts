@@ -14,13 +14,13 @@ export const publishPolicyOptions = [
 ];
 
 export function examTypeLabel(value: string) {
-  return examTypeOptions.find((item) => item.value === value)?.label ?? value;
+  return examTypeOptions.find((item) => item.value === value)?.label ?? "其他考试类型";
 }
 
 export function gradingLabel(value: string) {
-  return gradingPresentation[value as keyof typeof gradingPresentation]?.title ?? value;
+  return gradingPresentation[value as keyof typeof gradingPresentation]?.title ?? "其他阅卷方式";
 }
 
 export function publishPolicyLabel(value: string) {
-  return publishPolicyOptions.find((item) => item.value === value)?.label ?? value;
+  return publishPolicyOptions.find((item) => item.value === value)?.label ?? "其他发布方式";
 }

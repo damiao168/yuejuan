@@ -17,6 +17,15 @@ type organizationSummaryStub struct {
 	err        error
 }
 
+type activityStoreStub struct {
+	items []RecentActivity
+	err   error
+}
+
+func (s activityStoreStub) ListRecent(_ context.Context, _ string, _ auth.AccessScope, _ int) ([]RecentActivity, error) {
+	return append([]RecentActivity(nil), s.items...), s.err
+}
+
 func (s organizationSummaryStub) DashboardOrganizationSummary(_ context.Context, _ string, _ auth.AccessScope) (OrganizationStatistics, error) {
 	return s.statistics, s.err
 }
@@ -90,5 +99,41 @@ func TestPlatformAdminCannotReadSchoolDashboard(t *testing.T) {
 	})
 	if _, err := service.Summary(context.Background(), auth.User{TenantID: auth.PlatformTenantID, Roles: []string{"platform_admin"}}, auth.AccessScope{TenantID: auth.PlatformTenantID, IsPlatform: true}); err == nil {
 		t.Fatal("platform administrator must not enter a school dashboard")
+	}
+}
+
+func TestSchoolScopedSummaryDoesNotTurnUnavailableActivityIntoWarning(t *testing.T) {
+	service := NewService(Dependencies{
+		Exams: exam.NewMemoryStore(), Submissions: submission.NewMemoryStore(),
+		Reviews: review.NewMemoryStore(), Audits: auth.NewMemoryStore(), Organizations: organizationSummaryStub{},
+	})
+	summary, err := service.Summary(context.Background(), auth.User{
+		ID: "school-admin", TenantID: "tenant-school", Roles: []string{"school_admin"},
+	}, auth.AccessScope{TenantID: "tenant-school", ActorID: "school-admin", SchoolIDs: []string{"school-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, warning := range summary.Warnings {
+		if warning == "最近动态暂时无法加载" {
+			t.Fatal("school-scoped activity projection must stay silent until it is safely available")
+		}
+	}
+}
+
+func TestSchoolScopedSummaryUsesKeyProgressProjection(t *testing.T) {
+	want := RecentActivity{ID: "activity-1", Action: "exam.created", Title: "已创建考试", CreatedAt: time.Now().UTC()}
+	service := NewService(Dependencies{
+		Exams: exam.NewMemoryStore(), Submissions: submission.NewMemoryStore(),
+		Reviews: review.NewMemoryStore(), Audits: auth.NewMemoryStore(), Organizations: organizationSummaryStub{},
+		Activities: activityStoreStub{items: []RecentActivity{want}},
+	})
+	summary, err := service.Summary(context.Background(), auth.User{
+		ID: "school-admin", TenantID: "tenant-school", Roles: []string{"school_admin"},
+	}, auth.AccessScope{TenantID: "tenant-school", ActorID: "school-admin", SchoolIDs: []string{"school-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.RecentActivities) != 1 || summary.RecentActivities[0].ID != want.ID {
+		t.Fatalf("expected projected key progress, got %#v", summary.RecentActivities)
 	}
 }

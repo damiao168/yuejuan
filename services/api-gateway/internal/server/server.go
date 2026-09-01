@@ -207,10 +207,11 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	idempotencyStore := modules.Idempotency
 
 	authenticate := auth.AuthMiddleware(authStore, auth.HandlerOptions{CookieName: cfg.Auth.SessionCookieName})
+	resourceResolver, _ := authStore.(auth.ResourceBoundaryResolver)
 	environment := strings.ToLower(strings.TrimSpace(cfg.Service.Environment))
 	idempotent := idempotency.Middleware(idempotencyStore, idempotency.Options{Enforce: environment == "production" || environment == "staging"})
 	requireAuth := func(handler http.Handler) http.Handler {
-		return authenticate(idempotent(handler))
+		return authenticate(idempotent(auth.RequireRequestResourceBoundary(resourceResolver)(handler)))
 	}
 	requireOrgManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("org:manage")(handler))
@@ -228,7 +229,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 		return requireAuth(auth.RequireAnyPermission("exam:manage", "review:manage", "review:work")(handler))
 	}
 	requireDashboardRead := func(handler http.HandlerFunc) http.Handler {
-		return requireAuth(auth.RequirePermission("exam:manage")(handler))
+		return requireAuth(auth.RequirePermission("dashboard:read")(handler))
 	}
 	requireFileManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("file:manage")(handler))
@@ -347,7 +348,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 		return requireAuth(auth.RequireAnyPermission("ocr:manage", "orchestrator:manage", "system:read")(handler))
 	}
 	withScopedExam := func(handler http.HandlerFunc) http.HandlerFunc {
-		return auth.RequireScopedResource("exam", "examId")(handler).ServeHTTP
+		return handler
 	}
 	withWorkerTaskScope := func(handler http.HandlerFunc) http.HandlerFunc {
 		return workerruntime.TaskScope(workerRuntimeStore)(handler).ServeHTTP
@@ -668,7 +669,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	mux.Handle("GET /api/v1/exams/{examId}/reports/classes", requireReportRead(withScopedExam(reportHandler.Classes)))
 	mux.Handle("GET /api/v1/exams/{examId}/reports/questions", requireReportRead(withScopedExam(reportHandler.Questions)))
 	mux.Handle("GET /api/v1/exams/{examId}/reports/grading-quality", requireReportRead(withScopedExam(reportHandler.GradingQuality)))
-	mux.Handle("GET /api/v1/students/{studentId}/reports/{examId}", requireAuth(auth.RequireScopedResource("exam", "examId")(http.HandlerFunc(reportHandler.StudentReport))))
+	mux.Handle("GET /api/v1/students/{studentId}/reports/{examId}", requireAuth(http.HandlerFunc(reportHandler.StudentReport)))
 	mux.Handle("POST /api/v1/exams/{examId}/reports/export", requireReportExport(withScopedExam(reportHandler.Export)))
 	// Gold sets, answer-group reference cases, Seed observations and drift
 	// evidence are quality-management facts.  A grader receives only the

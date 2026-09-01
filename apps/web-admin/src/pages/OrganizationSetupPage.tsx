@@ -16,6 +16,7 @@ import {
 import type { TableColumnsType } from "antd";
 import { ArrowRight, CheckCircle2, Download, FileUp, RefreshCw } from "lucide-react";
 import Papa from "papaparse";
+import { getUserErrorMessage } from "../api/client";
 import { createExam, listExams } from "../api/exams";
 import {
   createClass,
@@ -60,7 +61,7 @@ interface ImportRow {
 const setupSteps = ["机构信息", "学年与年级", "班级", "学生", "人员账号", "第一场考试", "完成"];
 
 function messageOf(error: unknown) {
-  return error instanceof Error ? error.message : "请求失败";
+  return getUserErrorMessage(error, "请求失败");
 }
 
 function downloadCSV(filename: string, rows: Array<Record<string, string | number>>) {
@@ -197,7 +198,7 @@ export function OrganizationSetupPage({ onNavigate }: { onNavigate: (path: strin
       name: choose("name", "姓名"),
       classCode: choose("class_code", "班级代码", "班级")
     });
-    setImportErrors(parsed.errors.map((item) => ({ row: (item.row ?? 0) + 2, message: item.message })));
+    setImportErrors(parsed.errors.map((item) => ({ row: (item.row ?? 0) + 2, message: "该行 CSV 格式有误，请检查列数和引号" })));
     return false;
   };
 
@@ -309,7 +310,7 @@ export function OrganizationSetupPage({ onNavigate }: { onNavigate: (path: strin
                 </Space>
               </>
             ) : data.students.length ? <Alert type="success" showIcon message={`已导入 ${data.students.length} 名学生，可继续或追加导入。`} /> : null}
-            {importErrors.length ? <Alert type="warning" showIcon message={`${importErrors.length} 行未导入`} description={<Button type="link" onClick={() => downloadCSV("服务端导入错误.csv", importErrors.map((item) => ({ row: item.row, error: item.message })))}>下载服务端错误行</Button>} /> : null}
+            {importErrors.length ? <Alert type="warning" showIcon message={`${importErrors.length} 行未导入`} description={<Button type="link" onClick={() => downloadCSV("导入错误行.csv", importErrors.map((item) => ({ row: item.row, error: "该行未能导入，请检查必填字段和数据格式" })))}>下载错误行</Button>} /> : null}
             {data.students.length ? <Button className="step-next" onClick={() => setStep(4)}>继续 <ArrowRight size={16} /></Button> : null}
           </div>
         );

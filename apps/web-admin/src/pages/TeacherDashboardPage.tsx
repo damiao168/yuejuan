@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Button, Progress } from "antd";
 import { ArrowRight, BookOpenCheck, Gavel, RefreshCw } from "lucide-react";
+import { getSafeUserText, getUserErrorMessage } from "../api/client";
 import { listArbitrationTasks, listReviewTasks, type ArbitrationTask, type ReviewTask } from "../api/review";
 import { hasAnyPermission, type SessionUser } from "../auth/session";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
@@ -78,7 +79,7 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
     try {
       setData(await fetchTeacherHome(user));
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "教师工作台加载失败");
+      setError(getUserErrorMessage(loadError, "教师工作台加载失败"));
     } finally {
       setLoading(false);
     }
@@ -132,7 +133,7 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
       </section>
 
       {error ? <Alert type="error" showIcon message="刷新失败" description={error} /> : null}
-      {data?.warnings.map((warning) => <Alert type="warning" showIcon key={warning} message={warning} />)}
+      {data?.warnings.map((warning) => <Alert type="warning" showIcon key={warning} message={getSafeUserText(warning, "部分工作台数据暂时不可用")} />)}
 
       <section className="teacher-summary" aria-label="我的工作摘要">
         <div><span>待阅卷</span><strong>{activeReviews.length}</strong></div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiClientError } from "../../../api/client";
+import { ApiClientError, getUserErrorMessage } from "../../../api/client";
 import {
   createReviewAnnotation,
   createReviewCommentTemplate,
@@ -27,7 +27,7 @@ export class AnnotationRevisionConflict extends Error {
 }
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "操作失败，请稍后重试";
+  return getUserErrorMessage(error, "操作失败，请稍后重试");
 }
 
 function isRevisionConflict(error: unknown) {

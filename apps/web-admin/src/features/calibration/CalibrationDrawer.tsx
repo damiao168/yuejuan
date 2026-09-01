@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Descriptions, Divider, Drawer, Empty, Form, Input, InputNumber, List, Progress, Space, Tag } from "antd";
-import { ApiClientError, apiClient } from "../../api/client";
+import { apiClient, getUserErrorMessage } from "../../api/client";
 import {
   createCalibrationSession,
   getCalibrationPolicy,
@@ -107,7 +107,7 @@ export function CalibrationDrawer({
       policyForm.setFieldValue("expected_revision", result.policy.revision);
       message.success("校准阈值已保存");
     } catch (error) {
-      if (error instanceof ApiClientError) message.error(error.message);
+      message.error(getUserErrorMessage(error, "校准阈值保存失败"));
     } finally {
       setActing(false);
     }
@@ -121,7 +121,7 @@ export function CalibrationDrawer({
       setAttempts([]);
       setScore(emptyScore);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "无法开始校准");
+      message.error(getUserErrorMessage(error, "无法开始校准"));
     } finally {
       setActing(false);
     }
@@ -145,7 +145,7 @@ export function CalibrationDrawer({
       setScore(emptyScore);
       if (result.qualification?.status === "qualified") onQualified?.();
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "本份校准样本提交失败");
+      message.error(getUserErrorMessage(error, "本份校准样本提交失败"));
     } finally {
       setActing(false);
     }

@@ -38,7 +38,7 @@ export function SubjectToolPanel({
         <div>
           <h2>{tool.label}</h2>
           <p>
-            {subjectLabels[context.subject_tool_hints.subject_code] ?? context.subject_tool_hints.subject_code}
+            {subjectLabels[context.subject_tool_hints.subject_code] ?? "其他学科"}
             {` · ${context.subject_tool_hints.archetype_code}`}
           </p>
         </div>

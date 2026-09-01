@@ -65,7 +65,7 @@ func (s *MemoryStore) CreatePaperImport(_ context.Context, tenantID, examID, use
 		return PaperImportJob{}, ErrInvalidInput
 	}
 	now := time.Now().UTC()
-	job := PaperImportJob{ID: s.id("paper-import"), TenantID: tenantID, ExamID: examID, ExamPaperID: input.ExamPaperID, PaperFileAssetID: input.PaperFileAssetID, AnswerFileAssetID: input.AnswerFileAssetID, Status: "processing", Subject: input.Subject, Questions: []PaperImportDraftQuestion{}, Issues: []string{}, QuestionCandidates: []QuestionCandidate{}, AnswerCandidates: []AnswerCandidate{}, SolutionCandidates: []SolutionCandidate{}, StructuredIssues: []PaperImportIssue{}, CreatedBy: userID, CreatedAt: now, UpdatedAt: now}
+	job := PaperImportJob{ID: s.id("paper-import"), TenantID: tenantID, ExamID: examID, ExamPaperID: input.ExamPaperID, PaperFileAssetID: input.PaperFileAssetID, AnswerFileAssetID: input.AnswerFileAssetID, Status: "processing", Subject: input.Subject, Questions: []PaperImportDraftQuestion{}, Issues: []string{}, QuestionCandidates: []QuestionCandidate{}, AnswerCandidates: []AnswerCandidate{}, SolutionCandidates: []SolutionCandidate{}, RubricCandidates: []RubricCandidate{}, StructuredIssues: []PaperImportIssue{}, CreatedBy: userID, CreatedAt: now, UpdatedAt: now}
 	seenAssets, seenIndexes := map[string]bool{}, map[int]bool{}
 	for _, source := range sources {
 		if source.FileAssetID == "" || source.DocumentIndex < 0 || seenAssets[source.FileAssetID] || seenIndexes[source.DocumentIndex] || !validPaperImportRole(source.RoleHint, true) {
@@ -85,7 +85,7 @@ func (s *MemoryStore) AddPaperImportSources(_ context.Context, tenantID, id, _ s
 	if !ok || job.TenantID != tenantID {
 		return PaperImportJob{}, ErrNotFound
 	}
-	if job.Status == "applied" || job.Status == "processing" || len(input.Sources) == 0 {
+	if job.Status == "applied" {
 		return PaperImportJob{}, ErrConflict
 	}
 	seen := map[string]bool{}
@@ -114,7 +114,7 @@ func (s *MemoryStore) ReplacePaperImportSources(_ context.Context, tenantID, id,
 	if !ok || job.TenantID != tenantID {
 		return PaperImportJob{}, ErrNotFound
 	}
-	if job.Status == "applied" || job.Status == "processing" || len(input.Sources) == 0 {
+	if job.Status == "applied" {
 		return PaperImportJob{}, ErrConflict
 	}
 	current := map[string]PaperImportSource{}
@@ -140,20 +140,29 @@ func (s *MemoryStore) ReplacePaperImportSources(_ context.Context, tenantID, id,
 	}
 	sort.Slice(replaced, func(i, j int) bool { return replaced[i].DocumentIndex < replaced[j].DocumentIndex })
 	job.Sources = replaced
-	job.Status, job.UpdatedAt = "processing", now
+	if len(replaced) == 0 {
+		job.Status = "failed"
+		job.ErrorCode = "paper_import_no_sources"
+		job.Issues = []string{"已删除全部考试资料，请重新上传正确的资料"}
+	} else {
+		job.Status = "processing"
+		job.ErrorCode = ""
+		job.Issues = []string{}
+	}
+	job.UpdatedAt = now
 	s.imports[id] = job
 	return job, nil
 }
 
-func (s *MemoryStore) CompletePaperImportCandidates(_ context.Context, tenantID, id string, detected []PaperImportDetectedDocument, questions []QuestionCandidate, answers []AnswerCandidate, solutions []SolutionCandidate, issues []PaperImportIssue) (PaperImportJob, error) {
+func (s *MemoryStore) CompletePaperImportCandidates(_ context.Context, tenantID, id string, detected []PaperImportDetectedDocument, questions []QuestionCandidate, answers []AnswerCandidate, solutions []SolutionCandidate, rubrics []RubricCandidate, issues []PaperImportIssue) (PaperImportJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job, ok := s.imports[id]
 	if !ok || job.TenantID != tenantID {
 		return PaperImportJob{}, ErrNotFound
 	}
-	job.QuestionCandidates, job.AnswerCandidates, job.SolutionCandidates = questions, answers, solutions
-	fresh, structured := reconcilePaperImportCandidates(questions, answers, solutions, appendDetectedRoleIssues(issues, detected))
+	job.QuestionCandidates, job.AnswerCandidates, job.SolutionCandidates, job.RubricCandidates = questions, answers, solutions, rubrics
+	fresh, structured := reconcilePaperImportCandidates(questions, answers, solutions, rubrics, appendDetectedRoleIssues(issues, detected))
 	structured = appendHumanConfirmationConflicts(structured, fresh, job.Questions)
 	job.Questions = preserveHumanConfirmedDrafts(fresh, job.Questions)
 	job.StructuredIssues = issuesAfterHumanReview(structured, job.Questions, false)
@@ -278,6 +287,12 @@ func (s *MemoryStore) ApplyPaperImport(_ context.Context, tenantID, id, userID s
 		if draft.Rubric != nil && (!scoreEqual(SumRubricPoints(draft.Rubric.Points), draft.Score) || !scoreEqual(draft.Rubric.MaxScore, draft.Score)) {
 			return PaperImportJob{}, ErrRubricMismatch
 		}
+		if draft.Rubric != nil && draft.Rubric.Status == "" {
+			draft.Rubric.Status = "draft"
+		}
+		if draft.Rubric != nil && (!IsValidRubricStatus(draft.Rubric.Status) || !ValidRubricEvidenceRequirements(draft.Rubric.Points)) {
+			return PaperImportJob{}, ErrInvalidInput
+		}
 		if existing > 0 {
 			if draft.MatchedQuestionID == "" || draft.MatchStatus == "extra" || draft.MatchStatus == "ambiguous" {
 				continue
@@ -299,7 +314,14 @@ func (s *MemoryStore) ApplyPaperImport(_ context.Context, tenantID, id, userID s
 					if rubrics := s.rubrics[q.ID]; len(rubrics) > 0 && rubrics[len(rubrics)-1].Status == "locked" {
 						return PaperImportJob{}, ErrRubricLocked
 					}
-					r := Rubric{ID: s.id("rubric"), QuestionID: q.ID, Version: fmt.Sprintf("v%d", len(s.rubrics[q.ID])+1), Status: "draft", MaxScore: draft.Rubric.MaxScore, Points: draft.Rubric.Points, Deductions: draft.Rubric.Deductions, Examples: draft.Rubric.Examples, PaperImportID: job.ID, PaperImportSourceRefs: append([]PaperImportSourceRef{}, draft.SourceRefs...)}
+					status := draft.Rubric.Status
+					if status != "locked" {
+						status = "draft"
+					}
+					if status == "locked" && !stringSet(draft.HumanConfirmedFields)["rubric"] {
+						return PaperImportJob{}, ErrInvalidInput
+					}
+					r := Rubric{ID: s.id("rubric"), QuestionID: q.ID, Version: fmt.Sprintf("v%d", len(s.rubrics[q.ID])+1), Status: status, MaxScore: draft.Rubric.MaxScore, Points: draft.Rubric.Points, Deductions: draft.Rubric.Deductions, Examples: draft.Rubric.Examples, PaperImportID: job.ID, PaperImportCandidateID: draft.RubricCandidateID, PaperImportSourceRefs: append([]PaperImportSourceRef{}, draft.SourceRefs...)}
 					s.rubrics[q.ID] = append(s.rubrics[q.ID], r)
 				}
 			}
@@ -316,7 +338,14 @@ func (s *MemoryStore) ApplyPaperImport(_ context.Context, tenantID, id, userID s
 		}
 		s.questions[qid] = q
 		if draft.Rubric != nil {
-			r := Rubric{ID: s.id("rubric"), QuestionID: qid, Version: "v1", Status: "draft", MaxScore: draft.Rubric.MaxScore, Points: draft.Rubric.Points, Deductions: draft.Rubric.Deductions, Examples: draft.Rubric.Examples, PaperImportID: job.ID, PaperImportSourceRefs: append([]PaperImportSourceRef{}, draft.SourceRefs...)}
+			status := draft.Rubric.Status
+			if status != "locked" {
+				status = "draft"
+			}
+			if status == "locked" && !stringSet(draft.HumanConfirmedFields)["rubric"] {
+				return PaperImportJob{}, ErrInvalidInput
+			}
+			r := Rubric{ID: s.id("rubric"), QuestionID: qid, Version: "v1", Status: status, MaxScore: draft.Rubric.MaxScore, Points: draft.Rubric.Points, Deductions: draft.Rubric.Deductions, Examples: draft.Rubric.Examples, PaperImportID: job.ID, PaperImportCandidateID: draft.RubricCandidateID, PaperImportSourceRefs: append([]PaperImportSourceRef{}, draft.SourceRefs...)}
 			s.rubrics[qid] = []Rubric{r}
 		}
 		draft.MatchedQuestionID = qid
@@ -576,17 +605,17 @@ func (s *MemoryStore) ValidateConfig(_ context.Context, tenantID string, examID 
 		questionCount++
 		total += question.Score
 		if question.QuestionType == "" || question.QuestionNo == "" {
-			result.Issues = append(result.Issues, ValidationIssue{Code: "question_incomplete", Message: "question is missing question_no or question_type"})
+			result.Issues = append(result.Issues, ValidationIssue{Code: "question_incomplete", Message: "题目缺少题号或题型"})
 		}
 		if question.AnswerArea == nil {
-			result.Issues = append(result.Issues, ValidationIssue{Code: "answer_area_missing", Message: "question " + question.QuestionNo + " is missing answer_area"})
+			result.Issues = append(result.Issues, ValidationIssue{Code: "answer_area_missing", Message: "第" + question.QuestionNo + "题缺少答题区域"})
 		}
 	}
 	if questionCount == 0 {
-		result.Issues = append(result.Issues, ValidationIssue{Code: "no_questions", Message: "exam has no questions"})
+		result.Issues = append(result.Issues, ValidationIssue{Code: "no_questions", Message: "试卷尚未配置题目"})
 	}
 	if expected, ok := s.examTotals[examID]; ok && !scoreEqual(total, expected) {
-		result.Issues = append(result.Issues, ValidationIssue{Code: "total_score_mismatch", Message: fmt.Sprintf("question total %.2f does not equal exam total %.2f", total, expected)})
+		result.Issues = append(result.Issues, ValidationIssue{Code: "total_score_mismatch", Message: fmt.Sprintf("题目总分 %.2f 分与考试总分 %.2f 分不一致", total, expected)})
 	}
 	result.Valid = len(result.Issues) == 0
 	return result, nil

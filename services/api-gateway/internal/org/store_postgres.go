@@ -398,8 +398,9 @@ LEFT JOIN LATERAL (
 WHERE st.tenant_id=$1 AND st.deleted_at IS NULL
   AND ($2='' OR current_enrollment.class_id::text=$2)
   AND ($3='' OR st.student_no ILIKE '%'||$3||'%' OR st.name ILIKE '%'||$3||'%')
-  AND ($5='' OR st.student_no>$4 OR (st.student_no=$4 AND st.id::text>$5))`
-	args := []any{tenantID, filter.ClassID, filter.Query, filter.CursorStudentNo, filter.CursorID}
+  AND ($5='' OR st.student_no>$4 OR (st.student_no=$4 AND st.id::text>$5))
+  AND (NOT $6 OR current_enrollment.class_id::text = ANY(string_to_array($7, ',')) OR ($8<>'' AND st.id::text=$8))`
+	args := []any{tenantID, filter.ClassID, filter.Query, filter.CursorStudentNo, filter.CursorID, filter.RestrictClasses, strings.Join(filter.ClassIDs, ","), filter.StudentID}
 	if len(filter.StudentIDs) > 0 {
 		placeholders := make([]string, len(filter.StudentIDs))
 		for index, id := range filter.StudentIDs {
@@ -436,6 +437,25 @@ func (s *PostgresStore) UpdateStudentStatus(ctx context.Context, tenantID string
 }
 
 func (s *PostgresStore) BindTeacherClass(ctx context.Context, tenantID string, teacherID string, classID string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO teacher_class (tenant_id, teacher_id, class_id) VALUES ($1, $2, $3) ON CONFLICT (tenant_id, teacher_id, class_id) DO NOTHING`, tenantID, teacherID, classID)
-	return err
+	result, err := s.db.ExecContext(ctx, `
+INSERT INTO teacher_class (tenant_id, teacher_id, class_id)
+SELECT $1::uuid,u.id,c.id
+FROM app_user u
+JOIN user_role ur ON ur.tenant_id=u.tenant_id AND ur.user_id=u.id AND ur.deleted_at IS NULL
+JOIN role r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id AND r.code='teacher' AND r.deleted_at IS NULL
+JOIN school_class c ON c.tenant_id=u.tenant_id AND c.id=$3::uuid AND c.deleted_at IS NULL
+WHERE u.tenant_id=$1::uuid AND u.id=$2::uuid AND u.deleted_at IS NULL AND u.status='active'
+ON CONFLICT (tenant_id, teacher_id, class_id) DO UPDATE SET deleted_at=NULL,updated_at=now()
+`, tenantID, teacherID, classID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrInvalidTeacherBinding
+	}
+	return nil
 }

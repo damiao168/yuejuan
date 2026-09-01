@@ -10,7 +10,7 @@ import {
   type PublishedQuestionAppeal,
   type PublishedQuestionAppealContext
 } from "../api/questionAppeals";
-import { ApiClientError } from "../api/client";
+import { getUserErrorMessage } from "../api/client";
 import { listManagedUsers, type ManagedUser } from "../api/users";
 
 const statusLabels: Record<string, string> = {
@@ -22,7 +22,7 @@ const reasonLabels: Record<string, string> = {
 };
 
 function messageFor(error: unknown) {
-  return error instanceof ApiClientError ? error.message : "操作失败，请稍后重试";
+  return getUserErrorMessage(error, "操作失败，请稍后重试");
 }
 
 function formatScore(value: number) {
@@ -124,7 +124,7 @@ export function QuestionAppealWorkspace({ examId = "", canManage, canWork, onCha
     <header className="question-appeal-heading"><div><h2 id="question-appeal-title">题目申诉</h2><p>只处理已发布版本中的题目异议；需要更正时进入题目级复评，再生成新的成绩版本。</p></div><Button icon={<RotateCcw size={15} />} loading={loading} onClick={() => void refresh()}>刷新</Button></header>
     {error ? <Alert type="error" showIcon message="题目申诉暂时无法加载" description={error} /> : null}
     {!loading && appeals.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前考试没有题目申诉" /> : null}
-    {appeals.length > 0 ? <List size="small" className="question-appeal-list" dataSource={appeals} renderItem={(appeal) => <List.Item className={appeal.id === selectedId ? "is-selected" : ""} actions={[<Button key="open" size="small" onClick={() => setSelectedId(appeal.id)}>查看</Button>]}><div><strong>{appeal.question_no} · {reasonLabels[appeal.reason_code] ?? appeal.reason_code}</strong><span>原分 {formatScore(appeal.source_score)} / {formatScore(appeal.source_max_score)} · 发布 V{appeal.source_release_version}</span></div><Tag color={appeal.status === "submitted" ? "orange" : appeal.status === "resolved" ? "green" : "blue"}>{statusLabels[appeal.status] ?? appeal.status}</Tag></List.Item>} /> : null}
+    {appeals.length > 0 ? <List size="small" className="question-appeal-list" dataSource={appeals} renderItem={(appeal) => <List.Item className={appeal.id === selectedId ? "is-selected" : ""} actions={[<Button key="open" size="small" onClick={() => setSelectedId(appeal.id)}>查看</Button>]}><div><strong>{appeal.question_no} · {reasonLabels[appeal.reason_code] ?? "其他原因"}</strong><span>原分 {formatScore(appeal.source_score)} / {formatScore(appeal.source_max_score)} · 发布 V{appeal.source_release_version}</span></div><Tag color={appeal.status === "submitted" ? "orange" : appeal.status === "resolved" ? "green" : "blue"}>{statusLabels[appeal.status] ?? "处理中"}</Tag></List.Item>} /> : null}
     <Drawer width={760} open={Boolean(selectedId)} title={selected ? `${selected.question_no} 题目申诉` : "题目申诉"} onClose={() => setSelectedId("")}>
       {contextError ? <Alert type="error" showIcon message="无法处理此申诉" description={contextError} /> : null}
       {!context && !contextError ? <Typography.Text type="secondary">正在加载发布版本依据…</Typography.Text> : null}
@@ -133,7 +133,7 @@ export function QuestionAppealWorkspace({ examId = "", canManage, canWork, onCha
         {context.appeal.selected_region ? <Alert type="info" showIcon message="学生已圈选争议区域" description="红框只用于定位答题位置，不会修改原始答题图或成绩。" /> : null}
         {context.answer_image_ready && answerImageURL ? <section><h3><Eye size={16} /> 答题图</h3><div className="question-appeal-image"><img src={answerImageURL} alt={`${context.appeal.question_no} 答题区域`} />{context.appeal.selected_region ? <RegionOverlay region={context.appeal.selected_region} /> : null}</div></section> : <Alert type="warning" showIcon message="答题图暂不可用" description="申诉与发布版本依据仍可查看；请从阅卷证据链确认图像状态。" />}
         <section><h3><FileCheck2 size={16} /> 冻结评分要点</h3>{points.length ? <List size="small" dataSource={points} renderItem={(point) => <List.Item><span>{point.label}</span>{point.score !== undefined ? <Tag>{formatScore(point.score)} 分</Tag> : null}</List.Item>} /> : <Typography.Text type="secondary">本题没有可展示的结构化评分要点。</Typography.Text>}</section>
-        <section><h3>版本历史</h3><List size="small" dataSource={context.release_history} renderItem={(version) => <List.Item><span>V{version.version} · {version.source}</span><Tag color={version.status === "published" ? "green" : "default"}>{version.status}</Tag></List.Item>} /></section>
+        <section><h3>版本历史</h3><List size="small" dataSource={context.release_history} renderItem={(version) => <List.Item><span>V{version.version} · {version.source === "initial" ? "首次发布" : version.source === "regrade" ? "重评发布" : "其他来源"}</span><Tag color={version.status === "published" ? "green" : "default"}>{version.status === "published" ? "已发布" : version.status === "superseded" ? "已被替代" : "未知状态"}</Tag></List.Item>} /></section>
         {notice ? <Alert type="success" showIcon message={notice} /> : null}
         {context.appeal.status === "submitted" && canManage ? <section className="question-appeal-actions"><h3>分派处理</h3><Space wrap><Select className="question-appeal-reviewer" placeholder="选择阅卷教师" value={assignedTo || undefined} options={reviewers.map((user) => ({ value: user.id, label: user.display_name || user.username }))} onChange={setAssignedTo} /><Button type="primary" loading={actioning} disabled={!assignedTo} onClick={() => void assign()}>开始复核</Button></Space></section> : null}
         {context.appeal.status === "under_review" ? <section className="question-appeal-actions"><h3>处理结论</h3><Space wrap><Button loading={actioning} onClick={() => void decide("reject")}>答复并维持原成绩</Button>{canManage ? <><Input className="question-appeal-regrade-id" placeholder="已创建的复评任务编号" value={regradeJobID} onChange={(event) => setRegradeJobID(event.target.value)} /><Button type="primary" loading={actioning} onClick={() => void decide("refer_regrade")}>关联题目级复评</Button></> : null}</Space><Typography.Paragraph type="secondary">关联后不会直接改分；复评完成后仍需生成并发布新的成绩版本。</Typography.Paragraph></section> : null}

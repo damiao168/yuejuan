@@ -94,7 +94,7 @@ func evidenceAuthStoreWithPermissions(t *testing.T, permissions []string) *auth.
 			Status:      "active",
 			Roles:       []string{"teacher"},
 			Permissions: permissions,
-			DataScope:   map[string]any{"scope": "school"},
+			DataScope:   map[string]any{"scope": "school", "synthetic": true},
 		},
 		PasswordHash: hash,
 	})

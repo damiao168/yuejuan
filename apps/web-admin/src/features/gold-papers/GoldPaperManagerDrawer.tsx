@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Descriptions, Drawer, Empty, Input, InputNumber, List, Modal, Popconfirm, Select, Space, Tag } from "antd";
 import type { GoldPaper, GoldPaperVersion } from "@edugrade/sdk";
 import { approveGoldPaperVersion, createGoldPaperVersion, getGoldCoverage, listGoldPapers, retireGoldPaper } from "../../api/goldPapers";
-import { apiClient } from "../../api/client";
+import { apiClient, getUserErrorMessage } from "../../api/client";
 import { goldCoverageGapLabel, rubricPointsFromSnapshot } from "./goldPaperPresentation";
 
 const statusLabels = { pending_approval: "待审批", active: "已启用", retired: "已退役" } as const;
@@ -30,7 +30,7 @@ export function GoldPaperManagerDrawer({ open, examId, onClose }: { open: boolea
       setItems(response.gold_papers);
       setSelectedId((current) => response.gold_papers.some((item) => item.id === current) ? current : response.gold_papers[0]?.id ?? "");
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "标准卷加载失败");
+      message.error(getUserErrorMessage(error, "标准卷加载失败"));
     } finally {
       setLoading(false);
     }
@@ -49,7 +49,7 @@ export function GoldPaperManagerDrawer({ open, examId, onClose }: { open: boolea
   const run = async (action: () => Promise<unknown>, success: string) => {
     setActing(true);
     try { await action(); message.success(success); await load(); }
-    catch (error) { message.error(error instanceof Error ? error.message : "标准卷操作失败"); }
+    catch (error) { message.error(getUserErrorMessage(error, "标准卷操作失败")); }
     finally { setActing(false); }
   };
 
@@ -94,7 +94,7 @@ export function GoldPaperManagerDrawer({ open, examId, onClose }: { open: boolea
           <main>
             {!selected || !latest ? <Empty description="选择一份标准卷查看审批证据" /> : (
               <>
-                {coverageGaps.length ? <Alert type="warning" showIcon message="Gold 覆盖仍有缺口" description={coverageGaps.map(goldCoverageGapLabel).join("；")} /> : <Alert type="success" showIcon message="当前题目 Gold 覆盖规则已满足" />}
+                {coverageGaps.length ? <Alert type="warning" showIcon message="标准卷覆盖仍有缺口" description={coverageGaps.map(goldCoverageGapLabel).join("；")} /> : <Alert type="success" showIcon message="当前题目标准卷覆盖规则已满足" />}
                 {selected.answer_image_url ? <img className="gold-paper-answer" src={apiClient.url(selected.answer_image_url)} alt="标准卷原始答题区域" /> : <Alert type="warning" message="当前记录未提供答题图像地址" />}
                 <Descriptions size="small" bordered column={2}>
                   <Descriptions.Item label="状态"><Tag>{statusLabels[selected.status]}</Tag></Descriptions.Item>

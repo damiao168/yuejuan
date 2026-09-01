@@ -3,7 +3,7 @@ import { Alert, App, Button, Input, InputNumber, Select, Space, Tag, type TableC
 import { CheckCircle2, RefreshCw, Search, Send, UserRoundCheck } from "lucide-react";
 import type { SessionUser } from "../auth/session";
 import { canSubmitTeacherAppealRecommendation } from "../auth/capabilities";
-import { ApiClientError } from "../api/client";
+import { getUserErrorMessage } from "../api/client";
 import { listExams, type Exam } from "../api/exams";
 import { listClasses, listStudents, type SchoolClass, type Student } from "../api/org";
 import { assignAppeal, getAppeal, getAppealStatistics, listAppeals, reviewAppeal, submitAppealRecommendation, type Appeal, type AppealStatistics, type ReviewAppealPayload, type SubmitAppealRecommendationPayload } from "../api/appeals";
@@ -27,7 +27,7 @@ const reasonLabels: Record<string, string> = { recognition_error: "答题内容�
 const recommendationLabels: Record<string, string> = { accept: "申诉成立", reject: "维持原分", adjust_score: "建议改分", need_more_info: "需继续复核" };
 const recommendationOptions = Object.entries(recommendationLabels).map(([value, label]) => ({ value, label }));
 
-function formatError(error: unknown) { return error instanceof ApiClientError || error instanceof Error ? error.message || "操作失败，请稍后重试" : "操作失败，请稍后重试"; }
+function formatError(error: unknown) { return getUserErrorMessage(error, "操作失败，请稍后重试"); }
 function formatTime(value?: string) { if (!value) return "-"; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false }); }
 function formatScore(value?: number | null) { return value === undefined || value === null || !Number.isFinite(value) ? "-" : Number(value.toFixed(2)).toString(); }
 function statusTone(status: string): StatusTone { if (["accepted", "score_adjusted", "closed"].includes(status)) return "success"; if (status === "rejected") return "neutral"; if (["submitted", "need_more_info"].includes(status)) return "warning"; return "processing"; }

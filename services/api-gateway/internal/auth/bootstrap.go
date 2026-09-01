@@ -36,6 +36,9 @@ type BootstrapStore interface {
 
 func BootstrapInitialAdmin(ctx context.Context, store BootstrapStore, input BootstrapAdminInput) (BootstrapAdminResult, error) {
 	input = normalizeBootstrapAdminInput(input)
+	if input.TenantCode != "platform" || input.RoleCode != "platform_admin" {
+		return BootstrapAdminResult{}, ErrInvalidBootstrapInput
+	}
 	if input.Username == "" {
 		return BootstrapAdminResult{}, ErrInvalidBootstrapInput
 	}

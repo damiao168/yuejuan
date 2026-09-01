@@ -105,6 +105,9 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 		ExamID:     r.URL.Query().Get("exam_id"),
 		Limit:      limit + 1,
 	}
+	if scope, ok := auth.AccessScopeFromContext(r.Context()); ok {
+		applyReviewListScope(&filter, scope)
+	}
 	parts, err := pagination.DecodeParts(r.URL.Query().Get("cursor"), 3)
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
@@ -746,6 +749,9 @@ func (h *Handler) ListArbitrationTasks(w http.ResponseWriter, r *http.Request) {
 		CursorCreatedAt: cursor.CreatedAt,
 		CursorID:        cursor.ID,
 	}
+	if scope, ok := auth.AccessScopeFromContext(r.Context()); ok {
+		applyArbitrationListScope(&filter, scope)
+	}
 	if arbitrationWorkerScoped(user) {
 		filter.AssignedTo = user.ID
 	}
@@ -866,6 +872,22 @@ func mustUser(r *http.Request) auth.User {
 
 func reviewWorkerScoped(user auth.User) bool {
 	return !reviewManagerScoped(user)
+}
+
+func applyReviewListScope(filter *ListFilter, scope auth.AccessScope) {
+	filter.ScopeMode = scope.QueryMode()
+	filter.ScopeActorID = scope.ActorID
+	filter.ScopeSchoolIDs = append([]string(nil), scope.SchoolIDs...)
+	filter.ScopeExamIDs = append([]string(nil), scope.ExamIDs...)
+	filter.ScopeTaskIDs = append([]string(nil), scope.ReviewTaskIDs...)
+}
+
+func applyArbitrationListScope(filter *ArbitrationFilter, scope auth.AccessScope) {
+	filter.ScopeMode = scope.QueryMode()
+	filter.ScopeActorID = scope.ActorID
+	filter.ScopeSchoolIDs = append([]string(nil), scope.SchoolIDs...)
+	filter.ScopeExamIDs = append([]string(nil), scope.ExamIDs...)
+	filter.ScopeTaskIDs = append([]string(nil), scope.ArbitrationTaskIDs...)
 }
 
 func arbitrationWorkerScoped(user auth.User) bool {

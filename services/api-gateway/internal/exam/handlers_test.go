@@ -283,7 +283,7 @@ func authStoreWithPermissions(t *testing.T, permissions []string) *auth.MemorySt
 			Status:      "active",
 			Roles:       []string{"school_admin"},
 			Permissions: permissions,
-			DataScope:   map[string]any{"scope": "school", "school_id": "school-1", "class_ids": []any{"class-1", "class-2"}},
+			DataScope:   map[string]any{"scope": "school", "school_id": "school-1", "class_ids": []any{"class-1", "class-2"}, "synthetic": true},
 		},
 		PasswordHash: hash,
 	})

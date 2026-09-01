@@ -1,6 +1,7 @@
 package mathunderstanding
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +14,6 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
-	"edugrade-enterprise/services/api-gateway/internal/review"
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
 
@@ -21,12 +21,16 @@ type Handler struct {
 	artifacts   Store
 	corrections CorrectionStore
 	pilotGates  PilotGateStore
-	reviews     review.Store
+	reviews     reviewAssignmentStore
 	audit       auth.Store
 	runtime     workerruntime.Store
 }
 
-func NewHandler(artifacts Store, corrections CorrectionStore, pilotGates PilotGateStore, reviews review.Store, audit auth.Store) *Handler {
+type reviewAssignmentStore interface {
+	HasActiveAssignment(ctx context.Context, tenantID string, reviewerID string, answerSegmentID string) (bool, error)
+}
+
+func NewHandler(artifacts Store, corrections CorrectionStore, pilotGates PilotGateStore, reviews reviewAssignmentStore, audit auth.Store) *Handler {
 	return &Handler{artifacts: artifacts, corrections: corrections, pilotGates: pilotGates, reviews: reviews, audit: audit}
 }
 
@@ -305,16 +309,11 @@ func (h *Handler) canAccess(r *http.Request, user auth.User, segmentID string) b
 			return true
 		}
 	}
-	tasks, err := h.reviews.ListTasks(r.Context(), user.TenantID, review.ListFilter{AssignedTo: user.ID, Limit: 500})
-	if err != nil {
+	if h.reviews == nil {
 		return false
 	}
-	for _, task := range tasks {
-		if task.AnswerSegmentID == segmentID && task.AssignedTo == user.ID && task.Status != "completed" && task.Status != "cancelled" {
-			return true
-		}
-	}
-	return false
+	allowed, err := h.reviews.HasActiveAssignment(r.Context(), user.TenantID, user.ID, segmentID)
+	return err == nil && allowed
 }
 func (h *Handler) auditEvent(r *http.Request, user auth.User, action, targetID string, after map[string]any) {
 	if h.audit == nil {

@@ -231,13 +231,17 @@ func (s *MemoryStore) studentResultLocked(tenantID, examID, studentID string) (S
 		if item.StudentID != studentID {
 			continue
 		}
-		result := StudentResult{ExamID: examID, ReleaseID: id, ReleaseVersion: release.Version, TotalScore: item.TotalScore, MaxScore: item.MaxScore,
+		result := StudentResult{ExamID: examID, ReleaseID: id, ReleaseVersion: release.Version, TotalScore: item.TotalScore, MaxScore: item.MaxScore, OverallTotalScore: item.TotalScore, OverallMaxScore: item.MaxScore, ScoreRate: scoreRate(item.TotalScore, item.MaxScore),
 			Questions: []StudentQuestion{}, AppealWindow: appealView(release.AppealWindow, s.now().UTC())}
+		result.Reference = buildStudentReference(s.items[id], item.TotalScore, release.VisibilityPolicy)
+		if release.VisibilityPolicy.ShowExactRank && result.Reference != nil && result.Reference.StatisticsAvailable && result.Reference.Rank != nil {
+			result.Rankings = &StudentRankings{ClassRank: *result.Reference.Rank, ClassSize: result.Reference.SampleSize, GradeRank: *result.Reference.Rank, GradeSize: result.Reference.SampleSize}
+		}
 		for _, question := range s.questions[id] {
 			if question.SubmissionID != item.SubmissionID {
 				continue
 			}
-			studentQuestion := StudentQuestion{QuestionID: question.QuestionID, QuestionNo: question.QuestionNo, Score: question.Score, MaxScore: question.MaxScore}
+			studentQuestion := studentQuestionView(question, s.questions[id], release.VisibilityPolicy)
 			if release.VisibilityPolicy.ShowFeedback {
 				studentQuestion.Feedback = question.Explanation.Feedback
 			}
@@ -274,6 +278,13 @@ func (s *MemoryStore) StudentQuestionImage(ctx context.Context, tenantID, examID
 		return StudentQuestionImageSource{}, ErrNotFound
 	}
 	return StudentQuestionImageSource{AnswerSegmentID: answerSegmentID}, nil
+}
+
+func (s *MemoryStore) StudentPaperPageImage(ctx context.Context, tenantID, examID, studentID, questionID string, highScore bool) (StudentQuestionImageSource, error) {
+	if highScore {
+		return StudentQuestionImageSource{}, ErrNotFound
+	}
+	return s.StudentQuestionImage(ctx, tenantID, examID, studentID, questionID)
 }
 
 func (s *MemoryStore) StudentQuestionLocked(tenantID, examID, studentID, questionID string) (StudentQuestion, error) {

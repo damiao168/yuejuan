@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Descriptions, Drawer, Input, InputNumber, List, Select, Space, Tag } from "antd";
 import { nominateGoldPaper } from "../../api/goldPapers";
+import { getUserErrorMessage } from "../../api/client";
 import type { GoldRubricPoint } from "./goldPaperPresentation";
 import { buildRubricEvidence } from "./goldPaperPresentation";
 
@@ -66,7 +67,7 @@ export function GoldPaperNominationDrawer({
       onCreated?.();
       onClose();
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "标准卷提名失败");
+      message.error(getUserErrorMessage(error, "标准卷提名失败"));
     } finally {
       setSubmitting(false);
     }

@@ -24,9 +24,13 @@ func issueCodes(job PaperImportJob) map[string]bool {
 	return out
 }
 
+func confirmRequiredDraftFields(draft *PaperImportDraftQuestion) {
+	draft.HumanConfirmedFields = requiredHumanConfirmedFields(*draft)
+}
+
 func TestAnswerOnlyImportRemainsReviewableWithoutInventingQuestions(t *testing.T) {
 	store, job := candidateImport(t)
-	out, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, nil, []AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A", Confidence: .95}}, nil, nil)
+	out, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, nil, []AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A", Confidence: .95}}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +47,7 @@ func TestAnswerOnlyImportRemainsReviewableWithoutInventingQuestions(t *testing.T
 
 func TestQuestionOnlyImportReportsMissingAnswerAndMissingScore(t *testing.T) {
 	store, job := candidateImport(t)
-	out, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, []QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "第1题", QuestionType: "short_answer", Stem: "题干", Confidence: .9}}, nil, nil, nil)
+	out, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, []QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "第1题", QuestionType: "short_answer", Stem: "题干", Confidence: .9}}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +65,7 @@ func TestCandidateReconciliationDetectsGapAndConflictingAnswers(t *testing.T) {
 	score := 3.0
 	questions := []QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "01", QuestionType: "single_choice", Score: &score, Confidence: .9}, {CandidateID: "q3", QuestionNoRaw: "第3题", QuestionType: "single_choice", Score: &score, Confidence: .9}}
 	answers := []AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A", Confidence: .9}, {CandidateID: "a2", QuestionNoHint: "1.", StandardAnswer: "C", Confidence: .9}}
-	out, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, questions, answers, nil, nil)
+	out, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, questions, answers, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +97,7 @@ func TestCandidateReconciliationKeepsQuestionAnswerAndSolutionIndependent(t *tes
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			drafts, issues := reconcilePaperImportCandidates(testCase.questions, testCase.answers, testCase.solutions, nil)
+			drafts, issues := reconcilePaperImportCandidates(testCase.questions, testCase.answers, testCase.solutions, nil, nil)
 			if len(drafts) != testCase.wantDrafts {
 				t.Fatalf("draft count = %d, want %d", len(drafts), testCase.wantDrafts)
 			}
@@ -131,7 +135,7 @@ func TestQuestionNumberNormalizerPreservesParentChildStructure(t *testing.T) {
 
 func TestSolutionOnlyImportRemainsReviewableWithoutInventingQuestion(t *testing.T) {
 	store, job := candidateImport(t)
-	out, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, nil, nil, []SolutionCandidate{{CandidateID: "s1", QuestionNoHint: "18(1)", RawText: "因为，所以", Confidence: .9}}, nil)
+	out, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, nil, nil, []SolutionCandidate{{CandidateID: "s1", QuestionNoHint: "18(1)", RawText: "因为，所以", Confidence: .9}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +151,7 @@ func TestObjectiveCandidateGetsDeterministicRubricButEssayDoesNotInventAnswer(t 
 	score := 3.0
 	drafts, issues := reconcilePaperImportCandidates(
 		[]QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "1", QuestionType: "single_choice", Score: &score, Stem: "选择", Confidence: .9}},
-		[]AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A", Confidence: .9}}, nil, nil,
+		[]AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A", Confidence: .9}}, nil, nil, nil,
 	)
 	if len(drafts) != 1 || drafts[0].Rubric == nil || !scoreEqual(drafts[0].Rubric.MaxScore, score) {
 		t.Fatalf("objective rubric was not generated: %#v", drafts)
@@ -163,13 +167,210 @@ func TestObjectiveCandidateGetsDeterministicRubricButEssayDoesNotInventAnswer(t 
 	}
 
 	essayScore := 20.0
-	_, essayIssues := reconcilePaperImportCandidates([]QuestionCandidate{{CandidateID: "qe", QuestionNoRaw: "2", QuestionType: "essay", Score: &essayScore, Stem: "作文", Confidence: .9}}, nil, nil, nil)
+	_, essayIssues := reconcilePaperImportCandidates([]QuestionCandidate{{CandidateID: "qe", QuestionNoRaw: "2", QuestionType: "essay", Score: &essayScore, Stem: "作文", Confidence: .9}}, nil, nil, nil, nil)
 	codes := map[string]bool{}
 	for _, issue := range essayIssues {
 		codes[issue.Code] = true
 	}
 	if codes["MISSING_ANSWER"] || !codes["MISSING_RUBRIC"] {
 		t.Fatalf("essay requirements were wrong: %#v", essayIssues)
+	}
+}
+
+func TestExplicitRubricCandidateMatchesAndPersistsWithProvenance(t *testing.T) {
+	store, job := candidateImport(t)
+	score := 6.0
+	pointScore := 2.0
+	required := true
+	questionRef := PaperImportSourceRef{SourceID: "source-question", FileAssetID: "asset-question", DocumentIndex: 0, PageNo: 1}
+	answerRef := PaperImportSourceRef{SourceID: "source-answer", FileAssetID: "asset-answer", DocumentIndex: 1, PageNo: 1}
+	rubricRef := PaperImportSourceRef{SourceID: "source-rubric", FileAssetID: "asset-rubric", DocumentIndex: 2, PageNo: 3}
+	rubric := RubricCandidate{
+		CandidateID: "r18", QuestionNoHint: "第18（1）题", MaxScore: &score, Confidence: .96,
+		Points: []RubricCandidatePoint{
+			{ID: "p1", Description: "列出正确关系式", Score: &pointScore, Required: &required},
+			{ID: "p2", Description: "计算过程正确", Score: &pointScore, Required: &required},
+			{ID: "p3", Description: "结果正确", Score: &pointScore, Required: &required},
+		},
+		Deductions: []any{}, Examples: []any{}, SourceRefs: []PaperImportSourceRef{rubricRef}, Issues: []string{},
+	}
+	out, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil,
+		[]QuestionCandidate{{CandidateID: "q18", QuestionNoRaw: "18.1", QuestionType: "short_answer", Score: &score, Stem: "解答", Confidence: .95, SourceRefs: []PaperImportSourceRef{questionRef}}},
+		[]AnswerCandidate{{CandidateID: "a18", QuestionNoHint: "18(1)", StandardAnswer: "42", Confidence: .95, SourceRefs: []PaperImportSourceRef{answerRef}}}, nil,
+		[]RubricCandidate{rubric}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.RubricCandidates) != 1 || len(out.Questions) != 1 {
+		t.Fatalf("rubric candidate was not persisted: %#v", out)
+	}
+	draft := out.Questions[0]
+	if draft.RubricCandidateID != "r18" || draft.Rubric == nil || len(draft.Rubric.Points) != 3 || !scoreEqual(SumRubricPoints(draft.Rubric.Points), score) {
+		t.Fatalf("explicit rubric was not matched faithfully: %#v", draft)
+	}
+	if issueCodes(out)["MISSING_RUBRIC"] || issueCodes(out)["RUBRIC_SCORE_MISMATCH"] || issueCodes(out)["RUBRIC_POINTS_SCORE_MISMATCH"] {
+		t.Fatalf("valid explicit rubric produced a false issue: %#v", out.StructuredIssues)
+	}
+	foundRubricRef := false
+	for _, ref := range draft.SourceRefs {
+		foundRubricRef = foundRubricRef || ref.SourceID == rubricRef.SourceID
+	}
+	if !foundRubricRef {
+		t.Fatalf("rubric provenance was not merged into the review draft: %#v", draft.SourceRefs)
+	}
+}
+
+func TestRubricOnlyImportReportsUnmatchedRubric(t *testing.T) {
+	store, job := candidateImport(t)
+	score := 6.0
+	pointScore := 6.0
+	out, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, nil, nil, nil,
+		[]RubricCandidate{{CandidateID: "r1", QuestionNoHint: "1", MaxScore: &score, Points: []RubricCandidatePoint{{ID: "p1", Description: "正确", Score: &pointScore}}, Confidence: .9, SourceRefs: []PaperImportSourceRef{{SourceID: "rubric-source"}}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Questions) != 0 || len(out.RubricCandidates) != 1 || !issueCodes(out)["UNMATCHED_RUBRIC"] {
+		t.Fatalf("unexpected rubric-only result: %#v", out)
+	}
+	if issueCodes(out)["UNKNOWN_DOCUMENT_ROLE"] || !paperImportHasBlockingIssues(out) {
+		t.Fatalf("rubric-only import must stay reviewable and blocked without being treated as empty: %#v", out.StructuredIssues)
+	}
+}
+
+func TestSolutionDoesNotBecomeSubjectiveRubric(t *testing.T) {
+	score := 6.0
+	drafts, issues := reconcilePaperImportCandidates(
+		[]QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "1", QuestionType: "short_answer", Score: &score, Stem: "计算", Confidence: .9}},
+		[]AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "42", Confidence: .9}},
+		[]SolutionCandidate{{CandidateID: "s1", QuestionNoHint: "1", RawText: "第一步列式，第二步计算", Confidence: .9}}, nil, nil,
+	)
+	if len(drafts) != 1 || drafts[0].Solution == nil || drafts[0].Rubric != nil {
+		t.Fatalf("solution was conflated with a formal rubric: %#v", drafts)
+	}
+	codes := map[string]bool{}
+	for _, issue := range issues {
+		codes[issue.Code] = true
+	}
+	if !codes["MISSING_RUBRIC"] {
+		t.Fatalf("subjective question without explicit rubric must remain incomplete: %#v", issues)
+	}
+}
+
+func TestRubricCandidateValidationIssues(t *testing.T) {
+	questionScore := 6.0
+	point2, point3, point4 := 2.0, 3.0, 4.0
+	baseQuestion := []QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "1", QuestionType: "short_answer", Score: &questionScore, Stem: "解答", Confidence: .9}}
+	tests := []struct {
+		name    string
+		rubrics []RubricCandidate
+		code    string
+	}{
+		{
+			name: "conflicting rubric candidates",
+			rubrics: []RubricCandidate{
+				{CandidateID: "r1", QuestionNoHint: "1", MaxScore: &questionScore, Points: []RubricCandidatePoint{{ID: "p", Description: "过程", Score: &point2}}},
+				{CandidateID: "r2", QuestionNoHint: "1", MaxScore: &questionScore, Points: []RubricCandidatePoint{{ID: "p", Description: "结果", Score: &point4}}},
+			},
+			code: "CONFLICTING_RUBRICS",
+		},
+		{
+			name: "rubric max score mismatch",
+			rubrics: []RubricCandidate{{CandidateID: "r1", QuestionNoHint: "1", MaxScore: &point4, Points: []RubricCandidatePoint{
+				{ID: "p1", Description: "过程", Score: &point2}, {ID: "p2", Description: "结果", Score: &point4},
+			}}},
+			code: "RUBRIC_SCORE_MISMATCH",
+		},
+		{
+			name: "rubric point total mismatch",
+			rubrics: []RubricCandidate{{CandidateID: "r1", QuestionNoHint: "1", MaxScore: &questionScore, Points: []RubricCandidatePoint{
+				{ID: "p1", Description: "过程", Score: &point2}, {ID: "p2", Description: "结果", Score: &point3},
+			}}},
+			code: "RUBRIC_POINTS_SCORE_MISMATCH",
+		},
+		{
+			name: "rubric point score missing",
+			rubrics: []RubricCandidate{{CandidateID: "r1", QuestionNoHint: "1", MaxScore: &questionScore, Points: []RubricCandidatePoint{
+				{ID: "p1", Description: "过程"}, {ID: "p2", Description: "结果", Score: &questionScore},
+			}}},
+			code: "RUBRIC_POINT_SCORE_MISSING",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, issues := reconcilePaperImportCandidates(baseQuestion, nil, nil, testCase.rubrics, nil)
+			codes := map[string]bool{}
+			for _, issue := range issues {
+				codes[issue.Code] = true
+			}
+			if !codes[testCase.code] {
+				t.Fatalf("missing %s: %#v", testCase.code, issues)
+			}
+		})
+	}
+}
+
+func TestHumanCorrectedLockedRubricAppliesWithAnswerAndRubricProvenance(t *testing.T) {
+	store, job := candidateImport(t)
+	score, point2, point3 := 6.0, 2.0, 3.0
+	processed, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil,
+		[]QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "1", QuestionType: "short_answer", Score: &score, Stem: "解答", Confidence: .95, SourceRefs: []PaperImportSourceRef{{SourceID: "question-source"}}}},
+		[]AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "42", Confidence: .95, SourceRefs: []PaperImportSourceRef{{SourceID: "answer-source"}}}}, nil,
+		[]RubricCandidate{{CandidateID: "r1", QuestionNoHint: "1", MaxScore: &score, Points: []RubricCandidatePoint{
+			{ID: "p1", Description: "过程", Score: &point2}, {ID: "p2", Description: "结果", Score: &point3},
+		}, Confidence: .95, SourceRefs: []PaperImportSourceRef{{SourceID: "rubric-source"}}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !issueCodes(processed)["RUBRIC_POINTS_SCORE_MISMATCH"] {
+		t.Fatalf("initial mismatch was not reported: %#v", processed.StructuredIssues)
+	}
+	processed.Questions[0].Rubric.Points[1].Score = 4
+	processed.Questions[0].Rubric.Status = "locked"
+	confirmRequiredDraftFields(&processed.Questions[0])
+	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{Questions: processed.Questions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issueCodes(reviewed)["RUBRIC_POINTS_SCORE_MISMATCH"] || reviewed.Questions[0].CompletenessStatus != "complete" {
+		t.Fatalf("human correction did not clear rubric mismatch: %#v", reviewed)
+	}
+	if _, err = store.ApplyPaperImport(context.Background(), "tenant", job.ID, "user"); err != nil {
+		t.Fatalf("corrected locked rubric did not apply: %v", err)
+	}
+	questions, err := store.ListQuestions(context.Background(), "tenant", "exam")
+	if err != nil || len(questions) != 1 {
+		t.Fatalf("list applied question: count=%d err=%v", len(questions), err)
+	}
+	question := questions[0]
+	if question.AnswerKey == nil || question.AnswerKey.StandardAnswer != "42" || question.AnswerKey.PaperImportID != job.ID || question.AnswerKey.PaperImportCandidateID != "a1" || len(question.AnswerKey.PaperImportSourceRefs) == 0 {
+		t.Fatalf("answer apply path lost data or provenance: %#v", question.AnswerKey)
+	}
+	if question.Rubric == nil || question.Rubric.Status != "locked" || question.Rubric.PaperImportID != job.ID || question.Rubric.PaperImportCandidateID != "r1" || len(question.Rubric.PaperImportSourceRefs) == 0 {
+		t.Fatalf("rubric apply path lost status or provenance: %#v", question.Rubric)
+	}
+}
+
+func TestLockedRubricCannotApplyWithoutExplicitRubricConfirmation(t *testing.T) {
+	store, job := candidateImport(t)
+	score := 6.0
+	processed, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil,
+		[]QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "1", QuestionType: "short_answer", Score: &score, Stem: "解答", Confidence: .95}},
+		[]AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "42", Confidence: .95}}, nil,
+		[]RubricCandidate{{CandidateID: "r1", QuestionNoHint: "1", MaxScore: &score, Points: []RubricCandidatePoint{{ID: "p1", Description: "正确", Score: &score}}, Confidence: .95}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processed.Questions[0].Rubric.Status = "locked"
+	processed.Questions[0].HumanConfirmedFields = []string{"question_no", "question_type", "score", "stem", "answer"}
+	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{Questions: processed.Questions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !issueCodes(reviewed)["HUMAN_REVIEW_REQUIRED"] || reviewed.Questions[0].CompletenessStatus != "needs_review" {
+		t.Fatalf("missing rubric confirmation was treated as an explicit review: %#v", reviewed)
+	}
+	if _, err = store.ApplyPaperImport(context.Background(), "tenant", job.ID, "user"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("unconfirmed locked rubric apply error = %v, want ErrInvalidInput", err)
 	}
 }
 
@@ -191,7 +392,7 @@ func TestCandidateImportRequiresExplicitHumanReviewBeforeApply(t *testing.T) {
 	score := 3.0
 	processed, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil,
 		[]QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "1", QuestionType: "single_choice", Score: &score, Stem: "选择正确答案", Confidence: .95}},
-		[]AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A", Confidence: .95}}, nil, nil)
+		[]AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A", Confidence: .95}}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +402,7 @@ func TestCandidateImportRequiresExplicitHumanReviewBeforeApply(t *testing.T) {
 	if _, err = store.ApplyPaperImport(context.Background(), "tenant", job.ID, "user"); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("unreviewed candidate apply error = %v, want ErrInvalidInput", err)
 	}
+	confirmRequiredDraftFields(&processed.Questions[0])
 	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{Questions: processed.Questions})
 	if err != nil {
 		t.Fatal(err)
@@ -228,11 +430,12 @@ func TestHumanReviewCannotClearARequiredFieldAndBypassApplyGate(t *testing.T) {
 	score := 3.0
 	processed, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil,
 		[]QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "1", QuestionType: "single_choice", Score: &score, Stem: "选择", Confidence: .9}},
-		[]AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A", Confidence: .9}}, nil, nil)
+		[]AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A", Confidence: .9}}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	processed.Questions[0].AnswerKey.StandardAnswer = ""
+	confirmRequiredDraftFields(&processed.Questions[0])
 	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{Questions: processed.Questions})
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +454,7 @@ func TestReplacePaperImportSourcesReordersRemovesAndChangesRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err = store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, nil, []AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A"}}, nil, nil)
+	job, err = store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, nil, []AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A"}}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,6 +464,13 @@ func TestReplacePaperImportSourcesReordersRemovesAndChangesRole(t *testing.T) {
 	}
 	if out.Status != "processing" || len(out.Sources) != 2 || out.Sources[0].FileAssetID != "c" || out.Sources[0].RoleHint != "solution" || out.Sources[1].DocumentIndex != 1 {
 		t.Fatalf("unexpected replacement: %#v", out.Sources)
+	}
+	out, err = store.ReplacePaperImportSources(context.Background(), "tenant", job.ID, "user", ReplacePaperImportSourcesInput{Sources: []ReplacePaperImportSourceInput{}})
+	if err != nil {
+		t.Fatalf("deleting all sources while processing should be allowed: %v", err)
+	}
+	if out.Status != "failed" || out.ErrorCode != "paper_import_no_sources" || len(out.Sources) != 0 {
+		t.Fatalf("unexpected empty-source state: %#v", out)
 	}
 }
 
@@ -283,11 +493,11 @@ func TestCandidateRerunIsIdempotent(t *testing.T) {
 	score := 2.0
 	questions := []QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "1", QuestionType: "single_choice", Score: &score, Stem: "题干", Confidence: .9}}
 	answers := []AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A", Confidence: .9}}
-	first, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, questions, answers, nil, nil)
+	first, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, questions, answers, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, questions, answers, nil, nil)
+	second, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, questions, answers, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,12 +527,13 @@ func TestIncrementalRerunPreservesHumanConfirmedAnswer(t *testing.T) {
 	q := []QuestionCandidate{{CandidateID: "q1", QuestionNoRaw: "1", QuestionType: "single_choice", Score: &score, Stem: "题干", Confidence: .9}}
 	a := []AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "A", Confidence: .9}}
 	solutions := []SolutionCandidate{{CandidateID: "s1", QuestionNoHint: "1", RawText: "机器解析一", Confidence: .9}}
-	first, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, q, a, solutions, nil)
+	first, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, q, a, solutions, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	first.Questions[0].AnswerKey.StandardAnswer = "C"
 	first.Questions[0].Solution.RawText = "人工确认解析"
+	confirmRequiredDraftFields(&first.Questions[0])
 	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{Questions: first.Questions})
 	if err != nil {
 		t.Fatal(err)
@@ -332,7 +543,7 @@ func TestIncrementalRerunPreservesHumanConfirmedAnswer(t *testing.T) {
 	}
 	q[0].CandidateID = "q1-rerun"
 	solutions[0].RawText = "机器解析二"
-	rerun, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, q, a, solutions, nil)
+	rerun, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, q, a, solutions, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

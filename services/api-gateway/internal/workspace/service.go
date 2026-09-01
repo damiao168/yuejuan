@@ -26,6 +26,10 @@ type PaperReader interface {
 	Readiness(context.Context, string, string) (paper.ReadinessResult, error)
 }
 
+type PaperImportReader interface {
+	ListPaperImports(context.Context, string, string) ([]paper.PaperImportJob, error)
+}
+
 type SubmissionReader interface {
 	ListByExam(context.Context, string, string, submission.ListFilter) ([]submission.Submission, error)
 }
@@ -49,13 +53,14 @@ type ProcessingReader interface {
 }
 
 type Dependencies struct {
-	Exams       ExamReader
-	Papers      PaperReader
-	Submissions SubmissionReader
-	Reviews     ReviewReader
-	Assessments AssessmentSummaryReader
-	Processing  ProcessingReader
-	Now         func() time.Time
+	Exams        ExamReader
+	Papers       PaperReader
+	PaperImports PaperImportReader
+	Submissions  SubmissionReader
+	Reviews      ReviewReader
+	Assessments  AssessmentSummaryReader
+	Processing   ProcessingReader
+	Now          func() time.Time
 }
 
 type Service struct {
@@ -147,6 +152,7 @@ func (s *Service) Get(ctx context.Context, scope auth.AccessScope, examID string
 				})
 			}
 		}
+		appendPaperImportNotices(ctx, s.deps.PaperImports, item.TenantID, item.ID, readiness, &result)
 	}
 
 	submissions, submissionsErr := s.deps.Submissions.ListByExam(ctx, item.TenantID, item.ID, submission.ListFilter{})
@@ -204,6 +210,45 @@ func (s *Service) Get(ctx context.Context, scope auth.AccessScope, examID string
 	result.NextActions = buildNextActions(result)
 	result.StageProgress = buildStageProgress(result, readiness, submissionsReliable, taskTotal, arbitrationTotal)
 	return result, nil
+}
+
+func appendPaperImportNotices(ctx context.Context, reader PaperImportReader, tenantID, examID string, readiness *paper.ReadinessResult, result *Projection) {
+	if reader == nil {
+		return
+	}
+	imports, err := reader.ListPaperImports(ctx, tenantID, examID)
+	if err != nil {
+		result.Warnings = append(result.Warnings, unavailableNotice("paper_imports_unavailable", "考试资料识别状态暂不可用"))
+		return
+	}
+	if len(imports) == 0 {
+		return
+	}
+	latest := imports[0]
+	for _, candidate := range imports[1:] {
+		if candidate.CreatedAt.After(latest.CreatedAt) {
+			latest = candidate
+		}
+	}
+	route := examRoute(examID, "paper")
+	switch latest.Status {
+	case "processing":
+		result.Warnings = append(result.Warnings, Notice{Code: "paper_import_processing", Title: "考试资料正在识别", Message: "系统正在提取题目、答案、解析和评分标准", Severity: "warning", ActionLabel: "查看识别进度", ActionRoute: route})
+	case "review_required":
+		notice := Notice{Code: "paper_import_review_required", Title: "考试资料等待人工核对", Message: "系统已经识别资料，请确认题目、答案、解析和评分标准", Severity: "blocker", ActionLabel: "核对考试资料", ActionRoute: route}
+		if readiness != nil && readiness.Ready {
+			notice.Severity = "warning"
+			result.Warnings = append(result.Warnings, notice)
+		} else {
+			// Reviewing extracted materials is the actionable prerequisite for
+			// readiness failures caused by the same unconfirmed import. Put it
+			// first so buildNextActions does not hide it behind a generic paper
+			// readiness action with the same route.
+			result.Blockers = append([]Notice{notice}, result.Blockers...)
+		}
+	case "failed":
+		result.Warnings = append(result.Warnings, Notice{Code: "paper_import_failed", Title: "最近一次考试资料识别失败", Message: "请查看失败原因并重试或替换资料", Severity: "warning", ActionLabel: "查看考试资料", ActionRoute: route})
+	}
 }
 
 func buildStageProgress(result Projection, readiness *paper.ReadinessResult, submissionsReliable bool, taskTotal int, arbitrationTotal int) []StageProgress {
@@ -346,6 +391,13 @@ func shortProcessingID(value string) string {
 func buildNextActions(result Projection) []NextAction {
 	actions := make([]NextAction, 0, 3)
 	seen := map[string]bool{}
+	for _, blocker := range result.Blockers {
+		if blocker.Code == "paper_import_review_required" && blocker.ActionRoute != "" {
+			seen[blocker.ActionRoute] = true
+			actions = append(actions, NextAction{Code: blocker.Code, Label: "核对考试资料", Description: blocker.Title, Route: blocker.ActionRoute, Priority: "high"})
+			break
+		}
+	}
 	for _, blocker := range result.Blockers {
 		if blocker.ActionRoute == "" || seen[blocker.ActionRoute] {
 			continue

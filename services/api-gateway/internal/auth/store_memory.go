@@ -15,6 +15,7 @@ type MemoryStore struct {
 	roles          map[string]map[string]AssignableRole
 	tenantStatuses map[string]string
 	sessions       map[string]memorySession
+	boundaries     map[string]ResourceBoundary
 	audits         []AuditRecord
 	auditSeq       int
 	userSeq        int
@@ -38,8 +39,65 @@ func NewMemoryStore() *MemoryStore {
 		roles:          map[string]map[string]AssignableRole{},
 		tenantStatuses: map[string]string{},
 		sessions:       map[string]memorySession{},
+		boundaries:     map[string]ResourceBoundary{},
 		audits:         []AuditRecord{},
 	}
+}
+
+func (s *MemoryStore) AddResourceBoundary(resourceType, resourceID string, boundary ResourceBoundary) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	boundary.ResourceType = resourceType
+	boundary.ResourceID = resourceID
+	s.boundaries[resourceType+"|"+resourceID] = boundary
+}
+
+func (s *MemoryStore) ResolveResourceBoundary(_ context.Context, scope AccessScope, resourceType, resourceID string) (ResourceBoundary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if boundary, ok := s.boundaries[resourceType+"|"+resourceID]; ok {
+		return boundary, nil
+	}
+	boundary := ResourceBoundary{ResourceType: resourceType, ResourceID: resourceID, TenantID: scope.TenantID}
+	if scope.syntheticUnbounded {
+		return boundary, nil
+	}
+	switch resourceType {
+	case "exam":
+		if scope.AllowsExam(resourceID) || scope.TenantWide {
+			boundary.ExamID = resourceID
+			return boundary, nil
+		}
+	case "submission":
+		if scope.AllowsSubmission(resourceID) || scope.TenantWide {
+			boundary.SubmissionID = resourceID
+			return boundary, nil
+		}
+	case "file_asset":
+		if scope.AllowsFile(resourceID) || scope.TenantWide {
+			return boundary, nil
+		}
+	case "review_task":
+		if scope.AllowsReviewTask(resourceID) || scope.TenantWide {
+			boundary.AssignedTo = scope.ActorID
+			return boundary, nil
+		}
+	case "arbitration_task":
+		if scope.AllowsArbitrationTask(resourceID) || scope.TenantWide {
+			boundary.AssignedTo = scope.ActorID
+			return boundary, nil
+		}
+	case "student":
+		if scope.AllowsStudent(resourceID) || scope.TenantWide {
+			boundary.StudentID = resourceID
+			return boundary, nil
+		}
+	default:
+		if scope.TenantWide {
+			return boundary, nil
+		}
+	}
+	return ResourceBoundary{}, ErrResourceBoundaryNotFound
 }
 
 func (s *MemoryStore) AddUser(user UserWithPassword) {
@@ -54,7 +112,7 @@ func (s *MemoryStore) AddUser(user UserWithPassword) {
 	}
 	for _, code := range user.Roles {
 		if _, exists := s.roles[user.TenantID][code]; !exists {
-			s.roles[user.TenantID][code] = AssignableRole{Code: code, Name: code, ScopeType: "tenant"}
+			s.roles[user.TenantID][code] = AssignableRole{Code: code, Name: code, ScopeType: RolePolicy(code).CanonicalScope}
 		}
 	}
 }
@@ -92,16 +150,10 @@ func (s *MemoryStore) ResolveAccessScope(_ context.Context, user User) (AccessSc
 	if err != nil {
 		return AccessScope{}, err
 	}
-	// The in-memory store has no school/class relationship tables. Treat an
-	// otherwise relationship-less school fixture as tenant-wide so unit tests
-	// exercise handlers; PostgreSQL always derives the real school boundary.
-	if !scope.HasDataAccess() {
-		for _, raw := range user.DataScope {
-			if kind, ok := raw.(string); ok && kind == "school" {
-				scope.TenantWide = true
-				break
-			}
-		}
+	// Synthetic unit fixtures may explicitly request a tenant-wide in-memory
+	// boundary. Production scopes never receive this test-only expansion.
+	if scopeDeclaresSynthetic(user.DataScope) {
+		scope.syntheticUnbounded = true
 	}
 	return scope, nil
 }
@@ -259,6 +311,12 @@ func (s *MemoryStore) Audits() []AuditEvent {
 }
 
 func (s *MemoryStore) ListAudits(_ context.Context, tenantID string, filter AuditFilter) ([]AuditRecord, error) {
+	if filter.ScopeMode != "" && filter.ScopeMode != "tenant" && filter.ScopeMode != "platform" {
+		return []AuditRecord{}, nil
+	}
+	if filter.ScopeMode != "" && filter.ScopeMode != "tenant" && filter.ScopeMode != "platform" {
+		return []AuditRecord{}, nil
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []AuditRecord{}
@@ -324,6 +382,9 @@ func (s *MemoryStore) ListManagedUsers(_ context.Context, tenantID string, filte
 		if user.TenantID != tenantID || (filter.UserID != "" && user.ID != filter.UserID) {
 			continue
 		}
+		if filter.RestrictSchools && !containsID(filter.SchoolIDs, firstScopeID(user.DataScope, "school_id")) {
+			continue
+		}
 		query := strings.ToLower(filter.Query)
 		if query != "" && !strings.Contains(strings.ToLower(user.Username), query) && !strings.Contains(strings.ToLower(user.DisplayName), query) {
 			continue
@@ -342,7 +403,7 @@ func (s *MemoryStore) ListManagedUsers(_ context.Context, tenantID string, filte
 		}
 		out = append(out, ManagedUser{
 			ID: user.ID, Username: user.Username, DisplayName: user.DisplayName,
-			Status: user.Status, Roles: append([]string(nil), user.Roles...),
+			Status: user.Status, Roles: append([]string(nil), user.Roles...), SchoolID: firstScopeID(user.DataScope, "school_id"),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -368,41 +429,86 @@ func (s *MemoryStore) ListManagedUsers(_ context.Context, tenantID string, filte
 	return out, nil
 }
 
-func (s *MemoryStore) ListAssignableRoles(_ context.Context, tenantID string) ([]AssignableRole, error) {
+func (s *MemoryStore) ListAssignableRoles(_ context.Context, actor User) ([]AssignableRole, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []AssignableRole{}
-	for _, role := range s.roles[tenantID] {
-		if role.Code == "platform_admin" || role.Code == "tenant_admin" {
-			continue
+	for _, role := range s.roles[actor.TenantID] {
+		if policy := RolePolicy(role.Code); CanAssignManagedRole(actor, role.Code) && role.ScopeType == policy.CanonicalScope {
+			out = append(out, role)
 		}
-		out = append(out, role)
 	}
 	return out, nil
 }
 
-func (s *MemoryStore) CreateManagedUser(_ context.Context, tenantID string, tenantCode string, input CreateManagedUserInput, passwordHash string) (ManagedUser, error) {
+func (s *MemoryStore) CreateManagedUser(_ context.Context, actor User, actorScope AccessScope, input CreateManagedUserInput, passwordHash string) (ManagedUser, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := tenantCode + "|" + input.Username
+	key := actor.TenantCode + "|" + input.Username
 	if existing, exists := s.users[key]; exists && existing.User.Status != "deleted" {
 		return ManagedUser{}, ErrUsernameExists
 	}
-	role, exists := s.roles[tenantID][input.RoleCode]
-	if !exists || role.Code == "platform_admin" || role.Code == "tenant_admin" {
+	role, exists := s.roles[actor.TenantID][input.RoleCode]
+	if !exists {
 		return ManagedUser{}, ErrRoleNotFound
+	}
+	policy := RolePolicy(role.Code)
+	if !CanAssignManagedRole(actor, role.Code) || role.ScopeType != policy.CanonicalScope {
+		return ManagedUser{}, ErrRoleAssignment
+	}
+	if len(input.ClassIDs) > 0 && !policy.ClassBinding {
+		return ManagedUser{}, ErrInvalidRoleBinding
+	}
+	schoolID := strings.TrimSpace(input.SchoolID)
+	if schoolID == "" && HasRole(actor, "school_admin") && len(actorScope.SchoolIDs) == 1 {
+		schoolID = actorScope.SchoolIDs[0]
+	}
+	if policy.SchoolRequired && schoolID == "" {
+		return ManagedUser{}, ErrInvalidRoleBinding
+	}
+	if schoolID != "" && !actorScope.AllowsSchool(schoolID) {
+		return ManagedUser{}, ErrOrganizationScope
 	}
 	s.userSeq++
 	user := UserWithPassword{
 		User: User{
-			ID: fmt.Sprintf("managed-user-%d", s.userSeq), TenantID: tenantID, TenantCode: tenantCode,
+			ID: fmt.Sprintf("managed-user-%d", s.userSeq), TenantID: actor.TenantID, TenantCode: actor.TenantCode,
 			Username: input.Username, DisplayName: input.DisplayName, Status: "active",
-			Roles: []string{input.RoleCode}, Permissions: []string{}, DataScope: map[string]any{input.RoleCode: map[string]any{"scope": "tenant"}},
+			Roles: []string{input.RoleCode}, Permissions: []string{}, DataScope: map[string]any{input.RoleCode: canonicalRoleDataScope(input.RoleCode, schoolID)},
 		},
 		PasswordHash: passwordHash,
 	}
 	s.users[key] = user
-	return ManagedUser{ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, Status: user.Status, Roles: user.Roles}, nil
+	return ManagedUser{ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, Status: user.Status, Roles: user.Roles, SchoolID: schoolID}, nil
+}
+
+func scopeDeclaresSynthetic(scope map[string]any) bool {
+	for key, raw := range scope {
+		if key == "synthetic" {
+			value, _ := raw.(bool)
+			if value {
+				return true
+			}
+		}
+		if nested, ok := raw.(map[string]any); ok && scopeDeclaresSynthetic(nested) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstScopeID(scope map[string]any, key string) string {
+	if value, ok := scope[key].(string); ok {
+		return value
+	}
+	for _, raw := range scope {
+		if nested, ok := raw.(map[string]any); ok {
+			if value := firstScopeID(nested, key); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func cloneAuditMap(value map[string]any) map[string]any {

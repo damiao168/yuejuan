@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Empty, Input, Select, Space, Spin, Tag } from "antd";
 import { ArrowDown, ArrowUp, RefreshCw, Save, Split, Undo2, Unlink } from "lucide-react";
+import { getUserErrorMessage } from "../../../api/client";
 import {
   createMathUnderstandingCorrection,
   getMathUnderstanding,
@@ -85,7 +86,7 @@ export function MathEvidenceInspector({ segmentId, subjectCode, disabled = false
       setMergePrimary("");
       setMergeSecondary("");
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "数学答卷理解结果暂不可用";
+      const message = getUserErrorMessage(cause, "数学答卷理解结果暂不可用");
       if (/404|not found|未找到/i.test(message)) {
         setData(null);
         setError("");
@@ -159,7 +160,7 @@ export function MathEvidenceInspector({ segmentId, subjectCode, disabled = false
       await createMathUnderstandingCorrection(artifact.id, body);
       await load();
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "保存校正失败";
+      const message = getUserErrorMessage(cause, "保存校正失败");
       setError(/409|revision|冲突/i.test(message) ? "识别结果已更新，请刷新后重新校正。" : message);
     } finally {
       setSaving(false);

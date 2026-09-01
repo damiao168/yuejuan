@@ -75,7 +75,7 @@ func testAuthStoreWithPermissions(t *testing.T, permissions []string) *auth.Memo
 			Status:      "active",
 			Roles:       []string{"teacher"},
 			Permissions: permissions,
-			DataScope:   map[string]any{"scope": "school"},
+			DataScope:   map[string]any{"scope": "school", "synthetic": true},
 		},
 		PasswordHash: hash,
 	})

@@ -3,7 +3,7 @@ import { Alert, App, Button, Checkbox, Collapse, Drawer, Input, InputNumber, Lis
 import { ChevronLeft, ChevronRight, Copy, Download, LockKeyhole, MousePointer2, Plus, Printer, RefreshCw, Save, Trash2, WandSparkles, ZoomIn, ZoomOut } from "lucide-react";
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getUserErrorMessage } from "../api/client";
 import {
 	approveOMRCalibration,
   cloneAnswerSheetTemplate,
@@ -56,9 +56,9 @@ interface PreviewState {
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
     console.error("请求失败", error.status, error.code, error.message);
-    return error.message || "操作失败，请稍后重试";
+    return getUserErrorMessage(error, "操作失败，请稍后重试");
   }
-  return error instanceof Error && error.message ? error.message : "操作失败，请稍后重试";
+  return getUserErrorMessage(error, "操作失败，请稍后重试");
 }
 
 function saveDownload(blob: Blob, filename: string) {

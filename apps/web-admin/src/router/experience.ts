@@ -1,13 +1,17 @@
 import type { SessionUser } from "../auth/session";
 
-export type ProductExperience = "admin" | "teacher";
+export type ProductExperience = "admin" | "teacher" | "auditor" | "student";
 
 export const ADMIN_ROLES = ["platform_admin", "tenant_admin", "school_admin"] as const;
 export const TEACHER_ROLES = ["teacher", "grader", "arbitrator"] as const;
+export const AUDITOR_ROLES = ["auditor"] as const;
+export const STUDENT_ROLES = ["student"] as const;
 
 const experiencePrefixes: Record<ProductExperience, string> = {
   admin: "/admin",
-  teacher: "/teacher"
+  teacher: "/teacher",
+  auditor: "/auditor",
+  student: "/student"
 };
 
 function hasRole(user: SessionUser, roles: readonly string[]) {
@@ -16,15 +20,19 @@ function hasRole(user: SessionUser, roles: readonly string[]) {
 
 export function availableExperiences(user: SessionUser): ProductExperience[] {
   const experiences: ProductExperience[] = [];
-  if (hasRole(user, ADMIN_ROLES) || user.permissions.includes("exam:manage")) experiences.push("admin");
+  if (hasRole(user, ADMIN_ROLES)) experiences.push("admin");
   if (hasRole(user, TEACHER_ROLES)) experiences.push("teacher");
+  if (hasRole(user, AUDITOR_ROLES)) experiences.push("auditor");
+  if (hasRole(user, STUDENT_ROLES)) experiences.push("student");
   return experiences;
 }
 
 export function defaultExperience(user: SessionUser): ProductExperience {
   const experiences = availableExperiences(user);
   if (hasRole(user, ADMIN_ROLES)) return "admin";
-  return experiences.includes("teacher") ? "teacher" : "admin";
+  if (experiences.includes("teacher")) return "teacher";
+  if (experiences.includes("auditor")) return "auditor";
+  return experiences.includes("student") ? "student" : "admin";
 }
 
 export function hasExperienceAccess(user: SessionUser, experience: ProductExperience): boolean {
@@ -35,6 +43,8 @@ export function experienceFromPath(pathname: string): ProductExperience | null {
   const normalized = normalizePath(pathname);
   if (normalized === "/admin" || normalized.startsWith("/admin/")) return "admin";
   if (normalized === "/teacher" || normalized.startsWith("/teacher/")) return "teacher";
+  if (normalized === "/auditor" || normalized.startsWith("/auditor/")) return "auditor";
+  if (normalized === "/student" || normalized.startsWith("/student/")) return "student";
   return null;
 }
 
@@ -54,7 +64,10 @@ export function pathForExperience(pathname: string, experience: ProductExperienc
 }
 
 export function experienceLabel(experience: ProductExperience): string {
-  return experience === "admin" ? "管理端" : "阅卷端";
+  if (experience === "admin") return "管理端";
+  if (experience === "teacher") return "阅卷端";
+  if (experience === "auditor") return "审计端";
+  return "学生端";
 }
 
 function normalizePath(pathname: string): string {

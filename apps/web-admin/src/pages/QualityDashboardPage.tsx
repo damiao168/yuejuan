@@ -4,7 +4,7 @@ import { RefreshCw, ShieldAlert, ShieldCheck } from "lucide-react";
 import type { Dayjs } from "dayjs";
 import type { QualityDashboard } from "../api/qualityDashboard";
 import { getExamQualityDashboard } from "../api/qualityDashboard";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getUserErrorMessage } from "../api/client";
 import { getSeedPolicy, listBackmarkBatches, putSeedPolicy, type BackmarkBatch, type SeedPolicy } from "../api/qualityOperations";
 import { createBackmarkBatch, createBackmarkBatchRegradeJob, getBackmarkBatch, previewBackmarkBatch, previewBackmarkBatchRegrade, type BackmarkPolicy, type BackmarkPreview, type BackmarkSelector, type BackmarkSummary } from "../api/backmark";
 import { listScoreReleases, type RegradePreview, type ScoreRelease } from "../api/scoreReleases";
@@ -27,8 +27,7 @@ function percentage(value?: number) {
 }
 
 function errorMessage(error: unknown) {
-  if (error instanceof ApiClientError) return error.message;
-  return "质量看板暂时无法加载，请稍后重试";
+  return getUserErrorMessage(error, "质量看板暂时无法加载，请稍后重试");
 }
 
 export function QualityDashboardPage({ examId, canManage = false }: { examId: string; canManage?: boolean }) {
@@ -419,7 +418,7 @@ export function QualityDashboardPage({ examId, canManage = false }: { examId: st
           <Alert type="info" showIcon message="回标只记录候选差异，不会修改当前成绩" description="只有标记为“需重评”的已完成项目，才能由质量管理员明确转入题目复评。新任务仍需审批、人工复评并创建新的成绩发布版本。" />
           <Descriptions size="small" bordered column={2} items={[
             { key: "batch", label: "回标批次", children: backmarkSummary.batch.id },
-            { key: "status", label: "批次状态", children: <Tag>{backmarkSummary.batch.status}</Tag> },
+            { key: "status", label: "批次状态", children: <Tag>{backmarkSummary.batch.status === "completed" ? "已完成" : backmarkSummary.batch.status === "cancelled" ? "已取消" : backmarkSummary.batch.status === "ready_for_confirmation" ? "待确认" : "处理中"}</Tag> },
             { key: "count", label: "受影响答卷", children: `${backmarkSummary.batch.affected_count} 份` },
             { key: "policy", label: "差异去向", children: backmarkSummary.batch.policy.disposition }
           ]} />

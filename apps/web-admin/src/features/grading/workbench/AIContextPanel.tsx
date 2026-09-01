@@ -12,6 +12,44 @@ function flagList(source: Record<string, unknown>): string[] {
   return Array.isArray(candidate) ? candidate.filter((item): item is string => typeof item === "string") : [];
 }
 
+function calibrationStatusLabel(value: unknown): string {
+  if (value === "calibrated" || value === "qualified" || value === "ready") return "已校准";
+  if (value === "pending" || value === "in_progress") return "校准中";
+  if (value === "failed" || value === "unqualified") return "未通过校准";
+  return "未知状态";
+}
+
+function candidateSourceLabel(value: string): string {
+  const labels: Record<string, string> = {
+    ai: "智能评分",
+    model: "评分模型",
+    rule: "规则判断",
+    ensemble: "综合判断"
+  };
+  return labels[value] ?? "智能评分候选";
+}
+
+function candidateDecisionLabel(value: string | undefined): string {
+  if (!value) return "待人工确认";
+  const labels: Record<string, string> = {
+    accept: "建议通过",
+    reject: "建议不通过",
+    review: "建议人工复核",
+    abstain: "已放弃自动判断"
+  };
+  return labels[value] ?? (/[\u3400-\u9fff]/u.test(value) ? value : "待人工确认");
+}
+
+function riskFlagLabel(value: string): string {
+  const labels: Record<string, string> = {
+    low_confidence: "置信度较低",
+    score_anomaly: "分数异常",
+    evidence_incomplete: "证据不完整",
+    calibration_required: "需要校准"
+  };
+  return labels[value] ?? "其他风险";
+}
+
 export function AIContextPanel({
   context,
   visible,
@@ -50,11 +88,11 @@ export function AIContextPanel({
       {metadata ? (
         <Descriptions size="small" column={1} colon={false}>
           <Descriptions.Item label="模型版本">{scalar(metadata.model_version ?? metadata.engine_version)}</Descriptions.Item>
-          <Descriptions.Item label="校准状态">{scalar(metadata.calibration_status ?? metadata.status)}</Descriptions.Item>
+          <Descriptions.Item label="校准状态">{calibrationStatusLabel(metadata.calibration_status ?? metadata.status)}</Descriptions.Item>
           <Descriptions.Item label="置信度">{scalar(metadata.confidence)}</Descriptions.Item>
-          <Descriptions.Item label="风险 / abstain">
+          <Descriptions.Item label="风险 / 自动放弃">
             <Space wrap size={[4, 4]}>
-              {flags.map((item) => <Tag color="orange" key={item}>{item}</Tag>)}
+              {flags.map((item) => <Tag color="orange" key={item}>{riskFlagLabel(item)}</Tag>)}
               {metadata.abstain === true ? <Tag color="red">已放弃自动判断</Tag> : null}
               {!flags.length && metadata.abstain !== true ? "无已报告风险" : null}
             </Space>
@@ -67,14 +105,14 @@ export function AIContextPanel({
           size="small"
           items={candidates.map((candidate) => ({
             key: candidate.id,
-            label: `${candidate.source} · ${candidate.engine_version || "版本未知"}`,
+            label: `${candidateSourceLabel(candidate.source)} · ${candidate.engine_version || "版本未知"}`,
             children: (
               <Descriptions size="small" column={1} colon={false}>
-                <Descriptions.Item label="结论">{candidate.display_text || candidate.decision}</Descriptions.Item>
-                <Descriptions.Item label="Profile">{candidate.profile_version || "—"}</Descriptions.Item>
+                <Descriptions.Item label="结论">{candidateDecisionLabel(candidate.display_text || candidate.decision)}</Descriptions.Item>
+                <Descriptions.Item label="配置版本">{candidate.profile_version || "—"}</Descriptions.Item>
                 <Descriptions.Item label="置信度">{candidate.confidence ?? "—"}</Descriptions.Item>
                 <Descriptions.Item label="当前候选">{candidate.is_current ? "是" : "否"}</Descriptions.Item>
-                <Descriptions.Item label="证据">{Object.keys(candidate.evidence).join("、") || "无"}</Descriptions.Item>
+                <Descriptions.Item label="证据">{Object.keys(candidate.evidence).length ? `${Object.keys(candidate.evidence).length} 项` : "无"}</Descriptions.Item>
               </Descriptions>
             )
           }))}
@@ -83,7 +121,7 @@ export function AIContextPanel({
       {context.scoring_evidence.length ? (
         <div className="structured-evidence-list">
           {context.scoring_evidence.map((item) => (
-            <Tag key={item.id}>{item.evidence_type}{typeof item.quality === "number" ? ` · ${Math.round(item.quality * 100)}%` : ""}</Tag>
+            <Tag key={item.id}>评分证据{typeof item.quality === "number" ? ` · ${Math.round(item.quality * 100)}%` : ""}</Tag>
           ))}
         </div>
       ) : null}

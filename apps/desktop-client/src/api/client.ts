@@ -1,3 +1,5 @@
+import { getApiErrorMessage } from "./userError";
+
 export interface ApiErrorPayload {
   error?: {
     code?: string;
@@ -164,11 +166,9 @@ async function toApiError(response: Response): Promise<ApiClientError> {
   try {
     const payload = (await response.json()) as ApiErrorPayload;
     const code = payload.error?.code ?? payload.code ?? "request_failed";
-    const rawMessage = payload.error?.message ?? payload.message ?? response.statusText;
-    const message = code === "operation_in_progress" ? "操作正在处理中，请稍后查看结果。" : code === "resource_version_conflict" ? "任务已被其他人更新，请刷新后重试。" : rawMessage;
-    return new ApiClientError(response.status, code, message);
+    return new ApiClientError(response.status, code, getApiErrorMessage(code, response.status));
   } catch {
-    return new ApiClientError(response.status, "request_failed", response.statusText);
+    return new ApiClientError(response.status, "request_failed", getApiErrorMessage("request_failed", response.status));
   }
 }
 

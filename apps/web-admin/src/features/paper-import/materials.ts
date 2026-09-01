@@ -63,7 +63,6 @@ export function orderedSourcesAfterMove(sources: PaperImportSource[], sourceID: 
 }
 
 export function orderedSourcesAfterRemoval(sources: PaperImportSource[], sourceID: string) {
-  if (sources.length <= 1) return [...sources];
   return sources
     .filter((source) => source.id !== sourceID)
     .sort((left, right) => left.document_index - right.document_index)

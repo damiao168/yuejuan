@@ -12,6 +12,9 @@ var (
 	ErrForbidden          = errors.New("forbidden")
 	ErrUsernameExists     = errors.New("username already exists")
 	ErrRoleNotFound       = errors.New("role not found")
+	ErrRoleAssignment     = errors.New("role assignment is not allowed")
+	ErrOrganizationScope  = errors.New("organization scope is not allowed")
+	ErrInvalidRoleBinding = errors.New("role organization binding is invalid")
 )
 
 const PlatformTenantID = "00000000-0000-0000-0000-000000000001"
@@ -50,6 +53,7 @@ type ManagedUser struct {
 	DisplayName string    `json:"display_name"`
 	Status      string    `json:"status"`
 	Roles       []string  `json:"roles"`
+	SchoolID    string    `json:"school_id,omitempty"`
 	CreatedAt   time.Time `json:"created_at,omitempty"`
 }
 
@@ -57,9 +61,12 @@ type ManagedUserFilter struct {
 	Query           string
 	Role            string
 	UserID          string
+	RestrictSchools bool
+	SchoolIDs       []string
 	Limit           int
 	CursorCreatedAt time.Time
 	CursorID        string
+	ScopeMode       string
 }
 
 type AssignableRole struct {
@@ -70,10 +77,12 @@ type AssignableRole struct {
 }
 
 type CreateManagedUserInput struct {
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
-	Password    string `json:"password"`
-	RoleCode    string `json:"role_code"`
+	Username    string   `json:"username"`
+	DisplayName string   `json:"display_name"`
+	Password    string   `json:"password"`
+	RoleCode    string   `json:"role_code"`
+	SchoolID    string   `json:"school_id,omitempty"`
+	ClassIDs    []string `json:"class_ids,omitempty"`
 }
 
 type Session struct {
@@ -154,6 +163,9 @@ type AuditFilter struct {
 	Limit           int
 	CursorCreatedAt time.Time
 	CursorID        string
+	// ScopeMode is derived from the authenticated principal. Non-tenant
+	// scopes fail closed until audit rows carry a trusted resource projection.
+	ScopeMode string
 }
 
 type Store interface {
@@ -169,6 +181,6 @@ type Store interface {
 	Audit(ctx context.Context, event AuditEvent) error
 	ListAudits(ctx context.Context, tenantID string, filter AuditFilter) ([]AuditRecord, error)
 	ListManagedUsers(ctx context.Context, tenantID string, filter ManagedUserFilter) ([]ManagedUser, error)
-	ListAssignableRoles(ctx context.Context, tenantID string) ([]AssignableRole, error)
-	CreateManagedUser(ctx context.Context, tenantID string, tenantCode string, input CreateManagedUserInput, passwordHash string) (ManagedUser, error)
+	ListAssignableRoles(ctx context.Context, actor User) ([]AssignableRole, error)
+	CreateManagedUser(ctx context.Context, actor User, actorScope AccessScope, input CreateManagedUserInput, passwordHash string) (ManagedUser, error)
 }

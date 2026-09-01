@@ -26,7 +26,7 @@ import {
   TriangleAlert
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { ApiClientError } from "../../api/client";
+import { getUserErrorMessage } from "../../api/client";
 import {
   addModelEvaluationCandidate,
   completeModelEvaluationRun,
@@ -74,8 +74,7 @@ function formatAverageCost(value: number) {
 }
 
 function errorMessage(error: unknown) {
-  if (error instanceof ApiClientError) return error.message || "评测操作失败，请检查输入后重试";
-  return error instanceof Error ? error.message : "评测操作失败，请检查输入后重试";
+  return getUserErrorMessage(error, "评测操作失败，请检查输入后重试");
 }
 
 type TransitionKind = "complete" | "invalidate";

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Drawer, Form, Select, Space, Spin } from "antd";
 import { BookOpenCheck, LockKeyhole, Save } from "lucide-react";
-import { ApiClientError } from "../../../api/client";
+import { ApiClientError, getUserErrorMessage } from "../../../api/client";
 import {
   getQuestionAssessmentProfile,
   getQuestionAssessmentSnapshot,
@@ -108,8 +108,7 @@ function subjectFromExam(value: string): SubjectCode {
 }
 
 function formatError(error: unknown) {
-  if (error instanceof ApiClientError) return error.message || "学科评分配置加载失败";
-  return error instanceof Error ? error.message : "学科评分配置加载失败";
+  return getUserErrorMessage(error, "学科评分配置加载失败");
 }
 
 export function AssessmentProfileEditor({

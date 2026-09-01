@@ -18,6 +18,7 @@ type Dependencies struct {
 	Submissions   submission.Store
 	Reviews       review.Store
 	Audits        auth.Store
+	Activities    ActivityStore
 	Organizations OrganizationSummaryStore
 	Now           func() time.Time
 }
@@ -132,7 +133,12 @@ func (s *Service) Summary(ctx context.Context, user auth.User, accessScope auth.
 		result.ActiveExams = append(result.ActiveExams, active)
 	}
 
-	tasks, taskErr := s.deps.Reviews.ListTasks(ctx, user.TenantID, review.ListFilter{})
+	tasks, taskErr := s.deps.Reviews.ListTasks(ctx, user.TenantID, review.ListFilter{
+		ScopeMode: accessScope.QueryMode(), ScopeActorID: accessScope.ActorID,
+		ScopeSchoolIDs: append([]string(nil), accessScope.SchoolIDs...),
+		ScopeExamIDs:   append([]string(nil), accessScope.ExamIDs...),
+		ScopeTaskIDs:   append([]string(nil), accessScope.ReviewTaskIDs...),
+	})
 	if taskErr != nil {
 		result.Warnings = append(result.Warnings, "阅卷待办暂时无法统计")
 	} else {
@@ -147,7 +153,12 @@ func (s *Service) Summary(ctx context.Context, user auth.User, accessScope auth.
 		result.Statistics.PendingReviewSubmissionCount = len(submissions)
 	}
 
-	arbitrations, arbitrationErr := s.deps.Reviews.ListArbitrationTasks(ctx, user.TenantID, review.ArbitrationFilter{})
+	arbitrations, arbitrationErr := s.deps.Reviews.ListArbitrationTasks(ctx, user.TenantID, review.ArbitrationFilter{
+		ScopeMode: accessScope.QueryMode(), ScopeActorID: accessScope.ActorID,
+		ScopeSchoolIDs: append([]string(nil), accessScope.SchoolIDs...),
+		ScopeExamIDs:   append([]string(nil), accessScope.ExamIDs...),
+		ScopeTaskIDs:   append([]string(nil), accessScope.ArbitrationTaskIDs...),
+	})
 	if arbitrationErr != nil {
 		result.Warnings = append(result.Warnings, "人工复核待办暂时无法统计")
 	} else {
@@ -162,27 +173,37 @@ func (s *Service) Summary(ctx context.Context, user auth.User, accessScope auth.
 		result.Statistics.PendingArbitrationSubmissionCount = len(submissions)
 	}
 
-	audits, auditErr := s.deps.Audits.ListAudits(ctx, user.TenantID, auth.AuditFilter{Limit: 10})
-	if auditErr != nil {
-		result.Warnings = append(result.Warnings, "最近动态暂时无法加载")
-	} else {
-		for _, record := range audits {
-			if !dashboardActivity(record.Action) {
-				continue
-			}
-			result.RecentActivities = append(result.RecentActivities, RecentActivity{
-				ID:            record.ID,
-				Action:        record.Action,
-				TargetType:    record.TargetType,
-				TargetID:      record.TargetID,
-				Reason:        record.Reason,
-				CreatedAt:     record.CreatedAt,
-				DrilldownPath: activityPath(record),
-			})
-			if len(result.RecentActivities) == 5 {
-				break
+	var activityErr error
+	if s.deps.Activities != nil {
+		result.RecentActivities, activityErr = s.deps.Activities.ListRecent(ctx, user.TenantID, accessScope, 5)
+	} else if accessScope.IsPlatform || accessScope.TenantWide {
+		var audits []auth.AuditRecord
+		var auditErr error
+		audits, auditErr = s.deps.Audits.ListAudits(ctx, user.TenantID, auth.AuditFilter{Limit: 10})
+		if auditErr != nil {
+			activityErr = auditErr
+		} else {
+			for _, record := range audits {
+				if !dashboardActivity(record.Action) {
+					continue
+				}
+				result.RecentActivities = append(result.RecentActivities, RecentActivity{
+					ID:            record.ID,
+					Action:        record.Action,
+					TargetType:    record.TargetType,
+					TargetID:      record.TargetID,
+					Reason:        record.Reason,
+					CreatedAt:     record.CreatedAt,
+					DrilldownPath: activityPath(record),
+				})
+				if len(result.RecentActivities) == 5 {
+					break
+				}
 			}
 		}
+	}
+	if activityErr != nil {
+		result.Warnings = append(result.Warnings, "关键进展暂时无法加载")
 	}
 
 	sort.Slice(result.ActiveExams, func(i, j int) bool {

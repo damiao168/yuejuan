@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Avatar, Button, ConfigProvider, Drawer, Dropdown, Grid, Layout, Menu, Segmented, Space, theme, Tooltip } from "antd";
-import { ArrowLeft, ChevronDown, Menu as MenuIcon, PanelLeftClose, PanelLeftOpen, UserRound } from "lucide-react";
+import { ArrowLeft, ChevronDown, Menu as MenuIcon, PanelLeft, UserRound } from "lucide-react";
 import { productIdentityLabel, type SessionUser } from "../auth/session";
 import type { AppRoute } from "../router/routes";
 import { hasRouteAccess, routeGroups, routePresentation, visibleRoutes } from "../router/routes";
@@ -9,8 +9,8 @@ import { workspaceLabel } from "../workspaces/registry";
 import { MockBadge } from "./MockBadge";
 
 const { Header, Sider, Content } = Layout;
-const DESKTOP_NAVIGATION_WIDTH = 176;
-const DESKTOP_NAVIGATION_COLLAPSED_WIDTH = 56;
+const DESKTOP_NAVIGATION_WIDTH = 192;
+const DESKTOP_NAVIGATION_COLLAPSED_WIDTH = 64;
 const MOBILE_NAVIGATION_WIDTH = 280;
 const NAVIGATION_COLLAPSED_STORAGE_KEY = "edugrade.navigation.collapsed";
 
@@ -38,6 +38,12 @@ export function AppLayout({
   const screens = Grid.useBreakpoint();
   const desktopNavigation = Boolean(screens.lg);
   const [navigationOpen, setNavigationOpen] = useState(false);
+  const [navigationScrollbarVisible, setNavigationScrollbarVisible] = useState(false);
+  const [navigationScrollbarFading, setNavigationScrollbarFading] = useState(false);
+  const navigationScrollbarHideTimer = useRef<number | null>(null);
+  const [workspaceScrollbarVisible, setWorkspaceScrollbarVisible] = useState(false);
+  const [workspaceScrollbarFading, setWorkspaceScrollbarFading] = useState(false);
+  const workspaceScrollbarHideTimer = useRef<number | null>(null);
   const [navigationCollapsed, setNavigationCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem(NAVIGATION_COLLAPSED_STORAGE_KEY) === "true";
@@ -48,6 +54,65 @@ export function AppLayout({
   const permittedRoutes = visibleRoutes(experience).filter((route) => hasRouteAccess(user, route, experience));
   const selectedPath = currentRoute.key === "examWorkspace" ? "/exams" : currentRoute.path;
   const currentPresentation = routePresentation(currentRoute, experience);
+  useEffect(() => () => {
+    if (navigationScrollbarHideTimer.current !== null) {
+      window.clearTimeout(navigationScrollbarHideTimer.current);
+    }
+    if (workspaceScrollbarHideTimer.current !== null) {
+      window.clearTimeout(workspaceScrollbarHideTimer.current);
+    }
+  }, []);
+  const showNavigationScrollbar = () => {
+    if (navigationScrollbarHideTimer.current !== null) {
+      window.clearTimeout(navigationScrollbarHideTimer.current);
+      navigationScrollbarHideTimer.current = null;
+    }
+    setNavigationScrollbarVisible(true);
+    setNavigationScrollbarFading(false);
+  };
+  const scheduleNavigationScrollbarHide = () => {
+    if (navigationScrollbarHideTimer.current !== null) {
+      window.clearTimeout(navigationScrollbarHideTimer.current);
+    }
+    setNavigationScrollbarFading(true);
+    navigationScrollbarHideTimer.current = window.setTimeout(() => {
+      setNavigationScrollbarVisible(false);
+      setNavigationScrollbarFading(false);
+      navigationScrollbarHideTimer.current = null;
+    }, 3000);
+  };
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle("is-workspace-scrollbar-visible", workspaceScrollbarVisible);
+    root.classList.toggle("is-workspace-scrollbar-fading", workspaceScrollbarFading);
+    return () => {
+      root.classList.remove("is-workspace-scrollbar-visible", "is-workspace-scrollbar-fading");
+    };
+  }, [workspaceScrollbarVisible, workspaceScrollbarFading]);
+  const showWorkspaceScrollbar = () => {
+    if (workspaceScrollbarHideTimer.current !== null) {
+      window.clearTimeout(workspaceScrollbarHideTimer.current);
+      workspaceScrollbarHideTimer.current = null;
+    }
+    setWorkspaceScrollbarVisible(true);
+    setWorkspaceScrollbarFading(false);
+  };
+  const scheduleWorkspaceScrollbarHide = () => {
+    if (workspaceScrollbarHideTimer.current !== null) {
+      window.clearTimeout(workspaceScrollbarHideTimer.current);
+    }
+    setWorkspaceScrollbarFading(true);
+    workspaceScrollbarHideTimer.current = window.setTimeout(() => {
+      setWorkspaceScrollbarVisible(false);
+      setWorkspaceScrollbarFading(false);
+      workspaceScrollbarHideTimer.current = null;
+    }, 3000);
+  };
+  const toggleNavigation = () => {
+    const next = !navigationCollapsed;
+    setNavigationCollapsed(next);
+    try { window.localStorage.setItem(NAVIGATION_COLLAPSED_STORAGE_KEY, String(next)); } catch { /* persistence is optional */ }
+  };
   const menuItems = routeGroups(experience)
     .map((group) => {
       const children = permittedRoutes
@@ -89,15 +154,43 @@ export function AppLayout({
     }
   };
   const navigation = (
-    <div className={desktopNavigation && navigationCollapsed ? "sidebar-inner is-collapsed" : "sidebar-inner"}>
-      <button type="button" className="brand-block brand-button" onClick={() => { setNavigationOpen(false); onNavigate("/dashboard"); }} aria-label={`返回${experienceLabel(experience)}工作台`}>
-        <div className="brand-mark">E</div>
-        <div className="brand-copy">
-          <strong>EduGrade</strong>
-          <span title={user.school}>{user.school || productIdentityLabel(user)}</span>
-        </div>
-      </button>
-      <div className="sidebar-main">
+    <div
+      id="primary-navigation"
+      className={desktopNavigation && navigationCollapsed ? "sidebar-inner is-collapsed" : "sidebar-inner"}
+      onMouseEnter={desktopNavigation ? showNavigationScrollbar : undefined}
+      onMouseLeave={desktopNavigation ? scheduleNavigationScrollbarHide : undefined}
+    >
+      <div className="sidebar-header">
+        <button type="button" className="brand-block brand-button" onClick={() => { setNavigationOpen(false); onNavigate("/dashboard"); }} aria-label={`返回${experienceLabel(experience)}工作台`}>
+          <div className="brand-copy">
+            <strong>EduGrade</strong>
+            <span title={user.school}>{user.school || productIdentityLabel(user)}</span>
+          </div>
+        </button>
+        {desktopNavigation ? (
+          <Tooltip title={navigationCollapsed ? "展开导航" : "收起导航"} placement="right">
+            <button
+              type="button"
+              className="sidebar-toggle"
+              aria-label={navigationCollapsed ? "展开导航" : "收起导航"}
+              aria-expanded={!navigationCollapsed}
+              aria-controls="primary-navigation"
+              onClick={toggleNavigation}
+            >
+              <PanelLeft size={18} strokeWidth={1.8} />
+            </button>
+          </Tooltip>
+        ) : null}
+      </div>
+      <div
+        className={
+          !desktopNavigation
+            ? "sidebar-main is-scrollbar-visible"
+            : navigationScrollbarVisible
+              ? `sidebar-main is-scrollbar-visible${navigationScrollbarFading ? " is-scrollbar-fading" : ""}`
+              : "sidebar-main"
+        }
+      >
         {availableExperiences.length > 1 && !(desktopNavigation && navigationCollapsed) ? (
           <div className="experience-switcher">
             <Segmented
@@ -153,20 +246,6 @@ export function AppLayout({
         {!immersive && desktopNavigation ? (
           <Sider width={DESKTOP_NAVIGATION_WIDTH} collapsedWidth={DESKTOP_NAVIGATION_COLLAPSED_WIDTH} collapsed={navigationCollapsed} trigger={null} className="sidebar">
             {navigation}
-            <Tooltip title={navigationCollapsed ? "展开导航" : "收起导航"} placement="right">
-              <button
-                type="button"
-                className="sidebar-collapse-trigger"
-                aria-label={navigationCollapsed ? "展开导航" : "收起导航"}
-                onClick={() => {
-                  const next = !navigationCollapsed;
-                  setNavigationCollapsed(next);
-                  try { window.localStorage.setItem(NAVIGATION_COLLAPSED_STORAGE_KEY, String(next)); } catch { /* persistence is optional */ }
-                }}
-              >
-                {navigationCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
-              </button>
-            </Tooltip>
           </Sider>
         ) : null}
         {!immersive && !desktopNavigation ? (
@@ -208,7 +287,11 @@ export function AppLayout({
               {currentRoute.mock ? <MockBadge compact={true} /> : null}
             </Header>
           ) : null}
-          <Content className={immersive ? "workspace immersive-workspace" : "workspace"}>
+          <Content
+            className={immersive ? "workspace immersive-workspace" : "workspace"}
+            onMouseEnter={showWorkspaceScrollbar}
+            onMouseLeave={scheduleWorkspaceScrollbarHide}
+          >
             {!immersive && desktopNavigation && currentRoute.mock ? <div className="workspace-route-indicator"><MockBadge compact={true} /></div> : null}
             {children}
           </Content>

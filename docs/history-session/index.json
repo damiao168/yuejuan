@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "latest_number": 2,
+  "sessions": {
+    "v1/34E3IcC7e7I8FMGbmtRU3IsCyoGbqHIm6BdyuGx5TmE7JvN6e2NsbDhkMMvDIotUzb6PNDysEWiP": {
+      "number": 1,
+      "path": "docs/history-session/1.md",
+      "created_at": "unix:1787910633",
+      "updated_at": "unix:1787910671"
+    },
+    "v1/3O7Wx1emqFNI8HaXc2QFxrrdGm7UaUpK31J02UW64pw7Nc01ygWFpEa9D3A2U2rOx9eWmeFilRMC": {
+      "number": 2,
+      "path": "docs/history-session/2.md",
+      "created_at": "unix:1787911081",
+      "updated_at": "unix:1787911481"
+    }
+  }
+}

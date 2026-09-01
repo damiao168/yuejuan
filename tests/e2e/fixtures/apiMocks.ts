@@ -1,27 +1,9 @@
 import type { Page, Route } from "@playwright/test";
+import roleMatrix from "../../../contracts/authorization/role-matrix.json" with { type: "json" };
 
-type TestRole = "school_admin" | "platform_admin" | "grader";
+type TestRole = "school_admin" | "platform_admin" | "teacher" | "grader" | "arbitrator";
 
-const rolePermissions: Record<TestRole, string[]> = {
-  school_admin: [
-    "exam:manage",
-    "submission:manage",
-    "file:manage",
-    "capture:manage",
-    "ocr:manage",
-    "segment:manage",
-    "review:manage",
-    "review:work",
-    "arbitration:manage",
-    "score:manage",
-    "report:read",
-    "appeal:manage",
-    "org:manage",
-    "audit:read"
-  ],
-  platform_admin: ["tenant:manage", "system:read", "model:read", "audit:read"],
-  grader: ["review:work"]
-};
+const rolePermissions = Object.fromEntries(Object.entries(roleMatrix).map(([role, contract]) => [role, contract.permissions])) as Record<TestRole, string[]>;
 
 function userFor(role: TestRole) {
   return {
@@ -29,12 +11,17 @@ function userFor(role: TestRole) {
     tenant_id: role === "platform_admin" ? "platform" : "tenant-school",
     tenant_code: role === "platform_admin" ? "platform" : "demo-school",
     username: role,
-    display_name: role === "school_admin" ? "学校管理员" : role === "grader" ? "阅卷老师" : "平台管理员",
+		display_name: role === "school_admin" ? "学校管理员" : role === "teacher" ? "学科教师" : role === "grader" ? "阅卷老师" : role === "arbitrator" ? "仲裁教师" : "平台管理员",
     status: "active",
     roles: [role],
     permissions: rolePermissions[role],
-    data_scope: role === "platform_admin" ? {} : { school_id: "school-1", school_name: "示范学校" }
-  };
+		data_scope: role === "platform_admin"
+			? { platform_admin: { scope: "platform" } }
+			: { [role]: { scope: roleMatrix[role].scope, ...(role === "school_admin" ? { school_id: "school-1", school_name: "示范学校" } : {}) } },
+		organization_scope: role === "platform_admin"
+			? { tenant_wide: true, school_ids: [], grade_ids: [], class_ids: [] }
+			: { tenant_wide: false, school_ids: ["school-1"], grade_ids: role === "teacher" ? ["grade-1"] : [], class_ids: role === "teacher" ? ["class-1"] : [] }
+	};
 }
 
 function json(route: Route, body: unknown, status = 200) {
@@ -195,7 +182,7 @@ export async function installApiMocks(
     }] });
     if (path === "/api/v1/students") return json(route, { students: [{ id: "student-1", school_id: "school-1", class_id: "class-1", name: "陈同学", student_no: "S001", status: "active" }, { id: "student-2", school_id: "school-1", class_id: "class-1", name: "林同学", student_no: "S002", status: "active" }], has_more: false });
     if (path === "/api/v1/users") return json(route, { users: [{ id: "user-school_admin", username: "school_admin", display_name: "学校管理员", status: "active", roles: ["school_admin"] }, { id: "grader-1", username: "math_grader", display_name: "数学阅卷老师", status: "active", roles: ["grader"] }], has_more: false });
-    if (path === "/api/v1/roles") return json(route, { roles: [{ code: "teacher", name: "教师", scope_type: "school" }, { code: "grader", name: "阅卷员", scope_type: "exam_task" }, { code: "arbitrator", name: "仲裁员", scope_type: "exam_task" }] });
+	if (path === "/api/v1/roles") return json(route, { roles: [{ code: "teacher", name: "教师", scope_type: "class" }, { code: "grader", name: "阅卷员", scope_type: "exam_task" }, { code: "arbitrator", name: "仲裁员", scope_type: "exam_task" }] });
     if (path === "/api/v1/ocr/availability") {
       return json(route, {
         generated_at: "2026-08-02T07:06:00Z",

@@ -117,7 +117,7 @@ func reportAuthStore(t *testing.T) *auth.MemoryStore {
 			Status:      "active",
 			Roles:       []string{"teacher"},
 			Permissions: []string{"report:read", "report:export"},
-			DataScope:   map[string]any{"scope": "school"},
+			DataScope:   map[string]any{"scope": "school", "synthetic": true},
 		},
 		{
 			ID:          reportStudentID,
@@ -128,7 +128,7 @@ func reportAuthStore(t *testing.T) *auth.MemoryStore {
 			Status:      "active",
 			Roles:       []string{"student"},
 			Permissions: []string{"student:report:read"},
-			DataScope:   map[string]any{"scope": "self", "student_id": "student-1"},
+			DataScope:   map[string]any{"scope": "self", "student_id": "student-1", "synthetic": true},
 		},
 	}
 	for _, user := range users {

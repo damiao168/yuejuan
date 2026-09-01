@@ -24,7 +24,7 @@ func (s *Service) ListPublishedExams(ctx context.Context, tenantID, studentID st
 	seen := make(map[string]struct{}, len(items))
 	result := make([]PublishedExam, 0, len(items))
 	for _, item := range items {
-		item.ExamID, item.Name, item.Subject = strings.TrimSpace(item.ExamID), strings.TrimSpace(item.Name), strings.TrimSpace(item.Subject)
+		item.ExamID, item.Name, item.Subject, item.ExamType = strings.TrimSpace(item.ExamID), strings.TrimSpace(item.Name), strings.TrimSpace(item.Subject), strings.TrimSpace(item.ExamType)
 		if item.ExamID == "" || item.Name == "" || item.ReleaseVersion < 1 {
 			return nil, ErrInvalidInput
 		}

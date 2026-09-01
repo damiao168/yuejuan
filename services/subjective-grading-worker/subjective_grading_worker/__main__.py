@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 
-from .api import APIError, EduGradeClient
+from .api import APIError, AuthenticationError, EduGradeClient
 from .config import Settings, load_settings
 from .healthcheck import mark_healthy
 from .runner import Runner
@@ -29,8 +29,10 @@ def main() -> None:
             processed = run_cycle(api, runner, settings)
             if processed:
                 LOGGER.info("processed %d subjective grading task(s)", processed)
-        except APIError as exc:
+        except AuthenticationError:
             api.token = None
+            LOGGER.warning("subjective grading worker authentication expired; login will be retried")
+        except APIError as exc:
             LOGGER.warning("subjective grading API cycle failed; retrying: %s", exc)
         except Exception:
             api.token = None

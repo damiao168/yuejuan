@@ -46,6 +46,15 @@ type fakeSubmissionReader struct {
 	err   error
 }
 
+type fakePaperImportReader struct {
+	items []paper.PaperImportJob
+	err   error
+}
+
+func (f fakePaperImportReader) ListPaperImports(context.Context, string, string) ([]paper.PaperImportJob, error) {
+	return f.items, f.err
+}
+
 func (f fakeSubmissionReader) ListByExam(context.Context, string, string, submission.ListFilter) ([]submission.Submission, error) {
 	return f.items, f.err
 }
@@ -193,4 +202,111 @@ func TestProjectionLinksBlockingProcessingExceptionIntoUnifiedProcessingCentre(t
 	if !found {
 		t.Fatalf("workspace must surface a canonical processing blocker: %#v", result.Blockers)
 	}
+}
+
+func TestReviewRequiredPaperImportIsTheFirstPreparationAction(t *testing.T) {
+	now := time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)
+	service := NewService(Dependencies{
+		Exams: fakeExamReader{item: exam.Exam{ID: "exam-1", TenantID: "tenant-1", Status: "configured"}},
+		Papers: fakePaperReader{readiness: paper.ReadinessResult{Ready: false, Checks: []paper.ReadinessCheck{
+			{Code: "paper_file", Label: "试卷文件", Message: "缺少试卷", Section: "paper", Severity: "blocker"},
+			{Code: "rubrics", Label: "主观题评分标准", Message: "缺少评分标准", Section: "questions", Severity: "blocker"},
+		}}},
+		PaperImports: fakePaperImportReader{items: []paper.PaperImportJob{{ID: "import-1", Status: "review_required", CreatedAt: now}}},
+		Submissions:  fakeSubmissionReader{},
+		Reviews:      fakeReviewReader{},
+		Now:          func() time.Time { return now },
+	})
+
+	result, err := service.Get(context.Background(), auth.AccessScope{TenantID: "tenant-1", TenantWide: true}, "exam-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Blockers) == 0 || result.Blockers[0].Code != "paper_import_review_required" {
+		t.Fatalf("paper import review was not prioritized over derivative readiness failures: %#v", result.Blockers)
+	}
+	if len(result.NextActions) == 0 || result.NextActions[0].Code != "paper_import_review_required" || result.NextActions[0].Label != "核对考试资料" || result.NextActions[0].Route != "/exams/exam-1/paper" {
+		t.Fatalf("workspace did not expose the expected review action first: %#v", result.NextActions)
+	}
+}
+
+func TestPaperImportWorkspaceNoticesUseLatestStatusAndCanonicalReadiness(t *testing.T) {
+	now := time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		readiness   paper.ReadinessResult
+		imports     []paper.PaperImportJob
+		warningCode string
+		blockerCode string
+	}{
+		{
+			name:        "processing is a warning",
+			imports:     []paper.PaperImportJob{{ID: "processing", Status: "processing", CreatedAt: now}},
+			warningCode: "paper_import_processing",
+		},
+		{
+			name:        "review required is warning once canonical readiness passes",
+			readiness:   paper.ReadinessResult{Ready: true},
+			imports:     []paper.PaperImportJob{{ID: "review", Status: "review_required", CreatedAt: now}},
+			warningCode: "paper_import_review_required",
+		},
+		{
+			name:        "failed is a warning",
+			imports:     []paper.PaperImportJob{{ID: "failed", Status: "failed", CreatedAt: now}},
+			warningCode: "paper_import_failed",
+		},
+		{
+			name:      "newer applied import suppresses historical review notice",
+			readiness: paper.ReadinessResult{Ready: true},
+			imports: []paper.PaperImportJob{
+				{ID: "old-review", Status: "review_required", CreatedAt: now.Add(-time.Hour)},
+				{ID: "latest-applied", Status: "applied", CreatedAt: now},
+			},
+		},
+		{
+			name:        "review required blocks while readiness is incomplete",
+			imports:     []paper.PaperImportJob{{ID: "review", Status: "review_required", CreatedAt: now}},
+			blockerCode: "paper_import_review_required",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			service := NewService(Dependencies{
+				Exams:        fakeExamReader{item: exam.Exam{ID: "exam-1", TenantID: "tenant-1", Status: "configured"}},
+				Papers:       fakePaperReader{readiness: testCase.readiness},
+				PaperImports: fakePaperImportReader{items: testCase.imports},
+				Submissions:  fakeSubmissionReader{},
+				Reviews:      fakeReviewReader{},
+				Now:          func() time.Time { return now },
+			})
+			result, err := service.Get(context.Background(), auth.AccessScope{TenantID: "tenant-1", TenantWide: true}, "exam-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			workspaceNoticeFound := false
+			for _, notice := range append(append([]Notice{}, result.Warnings...), result.Blockers...) {
+				if notice.Code == "paper_import_processing" || notice.Code == "paper_import_review_required" || notice.Code == "paper_import_failed" {
+					workspaceNoticeFound = true
+				}
+			}
+			if testCase.warningCode == "" && testCase.blockerCode == "" && workspaceNoticeFound {
+				t.Fatalf("historical import unexpectedly produced a notice: warnings=%#v blockers=%#v", result.Warnings, result.Blockers)
+			}
+			if testCase.warningCode != "" && !noticeListHasCode(result.Warnings, testCase.warningCode) {
+				t.Fatalf("missing warning %s: %#v", testCase.warningCode, result.Warnings)
+			}
+			if testCase.blockerCode != "" && !noticeListHasCode(result.Blockers, testCase.blockerCode) {
+				t.Fatalf("missing blocker %s: %#v", testCase.blockerCode, result.Blockers)
+			}
+		})
+	}
+}
+
+func noticeListHasCode(values []Notice, code string) bool {
+	for _, value := range values {
+		if value.Code == code {
+			return true
+		}
+	}
+	return false
 }

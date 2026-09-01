@@ -1,4 +1,5 @@
 import { ApiClientError, type ApiErrorPayload, type DesktopApiClient } from "./client";
+import { getApiErrorMessage } from "./userError";
 
 export interface CaptureUploadInitInput {
   sha256: string;
@@ -150,9 +151,10 @@ async function sha256ForBytes(bytes: Uint8Array) {
 async function toApiError(response: Response) {
   try {
     const payload = (await response.json()) as ApiErrorPayload;
-    return new ApiClientError(response.status, payload.error?.code ?? payload.code ?? "request_failed", payload.error?.message ?? payload.message ?? response.statusText);
+    const code = payload.error?.code ?? payload.code ?? "request_failed";
+    return new ApiClientError(response.status, code, getApiErrorMessage(code, response.status));
   } catch {
-    return new ApiClientError(response.status, "request_failed", response.statusText);
+    return new ApiClientError(response.status, "request_failed", getApiErrorMessage("request_failed", response.status));
   }
 }
 

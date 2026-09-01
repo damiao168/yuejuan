@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, DatePicker, Descriptions, Drawer, Input, Select, Space, Tooltip, type TableColumnsType } from "antd";
 import { Download, FileWarning, LockKeyhole, RefreshCw, Search, ShieldCheck } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getUserErrorMessage } from "../api/client";
 import { exportAuditLogs, listAuditLogs, type AuditLog, type AuditLogFilter } from "../api/audit";
 import { listExams, type Exam } from "../api/exams";
 import { listManagedUsers, type ManagedUser } from "../api/users";
@@ -21,12 +21,9 @@ const sensitiveKeys = ["password", "token", "authorization", "secret", "credenti
 function formatError(error: unknown) {
   if (error instanceof ApiClientError) {
     console.warn("操作记录请求失败", error.status, error.code);
-    return error.message || "操作失败，请稍后重试";
+    return getUserErrorMessage(error, "操作失败，请稍后重试");
   }
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "操作失败，请稍后重试";
+  return getUserErrorMessage(error, "操作失败，请稍后重试");
 }
 
 function formatTime(value?: string) {
@@ -231,7 +228,7 @@ const actionLabels: Record<string, string> = {
 };
 
 function actionLabel(action: string) {
-  return actionLabels[action] ?? `其他操作（${action}）`;
+  return actionLabels[action] ?? "其他操作";
 }
 
 export function AuditLogPage({ canRead, canExport, tenantName }: AuditLogPageProps) {

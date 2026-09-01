@@ -29,7 +29,7 @@ import {
   ShieldCheck,
   TriangleAlert
 } from "lucide-react";
-import { ApiClientError } from "../api/client";
+import { ApiClientError, getUserErrorMessage } from "../api/client";
 import { getAIGradingStatus, type AIGradingRuntimeStatus } from "../api/system";
 import {
   createModelDeployment,
@@ -82,9 +82,9 @@ const statusLabels: Record<string, string> = {
 
 function errorMessage(error: unknown) {
   if (error instanceof ApiClientError) {
-    return error.message || "请求失败，请稍后重试";
+    return getUserErrorMessage(error, "请求失败，请稍后重试");
   }
-  return error instanceof Error ? error.message : "请求失败，请稍后重试";
+  return getUserErrorMessage(error, "请求失败，请稍后重试");
 }
 
 function statusColor(status: string) {
@@ -258,7 +258,7 @@ export function ModelGovernancePage({
       title: "状态",
       dataIndex: "status",
       width: 120,
-      render: (value: string) => <Tag color={statusColor(value)}>{statusLabels[value] ?? value}</Tag>
+      render: (value: string) => <Tag color={statusColor(value)}>{statusLabels[value] ?? "未知状态"}</Tag>
     }
   ];
 
@@ -301,13 +301,13 @@ export function ModelGovernancePage({
       title: "部署状态",
       dataIndex: "status",
       width: 120,
-      render: (value: string) => <Tag color={statusColor(value)}>{statusLabels[value] ?? value}</Tag>
+      render: (value: string) => <Tag color={statusColor(value)}>{statusLabels[value] ?? "未知状态"}</Tag>
     },
     {
       title: "健康",
       dataIndex: "health_state",
       width: 120,
-      render: (value: string) => <Tag color={statusColor(value)}>{statusLabels[value] ?? value}</Tag>
+      render: (value: string) => <Tag color={statusColor(value)}>{statusLabels[value] ?? "未知状态"}</Tag>
     }
   ];
 

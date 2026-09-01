@@ -29,7 +29,7 @@ export function examSubjectLabel(subject: string): string {
     mathematics: "数学",
     ethics_politics: "政治"
   };
-  return canonicalLabels[subject] ?? examSubjectOptions.find((item) => item.value === subject)?.label ?? subject;
+  return canonicalLabels[subject] ?? examSubjectOptions.find((item) => item.value === subject)?.label ?? "其他学科";
 }
 
 export function examStatusTone(status: string): StatusTone {

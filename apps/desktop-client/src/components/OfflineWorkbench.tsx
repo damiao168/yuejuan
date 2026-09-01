@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Empty, Form, Input, InputNumber, List, Space, Table, Tag, type TableColumnsType } from "antd";
 import { BookOpenCheck, Download, KeyRound, RefreshCw, Save, Send, Trash2 } from "lucide-react";
 import { downloadFileBlob } from "../api/files";
+import { getUserErrorMessage } from "../api/userError";
 import { listQuestions } from "../api/papers";
 import { getReviewTask, listAiGrades, listReviewTasks, submitHumanGrade } from "../api/review";
 import { listAnswerSegments, listOcrTasks, listSubmissionPages } from "../api/submissions";
@@ -16,6 +17,7 @@ import {
   type OfflineDraftEnvelope
 } from "../lib/offlineStore";
 import { hasDurableDesktopStore } from "../lib/durableStore";
+import { genericStatusLabel, offlineSyncStatusLabels } from "../statusLabels";
 import type {
   AuthUser,
   AiGrade,
@@ -99,7 +101,7 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
   const downloadPackage = async (taskId = selectedTaskId) => {
     const requestId = ++packageRequestRef.current;
     if (!taskId || !token) {
-      setPackageError("请先登录并选择真实 review_task。");
+      setPackageError("请先登录并选择真实阅卷任务。");
       return;
     }
     setPackageError(null);
@@ -265,7 +267,7 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
       <section className="panel full">
         <div className="offline-head">
           <div>
-            <p className="eyebrow">Offline Grading</p>
+            <p className="eyebrow">离线阅卷</p>
             <h3>离线阅卷基础工作台</h3>
             <p>任务包聚合真实后端 API；草稿使用本地离线密钥加密保存。</p>
           </div>
@@ -303,7 +305,7 @@ export function OfflineWorkbench({ client, token, user, isOnline, onLog }: Offli
                 <BookOpenCheck size={20} />
               </span>
               <div>
-                <h3>我的 review_task</h3>
+                <h3>我的阅卷任务</h3>
                 <p>只读取分配给当前用户的真实任务。</p>
               </div>
             </div>
@@ -396,7 +398,7 @@ function PackageView({ pkg, imagePreview }: { pkg: OfflineTaskPackage | null; im
     <div className="package-view">
       <div className="package-summary">
         <Tag color="blue">{pkg.task.anonymous_code}</Tag>
-        <Tag>{pkg.task.status}</Tag>
+        <Tag>{genericStatusLabel(pkg.task.status)}</Tag>
         <Tag>Rubric {pkg.rubricVersion ?? "未记录"}</Tag>
       </div>
       {pkg.warnings.length > 0 && <Alert type="warning" showIcon message="任务包不完整" description={pkg.warnings.join("；")} />}
@@ -405,7 +407,7 @@ function PackageView({ pkg, imagePreview }: { pkg: OfflineTaskPackage | null; im
       </div>
       <h4>OCR 文本</h4>
       <pre>{pkg.ocrText || "未记录 OCR 文本"}</pre>
-      <h4>Rubric</h4>
+      <h4>评分细则</h4>
       <List
         size="small"
         dataSource={pkg.question?.rubric?.points ?? []}
@@ -585,11 +587,11 @@ function latestGrade(grades: AiGrade[]) {
 
 function SyncTag({ status }: { status: OfflineDraftEnvelope["syncStatus"] }) {
   const color = status === "synced" ? "success" : status === "conflict" ? "warning" : status === "failed" ? "error" : status === "syncing" ? "processing" : "default";
-  return <Tag color={color}>{status}</Tag>;
+  return <Tag color={color}>{offlineSyncStatusLabels[status]}</Tag>;
 }
 
 function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  return getUserErrorMessage(error);
 }
 
 function formatDate(value: string) {

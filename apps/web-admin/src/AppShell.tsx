@@ -57,6 +57,7 @@ const ScoreManagementPage = lazy(() => import("./pages/ScoreManagementPage").the
 const SubmissionCapturePage = lazy(() => import("./pages/SubmissionCapturePage").then((module) => ({ default: module.SubmissionCapturePage })));
 const SystemStatusPage = lazy(() => import("./pages/SystemStatusPage").then((module) => ({ default: module.SystemStatusPage })));
 const SessionManagementPage = lazy(() => import("./pages/SessionManagementPage").then((module) => ({ default: module.SessionManagementPage })));
+const IdentityLandingPage = lazy(() => import("./pages/IdentityLandingPage").then((module) => ({ default: module.IdentityLandingPage })));
 
 export function AppShell() {
   const router = useRouter();
@@ -200,7 +201,7 @@ export function AppShell() {
         return <ExamStudentScopePage examId={examId} canManage={hasEveryPermission(user, ["exam:manage", "org:manage"])} onExamChanged={refreshWorkspace} />;
       case "paper":
       case "questions":
-        return <PaperRubricPage canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} canManageAssessment={experience === "admin" && hasEveryPermission(user, ["exam:manage"])} initialExamId={examId} onExamChanged={refreshWorkspace} />;
+        return <PaperRubricPage canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} canManageAssessment={experience === "admin" && hasEveryPermission(user, ["exam:manage"])} initialExamId={examId} onExamChanged={refreshWorkspace} onNavigate={navigate} />;
       case "template":
         return <AnswerSheetTemplatePage examId={examId} canManage={experience === "admin" && hasEveryPermission(user, ["exam:manage", "file:manage"])} canCalibrate={experience === "admin" && hasEveryPermission(user, ["grading:manage"])} onExamChanged={refreshWorkspace} />;
       case "settings":
@@ -232,7 +233,9 @@ export function AppShell() {
       || Boolean(examWorkspace && !hasExamWorkspaceSectionAccess(experience, examWorkspace.section)) ? (
       <ForbiddenState onBack={() => navigate("/dashboard")} />
     ) : route.path === "/dashboard" ? (
-      experience === "admin" ? <DashboardPage user={user} onNavigate={navigate} /> : <TeacherDashboardPage user={user} onNavigate={navigate} />
+      experience === "admin" ? <DashboardPage user={user} onNavigate={navigate} />
+        : experience === "teacher" ? <TeacherDashboardPage user={user} onNavigate={navigate} />
+          : <IdentityLandingPage user={user} experience={experience} />
     ) : examWorkspace ? (
       <ExamWorkspacePage examId={examWorkspace.examId} section={examWorkspace.section} experience={experience} currentUser={user} moduleContent={workspaceModule} onNavigate={navigate} />
     ) : route.path === "/exams/new" ? (

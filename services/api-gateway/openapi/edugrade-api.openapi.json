@@ -11728,6 +11728,33 @@
           },
           "show_rubric_summary": {
             "type": "boolean"
+          },
+          "show_cohort_statistics": {
+            "type": "boolean"
+          },
+          "show_score_distribution": {
+            "type": "boolean"
+          },
+          "show_percentile": {
+            "type": "boolean"
+          },
+          "show_exact_rank": {
+            "type": "boolean"
+          },
+          "show_question_statistics": {
+            "type": "boolean"
+          },
+          "show_knowledge_analysis": {
+            "type": "boolean"
+          },
+          "show_question_stem": {
+            "type": "boolean"
+          },
+          "show_answers": {
+            "type": "boolean"
+          },
+          "show_high_score_paper": {
+            "type": "boolean"
           }
         }
       },
@@ -14254,7 +14281,7 @@
         }
       },
       "PaperImportRole": {
-        "type": "string", "enum": ["auto", "question", "answer", "solution", "mixed", "unknown"]
+        "type": "string", "enum": ["auto", "question", "answer", "solution", "rubric", "mixed", "unknown"]
       },
       "CreatePaperImportSource": {
         "type": "object", "additionalProperties": false, "required": ["file_asset_id", "document_index"],
@@ -14277,7 +14304,7 @@
         "type": "object", "additionalProperties": false, "required": ["sources"], "properties": { "sources": { "type": "array", "minItems": 1, "items": { "$ref": "#/components/schemas/CreatePaperImportSource" } } }
       },
       "ReplacePaperImportSourcesRequest": {
-        "type": "object", "additionalProperties": false, "required": ["sources"], "properties": { "sources": { "type": "array", "minItems": 1, "items": { "$ref": "#/components/schemas/ReplacePaperImportSource" } } }
+        "type": "object", "additionalProperties": false, "required": ["sources"], "properties": { "sources": { "type": "array", "items": { "$ref": "#/components/schemas/ReplacePaperImportSource" } } }
       },
       "PaperImportSourceRef": {
         "type": "object", "additionalProperties": false, "required": ["source_id", "file_asset_id", "document_index"],
@@ -14285,7 +14312,7 @@
       },
       "PaperImportSource": {
         "type": "object", "additionalProperties": false, "required": ["id", "file_asset_id", "document_index", "role_hint", "detected_role", "role_confidence", "processing_status", "created_at"],
-        "properties": { "id": { "type": "string" }, "file_asset_id": { "type": "string" }, "document_index": { "type": "integer", "minimum": 0 }, "role_hint": { "$ref": "#/components/schemas/PaperImportRole" }, "detected_role": { "type": "string", "enum": ["question", "answer", "solution", "mixed", "unknown"] }, "role_confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "processing_status": { "type": "string", "enum": ["pending", "processing", "processed", "failed"] }, "original_name": { "type": "string" }, "content_type": { "type": "string" }, "created_at": { "type": "string", "format": "date-time" } }
+        "properties": { "id": { "type": "string" }, "file_asset_id": { "type": "string" }, "document_index": { "type": "integer", "minimum": 0 }, "role_hint": { "$ref": "#/components/schemas/PaperImportRole" }, "detected_role": { "type": "string", "enum": ["question", "answer", "solution", "rubric", "mixed", "unknown"] }, "role_confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "processing_status": { "type": "string", "enum": ["pending", "processing", "processed", "failed"] }, "original_name": { "type": "string" }, "content_type": { "type": "string" }, "created_at": { "type": "string", "format": "date-time" } }
       },
       "PaperImportQuestionCandidate": {
         "type": "object", "additionalProperties": false, "required": ["candidate_id", "options", "knowledge_point_hints", "confidence", "source_refs", "issues"],
@@ -14301,6 +14328,18 @@
       "PaperImportSolutionCandidate": {
         "type": "object", "additionalProperties": false, "required": ["candidate_id", "raw_text", "steps", "confidence", "source_refs", "issues"],
         "properties": { "candidate_id": { "type": "string" }, "question_no_hint": { "type": "string" }, "question_no_normalized": { "type": "string" }, "subquestion_no_hint": { "type": "string" }, "raw_text": { "type": "string" }, "steps": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportSolutionStep" } }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "source_refs": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportSourceRef" } }, "issues": { "type": "array", "items": { "type": "string" } } }
+      },
+      "PaperImportRubricEvidenceRequirement": {
+        "type": "object", "additionalProperties": false, "required": ["type"],
+        "properties": { "type": { "type": "string", "enum": ["all_of", "any_of", "at_least", "valid_transformation", "final_result", "concept", "unit", "domain"] }, "target": { "type": "string" }, "minimum": { "type": "integer" }, "children": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportRubricEvidenceRequirement" } } }
+      },
+      "PaperImportRubricCandidatePoint": {
+        "type": "object", "additionalProperties": false, "required": ["id", "description"],
+        "properties": { "id": { "type": "string" }, "description": { "type": "string" }, "score": { "type": "number", "nullable": true }, "required": { "type": "boolean", "nullable": true }, "evidence_requirements": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportRubricEvidenceRequirement" } } }
+      },
+      "PaperImportRubricCandidate": {
+        "type": "object", "additionalProperties": false, "required": ["candidate_id", "points", "deductions", "examples", "confidence", "source_refs", "issues"],
+        "properties": { "candidate_id": { "type": "string" }, "question_no_hint": { "type": "string" }, "question_no_normalized": { "type": "string" }, "max_score": { "type": "number", "nullable": true }, "points": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportRubricCandidatePoint" } }, "deductions": { "type": "array", "items": {} }, "examples": { "type": "array", "items": {} }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "source_refs": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportSourceRef" } }, "issues": { "type": "array", "items": { "type": "string" } } }
       },
       "PaperImportIssue": {
         "type": "object", "additionalProperties": false, "required": ["code", "severity", "certainty", "message", "source_refs"],
@@ -14320,14 +14359,14 @@
       },
       "PaperImportDraftQuestion": {
         "type": "object", "additionalProperties": false, "required": ["source_refs", "question_no", "question_type", "score", "stem", "knowledge_points", "confidence", "issues"],
-        "properties": { "candidate_id": { "type": "string" }, "answer_candidate_id": { "type": "string" }, "solution_candidate_id": { "type": "string" }, "source_refs": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportSourceRef" } }, "question_no": { "type": "string" }, "question_type": { "type": "string" }, "assessment_archetype": { "type": "string", "enum": ["selected_response", "exact_text", "numeric_expression", "structured_steps", "short_constructed", "extended_response", "diagram_graph", "table_experiment"] }, "score": { "type": "number" }, "stem": { "type": "string" }, "knowledge_points": { "type": "array", "items": { "type": "string" } }, "answer_key": { "$ref": "#/components/schemas/PaperImportAnswerKeyInput" }, "solution": { "$ref": "#/components/schemas/PaperImportSolutionInput" }, "rubric": { "$ref": "#/components/schemas/PaperImportRubricInput" }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "issues": { "type": "array", "items": { "type": "string" } }, "matched_question_id": { "type": "string" }, "match_status": { "type": "string", "enum": ["create", "matched", "matched_by_order", "mismatch", "extra", "ambiguous"] }, "completeness_status": { "type": "string", "enum": ["complete", "needs_review"] }, "human_confirmed_fields": { "type": "array", "items": { "type": "string" } } }
+        "properties": { "candidate_id": { "type": "string" }, "answer_candidate_id": { "type": "string" }, "solution_candidate_id": { "type": "string" }, "rubric_candidate_id": { "type": "string" }, "source_refs": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportSourceRef" } }, "question_no": { "type": "string" }, "question_type": { "type": "string" }, "assessment_archetype": { "type": "string", "enum": ["selected_response", "exact_text", "numeric_expression", "structured_steps", "short_constructed", "extended_response", "diagram_graph", "table_experiment"] }, "score": { "type": "number" }, "stem": { "type": "string" }, "knowledge_points": { "type": "array", "items": { "type": "string" } }, "answer_key": { "$ref": "#/components/schemas/PaperImportAnswerKeyInput" }, "solution": { "$ref": "#/components/schemas/PaperImportSolutionInput" }, "rubric": { "$ref": "#/components/schemas/PaperImportRubricInput" }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 }, "issues": { "type": "array", "items": { "type": "string" } }, "matched_question_id": { "type": "string" }, "match_status": { "type": "string", "enum": ["create", "matched", "matched_by_order", "mismatch", "extra", "ambiguous"] }, "completeness_status": { "type": "string", "enum": ["complete", "needs_review"] }, "human_confirmed_fields": { "type": "array", "items": { "type": "string" } } }
       },
       "ReviewPaperImportRequest": {
         "type": "object", "additionalProperties": false, "required": ["questions"], "properties": { "questions": { "type": "array", "minItems": 1, "items": { "$ref": "#/components/schemas/PaperImportDraftQuestion" } } }
       },
       "PaperImportJob": {
-        "type": "object", "additionalProperties": false, "required": ["id", "tenant_id", "exam_id", "exam_paper_id", "paper_file_asset_id", "answer_file_asset_id", "status", "subject", "sources", "question_candidates", "answer_candidates", "solution_candidates", "structured_issues", "questions", "issues", "created_by", "created_at", "updated_at"],
-        "properties": { "id": { "type": "string" }, "tenant_id": { "type": "string" }, "exam_id": { "type": "string" }, "exam_paper_id": { "type": "string" }, "paper_file_asset_id": { "type": "string", "deprecated": true }, "answer_file_asset_id": { "type": "string", "deprecated": true }, "status": { "type": "string", "enum": ["processing", "review_required", "failed", "applied"] }, "subject": { "type": "string" }, "sources": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportSource" } }, "question_candidates": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportQuestionCandidate" } }, "answer_candidates": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportAnswerCandidate" } }, "solution_candidates": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportSolutionCandidate" } }, "structured_issues": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportIssue" } }, "questions": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportDraftQuestion" } }, "issues": { "type": "array", "items": { "type": "string" } }, "error_code": { "type": "string" }, "created_by": { "type": "string" }, "created_at": { "type": "string", "format": "date-time" }, "updated_at": { "type": "string", "format": "date-time" }, "applied_at": { "type": "string", "format": "date-time" } }
+        "type": "object", "additionalProperties": false, "required": ["id", "tenant_id", "exam_id", "exam_paper_id", "paper_file_asset_id", "answer_file_asset_id", "status", "subject", "sources", "question_candidates", "answer_candidates", "solution_candidates", "rubric_candidates", "structured_issues", "questions", "issues", "created_by", "created_at", "updated_at"],
+        "properties": { "id": { "type": "string" }, "tenant_id": { "type": "string" }, "exam_id": { "type": "string" }, "exam_paper_id": { "type": "string" }, "paper_file_asset_id": { "type": "string", "deprecated": true }, "answer_file_asset_id": { "type": "string", "deprecated": true }, "status": { "type": "string", "enum": ["processing", "review_required", "failed", "applied"] }, "subject": { "type": "string" }, "sources": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportSource" } }, "question_candidates": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportQuestionCandidate" } }, "answer_candidates": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportAnswerCandidate" } }, "solution_candidates": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportSolutionCandidate" } }, "rubric_candidates": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportRubricCandidate" } }, "structured_issues": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportIssue" } }, "questions": { "type": "array", "items": { "$ref": "#/components/schemas/PaperImportDraftQuestion" } }, "issues": { "type": "array", "items": { "type": "string" } }, "error_code": { "type": "string" }, "created_by": { "type": "string" }, "created_at": { "type": "string", "format": "date-time" }, "updated_at": { "type": "string", "format": "date-time" }, "applied_at": { "type": "string", "format": "date-time" } }
       },
       "PaperImportResponse": {
         "type": "object", "additionalProperties": false, "required": ["import"], "properties": { "import": { "$ref": "#/components/schemas/PaperImportJob" } }

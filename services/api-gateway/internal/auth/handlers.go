@@ -307,6 +307,12 @@ func (h *Handler) ListAudits(w http.ResponseWriter, r *http.Request) {
 	filter.Limit = limit + 1
 	filter.CursorCreatedAt = cursor.CreatedAt
 	filter.CursorID = cursor.ID
+	if scope, ok := AccessScopeFromContext(r.Context()); ok {
+		filter.ScopeMode = scope.QueryMode()
+	}
+	if scope, ok := AccessScopeFromContext(r.Context()); ok {
+		filter.ScopeMode = scope.QueryMode()
+	}
 	records, err := h.store.ListAudits(r.Context(), user.TenantID, filter)
 	if err != nil {
 		httpx.Error(w, r, http.StatusInternalServerError, "audit_lookup_failed", "failed to list audit logs")
@@ -334,6 +340,12 @@ func (h *Handler) ExportAudits(w http.ResponseWriter, r *http.Request) {
 	filter, ok := h.auditFilterFromRequest(w, r, 200)
 	if !ok {
 		return
+	}
+	if scope, ok := AccessScopeFromContext(r.Context()); ok {
+		filter.ScopeMode = scope.QueryMode()
+	}
+	if scope, ok := AccessScopeFromContext(r.Context()); ok {
+		filter.ScopeMode = scope.QueryMode()
 	}
 	records, err := h.store.ListAudits(r.Context(), user.TenantID, filter)
 	if err != nil {
@@ -648,6 +660,14 @@ func AuthMiddleware(store Store, options ...HandlerOptions) func(http.Handler) h
 					return
 				}
 				httpx.Error(w, r, http.StatusInternalServerError, "access_scope_lookup_failed", "failed to resolve data access scope")
+				return
+			}
+			// A human identity without any resolved data boundary is not an
+			// authenticated-but-empty user.  It is an invalid authorization
+			// state and must fail closed.  Service identities use the explicit
+			// service scope and are handled by their worker-only routes.
+			if !scope.HasDataAccess() && !scope.syntheticUnbounded && !IsServiceUser(user) {
+				httpx.Error(w, r, http.StatusForbidden, "access_scope_missing", "no valid data access scope is assigned")
 				return
 			}
 			organizationScope := scope.OrganizationScope()
