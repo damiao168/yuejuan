@@ -321,6 +321,7 @@ export interface operations {
   "replacePaperImportSources": { args: { path: { "paperImportId": string; }; body: ReplacePaperImportSourcesRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
   "savePaperImportReview": { args: { path: { "paperImportId": string; }; body: ReviewPaperImportRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
   "applyPaperImport": { args: { path: { "paperImportId": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "cancelPaperImport": { args: { path: { "paperImportId": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
 }
 
 export class EduGradeApi {
@@ -1083,6 +1084,11 @@ export class EduGradeApi {
 
   applyPaperImport(args: operations["applyPaperImport"]["args"]): Promise<operations["applyPaperImport"]["response"]> {
     const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}/apply", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal });
+  }
+
+  cancelPaperImport(args: operations["cancelPaperImport"]["args"]): Promise<operations["cancelPaperImport"]["response"]> {
+    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}/cancel", args.path);
     return this.transport.request(requestPath, { method: "POST", signal: args.signal });
   }
 }

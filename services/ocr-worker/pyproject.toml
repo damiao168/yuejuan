@@ -10,6 +10,9 @@ requires = ["setuptools==83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
+test = [
+  "Pillow>=10,<12",
+]
 paddle = [
   "paddleocr==3.7.0",
   "paddlepaddle==3.3.1",

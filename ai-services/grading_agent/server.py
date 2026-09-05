@@ -6,8 +6,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .app import GradingAgentApplication
 from .config import Settings
 from .errors import AgentError
-from .paper_parser import PaperParser
 from .managed_model import paper_model
+from .paper_parser import PaperParser
 
 
 class GradingAgentHTTPServer(ThreadingHTTPServer):

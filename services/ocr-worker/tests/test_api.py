@@ -2,7 +2,11 @@ import json
 import unittest
 from unittest.mock import patch
 
-from ocr_worker.api import APIError, EduGradeClient, PAPER_IMPORT_COMPLETION_TIMEOUT_SECONDS
+from ocr_worker.api import (
+    PAPER_IMPORT_COMPLETION_TIMEOUT_SECONDS,
+    APIError,
+    EduGradeClient,
+)
 
 
 class FakeResponse:

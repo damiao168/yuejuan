@@ -61,7 +61,7 @@ def paper_model(application, payload):
         return application.model
     try:
         if not isinstance(config, dict):
-            raise ValueError("invalid managed model")
+            raise TypeError("invalid managed model")
         fields = ("adapter_type", "base_url", "api_key", "model_name", "model_version")
         if any(not isinstance(config.get(key), str) or not config[key].strip() for key in fields):
             raise ValueError("missing managed model fields")

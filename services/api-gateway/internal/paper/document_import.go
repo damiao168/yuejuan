@@ -350,10 +350,6 @@ func (s *DocumentImportService) assetText(ctx context.Context, tenantID, id stri
 	return text, nil
 }
 
-func (s *DocumentImportService) parse(ctx context.Context, requestID, subject string, documents []normalizedImportDocument) (documentParseResponse, error) {
-	return s.parseForTenant(ctx, "", requestID, subject, documents)
-}
-
 func (s *DocumentImportService) parseForTenant(ctx context.Context, tenantID, requestID, subject string, documents []normalizedImportDocument) (documentParseResponse, error) {
 	if s.baseURL == "" || len(s.token) < 32 {
 		return documentParseResponse{}, errors.New("AI service not configured")

@@ -325,7 +325,7 @@ jobs:
         include:
           - name: ocr
             package: services/ocr-worker
-            install: python -m pip install -e services/ocr-worker
+            install: python -m pip install -e 'services/ocr-worker[test]'
             command: python -m pytest -q services/ocr-worker/tests
           - name: image-quality
             package: services/image-quality-worker
