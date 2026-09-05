@@ -5,7 +5,6 @@ EduGrade Enterprise 是面向学校和教育机构的智能阅卷与学情分析
 项目采用 monorepo 组织，支持 Web 管理后台、扫描工作站、Go 业务服务、Python Worker、内部阅卷 Agent 以及 Docker Compose 私有化部署。
 
 > 当前 AI 能力遵循“模型提供建议，教师作出决定”的原则。模型结果不能绕过复核、质量门禁和发布流程直接成为最终成绩。
-![Uploading ChatGPT Image 2026年9月5日 13_11_57.png…]()
 
 ## 适用场景
 
