@@ -12,6 +12,15 @@ func (s *MemoryStore) CreateExamSession(ctx context.Context, scope auth.AccessSc
 	if !scopeAllowsRequestedClasses(scope, input.SchoolID, input.ClassIDs) || !scopeAllowsRequestedGrade(scope, input.GradeID) {
 		return ExamSession{}, ErrScopeForbidden
 	}
+	commandKey := ""
+	if input.CommandID != "" {
+		commandKey = scope.TenantID + "\x00" + createdBy + "\x00" + input.CommandID
+		s.sessionMu.Lock()
+		defer s.sessionMu.Unlock()
+		if existing, ok := s.sessionsByCommand[commandKey]; ok {
+			return cloneExamSession(existing), nil
+		}
+	}
 	now := time.Now().UTC()
 	appealEnabled := true
 	if input.AppealEnabled != nil {
@@ -30,7 +39,8 @@ func (s *MemoryStore) CreateExamSession(ctx context.Context, scope auth.AccessSc
 		SchoolID: input.SchoolID, GradeID: input.GradeID, TemplateID: input.TemplateID, TemplateVersion: templateVersion, Name: input.Name,
 		ExamType: input.ExamType, Status: "draft", GradingMode: input.GradingMode,
 		AppealEnabled: appealEnabled, PublishPolicy: input.PublishPolicy, CreatedBy: createdBy,
-		Revision: 1, CreatedAt: now, UpdatedAt: now,
+		CommandID: input.CommandID,
+		Revision:  1, CreatedAt: now, UpdatedAt: now,
 	}
 	for _, subject := range input.Subjects {
 		classes := subject.ClassIDs
@@ -48,5 +58,17 @@ func (s *MemoryStore) CreateExamSession(ctx context.Context, scope auth.AccessSc
 		}
 		session.Exams = append(session.Exams, child)
 	}
+	if commandKey != "" {
+		s.sessionsByCommand[commandKey] = cloneExamSession(session)
+	}
 	return session, nil
+}
+
+func cloneExamSession(input ExamSession) ExamSession {
+	out := input
+	out.Exams = append([]Exam(nil), input.Exams...)
+	for index := range out.Exams {
+		out.Exams[index].ClassIDs = cloneStrings(input.Exams[index].ClassIDs)
+	}
+	return out
 }

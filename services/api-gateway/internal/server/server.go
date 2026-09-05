@@ -91,6 +91,12 @@ func New(cfg config.Config, logg *logger.Logger) (*Server, func(), error) {
 		infra.Close()
 		return nil, nil, err
 	}
+	parseExecutor, err := paper.NewParseTaskExecutor(modules.Exam.PaperImportService, modules.Capture.WorkerRuntimeStore, cfg.AIService.Timeout)
+	if err != nil {
+		infra.Close()
+		return nil, nil, err
+	}
+	infra.startPaperParseExecutor(parseExecutor)
 	router := NewRouterComplete(RouterDependencies{
 		Config: cfg, Logger: logg, Checkers: infra.Checkers, Metrics: infra.Metrics,
 		Modules: modules,

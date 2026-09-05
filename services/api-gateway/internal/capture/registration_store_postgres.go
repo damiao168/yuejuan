@@ -23,7 +23,21 @@ func (s *PostgresStore) QueueSubmissionPages(ctx context.Context, tenantID, subm
 		return nil, err
 	}
 	defer tx.Rollback()
+	out, err := QueueSubmissionPagesInTx(ctx, tx, tenantID, submissionID, actorID)
+	if err != nil {
+		return nil, err
+	}
+	return out, tx.Commit()
+}
+
+// QueueSubmissionPagesInTx creates registration runs and their runtime tasks
+// inside an enclosing domain command.
+func QueueSubmissionPagesInTx(ctx context.Context, tx *sql.Tx, tenantID, submissionID, actorID string) ([]RegistrationRun, error) {
+	if tx == nil || tenantID == "" || submissionID == "" || actorID == "" {
+		return nil, ErrInvalidInput
+	}
 	var examID, batchID string
+	var err error
 	if err = tx.QueryRowContext(ctx, `SELECT s.exam_id::text,cp.capture_batch_id::text FROM submission s JOIN capture_page cp ON cp.tenant_id=s.tenant_id AND cp.submission_id=s.id AND cp.deleted_at IS NULL WHERE s.tenant_id=$1 AND s.id=$2::uuid AND s.deleted_at IS NULL LIMIT 1`, tenantID, submissionID).Scan(&examID, &batchID); err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -158,7 +172,10 @@ VALUES ($1,'page_registration','page-processing','page_registration_run',$2::uui
 	if len(out) == 0 {
 		return nil, ErrInvalidTransition
 	}
-	return out, tx.Commit()
+	if err = aggregateBatchTx(ctx, tx, tenantID, batchID); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *PostgresStore) GetRegistrationRun(ctx context.Context, tenantID, runID string) (RegistrationRun, error) {

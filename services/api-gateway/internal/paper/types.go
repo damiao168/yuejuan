@@ -279,6 +279,20 @@ type PaperImportOCRResult struct {
 	Blocks     []PaperImportOCRBlock `json:"blocks"`
 }
 
+type PaperImportParseDocument struct {
+	SourceID      string                `json:"source_id"`
+	FileAssetID   string                `json:"file_asset_id"`
+	DocumentIndex int                   `json:"document_index"`
+	RoleHint      string                `json:"role_hint"`
+	Content       string                `json:"content"`
+	Blocks        []PaperImportOCRBlock `json:"blocks"`
+}
+
+type PaperImportParseRequest struct {
+	Documents   []PaperImportParseDocument `json:"documents"`
+	ExtraIssues []PaperImportIssue         `json:"extra_issues"`
+}
+
 type PaperImportRuntimeFailure struct {
 	TaskID      string         `json:"task_id"`
 	LeaseToken  string         `json:"lease_token"`
@@ -290,8 +304,9 @@ type PaperImportRuntimeFailure struct {
 
 type PaperImportRuntime interface {
 	QueuePaperImportOCR(context.Context, string, PaperImportJob, string, []PaperImportOCRAsset) error
+	QueuePaperImportParse(context.Context, string, PaperImportJob, string, PaperImportParseRequest) error
 	CompletePaperImportDecode(context.Context, string, string, PaperImportDecodeResult) error
-	CompletePaperImportOCR(context.Context, string, string, PaperImportOCRResult) error
+	CompletePaperImportOCR(context.Context, string, string, PaperImportOCRResult, PaperImportParseRequest) error
 	FailPaperImportRuntime(context.Context, string, string, PaperImportRuntimeFailure) error
 }
 

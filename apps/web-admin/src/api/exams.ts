@@ -96,10 +96,11 @@ export async function createExam(payload: ExamPayload) {
   });
 }
 
-export async function createExamSession(payload: ExamSessionPayload) {
+export async function createExamSession(payload: ExamSessionPayload, commandId: string) {
   return apiClient.request<{ exam_session: ExamSession }>("/api/v1/exam-sessions", {
     method: "POST",
-    body: JSON.stringify(payload)
+    headers: { "Idempotency-Key": commandId },
+    body: JSON.stringify({ ...payload, command_id: commandId })
   });
 }
 

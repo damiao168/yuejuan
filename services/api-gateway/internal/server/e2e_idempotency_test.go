@@ -95,6 +95,21 @@ LIMIT 1`).Scan(&tenantID, &actorID); err != nil {
 	if _, _, err := store.Begin(ctx, conflict); !errors.Is(err, idempotency.ErrKeyConflict) {
 		t.Fatalf("changed request with reused key must conflict, got %v", err)
 	}
+
+	recovery := input
+	recovery.Key += "-recovery"
+	if _, execute, err := store.Begin(ctx, recovery); err != nil || !execute {
+		t.Fatalf("reserve recoverable operation: execute=%v err=%v", execute, err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE idempotency_record SET updated_at=now()-interval '10 minutes'
+	WHERE tenant_id=$1::uuid AND actor_id=$2::uuid AND method=$3 AND route=$4 AND idempotency_key=$5`, recovery.TenantID, recovery.ActorID, recovery.Method, recovery.Route, recovery.Key); err != nil {
+		t.Fatalf("age interrupted reservation: %v", err)
+	}
+	recovery.AllowTakeover = true
+	recovery.StaleBefore = time.Now().UTC().Add(-2 * time.Minute)
+	if _, execute, err := store.Begin(ctx, recovery); err != nil || !execute {
+		t.Fatalf("stale interrupted operation should be reclaimed: execute=%v err=%v", execute, err)
+	}
 }
 
 func TestOutboxLeaseRecoveryWithPostgresTestDatabase(t *testing.T) {

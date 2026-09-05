@@ -26,6 +26,21 @@ func (s *PostgresStore) CreateRuns(ctx context.Context, tenantID string, input C
 		return nil, err
 	}
 	defer tx.Rollback()
+	runs, err := createRunsInTx(ctx, tx, tenantID, input)
+	if err != nil {
+		return nil, err
+	}
+	return runs, tx.Commit()
+}
+
+func createRunsInTx(ctx context.Context, tx *sql.Tx, tenantID string, input CreateRunsInput) ([]Run, error) {
+	if tx == nil {
+		return nil, ErrInvalidInput
+	}
+	input.Profile = normalizeProfile(input.Profile)
+	if err := validateCreateRunsInput(input); err != nil {
+		return nil, err
+	}
 	runs := make([]Run, 0, len(input.Pages))
 	for _, page := range input.Pages {
 		row := tx.QueryRowContext(ctx, `
@@ -51,9 +66,6 @@ RETURNING id::text, tenant_id::text, submission_id::text, submission_page_id::te
 		run.PageNo = page.PageNo
 		run.DownloadURL = page.DownloadURL
 		runs = append(runs, run)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
 	}
 	return runs, nil
 }
@@ -218,12 +230,26 @@ func (s *PostgresStore) CompleteRun(ctx context.Context, tenantID string, runID 
 	if err := validateResultInput(input); err != nil {
 		return Run{}, err
 	}
-	payloadHash := resultPayloadHash(input)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Run{}, err
 	}
 	defer tx.Rollback()
+	run, err := s.completeRunInTx(ctx, tx, tenantID, runID, input)
+	if err != nil {
+		return Run{}, err
+	}
+	return run, tx.Commit()
+}
+
+func (s *PostgresStore) completeRunInTx(ctx context.Context, tx *sql.Tx, tenantID string, runID string, input ResultInput) (Run, error) {
+	if tx == nil {
+		return Run{}, ErrInvalidInput
+	}
+	if err := validateResultInput(input); err != nil {
+		return Run{}, err
+	}
+	payloadHash := resultPayloadHash(input)
 	run, err := s.getRunForUpdate(ctx, tx, tenantID, runID)
 	if err != nil {
 		return Run{}, err
@@ -233,7 +259,7 @@ func (s *PostgresStore) CompleteRun(ctx context.Context, tenantID string, runID 
 			return Run{}, ErrLeaseMismatch
 		}
 		if run.ResultPayloadHash == payloadHash {
-			return cloneRun(run), tx.Commit()
+			return cloneRun(run), nil
 		}
 		return Run{}, ErrConflict
 	}
@@ -277,9 +303,6 @@ RETURNING id::text, tenant_id::text, submission_id::text, submission_page_id::te
 		input.ResultVersion, payloadHash, input.DurationMS, reportJSON, issuesJSON, transformJSON, input.ErrorCode, errorDetailJSON)
 	var out Run
 	if err := scanRun(row, &out); err != nil {
-		return Run{}, err
-	}
-	if err := tx.Commit(); err != nil {
 		return Run{}, err
 	}
 	return out, nil

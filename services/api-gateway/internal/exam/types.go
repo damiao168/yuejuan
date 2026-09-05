@@ -53,6 +53,7 @@ type ExamSession struct {
 	AppealEnabled   bool      `json:"appeal_enabled"`
 	PublishPolicy   string    `json:"publish_policy"`
 	CreatedBy       string    `json:"created_by"`
+	CommandID       string    `json:"-"`
 	Revision        int64     `json:"revision"`
 	Exams           []Exam    `json:"exams"`
 	CreatedAt       time.Time `json:"created_at"`
@@ -86,6 +87,7 @@ type CreateSessionInput struct {
 	PublishPolicy string                `json:"publish_policy"`
 	ClassIDs      []string              `json:"class_ids"`
 	Subjects      []SessionSubjectInput `json:"subjects"`
+	CommandID     string                `json:"command_id,omitempty"`
 }
 
 type SessionStore interface {

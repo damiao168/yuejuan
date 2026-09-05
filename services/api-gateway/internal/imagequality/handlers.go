@@ -59,33 +59,30 @@ func (h *Handler) RunQualityCheck(w http.ResponseWriter, r *http.Request) {
 			DownloadURL:       "/api/v1/files/" + asset.ID + "/download",
 		})
 	}
-	runs, err := h.store.CreateRuns(r.Context(), user.TenantID, CreateRunsInput{
+	createInput := CreateRunsInput{
 		SubmissionID: submissionID,
 		Profile:      DefaultProfile(),
 		Pages:        pages,
-	})
+	}
+	var runs []Run
+	tasksCreatedAtomically := false
+	if coordinated, ok := h.store.(TransactionalStore); ok && h.runtime != nil {
+		if _, runtimeIsPostgres := h.runtime.(*workerruntime.PostgresStore); runtimeIsPostgres {
+			runs, err = coordinated.CreateRunsWithTasks(r.Context(), user.TenantID, user.ID, createInput)
+			tasksCreatedAtomically = true
+		} else {
+			runs, err = h.store.CreateRuns(r.Context(), user.TenantID, createInput)
+		}
+	} else {
+		runs, err = h.store.CreateRuns(r.Context(), user.TenantID, createInput)
+	}
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
 	}
-	if h.runtime != nil {
+	if h.runtime != nil && !tasksCreatedAtomically {
 		for _, run := range runs {
-			_, err := h.runtime.CreateTask(r.Context(), user.TenantID, user.ID, workerruntime.CreateTaskInput{
-				TaskType:             "image_quality",
-				QueueName:            "image-quality",
-				SourceType:           "image_quality_run",
-				SourceID:             run.ID,
-				IdempotencyKey:       "image-quality-run:" + run.ID,
-				PayloadSchemaVersion: "image-quality.v1",
-				Payload: map[string]any{
-					"run_id": run.ID, "submission_id": run.SubmissionID, "submission_page_id": run.SubmissionPageID,
-					"page_no": run.PageNo, "source_file_asset_id": run.SourceFileAssetID, "source_sha256": run.SourceSHA256,
-					"download_url": run.DownloadURL, "profile_name": run.ProfileName, "profile_version": run.ProfileVersion,
-					"profile_config_hash": run.ProfileConfigHash, "metric_schema_version": run.MetricSchemaVersion,
-					"report_schema_version": run.ReportSchemaVersion,
-				},
-				MaxAttempts: 3, RetryBackoffSeconds: 30,
-			})
+			_, err := h.runtime.CreateTask(r.Context(), user.TenantID, user.ID, qualityRuntimeCreateInput(run))
 			if err != nil {
 				writeStoreError(w, r, err)
 				return
@@ -255,6 +252,21 @@ func (h *Handler) SubmitResult(w http.ResponseWriter, r *http.Request) {
 		}
 		if asset.ContentType != "image/png" {
 			httpx.Error(w, r, http.StatusBadRequest, "normalized_file_asset_invalid", "normalized file asset must be image/png")
+			return
+		}
+	}
+	if coordinated, ok := h.store.(TransactionalStore); ok && h.runtime != nil && h.captures != nil {
+		_, submissionIsPostgres := h.submissions.(*submission.PostgresStore)
+		_, runtimeIsPostgres := h.runtime.(*workerruntime.PostgresStore)
+		_, captureIsPostgres := h.captures.(*capture.PostgresStore)
+		if submissionIsPostgres && runtimeIsPostgres && captureIsPostgres {
+			run, err := coordinated.SubmitResultCommand(r.Context(), user.TenantID, user.ID, runID, input)
+			if err != nil {
+				writeStoreError(w, r, err)
+				return
+			}
+			h.auditAction(r, "image_quality.result_submitted", "image_quality_run", run.ID, "submit image quality result")
+			httpx.JSON(w, http.StatusOK, map[string]any{"run": run})
 			return
 		}
 	}

@@ -126,8 +126,21 @@ func (s *PostgresStore) claim(ctx context.Context, heartbeatTenantID string, acr
 	if err != nil {
 		return nil, err
 	}
-	if err := upsertWorkerHeartbeat(ctx, tx, heartbeatTenantID, input.WorkerService, input.WorkerInstanceID, input.QueueName, dbNow, map[string]any{"state": "polling"}); err != nil {
-		return nil, err
+	// Process-owned executors do not impersonate a tenant merely to publish a
+	// heartbeat. External platform workers still provide a real tenant ID.
+	if heartbeatTenantID != "" {
+		if err := upsertWorkerHeartbeat(ctx, tx, heartbeatTenantID, input.WorkerService, input.WorkerInstanceID, input.QueueName, dbNow, map[string]any{"state": "polling"}); err != nil {
+			return nil, err
+		}
+	} else if !acrossTenants {
+		return nil, ErrInvalidInput
+	}
+	var tenantScope any = heartbeatTenantID
+	if acrossTenants && heartbeatTenantID == "" {
+		// Passing an empty string still makes PostgreSQL cast $1 to uuid even
+		// when the across-tenant branch of the OR is true. NULL keeps the
+		// process-owned executor tenant-neutral without an invalid uuid cast.
+		tenantScope = nil
 	}
 	exhaustedRows, err := tx.QueryContext(ctx, `
 SELECT tenant_id::text, id::text, status
@@ -145,7 +158,7 @@ WHERE ($5 OR tenant_id = $1)
 ORDER BY priority ASC, created_at ASC, id ASC
 LIMIT $3
 FOR UPDATE SKIP LOCKED
-`, heartbeatTenantID, input.QueueName, input.Limit, dbNow, acrossTenants)
+`, tenantScope, input.QueueName, input.Limit, dbNow, acrossTenants)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +224,7 @@ WHERE ($5 OR tenant_id = $1)
 ORDER BY priority ASC, created_at ASC, id ASC
 LIMIT $3
 FOR UPDATE SKIP LOCKED
-`, heartbeatTenantID, input.QueueName, input.Limit, dbNow, acrossTenants)
+`, tenantScope, input.QueueName, input.Limit, dbNow, acrossTenants)
 	if err != nil {
 		return nil, err
 	}

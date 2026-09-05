@@ -135,6 +135,19 @@ func TestExamSessionRejectsScoreMismatch(t *testing.T) {
 	}
 }
 
+func TestExamSessionRejectsMismatchedCommandIdentity(t *testing.T) {
+	router := testRouter(authStoreWithPermissions(t, []string{"exam:manage"}), exam.NewMemoryStore())
+	token := login(t, router)
+	payload := `{"school_id":"school-1","grade_id":"grade-1","name":"测试","exam_type":"quiz","grading_mode":"ai_assisted","publish_policy":"after_admin_approval","class_ids":["class-1"],"command_id":"command-in-body","subjects":[{"subject":"math","total_score":100,"duration_minutes":60,"sections":[{"title":"全卷","question_type":"short_answer","question_count":10,"score_per_question":10}]}]}`
+	req := authedRequest(http.MethodPost, "/api/v1/exam-sessions", bytes.NewBufferString(payload), token)
+	req.Header.Set("Idempotency-Key", "command-in-header")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "command_id") {
+		t.Fatalf("mismatched command identity expected 400, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestInvalidStatusTransitionRejected(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
 	router := testRouter(authStore, exam.NewMemoryStore())

@@ -9,6 +9,7 @@ import (
 type memoryEntry struct {
 	record    Record
 	expiresAt time.Time
+	updatedAt time.Time
 }
 
 type MemoryStore struct {
@@ -33,12 +34,21 @@ func (s *MemoryStore) Begin(_ context.Context, input BeginInput) (Record, bool, 
 			return Record{}, false, ErrKeyConflict
 		}
 		if existing.record.State == "processing" {
+			if input.AllowTakeover && !input.StaleBefore.IsZero() && existing.updatedAt.Before(input.StaleBefore) {
+				existing.updatedAt = time.Now().UTC()
+				existing.record.UpdatedAt = existing.updatedAt
+				existing.expiresAt = input.ExpiresAt
+				s.records[key] = existing
+				return cloneRecord(existing.record), true, nil
+			}
 			return Record{}, false, ErrInProgress
 		}
 		return cloneRecord(existing.record), false, nil
 	}
 	record := Record{State: "processing", RequestHash: input.RequestHash}
-	s.records[key] = memoryEntry{record: record, expiresAt: input.ExpiresAt}
+	now := time.Now().UTC()
+	record.UpdatedAt = now
+	s.records[key] = memoryEntry{record: record, expiresAt: input.ExpiresAt, updatedAt: now}
 	return record, true, nil
 }
 
@@ -51,6 +61,8 @@ func (s *MemoryStore) Complete(_ context.Context, input BeginInput, status int, 
 		return ErrKeyConflict
 	}
 	entry.record = Record{State: "completed", RequestHash: input.RequestHash, ResponseStatus: status, ResponseHeaders: cloneHeaders(headers), ResponseBody: append([]byte(nil), body...)}
+	entry.updatedAt = time.Now().UTC()
+	entry.record.UpdatedAt = entry.updatedAt
 	s.records[key] = entry
 	return nil
 }

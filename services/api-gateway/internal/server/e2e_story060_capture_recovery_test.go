@@ -2,14 +2,19 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/capture"
+	"edugrade-enterprise/services/api-gateway/internal/exam"
 	"edugrade-enterprise/services/api-gateway/internal/files"
+	"edugrade-enterprise/services/api-gateway/internal/imagequality"
+	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
 
 func TestStory060CaptureRecoveryE2EWithPostgresTestDatabase(t *testing.T) {
@@ -24,6 +29,25 @@ func TestStory060CaptureRecoveryE2EWithPostgresTestDatabase(t *testing.T) {
 	adminToken := e2eLoginWithTenant(t, router, "demo", "tenant_admin", "ChangeMe123!")
 	suffix := strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "")
 	fixture := e2eCreateStory056AcceptanceFixture(t, db, router, adminToken, suffix)
+	var gradeID string
+	if err := db.QueryRow(`SELECT grade_id::text FROM school_class WHERE tenant_id=$1::uuid AND id=$2::uuid`, fixture.TenantID, fixture.ClassID).Scan(&gradeID); err != nil {
+		t.Fatalf("lookup command recovery grade: %v", err)
+	}
+	commandID := "exam-session-recovery-" + suffix
+	sessionInput := exam.CreateSessionInput{
+		SchoolID: fixture.SchoolID, GradeID: gradeID, Name: "稳定操作身份验收", ExamType: "unit_test",
+		GradingMode: "ai_assisted", PublishPolicy: "manual_after_confirmation", ClassIDs: []string{fixture.ClassID}, CommandID: commandID,
+		Subjects: []exam.SessionSubjectInput{{Subject: "math", TotalScore: 10, DurationMinutes: 30, Sections: []exam.BlueprintSectionInput{{Title: "全卷", QuestionType: "short_answer", QuestionCount: 1, ScorePerQuestion: 10}}}},
+	}
+	sessionStore := exam.NewPostgresStore(db)
+	firstSession, err := sessionStore.CreateExamSession(context.Background(), auth.AccessScope{TenantID: fixture.TenantID, TenantWide: true}, fixture.AdminID, sessionInput)
+	if err != nil {
+		t.Fatalf("create stable command session: %v", err)
+	}
+	secondSession, err := sessionStore.CreateExamSession(context.Background(), auth.AccessScope{TenantID: fixture.TenantID, TenantWide: true}, fixture.AdminID, sessionInput)
+	if err != nil || secondSession.ID != firstSession.ID || len(secondSession.Exams) != 1 || secondSession.Exams[0].ID != firstSession.Exams[0].ID {
+		t.Fatalf("lost-response retry duplicated exam session: first=%#v second=%#v err=%v", firstSession, secondSession, err)
+	}
 
 	sourceAssetID := e2eUploadSyntheticPDF(
 		t,
@@ -127,28 +151,75 @@ WHERE tenant_id=$1::uuid AND capture_file_id=$2::uuid AND deleted_at IS NULL
 	if err != nil {
 		t.Fatalf("create normalized quality evidence: %v", err)
 	}
-	if _, err = db.Exec(`
-UPDATE submission_page
-SET normalized_file_asset_id=$3::uuid,quality_status='failed',
-    quality_issues='[{"code":"blur","message":"synthetic threshold failure"}]'::jsonb,
-    updated_at=now()
-WHERE tenant_id=$1::uuid AND id=$2::uuid
-`, fixture.TenantID, submissionPageID, normalized.ID); err != nil {
-		t.Fatalf("seed submission page quality false positive: %v", err)
+	qualityStore := imagequality.NewPostgresStore(db)
+	qualityRuns, err := qualityStore.CreateRunsWithTasks(context.Background(), fixture.TenantID, fixture.AdminID, imagequality.CreateRunsInput{
+		SubmissionID: submissionID, Profile: imagequality.DefaultProfile(), Pages: []imagequality.PageSource{{
+			SubmissionPageID: submissionPageID, PageNo: 1, SourceFileAssetID: sourceAssetID,
+			SourceSHA256: sourceHash, DownloadURL: "/api/v1/files/" + sourceAssetID + "/download",
+		}},
+	})
+	if err != nil || len(qualityRuns) != 1 {
+		t.Fatalf("create quality run and task atomically: %#v %v", qualityRuns, err)
 	}
-	if _, err = db.Exec(`
-UPDATE submission
-SET quality_status='failed',status='pages_uploaded',updated_at=now()
-WHERE tenant_id=$1::uuid AND id=$2::uuid
-`, fixture.TenantID, submissionID); err != nil {
-		t.Fatalf("seed submission quality false positive: %v", err)
+	runtimeStore := workerruntime.NewPostgresStore(db)
+	qualityTasks, err := runtimeStore.Claim(context.Background(), fixture.TenantID, workerruntime.ClaimInput{
+		QueueName: "image-quality", WorkerService: "image-quality-worker", WorkerInstanceID: "atomicity-test", Limit: 100, LeaseSeconds: 300,
+	})
+	var qualityTask workerruntime.Task
+	for _, task := range qualityTasks {
+		if task.SourceID == qualityRuns[0].ID {
+			qualityTask = task
+			break
+		}
 	}
-	if _, err = db.Exec(`
-UPDATE capture_page
-SET status='quality_rejected',page_identity=page_identity || '{"quality_status":"failed"}'::jsonb,updated_at=now()
-WHERE tenant_id=$1::uuid AND id=$2::uuid
-`, fixture.TenantID, capturePageID); err != nil {
-		t.Fatalf("seed capture page quality false positive: %v", err)
+	if err != nil || qualityTask.ID == "" || qualityTask.LeaseExpiresAt == nil {
+		t.Fatalf("claim quality task: %#v %v", qualityTasks, err)
+	}
+	leasedRun, err := qualityStore.LeaseRun(context.Background(), fixture.TenantID, qualityRuns[0].ID, "atomicity-test", qualityTask.LeaseToken, *qualityTask.LeaseExpiresAt, qualityTask.AttemptCount)
+	if err != nil {
+		t.Fatalf("lease quality source: %v", err)
+	}
+	resultInput := imagequality.ResultInput{
+		LeaseToken: qualityTask.LeaseToken, AttemptNo: leasedRun.AttemptNo, ResultVersion: "atomicity-v1", DurationMS: 25,
+		ProcessingStatus: imagequality.ProcessingCompleted, QualityStatus: imagequality.QualityFailed,
+		NormalizedFileAssetID: normalized.ID, QualityReport: map[string]any{"blur": 0.8},
+		QualityIssues:          []imagequality.Issue{{Code: "blur", Severity: "error", Action: "manual_review"}},
+		NormalizationTransform: map[string]any{"rotation": 0}, ErrorDetail: map[string]any{},
+	}
+	if _, err = db.Exec(`UPDATE agent_worker_task SET lease_token='forced-runtime-mismatch' WHERE tenant_id=$1::uuid AND id=$2::uuid`, fixture.TenantID, qualityTask.ID); err != nil {
+		t.Fatalf("inject runtime completion failure: %v", err)
+	}
+	if _, err = qualityStore.SubmitResultCommand(context.Background(), fixture.TenantID, fixture.AdminID, leasedRun.ID, resultInput); !errors.Is(err, workerruntime.ErrLeaseMismatch) {
+		t.Fatalf("injected runtime mismatch must roll back the command: %v", err)
+	}
+	var rolledBackRun, rolledBackPage, rolledBackCapture string
+	if err = db.QueryRow(`SELECT r.processing_status,sp.quality_status,cp.status
+	FROM submission_page_quality_run r
+	JOIN submission_page sp ON sp.tenant_id=r.tenant_id AND sp.id=r.submission_page_id
+	JOIN capture_page cp ON cp.tenant_id=sp.tenant_id AND cp.submission_page_id=sp.id
+	WHERE r.tenant_id=$1::uuid AND r.id=$2::uuid`, fixture.TenantID, leasedRun.ID).Scan(&rolledBackRun, &rolledBackPage, &rolledBackCapture); err != nil {
+		t.Fatalf("query rolled back quality state: %v", err)
+	}
+	if rolledBackRun != imagequality.ProcessingProcessing || rolledBackPage != imagequality.QualityUnchecked || rolledBackCapture == "quality_rejected" {
+		t.Fatalf("partial quality result escaped rollback: run=%s page=%s capture=%s", rolledBackRun, rolledBackPage, rolledBackCapture)
+	}
+	if _, err = db.Exec(`UPDATE agent_worker_task SET lease_token=$3 WHERE tenant_id=$1::uuid AND id=$2::uuid`, fixture.TenantID, qualityTask.ID, qualityTask.LeaseToken); err != nil {
+		t.Fatalf("restore runtime lease after fault injection: %v", err)
+	}
+	if _, err = qualityStore.SubmitResultCommand(context.Background(), fixture.TenantID, fixture.AdminID, leasedRun.ID, resultInput); err != nil {
+		t.Fatalf("commit coordinated quality result: %v", err)
+	}
+	var committedRun, committedPage, committedCapture, committedTask string
+	if err = db.QueryRow(`SELECT r.processing_status,sp.quality_status,cp.status,t.status
+	FROM submission_page_quality_run r
+	JOIN submission_page sp ON sp.tenant_id=r.tenant_id AND sp.id=r.submission_page_id
+	JOIN capture_page cp ON cp.tenant_id=sp.tenant_id AND cp.submission_page_id=sp.id
+	JOIN agent_worker_task t ON t.tenant_id=r.tenant_id AND t.source_type='image_quality_run' AND t.source_id=r.id
+	WHERE r.tenant_id=$1::uuid AND r.id=$2::uuid`, fixture.TenantID, leasedRun.ID).Scan(&committedRun, &committedPage, &committedCapture, &committedTask); err != nil {
+		t.Fatalf("query committed quality state: %v", err)
+	}
+	if committedRun != imagequality.ProcessingCompleted || committedPage != imagequality.QualityFailed || committedCapture != "quality_rejected" || committedTask != workerruntime.StatusSucceeded {
+		t.Fatalf("quality command did not commit as one unit: run=%s page=%s capture=%s task=%s", committedRun, committedPage, committedCapture, committedTask)
 	}
 
 	override := e2ePostJSON(t, router, http.MethodPost, "/api/v1/submission-pages/"+submissionPageID+"/quality-override", adminToken, story056JSON(t, map[string]any{

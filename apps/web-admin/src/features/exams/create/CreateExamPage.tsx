@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, App } from "antd";
-import { getUserErrorMessage } from "../../../api/client";
+import { ApiClientError, getUserErrorMessage } from "../../../api/client";
 import { createExamSession } from "../../../api/exams";
 import { listExamTemplates, type ExamTemplate } from "../../../api/examTemplates";
 import { listClasses, listGrades, listSchools, type Grade, type School, type SchoolClass } from "../../../api/org";
@@ -41,6 +41,15 @@ export function CreateExamPage({ user, onNavigate }: { user: SessionUser; onNavi
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const commandStorageKey = `exam-create-command:${user.tenant}:${user.id}`;
+  const [commandId, setCommandId] = useState<string>(() => {
+    try {
+      const stored = localStorage.getItem(commandStorageKey);
+      return stored && stored.length >= 8 ? stored : crypto.randomUUID();
+    } catch {
+      return crypto.randomUUID();
+    }
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,7 +93,7 @@ export function CreateExamPage({ user, onNavigate }: { user: SessionUser; onNavi
     } finally {
       setLoading(false);
     }
-  }, [user.id, user.school, user.tenant]);
+  }, [commandStorageKey, user.id, user.school, user.tenant]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -99,6 +108,10 @@ export function CreateExamPage({ user, onNavigate }: { user: SessionUser; onNavi
     }, 450);
     return () => window.clearTimeout(timer);
   }, [draft, loading, user.id, user.tenant]);
+
+  useEffect(() => {
+    localStorage.setItem(commandStorageKey, commandId);
+  }, [commandId, commandStorageKey]);
 
   const changeStep = (next: number) => {
     if (next > step) {
@@ -124,12 +137,19 @@ export function CreateExamPage({ user, onNavigate }: { user: SessionUser; onNavi
         publish_policy: draft.publishPolicy,
         class_ids: draft.classIds,
         subjects: draft.subjects.map((subject) => ({ subject: subject.subject, total_score: subject.totalScore, duration_minutes: subject.durationMinutes, candidate_rule: subject.candidateRule, class_ids: subject.candidateRule === "subject_selected_classes" ? subject.classIds : [], sections: subject.sections.map((section) => ({ title: section.title.trim(), question_type: section.questionType, question_count: section.questionCount, score_per_question: section.scorePerQuestion })) }))
-      });
+      }, commandId);
       localStorage.removeItem(`exam-create-draft:${user.tenant}:${user.id}`);
+      localStorage.removeItem(commandStorageKey);
       const firstExam = result.exam_session.exams[0];
       message.success(`已创建 ${result.exam_session.exams.length} 个科目工作区`);
       onNavigate(firstExam ? `/exams/${encodeURIComponent(firstExam.id)}/settings` : "/exams");
     } catch (submitError) {
+      // A received HTTP error proves that this attempt has a terminal response,
+      // so a corrected submission is a new command. Network failures retain the
+      // same ID because the server may already have committed successfully.
+      if (submitError instanceof ApiClientError) {
+        setCommandId(crypto.randomUUID());
+      }
       message.error(getUserErrorMessage(submitError, "考试创建失败"));
     } finally {
       setSubmitting(false);

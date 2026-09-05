@@ -309,15 +309,28 @@ func decodeAnswerRegionBBox(raw []byte) []float64 {
 }
 
 func (s *PostgresStore) ApplyPageQualityResult(ctx context.Context, tenantID string, input ApplyPageQualityInput) (SubmissionPage, error) {
-	if input.QualityStatus != "passed" && input.QualityStatus != "review" && input.QualityStatus != "failed" {
-		return SubmissionPage{}, ErrInvalidInput
-	}
-	issuesJSON, _ := json.Marshal(input.QualityIssues)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return SubmissionPage{}, err
 	}
 	defer tx.Rollback()
+	page, err := ApplyPageQualityResultInTx(ctx, tx, tenantID, input)
+	if err != nil {
+		return SubmissionPage{}, err
+	}
+	return page, tx.Commit()
+}
+
+// ApplyPageQualityResultInTx lets the quality result coordinator commit the
+// page projection and its submission aggregate with the source/runtime result.
+func ApplyPageQualityResultInTx(ctx context.Context, tx *sql.Tx, tenantID string, input ApplyPageQualityInput) (SubmissionPage, error) {
+	if input.QualityStatus != "passed" && input.QualityStatus != "review" && input.QualityStatus != "failed" {
+		return SubmissionPage{}, ErrInvalidInput
+	}
+	if tx == nil {
+		return SubmissionPage{}, ErrInvalidInput
+	}
+	issuesJSON, _ := json.Marshal(input.QualityIssues)
 	row := tx.QueryRowContext(ctx, `
 UPDATE submission_page
 SET latest_quality_run_id = NULLIF($4, '')::uuid,
@@ -334,10 +347,7 @@ RETURNING id::text, tenant_id::text, submission_id::text, file_asset_id::text, p
 	if err := scanPage(row, &page); err != nil {
 		return SubmissionPage{}, err
 	}
-	if err := s.aggregateQualityTx(ctx, tx, tenantID, input.SubmissionID); err != nil {
-		return SubmissionPage{}, err
-	}
-	if err := tx.Commit(); err != nil {
+	if err := aggregateQualityTx(ctx, tx, tenantID, input.SubmissionID); err != nil {
 		return SubmissionPage{}, err
 	}
 	return page, nil
@@ -418,7 +428,7 @@ RETURNING id::text, tenant_id::text, submission_id::text, file_asset_id::text, p
 	if err = scanPage(row, &page); err != nil {
 		return SubmissionPage{}, err
 	}
-	if err = s.aggregateQualityTx(ctx, tx, tenantID, submissionID); err != nil {
+	if err = aggregateQualityTx(ctx, tx, tenantID, submissionID); err != nil {
 		return SubmissionPage{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -519,7 +529,7 @@ WHERE tenant_id = $1 AND submission_id = $2 AND page_no = $3 AND deleted_at IS N
 	return page, nil
 }
 
-func (s *PostgresStore) aggregateQualityTx(ctx context.Context, tx *sql.Tx, tenantID string, submissionID string) error {
+func aggregateQualityTx(ctx context.Context, tx *sql.Tx, tenantID string, submissionID string) error {
 	rows, err := tx.QueryContext(ctx, `
 SELECT quality_status
 FROM submission_page

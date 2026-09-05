@@ -21,6 +21,7 @@ var keyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 var protectedRoutes = map[string]bool{
 	"POST /api/v1/exams":                                        true,
+	"POST /api/v1/exam-sessions":                                true,
 	"POST /api/v1/exams/{examId}/capture-batches":               true,
 	"POST /api/v1/capture-batches/{id}/files":                   true,
 	"POST /api/v1/capture-batches/{id}/process":                 true,
@@ -46,10 +47,17 @@ var protectedRoutes = map[string]bool{
 	"POST /api/v1/files":                                        true,
 }
 
+var recoverableRoutes = map[string]bool{
+	// This command persists its command_id in exam_session in the same
+	// transaction as all child exams, so a stale reservation can be replayed.
+	"POST /api/v1/exam-sessions": true,
+}
+
 type Options struct {
-	Enforce          bool
-	TTL              time.Duration
-	MaxResponseBytes int
+	Enforce           bool
+	TTL               time.Duration
+	ProcessingTimeout time.Duration
+	MaxResponseBytes  int
 }
 
 func Middleware(store Store, options Options) func(http.Handler) http.Handler {
@@ -58,6 +66,9 @@ func Middleware(store Store, options Options) func(http.Handler) http.Handler {
 	}
 	if options.MaxResponseBytes <= 0 {
 		options.MaxResponseBytes = 2 * 1024 * 1024
+	}
+	if options.ProcessingTimeout <= 0 {
+		options.ProcessingTimeout = 2 * time.Minute
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +98,12 @@ func Middleware(store Store, options Options) func(http.Handler) http.Handler {
 				return
 			}
 			defer cleanup()
-			input := BeginInput{TenantID: user.TenantID, ActorID: user.ID, Method: r.Method, Route: route, Key: key, RequestHash: hash, ExpiresAt: time.Now().UTC().Add(options.TTL)}
+			now := time.Now().UTC()
+			input := BeginInput{
+				TenantID: user.TenantID, ActorID: user.ID, Method: r.Method, Route: route, Key: key,
+				RequestHash: hash, ExpiresAt: now.Add(options.TTL), AllowTakeover: recoverableRoutes[route],
+				StaleBefore: now.Add(-options.ProcessingTimeout),
+			}
 			record, execute, err := store.Begin(r.Context(), input)
 			if err != nil {
 				switch err {

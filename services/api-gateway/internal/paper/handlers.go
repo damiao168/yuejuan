@@ -188,22 +188,17 @@ func (h *Handler) CompletePaperImportOCR(w http.ResponseWriter, r *http.Request)
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if err := runtime.CompletePaperImportOCR(r.Context(), user.TenantID, r.PathValue("id"), input); err != nil {
-		writeStoreError(w, r, err)
-		return
-	}
-	// Completing the Worker Runtime task is intentionally committed before the
-	// slower model parse. The OCR worker's HTTP client may time out or disconnect
-	// while a large local-model prompt is still being evaluated; do not let that
-	// client cancellation strand the durable import in "processing".
-	parseContext := context.WithoutCancel(r.Context())
-	out, err := h.documentImport.CompleteOCR(parseContext, user.TenantID, r.PathValue("id"), input.Blocks)
+	job, parseInput, err := h.documentImport.PrepareOCRParse(r.Context(), user.TenantID, r.PathValue("id"), input.Blocks)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
 	}
-	h.auditAction(r, "paper.import_ocr_completed", "paper_import_job", out.ID, "complete scanned document OCR and paper parsing")
-	httpx.JSON(w, http.StatusOK, map[string]any{"import": out})
+	if err := runtime.CompletePaperImportOCR(r.Context(), user.TenantID, job.ID, input, parseInput); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.import_ocr_completed", "paper_import_job", job.ID, "complete scanned document OCR and queue durable paper parsing")
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"import": job, "parse_queued": true})
 }
 
 func (h *Handler) FailPaperImportRuntime(w http.ResponseWriter, r *http.Request) {

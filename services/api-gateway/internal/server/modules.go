@@ -98,13 +98,14 @@ type ExamPreparationStores struct {
 }
 
 type ExamPreparationModule struct {
-	ExamStore       exam.Store
-	PaperStore      paper.Store
-	FileStore       files.Store
-	ObjectStore     files.ObjectStorage
-	SubmissionStore submission.Store
-	SegmentStore    segment.Store
-	AssessmentStore assessment.Store
+	ExamStore          exam.Store
+	PaperStore         paper.Store
+	FileStore          files.Store
+	ObjectStore        files.ObjectStorage
+	SubmissionStore    submission.Store
+	SegmentStore       segment.Store
+	AssessmentStore    assessment.Store
+	PaperImportService *paper.DocumentImportService
 
 	ExamHandler       *exam.Handler
 	PaperHandler      *paper.Handler
@@ -129,22 +130,22 @@ type ExamPreparationDependencies struct {
 func NewExamPreparationModule(cfg config.Config, stores ExamPreparationStores, dependencies ExamPreparationDependencies) *ExamPreparationModule {
 	fileHandler := files.NewHandler(stores.Files, dependencies.ObjectStore, dependencies.AuthStore, cfg.Files).WithReconciliationReader(dependencies.Reconciliation)
 	segmentHandler := segment.NewHandler(stores.Segments, stores.Paper, stores.Submissions, dependencies.AuthStore, stores.Files, dependencies.ObjectStore)
+	paperImportService := paper.NewDocumentImportService(stores.Paper, stores.Files, dependencies.ObjectStore, cfg.AIService.URL, cfg.AIService.Token, cfg.AIService.Timeout)
 	return &ExamPreparationModule{
-		ExamStore:       stores.Exam,
-		PaperStore:      stores.Paper,
-		FileStore:       stores.Files,
-		ObjectStore:     dependencies.ObjectStore,
-		SubmissionStore: stores.Submissions,
-		SegmentStore:    stores.Segments,
-		AssessmentStore: stores.Assessments,
-		ExamHandler:     exam.NewHandler(stores.Exam, dependencies.AuthStore),
-		PaperHandler: paper.NewHandler(stores.Paper, dependencies.AuthStore).WithDocumentImport(
-			paper.NewDocumentImportService(stores.Paper, stores.Files, dependencies.ObjectStore, cfg.AIService.URL, cfg.AIService.Token, cfg.AIService.Timeout),
-		),
-		FileHandler:       fileHandler,
-		SubmissionHandler: submission.NewHandler(stores.Submissions, stores.Files, dependencies.AuthStore),
-		SegmentHandler:    segmentHandler,
-		AssessmentHandler: assessment.NewHandler(stores.Assessments, dependencies.AuthStore),
+		ExamStore:          stores.Exam,
+		PaperStore:         stores.Paper,
+		FileStore:          stores.Files,
+		ObjectStore:        dependencies.ObjectStore,
+		SubmissionStore:    stores.Submissions,
+		SegmentStore:       stores.Segments,
+		AssessmentStore:    stores.Assessments,
+		PaperImportService: paperImportService,
+		ExamHandler:        exam.NewHandler(stores.Exam, dependencies.AuthStore),
+		PaperHandler:       paper.NewHandler(stores.Paper, dependencies.AuthStore).WithDocumentImport(paperImportService),
+		FileHandler:        fileHandler,
+		SubmissionHandler:  submission.NewHandler(stores.Submissions, stores.Files, dependencies.AuthStore),
+		SegmentHandler:     segmentHandler,
+		AssessmentHandler:  assessment.NewHandler(stores.Assessments, dependencies.AuthStore),
 		WorkspaceHandler: workspace.NewHandler(workspace.Dependencies{
 			Exams: stores.Exam, Papers: stores.Paper, PaperImports: stores.Paper, Submissions: stores.Submissions, Assessments: stores.Assessments,
 		}),

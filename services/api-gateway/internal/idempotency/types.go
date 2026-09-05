@@ -12,13 +12,15 @@ var (
 )
 
 type BeginInput struct {
-	TenantID    string
-	ActorID     string
-	Method      string
-	Route       string
-	Key         string
-	RequestHash string
-	ExpiresAt   time.Time
+	TenantID      string
+	ActorID       string
+	Method        string
+	Route         string
+	Key           string
+	RequestHash   string
+	ExpiresAt     time.Time
+	AllowTakeover bool
+	StaleBefore   time.Time
 }
 
 type Record struct {
@@ -27,6 +29,7 @@ type Record struct {
 	ResponseStatus  int
 	ResponseHeaders map[string]string
 	ResponseBody    []byte
+	UpdatedAt       time.Time
 }
 
 type Store interface {

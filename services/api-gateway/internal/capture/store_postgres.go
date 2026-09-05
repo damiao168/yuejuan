@@ -679,33 +679,52 @@ func validBarcodeObservations(items []BarcodeObservation, width, height int) boo
 }
 
 func (s *PostgresStore) ApplyQualityOutcome(ctx context.Context, tenantID, submissionPageID, qualityStatus string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	linked, err := ApplyQualityOutcomeInTx(ctx, tx, tenantID, submissionPageID, qualityStatus)
+	if err != nil {
+		return err
+	}
+	if !linked {
+		return ErrNotFound
+	}
+	return tx.Commit()
+}
+
+// ApplyQualityOutcomeInTx updates a linked capture page and aggregate. A
+// submission created outside capture is reported as linked=false, not an error.
+func ApplyQualityOutcomeInTx(ctx context.Context, tx *sql.Tx, tenantID, submissionPageID, qualityStatus string) (bool, error) {
 	pageStatus := "quality_rejected"
 	if qualityStatus == "passed" {
 		pageStatus = "normalized"
 	} else if qualityStatus == "review" {
 		pageStatus = "needs_review"
 	} else if qualityStatus != "failed" {
-		return ErrInvalidInput
+		return false, ErrInvalidInput
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
+	if tx == nil {
+		return false, ErrInvalidInput
 	}
-	defer tx.Rollback()
 	var batchID string
-	err = tx.QueryRowContext(ctx, `UPDATE capture_page
+	err := tx.QueryRowContext(ctx, `UPDATE capture_page
 SET status=CASE WHEN $3='normalized' AND page_identity->>'barcode_status'='needs_review' THEN 'needs_review' ELSE $3 END,
     page_identity=page_identity || jsonb_build_object('quality_status',$4::text),
     revision=revision+1,
     updated_at=now()
 WHERE tenant_id=$1 AND submission_page_id=$2::uuid AND deleted_at IS NULL RETURNING capture_batch_id::text`, tenantID, submissionPageID, pageStatus, qualityStatus).Scan(&batchID)
 	if err != nil {
-		return mapNotFound(err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
 	}
-	if err = s.aggregateBatchTx(ctx, tx, tenantID, batchID); err != nil {
-		return err
+	if err = aggregateBatchTx(ctx, tx, tenantID, batchID); err != nil {
+		return false, err
 	}
-	return tx.Commit()
+	return true, nil
 }
 
 func (s *PostgresStore) ApplyFileFailure(ctx context.Context, tenantID, fileID, errorCode string, retryable bool) (File, error) {
@@ -726,7 +745,7 @@ func (s *PostgresStore) ApplyFileFailure(ctx context.Context, tenantID, fileID, 
 	if err != nil {
 		return File{}, err
 	}
-	if err = s.aggregateBatchTx(ctx, tx, tenantID, batchID); err != nil {
+	if err = aggregateBatchTx(ctx, tx, tenantID, batchID); err != nil {
 		return File{}, err
 	}
 	return out, tx.Commit()
@@ -824,7 +843,7 @@ func (s *PostgresStore) SetBatchStatus(ctx context.Context, tenantID, batchID, a
 	return out, tx.Commit()
 }
 
-func (s *PostgresStore) aggregateBatchTx(ctx context.Context, tx *sql.Tx, tenantID, batchID string) error {
+func aggregateBatchTx(ctx context.Context, tx *sql.Tx, tenantID, batchID string) error {
 	_, err := tx.ExecContext(ctx, `UPDATE capture_batch b SET
 file_count=(SELECT count(*) FROM capture_file f WHERE f.tenant_id=b.tenant_id AND f.capture_batch_id=b.id AND f.deleted_at IS NULL),
 page_count=(SELECT count(*) FROM capture_page p WHERE p.tenant_id=b.tenant_id AND p.capture_batch_id=b.id AND p.status<>'deleted' AND p.deleted_at IS NULL),
@@ -842,6 +861,10 @@ status=CASE
  ELSE 'matching' END,
 revision=revision+1,updated_at=now() WHERE b.tenant_id=$1 AND b.id=$2::uuid`, tenantID, batchID)
 	return err
+}
+
+func (s *PostgresStore) aggregateBatchTx(ctx context.Context, tx *sql.Tx, tenantID, batchID string) error {
+	return aggregateBatchTx(ctx, tx, tenantID, batchID)
 }
 
 func ensureBatchWritableTx(ctx context.Context, tx *sql.Tx, tenantID, batchID string) error {

@@ -70,14 +70,9 @@ type documentParseResponse struct {
 	Issues             []PaperImportIssue            `json:"issues"`
 }
 
-type normalizedImportDocument struct {
-	SourceID      string                `json:"source_id"`
-	FileAssetID   string                `json:"file_asset_id"`
-	DocumentIndex int                   `json:"document_index"`
-	RoleHint      string                `json:"role_hint"`
-	Content       string                `json:"content"`
-	Blocks        []PaperImportOCRBlock `json:"blocks"`
-}
+// The parser input is persisted before execution so it must have one stable
+// wire representation shared by the request builder and the task executor.
+type normalizedImportDocument = PaperImportParseDocument
 
 func NewDocumentImportService(store Store, fileStore files.Store, objects files.ObjectStorage, baseURL, token string, timeout time.Duration) *DocumentImportService {
 	if timeout <= 0 {
@@ -136,6 +131,12 @@ func (s *DocumentImportService) processSources(ctx context.Context, tenantID, us
 			return failed, nil
 		}
 		if err := runtime.QueuePaperImportOCR(ctx, tenantID, job, userID, ocrAssets); err != nil {
+			return PaperImportJob{}, err
+		}
+		return job, nil
+	}
+	if runtime, ok := s.store.(PaperImportRuntime); ok {
+		if err := runtime.QueuePaperImportParse(ctx, tenantID, job, userID, PaperImportParseRequest{Documents: documents}); err != nil {
 			return PaperImportJob{}, err
 		}
 		return job, nil
@@ -218,13 +219,13 @@ func appendNoExamContentIssue(parsed documentParseResponse, documents []normaliz
 	))
 }
 
-func (s *DocumentImportService) CompleteOCR(ctx context.Context, tenantID, importID string, blocks []PaperImportOCRBlock) (PaperImportJob, error) {
+func (s *DocumentImportService) PrepareOCRParse(ctx context.Context, tenantID, importID string, blocks []PaperImportOCRBlock) (PaperImportJob, PaperImportParseRequest, error) {
 	job, err := s.store.GetPaperImport(ctx, tenantID, importID)
 	if err != nil {
-		return PaperImportJob{}, err
+		return PaperImportJob{}, PaperImportParseRequest{}, err
 	}
 	if job.Status != "processing" {
-		return PaperImportJob{}, ErrConflict
+		return PaperImportJob{}, PaperImportParseRequest{}, ErrConflict
 	}
 	sortPaperImportOCRBlocks(blocks)
 	bySource := map[string][]PaperImportOCRBlock{}
@@ -236,7 +237,7 @@ func (s *DocumentImportService) CompleteOCR(ctx context.Context, tenantID, impor
 	for _, block := range blocks {
 		source, known := sourceByID[block.SourceID]
 		if !known || source.DocumentIndex != block.DocumentIndex {
-			return PaperImportJob{}, ErrInvalidInput
+			return PaperImportJob{}, PaperImportParseRequest{}, ErrInvalidInput
 		}
 		if strings.TrimSpace(block.Text) != "" {
 			bySource[block.SourceID] = append(bySource[block.SourceID], block)
@@ -258,14 +259,35 @@ func (s *DocumentImportService) CompleteOCR(ctx context.Context, tenantID, impor
 		if content == "" {
 			text, textErr := s.assetText(ctx, tenantID, source.FileAssetID)
 			if textErr != nil {
-				failed, _ := s.store.FailPaperImport(ctx, tenantID, job.ID, "source_ocr_failed", []string{"OCR 未返回可用文字"})
-				return failed, nil
+				return PaperImportJob{}, PaperImportParseRequest{}, fmt.Errorf("%w: OCR returned no usable text", ErrInvalidInput)
 			}
 			content = text
 		}
 		documents = append(documents, normalizedImportDocument{SourceID: source.ID, FileAssetID: source.FileAssetID, DocumentIndex: source.DocumentIndex, RoleHint: source.RoleHint, Content: content, Blocks: sourceBlocks})
 	}
-	return s.completeParsedDocuments(ctx, tenantID, job, documents, issues)
+	return job, PaperImportParseRequest{Documents: documents, ExtraIssues: issues}, nil
+}
+
+func (s *DocumentImportService) ExecuteParse(ctx context.Context, tenantID, importID string, input PaperImportParseRequest) (PaperImportJob, error) {
+	job, err := s.store.GetPaperImport(ctx, tenantID, importID)
+	if err != nil {
+		return PaperImportJob{}, err
+	}
+	if job.Status == "review_required" {
+		return job, nil
+	}
+	if job.Status != "processing" {
+		return PaperImportJob{}, ErrConflict
+	}
+	parseContext, release := s.beginParse(ctx, tenantID, job.ID)
+	defer release()
+	parsed, err := s.parseForTenant(parseContext, tenantID, job.ID, job.Subject, input.Documents)
+	if err != nil {
+		return PaperImportJob{}, err
+	}
+	parsed.Issues = append(parsed.Issues, input.ExtraIssues...)
+	parsed.Issues = appendNoExamContentIssue(parsed, input.Documents)
+	return s.store.CompletePaperImportCandidates(ctx, tenantID, job.ID, parsed.Documents, parsed.QuestionCandidates, parsed.AnswerCandidates, parsed.SolutionCandidates, parsed.RubricCandidates, parsed.Issues)
 }
 
 func sortPaperImportOCRBlocks(blocks []PaperImportOCRBlock) {

@@ -546,14 +546,28 @@ UPDATE agent_worker_task_attempt AS attempt
 SET status='cancelled',completed_at=now(),error_code='cancelled'
 FROM agent_worker_task AS task
 WHERE attempt.tenant_id=$1 AND attempt.task_id=task.id AND attempt.completed_at IS NULL
-  AND task.tenant_id=$1 AND task.source_type='paper_import_job' AND task.source_id=$2::uuid
+  AND task.tenant_id=$1 AND (
+    (task.source_type='paper_import_job' AND task.source_id=$2::uuid)
+    OR (task.source_type='paper_import_parse' AND EXISTS (
+      SELECT 1 FROM paper_import_parse_input parse_input
+      WHERE parse_input.tenant_id=task.tenant_id AND parse_input.id=task.source_id
+        AND parse_input.paper_import_id=$2::uuid
+    ))
+  )
   AND task.status IN ('queued','leased','running')`, tenantID, id); err != nil {
 		return PaperImportJob{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `
 UPDATE agent_worker_task
 SET status='cancelled',cancelled_at=now(),completed_at=now(),updated_at=now(),revision=revision+1
-WHERE tenant_id=$1 AND source_type='paper_import_job' AND source_id=$2::uuid
+WHERE tenant_id=$1 AND (
+    (source_type='paper_import_job' AND source_id=$2::uuid)
+    OR (source_type='paper_import_parse' AND EXISTS (
+      SELECT 1 FROM paper_import_parse_input parse_input
+      WHERE parse_input.tenant_id=agent_worker_task.tenant_id AND parse_input.id=agent_worker_task.source_id
+        AND parse_input.paper_import_id=$2::uuid
+    ))
+  )
   AND status IN ('queued','leased','running')`, tenantID, id); err != nil {
 		return PaperImportJob{}, err
 	}

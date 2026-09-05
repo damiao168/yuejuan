@@ -18,6 +18,15 @@ func (s *PostgresStore) CreateExamSession(ctx context.Context, scope auth.Access
 		return ExamSession{}, err
 	}
 	defer tx.Rollback()
+	if input.CommandID != "" {
+		existing, existingErr := loadExamSessionByCommandTx(ctx, tx, scope.TenantID, createdBy, input.CommandID)
+		if existingErr == nil {
+			return existing, tx.Commit()
+		}
+		if !errors.Is(existingErr, ErrNotFound) {
+			return ExamSession{}, existingErr
+		}
+	}
 
 	appealEnabled := true
 	if input.AppealEnabled != nil {
@@ -28,19 +37,27 @@ func (s *PostgresStore) CreateExamSession(ctx context.Context, scope auth.Access
 		return ExamSession{}, err
 	}
 	row := tx.QueryRowContext(ctx, `
-INSERT INTO exam_session (tenant_id, school_id, grade_id, exam_template_id, exam_template_version, name, exam_type, grading_mode, appeal_enabled, publish_policy, created_by)
-SELECT $1, s.id, g.id, NULLIF($4,'')::uuid, NULLIF($5,0), $6, $7, $8, $9, $10, $11
+INSERT INTO exam_session (tenant_id, school_id, grade_id, exam_template_id, exam_template_version, name, exam_type, grading_mode, appeal_enabled, publish_policy, created_by, command_id)
+SELECT $1, s.id, g.id, NULLIF($4,'')::uuid, NULLIF($5,0), $6, $7, $8, $9, $10, $11, NULLIF($12,'')
 FROM school s
 JOIN grade g ON g.tenant_id = s.tenant_id AND g.school_id = s.id
 WHERE s.tenant_id = $1 AND s.id::text = $2 AND g.id::text = $3
   AND s.deleted_at IS NULL AND g.deleted_at IS NULL AND g.status = 'active'
+ON CONFLICT (tenant_id, created_by, command_id) WHERE command_id IS NOT NULL DO NOTHING
 RETURNING id::text, tenant_id::text, school_id::text, grade_id::text, COALESCE(exam_template_id::text,''), COALESCE(exam_template_version,0), name, exam_type,
           status, grading_mode, appeal_enabled, publish_policy, created_by::text,
-          revision, created_at, updated_at
-`, scope.TenantID, input.SchoolID, input.GradeID, input.TemplateID, templateVersion, input.Name, input.ExamType, input.GradingMode, appealEnabled, input.PublishPolicy, createdBy)
+          COALESCE(command_id,''), revision, created_at, updated_at
+`, scope.TenantID, input.SchoolID, input.GradeID, input.TemplateID, templateVersion, input.Name, input.ExamType, input.GradingMode, appealEnabled, input.PublishPolicy, createdBy, input.CommandID)
 	var session ExamSession
-	if err := row.Scan(&session.ID, &session.TenantID, &session.SchoolID, &session.GradeID, &session.TemplateID, &session.TemplateVersion, &session.Name, &session.ExamType, &session.Status, &session.GradingMode, &session.AppealEnabled, &session.PublishPolicy, &session.CreatedBy, &session.Revision, &session.CreatedAt, &session.UpdatedAt); err != nil {
+	if err := row.Scan(&session.ID, &session.TenantID, &session.SchoolID, &session.GradeID, &session.TemplateID, &session.TemplateVersion, &session.Name, &session.ExamType, &session.Status, &session.GradingMode, &session.AppealEnabled, &session.PublishPolicy, &session.CreatedBy, &session.CommandID, &session.Revision, &session.CreatedAt, &session.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			if input.CommandID != "" {
+				existing, existingErr := loadExamSessionByCommandTx(ctx, tx, scope.TenantID, createdBy, input.CommandID)
+				if existingErr == nil {
+					return existing, tx.Commit()
+				}
+				return ExamSession{}, existingErr
+			}
 			return ExamSession{}, ErrInvalidInput
 		}
 		return ExamSession{}, err
@@ -106,6 +123,41 @@ VALUES ($1, $2, $3, $4, $5, '', '[]', $6, 'draft')
 		return ExamSession{}, err
 	}
 	return session, nil
+}
+
+func loadExamSessionByCommandTx(ctx context.Context, tx *sql.Tx, tenantID, createdBy, commandID string) (ExamSession, error) {
+	row := tx.QueryRowContext(ctx, `SELECT id::text,tenant_id::text,school_id::text,grade_id::text,
+COALESCE(exam_template_id::text,''),COALESCE(exam_template_version,0),name,exam_type,status,
+grading_mode,appeal_enabled,publish_policy,created_by::text,COALESCE(command_id,''),revision,created_at,updated_at
+FROM exam_session
+WHERE tenant_id=$1 AND created_by=$2::uuid AND command_id=$3 AND deleted_at IS NULL`, tenantID, createdBy, commandID)
+	var session ExamSession
+	if err := row.Scan(&session.ID, &session.TenantID, &session.SchoolID, &session.GradeID, &session.TemplateID, &session.TemplateVersion, &session.Name, &session.ExamType, &session.Status, &session.GradingMode, &session.AppealEnabled, &session.PublishPolicy, &session.CreatedBy, &session.CommandID, &session.Revision, &session.CreatedAt, &session.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ExamSession{}, ErrNotFound
+		}
+		return ExamSession{}, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT e.id::text,e.tenant_id::text,e.school_id::text,e.name,e.subject,e.exam_type,
+e.total_score::float8,e.status,e.grading_mode,e.appeal_enabled,e.publish_policy,e.created_by::text,
+e.revision,e.created_at,e.updated_at,
+COALESCE(array_agg(DISTINCT ec.class_id::text) FILTER (WHERE ec.class_id IS NOT NULL),'{}')
+FROM exam e
+LEFT JOIN exam_class ec ON ec.tenant_id=e.tenant_id AND ec.exam_id=e.id AND ec.deleted_at IS NULL
+WHERE e.tenant_id=$1 AND e.exam_session_id=$2::uuid AND e.deleted_at IS NULL
+GROUP BY e.id ORDER BY e.created_at,e.id`, tenantID, session.ID)
+	if err != nil {
+		return ExamSession{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var child Exam
+		if err = scanExamWithClasses(rows, &child); err != nil {
+			return ExamSession{}, err
+		}
+		session.Exams = append(session.Exams, child)
+	}
+	return session, rows.Err()
 }
 
 func scopeAllowsRequestedGrade(scope auth.AccessScope, gradeID string) bool {

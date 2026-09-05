@@ -13,6 +13,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/logger"
 	"edugrade-enterprise/services/api-gateway/internal/observability"
 	"edugrade-enterprise/services/api-gateway/internal/outbox"
+	"edugrade-enterprise/services/api-gateway/internal/paper"
 )
 
 // Infrastructure owns process-level resources shared by application modules.
@@ -155,6 +156,28 @@ func (i *Infrastructure) startOutboxDispatcher() {
 		stopDispatch()
 		select {
 		case <-dispatchDone:
+		case <-time.After(5 * time.Second):
+			return context.DeadlineExceeded
+		}
+		return nil
+	})
+}
+
+func (i *Infrastructure) startPaperParseExecutor(executor *paper.ParseTaskExecutor) {
+	parseContext, stopParse := context.WithCancel(context.Background())
+	parseDone := make(chan struct{})
+	go func() {
+		defer close(parseDone)
+		executor.Run(parseContext, func(err error) {
+			i.Logger.Error(context.Background(), "durable paper parse failed", map[string]any{
+				"event": "paper_parse_failed", "error": err.Error(),
+			})
+		})
+	}()
+	i.cleanup = append(i.cleanup, func() error {
+		stopParse()
+		select {
+		case <-parseDone:
 		case <-time.After(5 * time.Second):
 			return context.DeadlineExceeded
 		}

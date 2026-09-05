@@ -39,11 +39,11 @@ SELECT COALESCE((SELECT true FROM inserted), false)`, input.TenantID, input.Acto
 	var record Record
 	var headersRaw []byte
 	err = tx.QueryRowContext(ctx, `
-SELECT state,request_hash,COALESCE(response_status,0),response_headers,COALESCE(response_body,''::bytea)
+SELECT state,request_hash,COALESCE(response_status,0),response_headers,COALESCE(response_body,''::bytea),updated_at
 FROM idempotency_record
 WHERE tenant_id=$1 AND actor_id=$2 AND method=$3 AND route=$4 AND idempotency_key=$5
 FOR UPDATE`, input.TenantID, input.ActorID, input.Method, input.Route, input.Key).Scan(
-		&record.State, &record.RequestHash, &record.ResponseStatus, &headersRaw, &record.ResponseBody,
+		&record.State, &record.RequestHash, &record.ResponseStatus, &headersRaw, &record.ResponseBody, &record.UpdatedAt,
 	)
 	if err != nil {
 		return Record{}, false, err
@@ -52,6 +52,22 @@ FOR UPDATE`, input.TenantID, input.ActorID, input.Method, input.Route, input.Key
 		return Record{}, false, ErrKeyConflict
 	}
 	if record.State == "processing" {
+		if input.AllowTakeover && !input.StaleBefore.IsZero() && record.UpdatedAt.Before(input.StaleBefore) {
+			result, updateErr := tx.ExecContext(ctx, `
+UPDATE idempotency_record SET updated_at=now(),expires_at=$7
+WHERE tenant_id=$1 AND actor_id=$2 AND method=$3 AND route=$4 AND idempotency_key=$5
+  AND request_hash=$6 AND state='processing' AND updated_at<$8`,
+				input.TenantID, input.ActorID, input.Method, input.Route, input.Key, input.RequestHash, input.ExpiresAt, input.StaleBefore)
+			if updateErr != nil {
+				return Record{}, false, updateErr
+			}
+			if rows, _ := result.RowsAffected(); rows == 1 {
+				if updateErr = tx.Commit(); updateErr != nil {
+					return Record{}, false, updateErr
+				}
+				return Record{State: "processing", RequestHash: input.RequestHash}, true, nil
+			}
+		}
 		return Record{}, false, ErrInProgress
 	}
 	if err = json.Unmarshal(headersRaw, &record.ResponseHeaders); err != nil {

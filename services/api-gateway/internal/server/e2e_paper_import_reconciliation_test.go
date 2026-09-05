@@ -2,12 +2,17 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/paper"
+	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
 
 func TestPaperImportApplyGateE2EWithPostgresTestDatabase(t *testing.T) {
@@ -122,6 +127,77 @@ JOIN question_row q ON q.exam_id=e.id
 	if err := db.QueryRowContext(ctx, `SELECT error_code FROM paper_import_job WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, reorderJob.ID).Scan(&errorCode); err != nil || errorCode != "" {
 		t.Fatalf("replacing sources must clear error_code to empty string: %q (%v)", errorCode, err)
 	}
+
+	t.Run("OCR completion atomically hands off to restart-safe parse", func(t *testing.T) {
+		parseJob, createErr := store.CreatePaperImport(ctx, tenantID, examID, userID, paper.CreatePaperImportInput{
+			Subject: "mathematics", Sources: []paper.CreatePaperImportSourceInput{{FileAssetID: paperFileID, DocumentIndex: 0, RoleHint: "question"}},
+		})
+		if createErr != nil {
+			t.Fatalf("create parse recovery fixture: %v", createErr)
+		}
+		runtimeStore := workerruntime.NewPostgresStore(db)
+		ocrTask, createErr := runtimeStore.CreateTask(ctx, tenantID, userID, workerruntime.CreateTaskInput{
+			TaskType: "ocr", QueueName: "ocr", SourceType: "paper_import_job", SourceID: parseJob.ID,
+			IdempotencyKey: "paper-parse-recovery-ocr:" + parseJob.ID, PayloadSchemaVersion: "test-v1",
+		})
+		if createErr != nil {
+			t.Fatalf("create OCR runtime fixture: %v", createErr)
+		}
+		claimed, claimErr := runtimeStore.Claim(ctx, tenantID, workerruntime.ClaimInput{
+			QueueName: "ocr", WorkerService: "ocr-worker", WorkerInstanceID: "recovery-test", Limit: 1, LeaseSeconds: 300,
+		})
+		if claimErr != nil || len(claimed) != 1 || claimed[0].ID != ocrTask.ID {
+			t.Fatalf("claim OCR runtime fixture: %#v %v", claimed, claimErr)
+		}
+		block := paper.PaperImportOCRBlock{SourceID: parseJob.Sources[0].ID, DocumentIndex: 0, PageNo: 1, BlockID: "b1", Text: "1. What is 6 x 7?", Confidence: .99}
+		parseInput := paper.PaperImportParseRequest{Documents: []paper.PaperImportParseDocument{{
+			SourceID: parseJob.Sources[0].ID, FileAssetID: paperFileID, DocumentIndex: 0, RoleHint: "question", Content: block.Text, Blocks: []paper.PaperImportOCRBlock{block},
+		}}}
+		if completeErr := store.CompletePaperImportOCR(ctx, tenantID, parseJob.ID, paper.PaperImportOCRResult{
+			TaskID: claimed[0].ID, LeaseToken: claimed[0].LeaseToken, DurationMS: 10, Blocks: []paper.PaperImportOCRBlock{block},
+		}, parseInput); completeErr != nil {
+			t.Fatalf("complete OCR and queue parse: %v", completeErr)
+		}
+		var succeededOCR, queuedParse int
+		if queryErr := db.QueryRowContext(ctx, `SELECT
+		  count(*) FILTER (WHERE task_type='ocr' AND status='succeeded'),
+		  count(*) FILTER (WHERE task_type='paper_parse' AND status='queued')
+		FROM agent_worker_task WHERE tenant_id=$1::uuid AND
+		  ((source_type='paper_import_job' AND source_id=$2::uuid) OR
+		   (source_type='paper_import_parse' AND source_id IN
+		     (SELECT id FROM paper_import_parse_input WHERE tenant_id=$1::uuid AND paper_import_id=$2::uuid)))`, tenantID, parseJob.ID).Scan(&succeededOCR, &queuedParse); queryErr != nil || succeededOCR != 1 || queuedParse != 1 {
+			t.Fatalf("OCR/parse handoff was not atomic: ocr=%d parse=%d err=%v", succeededOCR, queuedParse, queryErr)
+		}
+
+		parser := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var request map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode parser request: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"documents":[],"question_candidates":[{"candidate_id":"q-recovered","question_no_raw":"1","question_type":"short_answer","stem":"What is 6 x 7?","score":1,"confidence":0.99}],"answer_candidates":[],"solution_candidates":[],"rubric_candidates":[],"issues":[]}`))
+		}))
+		defer parser.Close()
+		// Constructing a new service/executor models the gateway process restarting
+		// after the OCR callback committed and before parsing began.
+		restartedService := paper.NewDocumentImportService(store, nil, nil, parser.URL, strings.Repeat("t", 32), time.Minute)
+		executor, executorErr := paper.NewParseTaskExecutor(restartedService, runtimeStore, time.Minute)
+		if executorErr != nil {
+			t.Fatalf("create restarted parse executor: %v", executorErr)
+		}
+		worked, runErr := executor.RunOnce(ctx)
+		if runErr != nil || !worked {
+			t.Fatalf("resume durable parse task: worked=%v err=%v", worked, runErr)
+		}
+		recovered, getErr := store.GetPaperImport(ctx, tenantID, parseJob.ID)
+		if getErr != nil || recovered.Status != "review_required" || len(recovered.QuestionCandidates) != 1 || recovered.QuestionCandidates[0].CandidateID != "q-recovered" {
+			t.Fatalf("recovered parse did not persist one candidate: %#v err=%v", recovered, getErr)
+		}
+		worked, runErr = executor.RunOnce(ctx)
+		if runErr != nil || worked {
+			t.Fatalf("completed parse task must not be claimed twice: worked=%v err=%v", worked, runErr)
+		}
+	})
 }
 
 func postgresPaperImportDraft(number, kind string, score float64) paper.PaperImportDraftQuestion {

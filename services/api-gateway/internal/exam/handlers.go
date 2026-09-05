@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
@@ -56,6 +57,13 @@ func (h *Handler) CreateExamSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var input CreateSessionInput
 	if !decodeJSON(w, r, &input) {
+		return
+	}
+	headerCommandID := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if input.CommandID == "" {
+		input.CommandID = headerCommandID
+	} else if headerCommandID != "" && input.CommandID != headerCommandID {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_exam_session", "command_id 必须与 Idempotency-Key 一致")
 		return
 	}
 	if err := validateCreateSession(input); err != nil {
@@ -236,6 +244,9 @@ func validateCreateSession(input CreateSessionInput) error {
 	}
 	if len(input.ClassIDs) == 0 || len(input.Subjects) == 0 {
 		return errors.New("请至少选择一个班级和一个科目")
+	}
+	if input.CommandID != "" && (len(input.CommandID) < 8 || len(input.CommandID) > 128) {
+		return errors.New("command_id 长度无效")
 	}
 	seen := map[string]bool{}
 	validQuestionTypes := map[string]bool{"single_choice": true, "multiple_choice": true, "true_false": true, "fill_blank": true, "numeric": true, "formula": true, "short_answer": true, "calculation": true, "essay": true, "discussion": true, "coding": true}
