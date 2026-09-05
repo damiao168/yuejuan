@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from subjective_grading_worker.config import Settings, validate_settings
+from subjective_grading_worker.config import Settings, load_settings, validate_settings
 from subjective_grading_worker.healthcheck import is_healthy, mark_healthy
 from subjective_grading_worker.runner import Runner
 
@@ -59,6 +59,16 @@ def test_settings_reject_unsafe_lease_heartbeat():
         assert "heartbeat" in str(exc)
     else:
         raise AssertionError("expected heartbeat validation failure")
+
+
+def test_settings_loads_execute_timeout_budget(monkeypatch):
+    monkeypatch.setenv("EDUGRADE_API_BASE_URL", "http://api-gateway:8080")
+    monkeypatch.setenv("EDUGRADE_SUBJECTIVE_WORKER_TENANT_CODE", "platform")
+    monkeypatch.setenv("EDUGRADE_SUBJECTIVE_WORKER_USERNAME", "worker")
+    monkeypatch.setenv("EDUGRADE_SUBJECTIVE_WORKER_PASSWORD", "secret")
+    monkeypatch.setenv("EDUGRADE_SUBJECTIVE_WORKER_EXECUTE_TIMEOUT", "900")
+
+    assert load_settings().execute_timeout == 900
 
 
 def test_health_marker_requires_recent_success(tmp_path):

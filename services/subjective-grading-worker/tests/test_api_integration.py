@@ -4,11 +4,32 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar
+from unittest.mock import patch
 
 from subjective_grading_worker.__main__ import run_cycle
 from subjective_grading_worker.api import EduGradeClient
 from subjective_grading_worker.config import Settings
 from subjective_grading_worker.runner import Runner
+
+
+class _Response:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return None
+
+    def read(self) -> bytes:
+        return b'{"output":{"request_id":"request-1"}}'
+
+
+def test_execute_uses_the_long_running_request_budget() -> None:
+    client = EduGradeClient("http://127.0.0.1:8080", "demo", "worker", "secret", execute_timeout=810)
+
+    with patch("subjective_grading_worker.api.request.urlopen", return_value=_Response()) as urlopen:
+        client.execute("run-1", "task-1", "lease-1")
+
+    assert urlopen.call_args.kwargs["timeout"] == 810
 
 
 class _Handler(BaseHTTPRequestHandler):

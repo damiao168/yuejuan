@@ -22,7 +22,13 @@ def run_cycle(api: EduGradeClient, runner: Runner, settings: Settings) -> int:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = load_settings()
-    api = EduGradeClient(settings.api_base_url, settings.tenant_code, settings.username, settings.password)
+    api = EduGradeClient(
+        settings.api_base_url,
+        settings.tenant_code,
+        settings.username,
+        settings.password,
+        execute_timeout=settings.execute_timeout,
+    )
     runner = Runner(api=api, settings=settings)
     while True:
         try:

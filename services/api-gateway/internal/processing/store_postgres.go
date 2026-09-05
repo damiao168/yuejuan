@@ -421,7 +421,11 @@ FROM submission_page_processing_state ps
 WHERE ps.tenant_id=$1::uuid AND ps.exam_id=$2::uuid AND ps.issue_code IS NOT NULL
 ON CONFLICT (tenant_id,source_type,source_id,code) DO UPDATE SET
   severity=EXCLUDED.severity,blocking=EXCLUDED.blocking,
-  status=CASE WHEN operational_exception.status='resolved' AND operational_exception.details_json=EXCLUDED.details_json THEN 'resolved' ELSE 'open' END,
+  status=CASE
+    WHEN operational_exception.status='assigned' THEN 'assigned'
+    WHEN operational_exception.status='resolved' AND operational_exception.details_json=EXCLUDED.details_json THEN 'resolved'
+    ELSE 'open'
+  END,
   details_json=EXCLUDED.details_json,updated_at=EXCLUDED.updated_at,
   resolved_at=CASE WHEN operational_exception.status='resolved' AND operational_exception.details_json=EXCLUDED.details_json THEN operational_exception.resolved_at ELSE NULL END,
   resolution=CASE WHEN operational_exception.status='resolved' AND operational_exception.details_json=EXCLUDED.details_json THEN operational_exception.resolution ELSE NULL END`

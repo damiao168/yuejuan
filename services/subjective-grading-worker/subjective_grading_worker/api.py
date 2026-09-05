@@ -26,6 +26,7 @@ class EduGradeClient:
     token: str | None = None
     worker_instance_id: str | None = None
     current_task: dict[str, str] | None = None
+    execute_timeout: float = 810.0
 
     def login(self) -> None:
         response = self._request("POST", "/api/v1/auth/token", {"tenant_code": self.tenant_code, "username": self.username, "password": self.password, "client_type": "service", "device_name": "Subjective Grading Worker"}, auth=False)
@@ -62,7 +63,12 @@ class EduGradeClient:
         self._request("POST", f"/api/v1/internal/worker/tasks/{task_id}/heartbeat", {"lease_token": token, "worker_service": "subjective-grading-worker", "worker_instance_id": worker_id, "state": "running", "lease_seconds": lease_seconds}, timeout=timeout)
 
     def execute(self, run_id: str, task_id: str, lease_token: str) -> dict[str, Any]:
-        return self._request("POST", f"/api/v1/internal/subjective-grading/runs/{run_id}/execute", {"task_id": task_id, "lease_token": lease_token})
+        return self._request(
+            "POST",
+            f"/api/v1/internal/subjective-grading/runs/{run_id}/execute",
+            {"task_id": task_id, "lease_token": lease_token},
+            timeout=self.execute_timeout,
+        )
 
     def complete(self, run_id: str, task_id: str, lease_token: str, output: dict[str, Any], duration_ms: int) -> None:
         self._request("POST", f"/api/v1/internal/subjective-grading/runs/{run_id}/result", {"task_id": task_id, "lease_token": lease_token, "result_schema_version": "subjective-grade-result-v1", "duration_ms": duration_ms, "output": output})

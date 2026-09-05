@@ -64,7 +64,7 @@ def load_config() -> Config:
         username=os.getenv("EDUGRADE_PAGE_PROCESSING_USERNAME", ""),
         password=os.getenv("EDUGRADE_PAGE_PROCESSING_PASSWORD", ""),
         worker_id=os.getenv("EDUGRADE_PAGE_PROCESSING_WORKER_ID") or f"{socket.gethostname()}-page-processing",
-        batch_size=_positive_int("EDUGRADE_PAGE_PROCESSING_BATCH_SIZE", 2),
+        batch_size=_positive_int("EDUGRADE_PAGE_PROCESSING_BATCH_SIZE", 1),
         lease_seconds=_positive_int("EDUGRADE_PAGE_PROCESSING_LEASE_SECONDS", 600),
         poll_interval=float(os.getenv("EDUGRADE_PAGE_PROCESSING_POLL_INTERVAL", "4")),
         max_pages=_positive_int("EDUGRADE_PAGE_PROCESSING_MAX_PAGES", 500),

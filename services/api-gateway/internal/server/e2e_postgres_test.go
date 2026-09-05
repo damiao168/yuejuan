@@ -27,6 +27,7 @@ import (
 	ocrpkg "edugrade-enterprise/services/api-gateway/internal/ocr"
 	"edugrade-enterprise/services/api-gateway/internal/org"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
+	"edugrade-enterprise/services/api-gateway/internal/processing"
 	"edugrade-enterprise/services/api-gateway/internal/review"
 	"edugrade-enterprise/services/api-gateway/internal/score"
 	"edugrade-enterprise/services/api-gateway/internal/segment"
@@ -188,6 +189,25 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	ocrDone := e2ePostJSON(t, router, http.MethodPost, "/api/v1/ocr-tasks/"+ocrTaskID+"/results", adminToken, `{"worker_id":"story041-e2e-1","model_version":"mock-ocr-story041","config_hash":"story041-config","input_hash":"story041-input","duration_ms":12,"preprocess_profile":"story041-synthetic","runtime_task_id":"`+runtimeTaskID+`","runtime_lease_token":"`+runtimeLeaseToken+`","results":[{"submission_page_id":"`+pageID+`","text":"`+answerText+`","bbox":[0.1,0.2,0.6,0.2],"confidence":0.76,"source_image_file_id":"`+answerFileID+`"}]}`, http.StatusOK)["task"].(map[string]any)
 	if ocrDone["status"] != "completed" {
 		t.Fatalf("ocr task should complete in test database workflow: %#v", ocrDone)
+	}
+	processingStore := processing.NewPostgresStore(db)
+	if err := processingStore.RefreshExam(context.Background(), demoTenantID, examID); err != nil {
+		t.Fatalf("refresh processing projection: %v", err)
+	}
+	exceptions, err := processingStore.ListExceptions(context.Background(), demoTenantID, processing.ExceptionFilter{ExamID: examID, Limit: 25})
+	if err != nil || len(exceptions.Exceptions) != 1 {
+		t.Fatalf("list projected OCR exception: %#v, %v", exceptions, err)
+	}
+	assigned, err := processingStore.AssignException(context.Background(), demoTenantID, exceptions.Exceptions[0].ID, graderID, processing.AssignInput{AssigneeID: graderID})
+	if err != nil || assigned.Status != processing.ExceptionAssigned {
+		t.Fatalf("assign projected OCR exception: %#v, %v", assigned, err)
+	}
+	if err := processingStore.RefreshExam(context.Background(), demoTenantID, examID); err != nil {
+		t.Fatalf("refresh processing projection after assignment: %v", err)
+	}
+	preserved, err := processingStore.GetException(context.Background(), demoTenantID, assigned.ID)
+	if err != nil || preserved.Status != processing.ExceptionAssigned || preserved.AssignedTo != graderID {
+		t.Fatalf("query refresh must preserve manual assignment: %#v, %v", preserved, err)
 	}
 	segmentResult := e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/segment-answers", adminToken, `{}`, http.StatusOK)["result"].(map[string]any)
 	segments := segmentResult["segments"].([]any)
