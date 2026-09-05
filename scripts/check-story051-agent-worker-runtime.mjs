@@ -29,9 +29,14 @@ const checks = [
     ],
   },
   {
-    name: 'image quality runtime adapter exists',
+    name: 'image quality handler uses the transactional runtime adapter',
     file: 'services/api-gateway/internal/imagequality/handlers.go',
-    includes: ['image-quality-run:', 'LeaseRun', 'workerruntime.StatusRunning'],
+    includes: ['CreateRunsWithTasks', 'SubmitResultCommand', 'LeaseRun', 'workerruntime.StatusRunning'],
+  },
+  {
+    name: 'image quality runtime coordinator is atomic',
+    file: 'services/api-gateway/internal/imagequality/coordinator_postgres.go',
+    includes: ['image-quality-run:', 'CreateTaskInTx', 'CompleteTaskInTx', 'FailTaskInTx'],
   },
   {
     name: 'ocr worker uses runtime',
