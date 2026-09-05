@@ -1,0 +1,40 @@
+{
+  "run_id": "local-baseline-v1",
+  "model_version": "ppocr-v5-mobile",
+  "engine_version": "paddleocr-3.7.0",
+  "device": "cpu",
+  "cpu_threads": 8,
+  "enable_mkldnn": "false",
+  "effective_mkldnn": false,
+  "enable_hpi": false,
+  "use_textline_orientation": true,
+  "text_det_limit_type": null,
+  "text_det_limit_side_len": null,
+  "text_recognition_batch_size": 1,
+  "preprocess_profile": "default",
+  "config_hash": "89aaf5340362f7524e8027a45642087272969d69c477050b1616f9942b095546",
+  "input_bundle_hash": "854007ab5219bec9f7075c578459db98656cbc0cca4ee2be18c770fed701fe57",
+  "hardware": {
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41",
+    "processor": "",
+    "python": "3.11.15"
+  },
+  "sample_count": 8,
+  "warmup_count": 5,
+  "average_duration_ms/page": 20777.516929749938,
+  "p50_duration_ms/page": 19920.559499500087,
+  "p95_duration_ms/page": 25877.662325399822,
+  "pages_per_minute": 2.887736787935906,
+  "task_average_duration_ms": 20777.516929749938,
+  "process_peak_rss_bytes": 652435456,
+  "failure_rate": 0.0,
+  "quality": {
+    "CER": null,
+    "WER": null,
+    "region_hit_rate": null,
+    "page_success_rate": 1.0,
+    "blank_false_positive_rate": null,
+    "low_confidence_recall": null,
+    "review_trigger_rate": null
+  }
+}

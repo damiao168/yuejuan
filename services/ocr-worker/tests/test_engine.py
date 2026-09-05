@@ -91,6 +91,11 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(calls[0]["text_detection_model_name"], "PP-OCRv5_mobile_det")
         self.assertEqual(calls[0]["text_recognition_model_name"], "PP-OCRv5_mobile_rec")
 
+    def test_mkldnn_auto_is_mobile_only_and_false_is_never_enabled(self):
+        self.assertTrue(PaddleOCREngine(model_version="ppocr-v5-mobile", enable_mkldnn="auto").effective_mkldnn)
+        self.assertFalse(PaddleOCREngine(model_version="ppocr-v5-server", enable_mkldnn="auto").effective_mkldnn)
+        self.assertFalse(PaddleOCREngine(model_version="ppocr-v5-mobile", enable_mkldnn="false").effective_mkldnn)
+
     def test_unknown_model_is_rejected_instead_of_misreported(self):
         with self.assertRaisesRegex(ValueError, "unsupported OCR model version"):
             PaddleOCREngine(model_version="not-a-real-model")
@@ -133,6 +138,57 @@ class EngineTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "no valid recognized text"):
             engine.initialize()
+
+    def test_region_inference_preserves_small_crop_upscaling(self):
+        calls = []
+
+        class FakeOCR:
+            def predict(self, _image_path, **kwargs):
+                calls.append(kwargs)
+                return [{"rec_texts": ["answer"], "rec_scores": [0.9], "rec_polys": [[[1, 1], [10, 1], [10, 5], [1, 5]]]}]
+
+        engine = PaddleOCREngine(text_det_limit_type="max", text_det_limit_side_len=960)
+        engine._ocr = FakeOCR()
+        engine.recognize_region(b"png")
+        self.assertEqual(calls, [{"text_det_limit_type": "min", "text_det_limit_side_len": 64}])
+
+    def test_mobile_auto_falls_back_for_known_onednn_error(self):
+        modes = []
+
+        class FakeOCR:
+            def __init__(self, mkldnn):
+                self.mkldnn = mkldnn
+
+            def predict(self, _image_path):
+                if self.mkldnn:
+                    raise RuntimeError("oneDNN PIR attribute conversion failed")
+                return [{"rec_texts": ["OCR 123"], "rec_scores": [0.99], "rec_polys": [[[10, 10], [200, 10], [200, 60], [10, 60]]]}]
+
+        class TestEngine(PaddleOCREngine):
+            def _load(self):
+                if self._ocr is None:
+                    modes.append(self.effective_mkldnn)
+                    self._ocr = FakeOCR(self.effective_mkldnn)
+                return self._ocr
+
+        engine = TestEngine(enable_mkldnn="auto")
+        engine.initialize()
+        self.assertEqual(modes, [True, False])
+        self.assertFalse(engine.effective_mkldnn)
+
+    def test_forced_true_and_unknown_errors_do_not_fallback(self):
+        class FailingOCR:
+            def __init__(self, message):
+                self.message = message
+
+            def predict(self, _image_path):
+                raise RuntimeError(self.message)
+
+        for mode, message in (("true", "oneDNN PIR attribute conversion failed"), ("auto", "unrelated model corruption"), ("auto", "model download token expired"), ("auto", "PIR model file missing")):
+            engine = PaddleOCREngine(enable_mkldnn=mode)
+            engine._ocr = FailingOCR(message)
+            with self.assertRaisesRegex(RuntimeError, message):
+                engine.initialize()
 
 
 if __name__ == "__main__":

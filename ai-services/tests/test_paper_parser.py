@@ -46,6 +46,27 @@ def test_solution_only_is_valid():
     assert result["solution_candidates"][0]["question_no_normalized"] == "18(1)"
 
 
+def test_obvious_meeting_screenshot_is_rejected_without_running_full_model():
+    class ModelMustNotRun(FakeStructuredModel):
+        def request_structured(self, *_args):
+            raise AssertionError("full extraction model must not run for an obvious meeting screenshot")
+
+    request = payload("北师保研分享会\n会议号：120732118\n发起人：任辰红\n最近入会\n参会时长\n回放")
+    result = PaperParser(ModelMustNotRun(output("unknown"))).parse(request)
+
+    assert result["documents"][0]["detected_role"] == "unknown"
+    assert result["question_candidates"] == []
+    assert result["answer_candidates"] == []
+
+
+def test_exam_markers_take_priority_over_unrelated_ui_words():
+    question = {"candidate_id": "q1", "question_no_raw": "第1题", "question_no_normalized": "1", "parent_question_no": None, "subquestion_no": None, "section_hint": None, "stem": "计算", "options": [], "question_type": "calculation", "score": None, "knowledge_point_hints": [], "confidence": .9, "source_refs": [ref()], "issues": []}
+    request = payload("会议资料附件\n选择题\n第1题 计算\n会议号\n发起人\n回放")
+    result = PaperParser(FakeStructuredModel(output("question", questions=[question]))).parse(request)
+
+    assert result["question_candidates"][0]["candidate_id"] == "q1"
+
+
 def test_rejects_empty_document_collection():
     with pytest.raises(AgentError): PaperParser(FakeStructuredModel(output("unknown"))).parse({"request_id": "job", "subject": "语文", "documents": []})
 
@@ -67,6 +88,23 @@ def test_rejects_source_ref_with_fabricated_file_or_document_index():
     fabricated = {**ref(), "file_asset_id": "invented", "document_index": 9}
     answer = {"candidate_id": "a1", "question_no_hint": "1", "question_no_normalized": "1", "subquestion_no_hint": None, "standard_answer": "A", "equivalent_answers": [], "tolerance": None, "confidence": .95, "source_refs": [fabricated], "issues": []}
     with pytest.raises(AgentError): PaperParser(FakeStructuredModel(output("answer", answers=[answer]))).parse(payload())
+
+
+def test_direct_text_discards_model_invented_ocr_metadata():
+    model_ref = {
+        **ref(),
+        "page_no": 1,
+        "bbox": {},
+        "ocr_confidence": 1.0,
+    }
+    answer = {"candidate_id": "a1", "question_no_hint": "1", "question_no_normalized": "1", "subquestion_no_hint": None, "standard_answer": "A", "equivalent_answers": [], "tolerance": None, "confidence": .95, "source_refs": [model_ref], "issues": []}
+
+    result = PaperParser(FakeStructuredModel(output("answer", answers=[answer]))).parse(payload())
+
+    normalized_ref = result["answer_candidates"][0]["source_refs"][0]
+    assert normalized_ref["page_no"] is None
+    assert normalized_ref["bbox"] is None
+    assert normalized_ref["ocr_confidence"] is None
 
 
 def test_rejects_duplicate_candidate_ids_across_candidate_kinds():

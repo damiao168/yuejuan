@@ -15,10 +15,24 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     log = logging.getLogger("edugrade.ocr_worker")
     settings = load_settings()
-    engine = PaddleOCREngine(device=settings.device, model_version=settings.model_version)
+    engine = PaddleOCREngine(
+        device=settings.device,
+        model_version=settings.model_version,
+        cpu_threads=getattr(settings, "cpu_threads", 4),
+        enable_mkldnn=getattr(settings, "enable_mkldnn", "auto"),
+        enable_hpi=getattr(settings, "enable_hpi", False),
+        use_textline_orientation=getattr(settings, "use_textline_orientation", True),
+        text_det_limit_type=getattr(settings, "text_det_limit_type", "min"),
+        text_det_limit_side_len=getattr(settings, "text_det_limit_side_len", 64),
+        text_recognition_batch_size=getattr(settings, "text_recognition_batch_size", 1),
+    )
     log.info("initializing OCR engine before worker registration")
     engine.initialize()
-    log.info("OCR engine ready: model=%s device=%s", engine.model_version, engine.device)
+    log.info(
+        "OCR engine ready: model=%s device=%s cpu_threads=%s effective_mkldnn=%s hpi=%s orientation=%s",
+        engine.model_version, engine.device, engine.cpu_threads, engine.effective_mkldnn,
+        engine.enable_hpi, engine.use_textline_orientation,
+    )
     client = EduGradeClient(
         base_url=settings.api_base_url,
         tenant_code=settings.tenant_code,
@@ -34,6 +48,13 @@ def main() -> None:
         lease_seconds=settings.lease_seconds,
         heartbeat_interval=settings.heartbeat_interval,
         heartbeat_timeout=settings.heartbeat_timeout,
+        cpu_threads=getattr(settings, "cpu_threads", 4),
+        enable_mkldnn=getattr(settings, "enable_mkldnn", "auto"),
+        enable_hpi=getattr(settings, "enable_hpi", False),
+        use_textline_orientation=getattr(settings, "use_textline_orientation", True),
+        text_det_limit_type=getattr(settings, "text_det_limit_type", "min"),
+        text_det_limit_side_len=getattr(settings, "text_det_limit_side_len", 64),
+        text_recognition_batch_size=getattr(settings, "text_recognition_batch_size", 1),
     )
     runner = None
     if getattr(settings, "ocr_runtime_enabled", True):

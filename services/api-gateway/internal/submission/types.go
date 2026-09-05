@@ -49,6 +49,19 @@ type SubmissionPage struct {
 	CreatedAt             time.Time      `json:"created_at"`
 }
 
+// AnswerRegion is the privacy-safe subset of answer_segment exposed to the OCR
+// worker. It intentionally contains no student identity or answer text.
+type AnswerRegion struct {
+	ID           string    `json:"answer_segment_id"`
+	QuestionID   string    `json:"question_id"`
+	QuestionNo   string    `json:"question_no"`
+	QuestionType string    `json:"question_type"`
+	BBox         []float64 `json:"bbox"`
+	PageID       string    `json:"submission_page_id"`
+	// Registered/template coordinates cannot be applied to the original page.
+	RequiresFullPage bool `json:"-"`
+}
+
 type QualityIssue struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -106,6 +119,12 @@ type Store interface {
 	OverridePageQuality(ctx context.Context, tenantID string, pageID string, actorID string, input OverridePageQualityInput) (SubmissionPage, error)
 	RunQualityCheck(ctx context.Context, tenantID string, submissionID string, actorID string) (QualityResult, error)
 	UpdateStatus(ctx context.Context, tenantID string, submissionID string, actorID string, status string, expectedRevision int64) (Submission, error)
+}
+
+// AnswerRegionLister is optional for backwards-compatible stores. When
+// unavailable, OCR input falls back to full-page inference.
+type AnswerRegionLister interface {
+	ListAnswerRegions(ctx context.Context, tenantID string, submissionID string) ([]AnswerRegion, error)
 }
 
 // ExamBatchLister avoids one submission query per exam on dashboards and

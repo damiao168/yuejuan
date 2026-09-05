@@ -193,7 +193,7 @@ func (s *PostgresStore) AddPaperImportSources(ctx context.Context, tenantID, id,
 			return PaperImportJob{}, ErrInvalidInput
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='processing',updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, id); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='processing',error_code='',issues='[]'::jsonb,structured_issues='[]'::jsonb,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, id); err != nil {
 		return PaperImportJob{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -259,9 +259,9 @@ func (s *PostgresStore) ReplacePaperImportSources(ctx context.Context, tenantID,
 	}
 	if len(input.Sources) == 0 {
 		issues, _ := json.Marshal([]string{"已删除全部考试资料，请重新上传正确的资料"})
-		_, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='failed',error_code='paper_import_no_sources',issues=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, id, issues)
+		_, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='failed',error_code='paper_import_no_sources',issues=$3,structured_issues='[]'::jsonb,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, id, issues)
 	} else {
-		_, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='processing',error_code='',issues='[]'::jsonb,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, id)
+		_, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='processing',error_code='',issues='[]'::jsonb,structured_issues='[]'::jsonb,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, id)
 	}
 	if err != nil {
 		return PaperImportJob{}, err
@@ -295,12 +295,12 @@ func (s *PostgresStore) CompletePaperImportCandidates(ctx context.Context, tenan
 	si, _ := json.Marshal(structured)
 	messages := issueMessages(structured)
 	mi, _ := json.Marshal(messages)
-	result, err := s.db.ExecContext(ctx, `UPDATE paper_import_job SET status='review_required',question_candidates=$3,answer_candidates=$4,solution_candidates=$5,rubric_candidates=$6,draft_questions=$7,structured_issues=$8,issues=$9,error_code='',updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL`, tenantID, id, q, a, so, r, d, si, mi)
+	result, err := s.db.ExecContext(ctx, `UPDATE paper_import_job SET status='review_required',question_candidates=$3,answer_candidates=$4,solution_candidates=$5,rubric_candidates=$6,draft_questions=$7,structured_issues=$8,issues=$9,error_code='',updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND status IN ('processing','review_required') AND deleted_at IS NULL`, tenantID, id, q, a, so, r, d, si, mi)
 	if err != nil {
 		return PaperImportJob{}, err
 	}
 	if n, _ := result.RowsAffected(); n != 1 {
-		return PaperImportJob{}, ErrNotFound
+		return PaperImportJob{}, ErrConflict
 	}
 	_, _ = s.db.ExecContext(ctx, `UPDATE paper_import_source SET processing_status='processed',updated_at=now() WHERE tenant_id=$1 AND paper_import_id=$2::uuid AND deleted_at IS NULL`, tenantID, id)
 	for _, item := range detected {
@@ -513,8 +513,57 @@ func dedupeStrings(values []string) []string {
 
 func (s *PostgresStore) FailPaperImport(ctx context.Context, tenantID, id, code string, issues []string) (PaperImportJob, error) {
 	i, _ := json.Marshal(issues)
-	row := s.db.QueryRowContext(ctx, `UPDATE paper_import_job SET status='failed',issues=$3,error_code=$4,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL RETURNING id::text,tenant_id::text,exam_id::text,COALESCE(exam_paper_id::text,''),COALESCE(paper_file_asset_id::text,''),COALESCE(answer_file_asset_id::text,''),status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at`, tenantID, id, i, code)
-	return scanPaperImport(row)
+	row := s.db.QueryRowContext(ctx, `UPDATE paper_import_job SET status='failed',issues=$3,error_code=$4,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND status='processing' AND deleted_at IS NULL RETURNING id::text,tenant_id::text,exam_id::text,COALESCE(exam_paper_id::text,''),COALESCE(paper_file_asset_id::text,''),COALESCE(answer_file_asset_id::text,''),status,subject,draft_questions,issues,error_code,created_by::text,created_at,updated_at,applied_at`, tenantID, id, i, code)
+	job, err := scanPaperImport(row)
+	if errors.Is(err, ErrNotFound) {
+		return PaperImportJob{}, ErrConflict
+	}
+	return job, err
+}
+
+func (s *PostgresStore) CancelPaperImport(ctx context.Context, tenantID, id string) (PaperImportJob, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return PaperImportJob{}, err
+	}
+	defer tx.Rollback()
+	var status string
+	if err = tx.QueryRowContext(ctx, `SELECT status FROM paper_import_job WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, tenantID, id).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PaperImportJob{}, ErrNotFound
+		}
+		return PaperImportJob{}, err
+	}
+	if status != "processing" {
+		return PaperImportJob{}, ErrConflict
+	}
+	issues, _ := json.Marshal([]string{"识别任务已手动停止"})
+	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='cancelled',issues=$3,error_code='paper_import_cancelled',updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, id, issues); err != nil {
+		return PaperImportJob{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `
+UPDATE agent_worker_task_attempt AS attempt
+SET status='cancelled',completed_at=now(),error_code='cancelled'
+FROM agent_worker_task AS task
+WHERE attempt.tenant_id=$1 AND attempt.task_id=task.id AND attempt.completed_at IS NULL
+  AND task.tenant_id=$1 AND task.source_type='paper_import_job' AND task.source_id=$2::uuid
+  AND task.status IN ('queued','leased','running')`, tenantID, id); err != nil {
+		return PaperImportJob{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `
+UPDATE agent_worker_task
+SET status='cancelled',cancelled_at=now(),completed_at=now(),updated_at=now(),revision=revision+1
+WHERE tenant_id=$1 AND source_type='paper_import_job' AND source_id=$2::uuid
+  AND status IN ('queued','leased','running')`, tenantID, id); err != nil {
+		return PaperImportJob{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_source SET processing_status='failed',updated_at=now() WHERE tenant_id=$1 AND paper_import_id=$2::uuid AND processing_status IN ('pending','processing') AND deleted_at IS NULL`, tenantID, id); err != nil {
+		return PaperImportJob{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return PaperImportJob{}, err
+	}
+	return s.GetPaperImport(ctx, tenantID, id)
 }
 
 func (s *PostgresStore) GetPaperImport(ctx context.Context, tenantID, id string) (PaperImportJob, error) {

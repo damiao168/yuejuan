@@ -513,6 +513,7 @@ type Store interface {
 	SavePaperImportReview(ctx context.Context, tenantID string, id string, userID string, input ReviewPaperImportInput) (PaperImportJob, error)
 	CompletePaperImport(ctx context.Context, tenantID string, id string, questions []PaperImportDraftQuestion, issues []string) (PaperImportJob, error)
 	FailPaperImport(ctx context.Context, tenantID string, id string, errorCode string, issues []string) (PaperImportJob, error)
+	CancelPaperImport(ctx context.Context, tenantID string, id string) (PaperImportJob, error)
 	GetPaperImport(ctx context.Context, tenantID string, id string) (PaperImportJob, error)
 	ListPaperImports(ctx context.Context, tenantID string, examID string) ([]PaperImportJob, error)
 	ApplyPaperImport(ctx context.Context, tenantID string, id string, userID string) (PaperImportJob, error)

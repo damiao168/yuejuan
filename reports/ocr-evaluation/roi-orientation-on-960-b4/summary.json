@@ -1,0 +1,43 @@
+{
+  "run_id": "roi-orientation-on-960-b4",
+  "model_version": "ppocr-v5-mobile",
+  "engine_version": "paddleocr-3.7.0",
+  "device": "cpu",
+  "cpu_threads": 8,
+  "enable_mkldnn": "auto",
+  "effective_mkldnn": false,
+  "enable_hpi": false,
+  "use_textline_orientation": true,
+  "text_det_limit_type": "max",
+  "text_det_limit_side_len": 960,
+  "text_recognition_batch_size": 4,
+  "preprocess_profile": "default",
+  "config_hash": "db3ae52338f1219d0505578e5b7596474dc170558013a6abae4a2f7a74ce688c",
+  "input_bundle_hash": "854007ab5219bec9f7075c578459db98656cbc0cca4ee2be18c770fed701fe57",
+  "hardware": {
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41",
+    "processor": "",
+    "python": "3.11.15"
+  },
+  "sample_count": 8,
+  "warmup_count": 5,
+  "average_duration_ms/page": 6663.9018396248275,
+  "p50_duration_ms/page": 6799.406429000101,
+  "p95_duration_ms/page": 7463.8839732996075,
+  "pages_per_minute": 9.003734065113113,
+  "task_average_duration_ms": 6663.9018396248275,
+  "process_peak_rss_bytes": 703463424,
+  "failure_rate": 0.0,
+  "result_block_count": 146,
+  "region_count": 76,
+  "quality": {
+    "CER": 1.8129496402877698,
+    "WER": 1.5394736842105263,
+    "region_hit_rate": 0.7894736842105263,
+    "bbox_iou": null,
+    "page_success_rate": 1.0,
+    "blank_false_positive_rate": 1.0,
+    "low_confidence_recall": null,
+    "review_trigger_rate": 0.5657894736842105
+  }
+}

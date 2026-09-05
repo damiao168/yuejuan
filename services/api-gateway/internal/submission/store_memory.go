@@ -196,6 +196,17 @@ func (s *MemoryStore) ListPages(_ context.Context, tenantID string, submissionID
 	return s.pagesForLocked(tenantID, submissionID), nil
 }
 
+func (s *MemoryStore) ListAnswerRegions(_ context.Context, tenantID string, submissionID string) ([]AnswerRegion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if item, ok := s.submissions[submissionID]; !ok || item.TenantID != tenantID {
+		return nil, ErrNotFound
+	}
+	// The in-memory submission fixture does not persist answer_segment rows;
+	// returning an empty set intentionally selects the legacy full-page path.
+	return []AnswerRegion{}, nil
+}
+
 func (s *MemoryStore) ApplyPageQualityResult(_ context.Context, tenantID string, input ApplyPageQualityInput) (SubmissionPage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

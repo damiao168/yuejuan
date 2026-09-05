@@ -4,6 +4,29 @@
 
 Each OCR evaluation run must produce `reports/ocr-evaluation/<run-id>/summary.json` and a human-readable markdown summary. The report must include engine name, engine version, model version, config hash, input bundle hash, preprocessing profile, hardware profile, average duration, P95 duration, failure rate, and review-trigger rate.
 
+The repeatable local harness is `services/ocr-worker/benchmarks/benchmark_local.py`. It sorts
+the sample bundle, performs at least five warmup pages, and records p50/p95, pages/minute,
+peak RSS when available, and effective MKLDNN. Use `local-baseline-v1` with the production
+mobile settings before comparing thread counts, orientation, detection side length, HPI, or
+ROI. Vendor/server timings are not project benchmark results.
+
+Benchmark version 2 warms up the same inference path as the measured workload, cycling
+small bundles to reach five calls. `local-baseline-v1` now exactly uses the original Paddle
+constructor without overriding implicit thread/detection/batch defaults (`cpu_threads=null`
+means runtime default). Historical reports that explicitly set eight threads are exploratory
+baselines, not exact replicas. An additional `annotation_hash` fingerprints labels and ROI
+definitions without outputting their text. RSS uses the OS process high-water mark when available.
+
+The local harness reports inference time per page, excluding queue/network/writeback latency.
+Its ROI hit metric currently counts regions with non-empty recognized text; it is a proxy,
+not the annotated spatial matching metric below. Missing bbox IoU or low-confidence recall
+must remain N/A and cannot pass an accuracy gate. CER/WER are ratios and may exceed 1 because
+of insertion errors. Synthetic pages do not validate real handwriting or abnormal orientation.
+
+The task-level queue remains sequential (`EDUGRADE_OCR_BATCH_SIZE=1`) so the heartbeat thread
+continues to renew the one claimed lease. `EDUGRADE_OCR_TEXT_RECOGNITION_BATCH_SIZE` controls
+only PaddleOCR recognition batching inside that task.
+
 ## Core Metrics
 
 | Metric | Definition | Gate Type |

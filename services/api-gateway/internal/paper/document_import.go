@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/files"
@@ -23,18 +24,41 @@ const maxDocumentTextBytes = 700_000
 var errDocumentOCRRequired = errors.New("document OCR required")
 
 type DocumentImportService struct {
-	store   Store
-	files   files.Store
-	objects files.ObjectStorage
-	client  *http.Client
-	baseURL string
-	token   string
+	store         Store
+	files         files.Store
+	objects       files.ObjectStorage
+	client        *http.Client
+	baseURL       string
+	token         string
+	parseMu       sync.Mutex
+	activeParses  map[string]*paperImportParse
+	modelResolver func(context.Context, string) (*DocumentModelConfig, error)
+}
+
+// DocumentModelConfig travels only on the authenticated internal parser request.
+// It must never be persisted in a paper import or returned to the browser.
+type DocumentModelConfig struct {
+	AdapterType  string `json:"adapter_type"`
+	BaseURL      string `json:"base_url"`
+	APIKey       string `json:"api_key"`
+	ModelName    string `json:"model_name"`
+	ModelVersion string `json:"model_version"`
+}
+
+func (s *DocumentImportService) WithModelResolver(resolve func(context.Context, string) (*DocumentModelConfig, error)) *DocumentImportService {
+	s.modelResolver = resolve
+	return s
+}
+
+type paperImportParse struct {
+	cancel context.CancelFunc
 }
 
 type documentParseRequest struct {
-	RequestID string                     `json:"request_id"`
-	Subject   string                     `json:"subject"`
-	Documents []normalizedImportDocument `json:"documents"`
+	RequestID    string                     `json:"request_id"`
+	Subject      string                     `json:"subject"`
+	Documents    []normalizedImportDocument `json:"documents"`
+	ManagedModel *DocumentModelConfig       `json:"managed_model,omitempty"`
 }
 
 type documentParseResponse struct {
@@ -59,7 +83,7 @@ func NewDocumentImportService(store Store, fileStore files.Store, objects files.
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	return &DocumentImportService{store: store, files: fileStore, objects: objects, client: &http.Client{Timeout: timeout}, baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"), token: token}
+	return &DocumentImportService{store: store, files: fileStore, objects: objects, client: &http.Client{Timeout: timeout}, baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"), token: token, activeParses: map[string]*paperImportParse{}}
 }
 
 func (s *DocumentImportService) Start(ctx context.Context, tenantID, examID, userID string, input CreatePaperImportInput) (PaperImportJob, error) {
@@ -120,13 +144,78 @@ func (s *DocumentImportService) processSources(ctx context.Context, tenantID, us
 }
 
 func (s *DocumentImportService) completeParsedDocuments(ctx context.Context, tenantID string, job PaperImportJob, documents []normalizedImportDocument, extraIssues []PaperImportIssue) (PaperImportJob, error) {
-	parsed, err := s.parse(ctx, job.ID, job.Subject, documents)
+	parseContext, release := s.beginParse(ctx, tenantID, job.ID)
+	defer release()
+	parsed, err := s.parseForTenant(parseContext, tenantID, job.ID, job.Subject, documents)
 	if err != nil {
-		failed, _ := s.store.FailPaperImport(ctx, tenantID, job.ID, "ai_parse_failed", []string{"AI 解析服务暂不可用，可稍后重试"})
+		if errors.Is(parseContext.Err(), context.Canceled) {
+			return PaperImportJob{}, ErrConflict
+		}
+		failed, failErr := s.store.FailPaperImport(ctx, tenantID, job.ID, "ai_parse_failed", []string{"AI 解析服务暂不可用，可稍后重试"})
+		if failErr != nil {
+			return PaperImportJob{}, failErr
+		}
 		return failed, nil
 	}
 	parsed.Issues = append(parsed.Issues, extraIssues...)
+	parsed.Issues = appendNoExamContentIssue(parsed, documents)
 	return s.store.CompletePaperImportCandidates(ctx, tenantID, job.ID, parsed.Documents, parsed.QuestionCandidates, parsed.AnswerCandidates, parsed.SolutionCandidates, parsed.RubricCandidates, parsed.Issues)
+}
+
+func (s *DocumentImportService) beginParse(ctx context.Context, tenantID, importID string) (context.Context, func()) {
+	parseContext, cancel := context.WithCancel(ctx)
+	entry := &paperImportParse{cancel: cancel}
+	key := tenantID + "\x00" + importID
+	s.parseMu.Lock()
+	previous := s.activeParses[key]
+	s.activeParses[key] = entry
+	s.parseMu.Unlock()
+	if previous != nil {
+		previous.cancel()
+	}
+	return parseContext, func() {
+		cancel()
+		s.parseMu.Lock()
+		if s.activeParses[key] == entry {
+			delete(s.activeParses, key)
+		}
+		s.parseMu.Unlock()
+	}
+}
+
+func (s *DocumentImportService) Cancel(tenantID, importID string) {
+	key := tenantID + "\x00" + importID
+	s.parseMu.Lock()
+	entry := s.activeParses[key]
+	s.parseMu.Unlock()
+	if entry != nil {
+		entry.cancel()
+	}
+}
+
+func appendNoExamContentIssue(parsed documentParseResponse, documents []normalizedImportDocument) []PaperImportIssue {
+	issues := append([]PaperImportIssue{}, parsed.Issues...)
+	if len(parsed.QuestionCandidates) > 0 || len(parsed.AnswerCandidates) > 0 || len(parsed.SolutionCandidates) > 0 || len(parsed.RubricCandidates) > 0 {
+		return issues
+	}
+	for _, issue := range issues {
+		if issue.Code == "NO_EXAM_CONTENT_DETECTED" {
+			return issues
+		}
+	}
+	refs := make([]PaperImportSourceRef, 0, len(documents))
+	for _, document := range documents {
+		refs = append(refs, PaperImportSourceRef{SourceID: document.SourceID, FileAssetID: document.FileAssetID, DocumentIndex: document.DocumentIndex})
+	}
+	return append(issues, candidateIssue(
+		"NO_EXAM_CONTENT_DETECTED",
+		"error",
+		"confirmed",
+		"",
+		"未识别到与考试有关的题目、答案、解析或评分标准，请检查是否上传了无关图片或错误文件",
+		"请重新上传正确的考试资料；若图片确属考试资料，可重试识别或手动补充题目",
+		refs,
+	))
 }
 
 func (s *DocumentImportService) CompleteOCR(ctx context.Context, tenantID, importID string, blocks []PaperImportOCRBlock) (PaperImportJob, error) {
@@ -262,10 +351,22 @@ func (s *DocumentImportService) assetText(ctx context.Context, tenantID, id stri
 }
 
 func (s *DocumentImportService) parse(ctx context.Context, requestID, subject string, documents []normalizedImportDocument) (documentParseResponse, error) {
+	return s.parseForTenant(ctx, "", requestID, subject, documents)
+}
+
+func (s *DocumentImportService) parseForTenant(ctx context.Context, tenantID, requestID, subject string, documents []normalizedImportDocument) (documentParseResponse, error) {
 	if s.baseURL == "" || len(s.token) < 32 {
 		return documentParseResponse{}, errors.New("AI service not configured")
 	}
-	body, _ := json.Marshal(documentParseRequest{RequestID: requestID, Subject: subject, Documents: documents})
+	var model *DocumentModelConfig
+	if s.modelResolver != nil && tenantID != "" {
+		var err error
+		model, err = s.modelResolver(ctx, tenantID)
+		if err != nil {
+			return documentParseResponse{}, errors.New("school model configuration unavailable")
+		}
+	}
+	body, _ := json.Marshal(documentParseRequest{RequestID: requestID, Subject: subject, Documents: documents, ManagedModel: model})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+"/paper/parse", bytes.NewReader(body))
 	if err != nil {
 		return documentParseResponse{}, err

@@ -1,10 +1,13 @@
+import io
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from ocr_worker.api import APIError, AuthenticationError
 from ocr_worker.engine import OCRBlock
-from ocr_worker.runner import OCRRunner, WorkerConfig
+from ocr_worker.runner import OCRRunner, WorkerConfig, _decode_region_page
+from PIL import Image
 
 
 class FakeAPI:
@@ -78,6 +81,67 @@ class FakeEngine:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_multiple_fractional_regions_decode_once_and_preserve_pixel_offsets(self):
+        api = FakeAPI()
+        encoded = io.BytesIO()
+        Image.new("RGB", (100, 80), (255, 0, 0)).save(encoded, format="PNG")
+        api.downloads["/files/file-1/download"] = encoded.getvalue()
+        api.get_task_input = lambda *_: {"pages": [{"id": "page-1", "download_url": "/files/file-1/download", "regions": [
+            {"bbox": [10.5, 20.25, 30, 20]}, {"bbox": [50.25, 5.5, 10, 10]},
+        ]}]}
+        crops = []
+
+        class RegionEngine(FakeEngine):
+            def recognize(self, image_bytes):
+                with Image.open(io.BytesIO(image_bytes)) as crop:
+                    crops.append((crop.size, crop.getpixel((0, 0))))
+                return [OCRBlock(text="answer", bbox=[2, 3, 5, 5], confidence=0.9)]
+
+        runner = OCRRunner(api=api, engine=RegionEngine([]), config=WorkerConfig(worker_id="worker-a"))
+        with patch("ocr_worker.runner._decode_region_page", wraps=_decode_region_page) as decode:
+            runner.process_once()
+        self.assertEqual(decode.call_count, 1)
+        self.assertEqual(crops, [((31, 21), (255, 0, 0)), ((11, 11), (255, 0, 0))])
+        self.assertEqual([row["bbox"] for row in api.completed[0][1]["results"]], [[12, 23, 5, 5], [52, 8, 5, 5]])
+
+    def test_invalid_region_geometry_rejects_before_inference(self):
+        encoded = io.BytesIO()
+        Image.new("RGB", (100, 80), "white").save(encoded, format="PNG")
+        for bbox in ([90, 70, 30, 20], [0, 0, 0, 2], [0, 0, -1, 2], [float("nan"), 0, 2, 2], [0, 0, float("inf"), 2]):
+            with self.subTest(bbox=bbox):
+                api = FakeAPI()
+                api.downloads["/files/file-1/download"] = encoded.getvalue()
+                api.get_task_input = lambda *_, region_bbox=bbox: {"pages": [{"id": "page-1", "download_url": "/files/file-1/download", "regions": [{"bbox": region_bbox}]}]}
+                engine = FakeEngine([])
+                with patch.object(engine, "recognize") as recognize:
+                    OCRRunner(api=api, engine=engine, config=WorkerConfig(worker_id="worker-a")).process_once()
+                recognize.assert_not_called()
+                self.assertEqual(api.failed, [("task-1", "invalid_ocr_region")])
+                self.assertEqual(api.completed, [])
+
+    def test_roi_ocr_translates_crop_bbox_to_page_coordinates(self):
+        api = FakeAPI()
+        source = Image.new("RGB", (100, 80), "white")
+        encoded = io.BytesIO(); source.save(encoded, format="PNG")
+        api.downloads["/files/file-1/download"] = encoded.getvalue()
+        api.get_task_input = lambda *_: {"pages": [{"id": "page-1", "download_url": "/files/file-1/download", "regions": [{"bbox": [10, 20, 30, 20]}]}]}
+        class RegionEngine(FakeEngine):
+            def recognize(self, image_bytes):
+                self.seen_size = Image.open(io.BytesIO(image_bytes)).size
+                return [OCRBlock(text="answer", bbox=[2, 3, 10, 5], confidence=0.9)]
+        engine = RegionEngine([])
+        runner = OCRRunner(api=api, engine=engine, config=WorkerConfig(worker_id="worker-a"))
+        runner.process_once()
+        self.assertEqual(engine.seen_size, (30, 20))
+        self.assertEqual(api.completed[0][1]["results"][0]["bbox"], [12.0, 23.0, 10, 5])
+
+    def test_invalid_roi_fails_closed(self):
+        api = FakeAPI()
+        api.get_task_input = lambda *_: {"pages": [{"id": "page-1", "download_url": "/files/file-1/download", "regions": [{"bbox": [90, 70, 30, 20]}]}]}
+        runner = OCRRunner(api=api, engine=FakeEngine([OCRBlock(text="must not run", bbox=[1, 2, 3, 4], confidence=0.9)]), config=WorkerConfig(worker_id="worker-a"))
+        runner.process_once()
+        self.assertEqual(api.failed, [("task-1", "invalid_ocr_region")])
+
     def test_paper_import_pages_use_existing_ocr_engine(self):
         api = FakeAPI()
         api.claim_tasks = lambda *_: [{

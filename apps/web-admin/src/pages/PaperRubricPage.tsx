@@ -7,6 +7,7 @@ import {
   Input,
   InputNumber,
   List,
+  Progress,
   Select,
   Space,
   Switch,
@@ -19,8 +20,9 @@ import { ApiClientError, getPaperImportUserMessage, getUserErrorMessage } from "
 import { listExams, type Exam } from "../api/exams";
 import {
   createQuestion,
-  createPaperImport,
+	createPaperImport,
 	addPaperImportSources,
+	cancelPaperImport,
 	replacePaperImportSources,
 	savePaperImportReview,
   createRubric,
@@ -55,7 +57,7 @@ import { AssessmentProfileEditor } from "../components/features/assessment/Asses
 import { isFormulaEvidenceSubject } from "../features/grading/workbench/mathEvidenceSubjects";
 import type { StatusTone } from "../types";
 import { questionTypeOptions } from "../constants/examCatalog";
-import { filesFromClipboard, hasBlockingImportIssues, isSupportedPaperImportFile, isTextPasteTarget, markImportFieldConfirmed, orderedSourcesAfterMove, orderedSourcesAfterRemoval, paperImportSummary, sourcesAfterRoleChange } from "../features/paper-import/materials";
+import { filesFromClipboard, hasBlockingImportIssues, hasNoExamContentDetected, isPaperImportCancelled, isSupportedPaperImportFile, isTextPasteTarget, markImportFieldConfirmed, orderedSourcesAfterMove, orderedSourcesAfterRemoval, paperImportProgress, paperImportSummary, sourcesAfterRoleChange } from "../features/paper-import/materials";
 import { PaperImportReviewPanel } from "../features/paper-import/PaperImportReviewPanel";
 
 const rubricStatusOptions = [
@@ -222,6 +224,7 @@ export function PaperRubricPage({
 	const [reviewDrafts, setReviewDrafts] = useState<PaperImportDraftQuestion[]>([]);
 	const [savingImportReview, setSavingImportReview] = useState(false);
 	const [updatingImportSources, setUpdatingImportSources] = useState(false);
+	const [stoppingImport, setStoppingImport] = useState(false);
 
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
   const selectedQuestion = useMemo(
@@ -253,7 +256,7 @@ export function PaperRubricPage({
     }
   }, [initialExamId]);
 
-  const loadConfig = useCallback(async (examId: string) => {
+  const loadConfig = useCallback(async (examId: string, options: { silent?: boolean } = {}) => {
     const requestId = ++configRequestRef.current;
     if (!examId) {
       setPapers([]);
@@ -261,8 +264,10 @@ export function PaperRubricPage({
       setConfigLoading(false);
       return;
     }
-    setConfigLoading(true);
-    setConfigError(null);
+    if (!options.silent) {
+      setConfigLoading(true);
+      setConfigError(null);
+    }
     try {
       const [paperResult, questionResult, importResult] = await Promise.all([listPapers(examId), listQuestions(examId), listPaperImports(examId)]);
       if (requestId !== configRequestRef.current) return;
@@ -284,7 +289,7 @@ export function PaperRubricPage({
       });
     } catch (currentError) {
       if (requestId !== configRequestRef.current) return;
-      setConfigError(formatError(currentError));
+      if (!options.silent) setConfigError(formatError(currentError));
     } finally {
       if (requestId === configRequestRef.current) setConfigLoading(false);
     }
@@ -302,11 +307,21 @@ export function PaperRubricPage({
     void loadConfig(selectedExamId);
   }, [loadConfig, selectedExamId]);
 
+  const hasProcessingImport = paperImports.some((item) => item.status === "processing");
   useEffect(() => {
-    if (!selectedExamId || !paperImports.some((item) => item.status === "processing")) return;
-    const timer = window.setTimeout(() => void loadConfig(selectedExamId), 2500);
-    return () => window.clearTimeout(timer);
-  }, [loadConfig, paperImports, selectedExamId]);
+    if (!selectedExamId || !hasProcessingImport) return;
+    let pending = false;
+    const timer = window.setInterval(async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        await loadConfig(selectedExamId, { silent: true });
+      } finally {
+        pending = false;
+      }
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [hasProcessingImport, loadConfig, selectedExamId]);
 
 	useEffect(() => { setReviewDrafts(paperImports[0]?.questions ?? []); }, [paperImports]);
 
@@ -586,7 +601,7 @@ export function PaperRubricPage({
     try {
 			const uploaded = [];
 			for (const file of supportedFiles) uploaded.push((await uploadFile(file, { owner_type: "import", owner_id: selectedExam.id, exam_id: selectedExam.id, school_id: selectedExam.school_id })).file);
-			const activeImport = paperImports.find((item) => item.status === "review_required" || item.status === "failed");
+			const activeImport = paperImports.find((item) => item.status === "review_required" || item.status === "failed" || item.status === "cancelled");
 			const startIndex = activeImport?.sources.length ?? 0;
 			const sources = uploaded.map((file, index) => ({ file_asset_id: file.id, document_index: startIndex + index, role_hint: "auto" as const }));
 			const result = activeImport ? await addPaperImportSources(activeImport.id, sources) : await createPaperImport(selectedExam.id, { exam_paper_id: papers[0]?.id, subject: selectedExam.subject, sources });
@@ -595,7 +610,7 @@ export function PaperRubricPage({
       } else {
 				message.success(`已添加 ${supportedFiles.length} 份资料，系统正在识别和匹配`);
       }
-      await loadConfig(selectedExam.id);
+      await loadConfig(selectedExam.id, { silent: true });
     } catch (currentError) {
       message.error(formatError(currentError));
     } finally {
@@ -605,17 +620,40 @@ export function PaperRubricPage({
 	materialUploadRef.current = (files) => { void handleMaterialFiles(files); };
 
 	async function replaceImportSources(job: PaperImportJob, sources: PaperImportJob["sources"]) {
-		if (job.status !== "processing" && job.status !== "review_required" && job.status !== "failed") return;
+		if (job.status !== "processing" && job.status !== "review_required" && job.status !== "failed" && job.status !== "cancelled") return;
 		setUpdatingImportSources(true);
 		try {
 			await replacePaperImportSources(job.id, sources.map((source, documentIndex) => ({ id: source.id, document_index: documentIndex, role_hint: source.role_hint })));
 			message.success(sources.length ? "资料顺序或类型已更新，系统正在重新匹配" : "已删除全部考试资料，请重新上传正确的资料");
-			if (selectedExam) await loadConfig(selectedExam.id);
+			if (selectedExam) await loadConfig(selectedExam.id, { silent: true });
 		} catch (currentError) {
 			message.error(formatError(currentError));
 		} finally {
 			setUpdatingImportSources(false);
 		}
+	}
+
+	function stopPaperImport(job: PaperImportJob) {
+		if (job.status !== "processing" || stoppingImport) return;
+		modal.confirm({
+			title: "停止当前识别？",
+			content: "系统会停止尚未完成的文字识别和 AI 解析；已上传资料会保留，之后可以重新识别。",
+			okText: "停止识别",
+			cancelText: "继续识别",
+			okButtonProps: { danger: true },
+			onOk: async () => {
+				setStoppingImport(true);
+				try {
+					await cancelPaperImport(job.id);
+					message.success("已停止识别，上传资料仍然保留");
+					if (selectedExam) await loadConfig(selectedExam.id, { silent: true });
+				} catch (currentError) {
+					message.error(formatError(currentError));
+				} finally {
+					setStoppingImport(false);
+				}
+			}
+		});
 	}
 
 	async function removeImportSource(job: PaperImportJob, sourceID: string) {
@@ -809,12 +847,17 @@ export function PaperRubricPage({
 
   const scoreMismatch = selectedQuestion ? Math.abs(pointTotal(rubricPoints) - selectedQuestion.score) > 0.0001 : false;
 	const latestPaperImport = paperImports[0];
-	const visibleImportIssues = latestPaperImport?.structured_issues?.length
+	const importCancelled = latestPaperImport ? isPaperImportCancelled(latestPaperImport) : false;
+	const noExamContentDetected = latestPaperImport ? hasNoExamContentDetected(latestPaperImport) : false;
+	const visibleImportIssues = importCancelled || latestPaperImport?.status === "processing" ? [] : noExamContentDetected
+		? (latestPaperImport?.structured_issues ?? []).filter((issue) => issue.code === "NO_EXAM_CONTENT_DETECTED")
+		: latestPaperImport?.structured_issues?.length
 		? latestPaperImport.structured_issues.filter((issue) => issue.severity !== "info")
 		: (latestPaperImport?.issues ?? []).map((message) => ({ message, certainty: "unknown" as const }));
 	const importSummary = latestPaperImport ? paperImportSummary(latestPaperImport) : null;
+	const importProgress = latestPaperImport ? paperImportProgress(latestPaperImport) : null;
 	const invalidReviewRubric = reviewDrafts.some(reviewRubricHasScoreMismatch);
-	const canEditImportSources = latestPaperImport?.status === "processing" || latestPaperImport?.status === "review_required" || latestPaperImport?.status === "failed";
+	const canEditImportSources = latestPaperImport?.status === "processing" || latestPaperImport?.status === "review_required" || latestPaperImport?.status === "failed" || latestPaperImport?.status === "cancelled";
 	function updateReviewDraft(index: number, field: string, patch: Partial<PaperImportDraftQuestion>) {
 		setReviewDrafts((current) => current.map((draft, draftIndex) => draftIndex === index ? markImportFieldConfirmed(draft, field, patch) : draft));
 	}
@@ -894,7 +937,7 @@ export function PaperRubricPage({
 							<Button key="down" type="text" size="small" aria-label="下移资料" icon={<ChevronDown size={14} />} disabled={index === latestPaperImport.sources.length - 1 || !canEditImportSources || updatingImportSources} onClick={() => void replaceImportSources(latestPaperImport, orderedSourcesAfterMove(latestPaperImport.sources, source.id, 1))} />,
 							<Select<PaperImportRole> key="role" size="small" aria-label="资料类型" value={source.role_hint} options={importRoleOptions} disabled={!canEditImportSources || updatingImportSources} onChange={(roleHint) => void replaceImportSources(latestPaperImport, sourcesAfterRoleChange(latestPaperImport.sources, source.id, roleHint))} />,
 							<Button key="remove" type="text" danger size="small" aria-label="删除资料" icon={<Trash2 size={14} />} disabled={!canEditImportSources || updatingImportSources} onClick={() => void removeImportSource(latestPaperImport, source.id)} />
-						]} extra={<StatusTag tone={source.processing_status === "processed" ? "success" : source.processing_status === "failed" ? "danger" : "processing"}>{source.processing_status === "processed" ? "已识别" : source.processing_status === "failed" ? "失败" : "处理中"}</StatusTag>}>
+						]} extra={<StatusTag tone={importCancelled ? "neutral" : source.processing_status === "processed" ? "success" : source.processing_status === "failed" ? "danger" : "processing"}>{importCancelled ? "已停止" : source.processing_status === "processed" ? "已识别" : source.processing_status === "failed" ? "失败" : "处理中"}</StatusTag>}>
 							<List.Item.Meta title={`${source.document_index + 1}. ${source.original_name || "考试资料"}`} description={`识别内容：${source.detected_role === "question" ? "题目" : source.detected_role === "answer" ? "答案" : source.detected_role === "solution" ? "解析" : source.detected_role === "rubric" ? "评分标准" : source.detected_role === "mixed" ? "混合内容" : "识别中"}${source.role_confidence ? ` · 置信度 ${Math.round(source.role_confidence * 100)}%` : ""}`} />
 						</List.Item>
 					)} />
@@ -908,18 +951,42 @@ export function PaperRubricPage({
                   <h2>自动识别结果</h2>
                   <p>
                     {latestPaperImport.status === "review_required"
-						? `已识别题目 ${latestPaperImport.question_candidates?.length ?? latestPaperImport.questions.length}、答案 ${latestPaperImport.answer_candidates?.length ?? 0}、解析 ${latestPaperImport.solution_candidates?.length ?? 0}、评分标准 ${latestPaperImport.rubric_candidates?.length ?? 0}`
+						? noExamContentDetected
+							? "未识别到与考试有关的题目、答案、解析或评分标准，请检查是否上传了无关图片或错误文件"
+							: `已识别题目 ${latestPaperImport.question_candidates?.length ?? latestPaperImport.questions.length}、答案 ${latestPaperImport.answer_candidates?.length ?? 0}、解析 ${latestPaperImport.solution_candidates?.length ?? 0}、评分标准 ${latestPaperImport.rubric_candidates?.length ?? 0}`
                       : latestPaperImport.status === "applied"
                         ? "已确认并写入当前考试"
                         : latestPaperImport.status === "failed"
                           ? getPaperImportUserMessage(latestPaperImport.issues[0], "考试资料识别失败，请检查资料后重试")
+						  : latestPaperImport.status === "cancelled"
+							? "识别任务已手动停止，已上传资料仍然保留"
                           : "正在识别考试资料中的题目、答案与解析"}
                   </p>
                 </div>
                 {latestPaperImport.status === "review_required" ? (
-					<Space><Button loading={savingImportReview} onClick={() => void saveImportReview(latestPaperImport)}>保存人工核对</Button><Button type="primary" loading={parsing} disabled={hasBlockingImportIssues(latestPaperImport) || invalidReviewRubric} onClick={() => void confirmPaperImport(latestPaperImport)}>确认导入</Button></Space>
-                ) : null}
+					noExamContentDetected ? (
+						<Space wrap><Button type="primary" loading={updatingImportSources} onClick={() => void replaceImportSources(latestPaperImport, latestPaperImport.sources)}>重新识别</Button><Button onClick={() => { setShowQuestionEditor(true); document.getElementById("paper-question-summary")?.scrollIntoView({ behavior: "smooth", block: "start" }); }}>手动补充题目</Button></Space>
+					) : <Space><Button loading={savingImportReview} onClick={() => void saveImportReview(latestPaperImport)}>保存人工核对</Button><Button type="primary" loading={parsing} disabled={hasBlockingImportIssues(latestPaperImport) || invalidReviewRubric} onClick={() => void confirmPaperImport(latestPaperImport)}>确认导入</Button></Space>
+                ) : latestPaperImport.status === "failed" && latestPaperImport.sources.length ? (
+					<Button type="primary" loading={updatingImportSources} onClick={() => void replaceImportSources(latestPaperImport, latestPaperImport.sources)}>重新识别</Button>
+				) : latestPaperImport.status === "cancelled" && latestPaperImport.sources.length ? (
+					<Button type="primary" loading={updatingImportSources} onClick={() => void replaceImportSources(latestPaperImport, latestPaperImport.sources)}>重新识别</Button>
+				) : latestPaperImport.status === "processing" ? (
+					<Button danger loading={stoppingImport} onClick={() => stopPaperImport(latestPaperImport)}>停止识别</Button>
+				) : null}
               </div>
+			  {latestPaperImport.status === "processing" && importProgress ? (
+				<div className="paper-import-progress" aria-live="polite">
+					<div><strong>{importProgress.label}</strong><span>{importProgress.detail}</span></div>
+					<Progress percent={importProgress.percent} status="active" />
+				</div>
+			  ) : null}
+			  {latestPaperImport.status === "cancelled" && importProgress ? (
+				<div className="paper-import-progress" aria-live="polite">
+					<div><strong>{importProgress.label}</strong><span>{importProgress.detail}</span></div>
+					<Progress percent={importProgress.percent} status="normal" />
+				</div>
+			  ) : null}
               {latestPaperImport.status === "review_required" ? (
                 <div className="paper-import-facts">
 					<span><strong>{importSummary?.questions ?? 0}</strong> 道题目</span>
@@ -933,7 +1000,7 @@ export function PaperRubricPage({
 			{latestPaperImport.status === "review_required" && reviewDrafts.length ? <PaperImportReviewPanel job={latestPaperImport} drafts={reviewDrafts} onChange={updateReviewDraft} onOpenSource={(ref) => void openImportSource(ref.file_asset_id, ref.page_no)} /> : null}
 			{latestPaperImport.status === "applied" ? <div className="paper-import-result"><div className="paper-import-facts"><span>已写入题目：<strong>{latestPaperImport.questions.length}</strong></span><span>已配置答案：<strong>{latestPaperImport.questions.filter((item) => item.answer_key).length}</strong></span><span>已导入解析：<strong>{latestPaperImport.questions.filter((item) => item.solution).length}</strong></span><span>已配置评分标准：<strong>{latestPaperImport.questions.filter((item) => item.rubric).length}</strong></span><span>已锁定评分标准：<strong>{latestPaperImport.questions.filter((item) => item.rubric?.status === "locked").length}</strong></span><span>仍需处理：<strong>{latestPaperImport.questions.filter((item) => rubricRequiredArchetypes.has(item.assessment_archetype ?? "") && item.rubric?.status !== "locked").length}</strong></span></div><Space wrap><Button onClick={() => document.getElementById("paper-question-summary")?.scrollIntoView({ behavior: "smooth", block: "start" })}>去逐题校对</Button>{initialExamId && onNavigate ? <Button type="primary" onClick={() => onNavigate(`/exams/${encodeURIComponent(initialExamId)}/settings`)}>去考试准备</Button> : null}</Space></div> : null}
 			  {visibleImportIssues.length ? (
-				<Alert type={latestPaperImport.status === "failed" || (latestPaperImport.structured_issues ?? []).some((item) => item.severity === "error") ? "error" : "warning"} showIcon message="需要核对" description={
+				<Alert type={latestPaperImport.status === "failed" || (latestPaperImport.structured_issues ?? []).some((item) => item.severity === "error") ? "error" : "warning"} showIcon message={noExamContentDetected ? "未识别到考试内容" : "需要核对"} description={
 					<ul className="validation-issue-list">{visibleImportIssues.map((issue, index) => <li key={`${issue.message}-${index}`}><strong>{"question_no" in issue && issue.question_no ? `第${issue.question_no}题：` : ""}</strong>{getPaperImportUserMessage(issue.message, "考试资料存在需要核对的内容")}{issue.certainty === "suspected" ? "（疑似）" : ""}{"source_refs" in issue && issue.source_refs?.[0]?.file_asset_id ? <Button type="link" size="small" onClick={() => void openImportSource(issue.source_refs[0].file_asset_id, issue.source_refs[0].page_no)}>查看来源</Button> : null}</li>)}</ul>
 				} />
               ) : null}

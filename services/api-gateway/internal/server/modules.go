@@ -515,6 +515,7 @@ type AIGovernanceStores struct {
 }
 
 type AIGovernanceModule struct {
+	modelStore               modelgovernance.Store
 	Foundation               *AIFoundation
 	ModelGovernanceHandler   *modelgovernance.Handler
 	MathUnderstandingHandler *mathunderstanding.Handler
@@ -522,6 +523,7 @@ type AIGovernanceModule struct {
 
 func NewAIGovernanceModule(cfg config.Config, stores AIGovernanceStores, identity *IdentityModule, captureModule *CaptureProcessingModule, gradingQuality *GradingQualityModule, foundation *AIFoundation) *AIGovernanceModule {
 	return &AIGovernanceModule{
+		modelStore: stores.ModelGovernance,
 		Foundation: foundation,
 		ModelGovernanceHandler: modelgovernance.NewHandler(
 			stores.ModelGovernance,
@@ -540,7 +542,11 @@ func NewAIGovernanceModule(cfg config.Config, stores AIGovernanceStores, identit
 }
 
 func NewPostgresAIGovernanceModule(infra *Infrastructure, identity *IdentityModule, captureModule *CaptureProcessingModule, gradingQuality *GradingQualityModule, foundation *AIFoundation) (*AIGovernanceModule, error) {
-	governanceStore := modelgovernance.NewPostgresStore(infra.DB)
+	credentialCipher, err := modelgovernance.NewCredentialCipher(infra.Config.ModelSecrets.MasterKey)
+	if err != nil {
+		return nil, err
+	}
+	governanceStore := modelgovernance.NewPostgresStore(infra.DB, credentialCipher)
 	if err := governanceStore.EnsureLocalBaseline(context.Background(), "", localModelBaseline(infra.Config)); err != nil {
 		return nil, err
 	}
@@ -637,6 +643,7 @@ func NewMemoryApplicationModules(dependencies MemoryApplicationDependencies, sto
 	examModule.ConnectOperations(gradingQuality.ReviewStore, captureModule.ProcessingService)
 	releaseModule := NewReleaseModule(stores.Release, identity, examModule, gradingQuality)
 	aiGovernance := NewAIGovernanceModule(dependencies.Config, stores.AIGovernance, identity, captureModule, gradingQuality, aiFoundation)
+	connectSchoolDocumentModels(examModule, stores.AIGovernance.ModelGovernance)
 	return ApplicationModules{
 		Identity: identity, Exam: examModule, Capture: captureModule, Grading: gradingQuality,
 		Release: releaseModule, AIGovernance: aiGovernance, Idempotency: stores.Idempotency,
@@ -655,8 +662,26 @@ func NewPostgresApplicationModules(infra *Infrastructure) (ApplicationModules, e
 	if err != nil {
 		return ApplicationModules{}, err
 	}
+	connectSchoolDocumentModels(examModule, aiGovernance.modelStore)
 	return ApplicationModules{
 		Identity: identity, Exam: examModule, Capture: captureModule, Grading: gradingQuality,
 		Release: releaseModule, AIGovernance: aiGovernance, Idempotency: idempotency.NewPostgresStore(infra.DB),
 	}, nil
+}
+
+func connectSchoolDocumentModels(examModule *ExamPreparationModule, store modelgovernance.Store) {
+	managed, ok := store.(modelgovernance.ManagedAPIConfigStore)
+	if !ok {
+		return
+	}
+	examModule.PaperHandler.WithDocumentModelResolver(func(ctx context.Context, tenantID string) (*paper.DocumentModelConfig, error) {
+		connection, err := modelgovernance.ResolveDefaultManagedAPI(ctx, managed, tenantID)
+		if err != nil || connection == nil {
+			return nil, err
+		}
+		return &paper.DocumentModelConfig{
+			AdapterType: connection.Config.AdapterType, BaseURL: connection.Config.BaseURL,
+			APIKey: connection.APIKey, ModelName: connection.Config.ModelName, ModelVersion: connection.Config.ModelVersion,
+		}, nil
+	})
 }

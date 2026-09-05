@@ -102,7 +102,8 @@ func (s *MemoryStore) AddPaperImportSources(_ context.Context, tenantID, id, _ s
 		job.Sources = append(job.Sources, PaperImportSource{ID: s.id("paper-import-source"), FileAssetID: source.FileAssetID, DocumentIndex: source.DocumentIndex, RoleHint: defaultRoleHint(source.RoleHint), DetectedRole: "unknown", ProcessingStatus: "pending", CreatedAt: now})
 		seen[source.FileAssetID], indexes[source.DocumentIndex] = true, true
 	}
-	job.Status, job.UpdatedAt = "processing", now
+	job.Status, job.ErrorCode, job.Issues, job.UpdatedAt = "processing", "", []string{}, now
+	job.StructuredIssues = []PaperImportIssue{}
 	s.imports[id] = job
 	return job, nil
 }
@@ -140,6 +141,7 @@ func (s *MemoryStore) ReplacePaperImportSources(_ context.Context, tenantID, id,
 	}
 	sort.Slice(replaced, func(i, j int) bool { return replaced[i].DocumentIndex < replaced[j].DocumentIndex })
 	job.Sources = replaced
+	job.StructuredIssues = []PaperImportIssue{}
 	if len(replaced) == 0 {
 		job.Status = "failed"
 		job.ErrorCode = "paper_import_no_sources"
@@ -160,6 +162,9 @@ func (s *MemoryStore) CompletePaperImportCandidates(_ context.Context, tenantID,
 	job, ok := s.imports[id]
 	if !ok || job.TenantID != tenantID {
 		return PaperImportJob{}, ErrNotFound
+	}
+	if job.Status == "cancelled" || job.Status == "applied" {
+		return PaperImportJob{}, ErrConflict
 	}
 	job.QuestionCandidates, job.AnswerCandidates, job.SolutionCandidates, job.RubricCandidates = questions, answers, solutions, rubrics
 	fresh, structured := reconcilePaperImportCandidates(questions, answers, solutions, rubrics, appendDetectedRoleIssues(issues, detected))
@@ -229,7 +234,33 @@ func (s *MemoryStore) FailPaperImport(_ context.Context, tenantID, id, code stri
 	if !ok || job.TenantID != tenantID {
 		return PaperImportJob{}, ErrNotFound
 	}
+	if job.Status != "processing" {
+		return PaperImportJob{}, ErrConflict
+	}
 	job.Status, job.ErrorCode, job.Issues, job.UpdatedAt = "failed", code, issues, time.Now().UTC()
+	s.imports[id] = job
+	return job, nil
+}
+
+func (s *MemoryStore) CancelPaperImport(_ context.Context, tenantID, id string) (PaperImportJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.imports[id]
+	if !ok || job.TenantID != tenantID {
+		return PaperImportJob{}, ErrNotFound
+	}
+	if job.Status != "processing" {
+		return PaperImportJob{}, ErrConflict
+	}
+	job.Status = "cancelled"
+	job.ErrorCode = "paper_import_cancelled"
+	job.Issues = []string{"识别任务已手动停止"}
+	job.UpdatedAt = time.Now().UTC()
+	for index := range job.Sources {
+		if job.Sources[index].ProcessingStatus == "pending" || job.Sources[index].ProcessingStatus == "processing" {
+			job.Sources[index].ProcessingStatus = "failed"
+		}
+	}
 	s.imports[id] = job
 	return job, nil
 }

@@ -5,6 +5,7 @@ import {
   BrainCircuit,
   BookOpenCheck,
   Building2,
+  Cable,
   ClipboardCheck,
   FileText,
   Gauge,
@@ -67,6 +68,10 @@ const productionRouteDefinitions: AppRoute[] = [
   {
     key: "platformSchools", path: "/platform/schools", title: "学校管理", group: "平台管理", icon: <Building2 size={18} />, permissions: ["tenant:manage"], allowedRoles: ["platform_admin"], mock: false, productionReady: true,
     workspaces: ["platform"], experiences: { admin: { title: "学校管理", group: "平台管理" } }
+  },
+  {
+    key: "platformModelConfig", path: "/platform/model-config", title: "模型配置", group: "平台管理", icon: <Cable size={18} />, permissions: ["model:provider:manage"], allowedRoles: ["platform_admin"], mock: false, productionReady: true,
+    workspaces: ["platform"], experiences: { admin: { title: "模型配置", group: "平台管理" } }
   },
   {
     key: "exams", path: "/exams", title: "考试管理", group: "考试组织", icon: <ClipboardCheck size={18} />, permissions: ["exam:manage"], mock: false, productionReady: true,

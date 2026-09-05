@@ -7,6 +7,7 @@ from .app import GradingAgentApplication
 from .config import Settings
 from .errors import AgentError
 from .paper_parser import PaperParser
+from .managed_model import paper_model
 
 
 class GradingAgentHTTPServer(ThreadingHTTPServer):
@@ -62,7 +63,7 @@ class GradingAgentHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             request_id = payload.get("request_id", "") if isinstance(payload, dict) else ""
             if self.path == "/paper/parse":
-                parser = PaperParser(self.server.application.model)
+                parser = PaperParser(paper_model(self.server.application, payload))
                 self._json(200, parser.parse(payload))
                 return
             idempotency_key = self.headers.get("Idempotency-Key", "").strip()

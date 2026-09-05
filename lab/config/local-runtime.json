@@ -24,7 +24,7 @@
     "thinking_mode": "disabled_by_prompt"
   },
   "execution": {
-    "context_tokens": 4096,
+    "context_tokens": 16384,
     "threads": 6,
     "gpu_layers": 0,
     "parallel_requests": 1,

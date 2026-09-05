@@ -2,6 +2,7 @@ ARG OCR_PYTHON_IMAGE=python:3.11.15-slim-trixie
 FROM ${OCR_PYTHON_IMAGE}
 
 ARG INSTALL_PADDLEOCR=true
+ARG INSTALL_PADDLEOCR_HPI=false
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG DEBIAN_MIRROR=http://deb.debian.org/debian
 ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
@@ -17,7 +18,10 @@ RUN python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
       "pip==26.1.2" "setuptools==83.0.0" \
     && if [ "$INSTALL_PADDLEOCR" = "true" ]; then \
       python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
-        "paddleocr==3.7.0" "paddlepaddle==3.3.1" "tokenizers==0.22.1"; \
+        "paddleocr==3.7.0" "paddlepaddle==3.3.1" "tokenizers==0.22.1" "Pillow>=10,<12"; \
+      if [ "$INSTALL_PADDLEOCR_HPI" = "true" ]; then \
+        paddlex --install hpi-cpu; \
+      fi; \
     fi
 
 COPY services/ocr-worker/ocr_worker ./ocr_worker

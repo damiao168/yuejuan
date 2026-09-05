@@ -43,7 +43,13 @@ export function validateLocalRuntimeManifest(manifest) {
   if (manifest.execution?.gpu_layers !== 0) errors.push("initial baseline must be CPU-only with gpu_layers=0");
   if (manifest.execution?.parallel_requests !== 1) errors.push("initial baseline must use one request at a time");
   if (manifest.execution?.temperature !== 0) errors.push("grading baseline temperature must be zero");
-  if (manifest.execution?.context_tokens > 4096) errors.push("initial context must not exceed 4096 tokens");
+  if (
+    !Number.isInteger(manifest.execution?.context_tokens)
+    || manifest.execution.context_tokens < 1024
+    || manifest.execution.context_tokens > 32768
+  ) {
+    errors.push("runtime context must be between 1024 and 32768 tokens");
+  }
   return { valid: errors.length === 0, errors };
 }
 

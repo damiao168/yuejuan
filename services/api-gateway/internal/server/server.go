@@ -234,6 +234,14 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	requireFileManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("file:manage")(handler))
 	}
+	requireTaskScopedFileManage := func(pathParam string, handler http.HandlerFunc) http.Handler {
+		// The durable task scope must be derived before file authorization. The
+		// normal request-boundary middleware sees a service account's declared
+		// (empty) browser scope and would reject legitimate worker downloads
+		// before the task capability can authorize its payload files.
+		guarded := workerruntime.RequireTaskFile(pathParam)(auth.RequirePermission("file:manage")(handler))
+		return authenticate(idempotent(workerruntime.TaskScope(workerRuntimeStore)(guarded)))
+	}
 	requireSubmissionManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("submission:manage")(handler))
 	}
@@ -324,6 +332,11 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	requireModelProviderManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("model:provider:manage")(handler))
 	}
+	requirePlatformModelManage := func(handler http.HandlerFunc) http.Handler {
+		return requireAuth(auth.RequireAnyRole("platform_admin")(
+			auth.RequirePermission("model:provider:manage")(handler),
+		))
+	}
 	requireModelPolicyManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("model:policy:manage")(handler))
 	}
@@ -361,11 +374,6 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 		guarded := workerruntime.RequireTaskPayloadValue(pathParam, payloadKey)(handler)
 		return workerruntime.TaskScope(workerRuntimeStore)(guarded).ServeHTTP
 	}
-	withWorkerTaskFile := func(pathParam string, handler http.HandlerFunc) http.HandlerFunc {
-		guarded := workerruntime.RequireTaskFile(pathParam)(handler)
-		return workerruntime.TaskScope(workerRuntimeStore)(guarded).ServeHTTP
-	}
-
 	mux.HandleFunc("GET /health", h.Health)
 	mux.HandleFunc("GET /health/live", h.Health)
 	mux.HandleFunc("GET /health/ready", h.Ready)
@@ -402,6 +410,10 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	mux.Handle("GET /api/v1/model-prompts/current", requireModelRead(modelGovernanceHandler.GetCurrentPrompt))
 	mux.Handle("PUT /api/v1/model-policy", requireModelPolicyManage(modelGovernanceHandler.UpdatePolicy))
 	mux.Handle("POST /api/v1/model-secrets/probe", requireModelProviderManage(modelGovernanceHandler.ProbeSecret))
+	mux.Handle("GET /api/v1/platform/model-api-configs", requirePlatformModelManage(modelGovernanceHandler.ListManagedAPIConfigs))
+	mux.Handle("POST /api/v1/platform/model-api-configs", requirePlatformModelManage(modelGovernanceHandler.CreateManagedAPIConfig))
+	mux.Handle("PATCH /api/v1/platform/model-api-configs/{id}", requirePlatformModelManage(modelGovernanceHandler.UpdateManagedAPIConfig))
+	mux.Handle("POST /api/v1/platform/model-api-configs/{id}/probe", requirePlatformModelManage(modelGovernanceHandler.ProbeManagedAPIConfig))
 	mux.Handle("GET /api/v1/model-sandbox-approvals", requireModelRead(modelGovernanceHandler.ListSandboxApprovals))
 	mux.Handle("POST /api/v1/model-sandbox-approvals", requireModelProviderManage(modelGovernanceHandler.CreateSandboxApproval))
 	mux.Handle("POST /api/v1/model-sandbox-approvals/{id}/revoke", requireModelProviderManage(modelGovernanceHandler.RevokeSandboxApproval))
@@ -482,6 +494,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	mux.Handle("PUT /api/v1/paper-imports/{id}/sources", requireExamManage(paperHandler.ReplacePaperImportSources))
 	mux.Handle("PUT /api/v1/paper-imports/{id}/review", requireExamManage(paperHandler.SavePaperImportReview))
 	mux.Handle("POST /api/v1/paper-imports/{id}/apply", requireExamManage(paperHandler.ApplyPaperImport))
+	mux.Handle("POST /api/v1/paper-imports/{id}/cancel", requireExamManage(paperHandler.CancelPaperImport))
 	mux.Handle("POST /api/v1/exams/{examId}/questions", requireExamManage(withScopedExam(paperHandler.CreateQuestion)))
 	mux.Handle("GET /api/v1/exams/{examId}/questions", requireExamManage(withScopedExam(paperHandler.ListQuestions)))
 	mux.Handle("PATCH /api/v1/questions/{id}", requireExamManage(paperHandler.UpdateQuestion))
@@ -491,7 +504,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 
 	mux.Handle("POST /api/v1/files", requireFileManage(withWorkerTaskScope(fileHandler.Upload)))
 	mux.Handle("GET /api/v1/files/{id}", requireFileManage(fileHandler.Get))
-	mux.Handle("GET /api/v1/files/{id}/download", requireFileManage(withWorkerTaskFile("id", fileHandler.Download)))
+	mux.Handle("GET /api/v1/files/{id}/download", requireTaskScopedFileManage("id", fileHandler.Download))
 	mux.Handle("DELETE /api/v1/files/{id}", requireFileManage(fileHandler.Delete))
 	mux.Handle("GET /api/v1/system/file-reconciliation", requireAuth(auth.RequireAnyRole("platform_admin")(http.HandlerFunc(fileHandler.ReconciliationStatus))))
 

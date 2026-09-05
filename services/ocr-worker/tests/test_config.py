@@ -22,6 +22,26 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.heartbeat_interval, 10)
         self.assertEqual(settings.heartbeat_timeout, 3)
         self.assertTrue(settings.ocr_runtime_enabled)
+        self.assertEqual(settings.cpu_threads, 4)
+        self.assertEqual(settings.enable_mkldnn, "auto")
+        self.assertTrue(settings.use_textline_orientation)
+        self.assertEqual(settings.text_det_limit_side_len, 64)
+        self.assertEqual(settings.text_recognition_batch_size, 1)
+
+    @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_OCR_CPU_THREADS": "0"}, clear=True)
+    def test_cpu_threads_are_bounded(self):
+        with self.assertRaisesRegex(ValueError, "CPU_THREADS"):
+            load_settings()
+
+    @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_OCR_ENABLE_MKLDNN": "sometimes"}, clear=True)
+    def test_mkldnn_mode_is_explicit(self):
+        with self.assertRaisesRegex(ValueError, "MKLDNN"):
+            load_settings()
+
+    @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_OCR_TEXT_RECOGNITION_BATCH_SIZE": "0"}, clear=True)
+    def test_recognition_batch_size_is_positive(self):
+        with self.assertRaisesRegex(ValueError, "RECOGNITION_BATCH_SIZE"):
+            load_settings()
 
     @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_OCR_BATCH_SIZE": "2"}, clear=True)
     def test_batch_size_greater_than_one_fails_before_claim(self):

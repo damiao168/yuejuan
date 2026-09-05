@@ -275,18 +275,25 @@ class Runner:
 
     def _fail(self, task: dict, exc: Exception) -> None:
         payload = task.get("payload") or {}
-        code = str(exc) if isinstance(exc, (DecodeError, RegistrationError, OMRExtractionError)) else "page_processing_failed"
+        known_error = isinstance(exc, (DecodeError, RegistrationError, OMRExtractionError, APIError))
+        code = str(exc) if known_error else "page_processing_failed"
         detail = {"error_type": type(exc).__name__, "message": str(exc)[:200]}
+        retryable = not isinstance(exc, (DecodeError, RegistrationError, OMRExtractionError))
+        if isinstance(exc, APIError):
+            # A missing/forbidden source is deterministic. Other API failures,
+            # including a lost lease while reporting, retain the worker
+            # runtime's existing retry behavior.
+            retryable = code not in {"source_download_forbidden", "source_not_found"}
         if task.get("task_type") == "capture_file_decode":
-            self.client.fail(str(payload["capture_file_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": not isinstance(exc, DecodeError), "error_code": code, "error_detail": detail, "duration_ms": 0})
+            self.client.fail(str(payload["capture_file_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": retryable, "error_code": code, "error_detail": detail, "duration_ms": 0})
         elif task.get("task_type") == "page_registration" and payload.get("registration_run_id"):
-            self.client.fail_registration(str(payload["registration_run_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": not isinstance(exc, RegistrationError), "error_code": code, "error_detail": detail, "duration_ms": 0})
+            self.client.fail_registration(str(payload["registration_run_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": retryable, "error_code": code, "error_detail": detail, "duration_ms": 0})
         elif task.get("task_type") == "page_registration_correction_preview" and payload.get("correction_id"):
-            self.client.fail_correction(str(payload["correction_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": not isinstance(exc, RegistrationError), "error_code": code, "error_detail": detail, "duration_ms": 0})
+            self.client.fail_correction(str(payload["correction_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": retryable, "error_code": code, "error_detail": detail, "duration_ms": 0})
         elif task.get("task_type") == "omr_extract" and payload.get("omr_run_id"):
-            self.client.fail_omr(str(payload["omr_run_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": not isinstance(exc, OMRExtractionError), "error_code": code, "error_detail": detail, "duration_ms": 0})
+            self.client.fail_omr(str(payload["omr_run_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": retryable, "error_code": code, "error_detail": detail, "duration_ms": 0})
         elif task.get("task_type") == "layout" and payload.get("paper_import_id"):
-            self.client.fail_paper_import(str(payload["paper_import_id"]), task, code, detail)
+            self.client.fail_paper_import(str(payload["paper_import_id"]), task, code, detail, retryable)
         else:
             self.client.fail_task(task, code, detail)
 

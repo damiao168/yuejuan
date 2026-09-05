@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from ocr_worker.api import APIError, EduGradeClient
+from ocr_worker.api import APIError, EduGradeClient, PAPER_IMPORT_COMPLETION_TIMEOUT_SECONDS
 
 
 class FakeResponse:
@@ -60,6 +60,23 @@ class APITests(unittest.TestCase):
         self.assertEqual(req.headers["X-edugrade-worker-service"], "ocr-worker")
         self.assertEqual(req.headers["X-edugrade-worker-instance-id"], "worker-1")
         self.assertNotIn("X-edugrade-tenant-id", req.headers)
+
+    @patch("ocr_worker.api.request.urlopen", return_value=FakeResponse())
+    def test_paper_import_completion_allows_local_model_processing_budget(self, urlopen):
+        client = EduGradeClient(
+            base_url="http://api-gateway:8080",
+            tenant_code="demo",
+            username="ocr-worker",
+            password="test-only",
+            token="worker-token",
+        )
+
+        client.complete_paper_import_ocr("import-1", {"blocks": [{"text": "question"}]})
+
+        self.assertEqual(
+            urlopen.call_args.kwargs["timeout"],
+            PAPER_IMPORT_COMPLETION_TIMEOUT_SECONDS,
+        )
 
 
 if __name__ == "__main__":

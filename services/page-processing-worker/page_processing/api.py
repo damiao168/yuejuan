@@ -63,7 +63,15 @@ class Client:
         try:
             with request.urlopen(req, timeout=120) as response:
                 return response.read()
-        except (error.HTTPError, OSError) as exc:
+        except error.HTTPError as exc:
+            if exc.code in {401, 403}:
+                code = "source_download_forbidden"
+            elif exc.code == 404:
+                code = "source_not_found"
+            else:
+                code = "source_download_failed"
+            raise APIError(code, status_code=exc.code, retry_after=_retry_after_seconds(exc.headers)) from exc
+        except OSError as exc:
             raise APIError("source_download_failed") from exc
 
     def upload_page(self, task: dict[str, Any], page_index: int, png: bytes) -> dict[str, Any]:
@@ -131,8 +139,8 @@ class Client:
     def complete_paper_import_decode(self, import_id: str, payload: dict[str, Any]) -> None:
         self._json("POST", f"/api/v1/internal/paper-imports/{import_id}/decode-result", payload)
 
-    def fail_paper_import(self, import_id: str, task: dict[str, Any], error_code: str, detail: dict[str, Any]) -> None:
-        self._json("POST", f"/api/v1/internal/paper-imports/{import_id}/failure", {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": False, "error_code": error_code, "error_detail": detail, "duration_ms": 0})
+    def fail_paper_import(self, import_id: str, task: dict[str, Any], error_code: str, detail: dict[str, Any], retryable: bool) -> None:
+        self._json("POST", f"/api/v1/internal/paper-imports/{import_id}/failure", {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": retryable, "error_code": error_code, "error_detail": detail, "duration_ms": 0})
 
     def _json(self, method: str, path: str, payload: dict[str, Any], auth: bool = True, timeout: float | None = None) -> dict[str, Any]:
         req = self._request(method, path, json.dumps(payload).encode("utf-8"), auth=auth)

@@ -165,6 +165,22 @@ func (h *Handler) GetTaskInput(w http.ResponseWriter, r *http.Request) {
 		PageNo      int    `json:"page_no"`
 		Status      string `json:"status"`
 		DownloadURL string `json:"download_url"`
+		Regions     any    `json:"regions,omitempty"`
+	}
+	regionsByPage := map[string][]submissionpkg.AnswerRegion{}
+	fullPageRequired := map[string]bool{}
+	if lister, ok := h.submissions.(submissionpkg.AnswerRegionLister); ok {
+		regions, regionErr := lister.ListAnswerRegions(r.Context(), user.TenantID, task.SubmissionID)
+		if regionErr != nil {
+			writeStoreError(w, r, ErrInvalidInput)
+			return
+		}
+		for _, region := range regions {
+			if region.RequiresFullPage {
+				fullPageRequired[region.PageID] = true
+			}
+			regionsByPage[region.PageID] = append(regionsByPage[region.PageID], region)
+		}
 	}
 	pageInputs := make([]pageInput, 0, len(pages))
 	for _, page := range pages {
@@ -174,6 +190,15 @@ func (h *Handler) GetTaskInput(w http.ResponseWriter, r *http.Request) {
 			PageNo:      page.PageNo,
 			Status:      page.Status,
 			DownloadURL: "/api/v1/files/" + page.FileAssetID + "/download",
+			Regions: func() any {
+				if fullPageRequired[page.ID] {
+					return nil
+				}
+				if regions := regionsByPage[page.ID]; len(regions) > 0 {
+					return regions
+				}
+				return nil
+			}(),
 		})
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{

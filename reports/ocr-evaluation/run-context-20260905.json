@@ -1,0 +1,25 @@
+{
+  "date": "2026-09-05",
+  "host_cpu": "AMD Ryzen 5 5500U with Radeon Graphics",
+  "host_physical_cores": 6,
+  "host_logical_processors": 12,
+  "host_physical_memory_bytes": 14887411712,
+  "hardware_source": "Windows Win32_Processor and Win32_ComputerSystem",
+  "container_cpu_quota": 4,
+  "container_memory_limit_bytes": 4294967296,
+  "container_network": "none",
+  "image": "edugrade/ocr-worker:local",
+  "model_cache": "edugrade-enterprise_ocr_model_cache",
+  "runs": [
+    "optimized-safe-20260905/summary.json",
+    "20260905-exact/local-baseline-v1/summary.json"
+  ],
+  "production_accuracy_gate": "not_evaluated",
+  "limitations": [
+    "Synthetic math pages, not real handwriting acceptance data",
+    "Ground truth missing for full-page OCR, bbox IoU and low-confidence recall",
+    "Background application services remained running",
+    "Host is Ryzen 5 5500U, not the requested Ryzen 7 5800H target",
+    "Local inference timings exclude queue, download and API writeback"
+  ]
+}

@@ -81,7 +81,7 @@ export interface PaperImportJob {
   exam_paper_id: string;
   paper_file_asset_id: string;
   answer_file_asset_id: string;
-  status: "processing" | "review_required" | "failed" | "applied";
+  status: "processing" | "review_required" | "failed" | "cancelled" | "applied";
   subject: string;
 	sources: PaperImportSource[];
 	question_candidates: QuestionCandidate[];
@@ -236,6 +236,12 @@ export async function savePaperImportReview(importId: string, questions: PaperIm
 
 export async function applyPaperImport(importId: string) {
   return generatedApi.applyPaperImport({ path: { paperImportId: importId } });
+}
+
+export async function cancelPaperImport(importId: string) {
+  return apiClient.request<{ import: PaperImportJob }>(`/api/v1/paper-imports/${encodeURIComponent(importId)}/cancel`, {
+    method: "POST"
+  });
 }
 
 export async function listQuestions(examId: string) {

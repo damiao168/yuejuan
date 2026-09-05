@@ -6,6 +6,8 @@ from typing import Any
 from urllib import error, request
 from urllib.parse import urlsplit
 
+PAPER_IMPORT_COMPLETION_TIMEOUT_SECONDS = 720
+
 
 class APIError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None) -> None:
@@ -194,7 +196,17 @@ class EduGradeClient:
         )
 
     def complete_paper_import_ocr(self, import_id: str, payload: dict[str, Any], tenant_id: str | None = None) -> None:
-        self._request("POST", f"/api/v1/internal/paper-imports/{import_id}/ocr-result", payload, tenant_id=tenant_id)
+        # The gateway performs model-backed question parsing after persisting the
+        # OCR result. Local CPU inference for a full paper can legitimately take
+        # several minutes, so this terminal callback must not inherit the generic
+        # 60-second control-plane timeout.
+        self._request(
+            "POST",
+            f"/api/v1/internal/paper-imports/{import_id}/ocr-result",
+            payload,
+            timeout=PAPER_IMPORT_COMPLETION_TIMEOUT_SECONDS,
+            tenant_id=tenant_id,
+        )
 
     def fail_paper_import(self, import_id: str, runtime_task_id: str, lease_token: str, error_code: str, retryable: bool, tenant_id: str | None = None) -> None:
         self._request("POST", f"/api/v1/internal/paper-imports/{import_id}/failure", {

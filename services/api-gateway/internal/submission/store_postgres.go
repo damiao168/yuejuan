@@ -256,6 +256,58 @@ ORDER BY page_no
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) ListAnswerRegions(ctx context.Context, tenantID string, submissionID string) ([]AnswerRegion, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT seg.id::text, seg.question_id::text, COALESCE(seg.question_no::text,''),
+	       COALESCE(q.question_type,''), COALESCE(NULLIF(seg.pixel_bbox,'{}'::jsonb),seg.bbox), seg.submission_page_id::text,
+	       (seg.registration_run_id IS NOT NULL OR NULLIF(seg.normalized_bbox,'{}'::jsonb) IS NOT NULL
+	        OR seg.status NOT IN ('generated','accepted'))
+FROM answer_segment seg
+JOIN submission_page sp ON sp.tenant_id=seg.tenant_id AND sp.id=seg.submission_page_id
+  AND sp.submission_id=seg.submission_id AND sp.deleted_at IS NULL
+LEFT JOIN question q ON q.tenant_id=seg.tenant_id AND q.id=seg.question_id AND q.deleted_at IS NULL
+WHERE seg.tenant_id=$1 AND seg.submission_id=$2 AND seg.deleted_at IS NULL
+ORDER BY seg.submission_page_id, seg.question_no, seg.id
+`, tenantID, submissionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AnswerRegion{}
+	for rows.Next() {
+		var region AnswerRegion
+		var raw []byte
+		if err := rows.Scan(&region.ID, &region.QuestionID, &region.QuestionNo, &region.QuestionType, &raw, &region.PageID, &region.RequiresFullPage); err != nil {
+			return nil, err
+		}
+		region.BBox = decodeAnswerRegionBBox(raw)
+		out = append(out, region)
+	}
+	return out, rows.Err()
+}
+
+func decodeAnswerRegionBBox(raw []byte) []float64 {
+	var values []float64
+	if json.Unmarshal(raw, &values) == nil && len(values) == 4 {
+		return values
+	}
+	var object map[string]float64
+	if json.Unmarshal(raw, &object) == nil {
+		width, hasWidth := object["width"]
+		height, hasHeight := object["height"]
+		if !hasWidth {
+			width = object["w"]
+		}
+		if !hasHeight {
+			height = object["h"]
+		}
+		return []float64{object["x"], object["y"], width, height}
+	}
+	// Preserve fail-closed behavior: an empty bbox is serialized to the worker,
+	// which rejects the task as invalid_ocr_region instead of silently using a page fallback.
+	return []float64{}
+}
+
 func (s *PostgresStore) ApplyPageQualityResult(ctx context.Context, tenantID string, input ApplyPageQualityInput) (SubmissionPage, error) {
 	if input.QualityStatus != "passed" && input.QualityStatus != "review" && input.QualityStatus != "failed" {
 		return SubmissionPage{}, ErrInvalidInput

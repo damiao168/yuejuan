@@ -20,6 +20,8 @@ type MemoryStore struct {
 	evaluations    map[string]EvaluationRun
 	candidates     map[string]EvaluationCandidate
 	modelApprovals map[string]ModelApproval
+	managedConfigs map[string]ManagedAPIConfig
+	managedSecrets map[string]string
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -31,6 +33,8 @@ func NewMemoryStore() *MemoryStore {
 		evaluations:    map[string]EvaluationRun{},
 		candidates:     map[string]EvaluationCandidate{},
 		modelApprovals: map[string]ModelApproval{},
+		managedConfigs: map[string]ManagedAPIConfig{},
+		managedSecrets: map[string]string{},
 	}
 }
 

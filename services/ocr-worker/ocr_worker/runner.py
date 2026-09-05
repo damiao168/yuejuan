@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import logging
 import math
 import threading
 import time
@@ -9,6 +11,8 @@ from typing import Any, Self
 
 from .api import APIError, AuthenticationError
 from .engine import OCREngine
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -22,12 +26,21 @@ class WorkerConfig:
     lease_seconds: int = 300
     heartbeat_interval: float = 10.0
     heartbeat_timeout: float = 3.0
+    cpu_threads: int = 4
+    enable_mkldnn: str = "auto"
+    enable_hpi: bool = False
+    use_textline_orientation: bool = True
+    text_det_limit_type: str = "min"
+    text_det_limit_side_len: int = 64
+    text_recognition_batch_size: int = 1
 
     def __post_init__(self) -> None:
         if self.batch_size != 1:
             raise ValueError("the sequential OCR worker must claim exactly one task")
         if not self.engine or not self.engine_version:
             raise ValueError("engine and engine_version must be configured")
+        if self.cpu_threads < 1 or self.cpu_threads > 64:
+            raise ValueError("cpu_threads must be between 1 and 64")
         if self.lease_seconds < 30 or self.lease_seconds > 3600:
             raise ValueError("lease_seconds must be between 30 and 3600")
         if (
@@ -87,9 +100,12 @@ class OCRRunner:
             task_input = self.api.get_task_input(task_id, tenant_id)
             image_hash = hashlib.sha256()
             results: list[dict[str, Any]] = []
+            download_ms = decode_ms = ocr_ms = 0
+            region_count = 0
             for page in task_input.get("pages", []):
                 heartbeat.raise_if_failed()
                 page_id = str(page["id"])
+                download_start = time.monotonic()
                 try:
                     image_bytes = self.api.download(str(page["download_url"]), tenant_id)
                 except AuthenticationError:
@@ -98,24 +114,67 @@ class OCRRunner:
                     heartbeat.stop()
                     self.api.fail_task(task_id, "download_failed", runtime_task_id, lease_token, True, tenant_id)
                     return
+                download_ms += int((time.monotonic() - download_start) * 1000)
                 image_hash.update(image_bytes)
-                try:
-                    blocks = self.engine.recognize(image_bytes)
-                except Exception:  # noqa: BLE001 - Paddle backends raise heterogeneous runtime exceptions.
+                regions = page.get("regions")
+                if regions is not None and not isinstance(regions, list):
                     heartbeat.stop()
-                    self.api.fail_task(task_id, "ocr_engine_failed", runtime_task_id, lease_token, True, tenant_id)
+                    self.api.fail_task(task_id, "invalid_ocr_region", runtime_task_id, lease_token, False, tenant_id)
                     return
-                for block in blocks:
-                    if not _valid_block(block.text, block.bbox, block.confidence):
-                        continue
-                    results.append(
-                        {
-                            "submission_page_id": page_id,
-                            "text": block.text,
-                            "bbox": block.bbox,
-                            "confidence": block.confidence,
-                        }
-                    )
+                page_regions = regions if isinstance(regions, list) and regions else [None]
+                decoded_page = None
+                if isinstance(regions, list) and regions:
+                    region_count += len(regions)
+                    decode_start = time.monotonic()
+                    try:
+                        decoded_page = _decode_region_page(image_bytes)
+                    except ValueError:
+                        heartbeat.stop()
+                        self.api.fail_task(task_id, "invalid_ocr_region", runtime_task_id, lease_token, False, tenant_id)
+                        return
+                    decode_ms += int((time.monotonic() - decode_start) * 1000)
+                for region in page_regions:
+                    input_bytes = image_bytes
+                    offset = (0.0, 0.0)
+                    if region is not None:
+                        if not isinstance(region, dict):
+                            heartbeat.stop()
+                            self.api.fail_task(task_id, "invalid_ocr_region", runtime_task_id, lease_token, False, tenant_id)
+                            return
+                        decode_start = time.monotonic()
+                        try:
+                            input_bytes, offset = _crop_region(decoded_page, region.get("bbox"))
+                        except (ValueError, TypeError):
+                            heartbeat.stop()
+                            self.api.fail_task(task_id, "invalid_ocr_region", runtime_task_id, lease_token, False, tenant_id)
+                            return
+                        decode_ms += int((time.monotonic() - decode_start) * 1000)
+                    ocr_start = time.monotonic()
+                    try:
+                        recognize_region = getattr(self.engine, "recognize_region", None)
+                        blocks = recognize_region(input_bytes) if region is not None and callable(recognize_region) else self.engine.recognize(input_bytes)
+                    except Exception:  # noqa: BLE001 - Paddle backends raise heterogeneous runtime exceptions.
+                        heartbeat.stop()
+                        self.api.fail_task(task_id, "ocr_engine_failed", runtime_task_id, lease_token, True, tenant_id)
+                        return
+                    ocr_ms += int((time.monotonic() - ocr_start) * 1000)
+                    for block in blocks:
+                        if not _valid_block(block.text, block.bbox, block.confidence):
+                            continue
+                        bbox = list(block.bbox)
+                        if region is not None:
+                            bbox[0] += offset[0]
+                            bbox[1] += offset[1]
+                        results.append(
+                            {
+                                "submission_page_id": page_id,
+                                "text": block.text,
+                                "bbox": bbox,
+                                "confidence": block.confidence,
+                            }
+                        )
+                if decoded_page is not None:
+                    decoded_page.close()
             heartbeat.raise_if_failed()
             if not results:
                 heartbeat.stop()
@@ -134,6 +193,22 @@ class OCRRunner:
                 "results": results,
             }
             heartbeat.stop()
+            log.info(
+                "ocr task completed",
+                extra={
+                    "worker_id": self.config.worker_id,
+                    "task_id": task_id,
+                    "page_count": len(task_input.get("pages", [])),
+                    "region_count": region_count,
+                    "model_version": self.engine.model_version,
+                    "config_hash": self._config_hash(),
+                    "duration_ms": duration_ms,
+                    "download_duration_ms": download_ms,
+                    "decode_duration_ms": decode_ms,
+                    "ocr_duration_ms": ocr_ms,
+                    "result_block_count": len(results),
+                },
+            )
             self.api.complete_task(task_id, payload, tenant_id)
 
     def _process_paper_import(self, runtime_task: dict[str, Any], start: float, tenant_id: str) -> None:
@@ -177,17 +252,38 @@ class OCRRunner:
                 self.api.fail_paper_import(import_id, runtime_task_id, lease_token, str(exc)[:80] or "paper_ocr_failed", False, tenant_id)
                 return
             heartbeat.stop()
+            duration_ms = int((time.monotonic() - start) * 1000)
+            log.info(
+                "paper import OCR task completed",
+                extra={
+                    "worker_id": self.config.worker_id,
+                    "task_id": import_id,
+                    "page_count": len(pages),
+                    "region_count": 0,
+                    "model_version": self.engine.model_version,
+                    "config_hash": self._config_hash(),
+                    "duration_ms": duration_ms,
+                    "download_duration_ms": None,
+                    "decode_duration_ms": None,
+                    "ocr_duration_ms": None,
+                    "result_block_count": len(blocks),
+                },
+            )
             self.api.complete_paper_import_ocr(import_id, {
                 "task_id": runtime_task_id, "lease_token": lease_token,
-                "duration_ms": int((time.monotonic() - start) * 1000), "blocks": blocks,
+                "duration_ms": duration_ms, "blocks": blocks,
             }, tenant_id)
 
     def _config_hash(self) -> str:
         if self.config.config_hash:
             return self.config.config_hash
         raw = (
-            f"{self.config.engine}|{self.config.engine_version}|{self.engine.model_version}|"
-            f"{self.engine.device}|{self.config.preprocess_profile}"
+            f"engine={self.config.engine}|engine_version={self.config.engine_version}|model_version={self.engine.model_version}|"
+            f"device={self.engine.device}|preprocess_profile={self.config.preprocess_profile}|"
+            f"cpu_threads={self.config.cpu_threads}|effective_mkldnn={getattr(self.engine, 'effective_mkldnn', self.config.enable_mkldnn == 'true')}|"
+            f"enable_hpi={self.config.enable_hpi}|use_textline_orientation={self.config.use_textline_orientation}|"
+            f"text_det_limit_type={self.config.text_det_limit_type}|text_det_limit_side_len={self.config.text_det_limit_side_len}|"
+            f"text_recognition_batch_size={self.config.text_recognition_batch_size}|roi_text_det_limit_type=min|roi_text_det_limit_side_len=64"
         ).encode()
         return hashlib.sha256(raw).hexdigest()
 
@@ -286,3 +382,42 @@ def _valid_block(text: str, bbox: list[float], confidence: float) -> bool:
     if not all(math.isfinite(value) for value in bbox):
         return False
     return bbox[0] >= 0 and bbox[1] >= 0 and bbox[2] > 0 and bbox[3] > 0
+
+
+def _decode_region_page(image_bytes: bytes) -> Any:
+    """Decode once per page, sharing the RGB pixels across all answer regions."""
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(image_bytes)) as source:
+            source.load()
+            return source.convert("RGB")
+    except ImportError as exc:
+        raise ValueError("Pillow is required for ROI OCR") from exc
+    except Exception as exc:
+        raise ValueError("page decode failed") from exc
+
+
+def _crop_region(source: Any, bbox: object) -> tuple[bytes, tuple[float, float]]:
+    """Crop one answer_segment and return its actual integer page offset.
+
+    Regions are deliberately validated strictly. A malformed segment fails the task
+    instead of silently changing answer/evidence coordinates.
+    """
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        raise ValueError("bbox must be [x,y,w,h]")
+    values = [float(value) for value in bbox]
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("bbox must be finite")
+    x, y, width, height = values
+    if x < 0 or y < 0 or width <= 0 or height <= 0:
+        raise ValueError("bbox dimensions are invalid")
+    image_width, image_height = source.size
+    if x + width > image_width or y + height > image_height:
+        raise ValueError("bbox exceeds page bounds")
+    # Round outward to retain all pixels covered by fractional segment bounds.
+    left, top = math.floor(x), math.floor(y)
+    right, bottom = math.ceil(x + width), math.ceil(y + height)
+    with source.crop((left, top, right, bottom)) as crop:
+        output = io.BytesIO()
+        crop.save(output, format="PNG")
+        return output.getvalue(), (float(left), float(top))

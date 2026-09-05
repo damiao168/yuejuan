@@ -163,7 +163,7 @@ func TestRegisteredDirectIDRoutesDeclareResourceBoundaryOrExplicitTenantScope(t 
 	tenantScopedPrefixes := []string{
 		"/api/v1/auth/sessions/", "/api/v1/users/", "/api/v1/tenants/",
 		"/api/v1/review/comment-templates/", "/api/v1/model-", "/api/v1/grading-evaluations/",
-		"/api/v1/ai-eligibility/",
+		"/api/v1/ai-eligibility/", "/api/v1/platform/model-api-configs/",
 	}
 	var uncovered []string
 	err := filepath.WalkDir("..", func(path string, entry os.DirEntry, walkErr error) error {

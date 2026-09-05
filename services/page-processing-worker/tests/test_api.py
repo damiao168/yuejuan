@@ -57,3 +57,16 @@ def test_download_rejects_cross_origin_url_before_sending_worker_token() -> None
 
     with pytest.raises(APIError, match="configured API origin"):
         client.download("https://attacker.invalid/collect")
+
+
+def test_download_preserves_forbidden_status_as_stable_error() -> None:
+    forbidden = error.HTTPError("http://api/files/file-1/download", 403, "Forbidden", {}, io.BytesIO())
+    client = Client("http://api", "demo", "worker", "secret", token="worker-token")
+
+    with (
+        patch("page_processing.api.request.urlopen", side_effect=forbidden),
+        pytest.raises(APIError, match="source_download_forbidden") as caught,
+    ):
+        client.download("/files/file-1/download")
+
+    assert caught.value.status_code == 403

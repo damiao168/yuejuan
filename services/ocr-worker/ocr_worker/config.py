@@ -28,6 +28,13 @@ class Settings:
     math_verify_base_url: str = "http://math-verification-worker:8092"
     math_verify_token: str = ""
     formula_model_version: str = "PP-FormulaNet_plus-M"
+    cpu_threads: int = 4
+    enable_mkldnn: str = "auto"
+    enable_hpi: bool = False
+    use_textline_orientation: bool = True
+    text_det_limit_type: str = "min"
+    text_det_limit_side_len: int = 64
+    text_recognition_batch_size: int = 1
 
 
 def load_settings() -> Settings:
@@ -53,6 +60,13 @@ def load_settings() -> Settings:
         math_verify_base_url=os.environ.get("EDUGRADE_MATH_VERIFY_BASE_URL", "http://math-verification-worker:8092"),
         math_verify_token=os.environ.get("EDUGRADE_MATH_VERIFY_TOKEN", ""),
         formula_model_version=os.environ.get("EDUGRADE_FORMULA_MODEL_VERSION", "PP-FormulaNet_plus-M"),
+        cpu_threads=int(os.environ.get("EDUGRADE_OCR_CPU_THREADS", "4")),
+        enable_mkldnn=os.environ.get("EDUGRADE_OCR_ENABLE_MKLDNN", "auto").strip().lower(),
+        enable_hpi=os.environ.get("EDUGRADE_OCR_ENABLE_HPI", "false").lower() in {"1", "true", "yes"},
+        use_textline_orientation=os.environ.get("EDUGRADE_OCR_USE_TEXTLINE_ORIENTATION", "true").lower() in {"1", "true", "yes"},
+        text_det_limit_type=os.environ.get("EDUGRADE_OCR_TEXT_DET_LIMIT_TYPE", "min").strip().lower(),
+        text_det_limit_side_len=int(os.environ.get("EDUGRADE_OCR_TEXT_DET_LIMIT_SIDE_LEN", "64")),
+        text_recognition_batch_size=int(os.environ.get("EDUGRADE_OCR_TEXT_RECOGNITION_BATCH_SIZE", "1")),
     )
     _validate_settings(settings)
     return settings
@@ -81,6 +95,16 @@ def _validate_settings(settings: Settings) -> None:
     # later tasks without a heartbeat while the first model inference runs.
     if settings.batch_size != 1:
         raise ValueError("EDUGRADE_OCR_BATCH_SIZE must be 1 for the sequential OCR worker")
+    if settings.cpu_threads < 1 or settings.cpu_threads > 64:
+        raise ValueError("EDUGRADE_OCR_CPU_THREADS must be between 1 and 64")
+    if settings.enable_mkldnn not in {"auto", "true", "false"}:
+        raise ValueError("EDUGRADE_OCR_ENABLE_MKLDNN must be auto, true, or false")
+    if settings.text_det_limit_type not in {"max", "min"}:
+        raise ValueError("EDUGRADE_OCR_TEXT_DET_LIMIT_TYPE must be max or min")
+    if settings.text_det_limit_side_len < 32 or settings.text_det_limit_side_len > 4096:
+        raise ValueError("EDUGRADE_OCR_TEXT_DET_LIMIT_SIDE_LEN must be between 32 and 4096")
+    if settings.text_recognition_batch_size < 1 or settings.text_recognition_batch_size > 64:
+        raise ValueError("EDUGRADE_OCR_TEXT_RECOGNITION_BATCH_SIZE must be between 1 and 64")
     if settings.lease_seconds < 30 or settings.lease_seconds > 3600:
         raise ValueError("EDUGRADE_OCR_LEASE_SECONDS must be between 30 and 3600")
     if not math.isfinite(settings.heartbeat_interval) or settings.heartbeat_interval <= 0:

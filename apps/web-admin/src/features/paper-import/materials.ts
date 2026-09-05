@@ -82,6 +82,27 @@ export function paperImportSummary(job: PaperImportJob) {
   };
 }
 
+export function hasNoExamContentDetected(job: PaperImportJob) {
+  return (job.structured_issues ?? []).some((issue) => issue.code === "NO_EXAM_CONTENT_DETECTED");
+}
+
+export function isPaperImportCancelled(job: PaperImportJob) {
+  return job.status === "cancelled" || job.error_code === "paper_import_cancelled";
+}
+
+export function paperImportProgress(job: PaperImportJob) {
+  if (job.status === "applied") return { percent: 100, label: "导入完成", detail: "题目与评分资料已写入考试" };
+	if (isPaperImportCancelled(job)) return { percent: 100, label: "已停止识别", detail: "识别任务已手动停止，可重新识别" };
+  if (job.status === "review_required" && hasNoExamContentDetected(job)) return { percent: 100, label: "未识别到考试内容", detail: "请检查是否上传了无关图片或错误文件" };
+  if (job.status === "review_required") return { percent: 100, label: "等待人工核对", detail: "自动识别完成，请核对识别结果" };
+  if (job.status === "failed") return { percent: 100, label: "识别失败", detail: job.issues[0] ?? "请检查资料后重试" };
+  if (!job.sources.length) return { percent: 15, label: "准备资料", detail: "正在登记上传文件" };
+  if (job.sources.some((source) => source.processing_status === "failed")) return { percent: 100, label: "文字识别失败", detail: "请检查源文件后重试" };
+  if (job.sources.every((source) => source.processing_status === "processed")) return { percent: 85, label: "AI 内容解析", detail: "文字识别已完成，正在提取题目、答案与解析" };
+  if (job.sources.some((source) => source.processing_status === "processing")) return { percent: 60, label: "文字识别", detail: "正在识别扫描页面中的文字" };
+  return { percent: 30, label: "页面预处理", detail: "正在读取图片、校正页面并准备文字识别" };
+}
+
 export function hasBlockingImportIssues(job: PaperImportJob) {
   return job.questions.length === 0 || (job.structured_issues ?? []).some((issue) => issue.severity === "error");
 }

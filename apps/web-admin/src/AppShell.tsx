@@ -45,6 +45,7 @@ const StudentManagementPage = lazy(() => import("./pages/StudentManagementPage")
 const ClassManagementPage = lazy(() => import("./features/members/classes/ClassManagementPage").then((module) => ({ default: module.ClassManagementPage })));
 const TeacherManagementPage = lazy(() => import("./features/members/teachers/TeacherManagementPage").then((module) => ({ default: module.TeacherManagementPage })));
 const PlatformSchoolsPage = lazy(() => import("./pages/PlatformSchoolsPage").then((module) => ({ default: module.PlatformSchoolsPage })));
+const PlatformModelConfigPage = lazy(() => import("./pages/PlatformModelConfigPage").then((module) => ({ default: module.PlatformModelConfigPage })));
 const ExamWorkspacePage = lazy(() => import("./pages/ExamWorkspacePage").then((module) => ({ default: module.ExamWorkspacePage })));
 const AnswerSheetTemplatePage = lazy(() => import("./pages/AnswerSheetTemplatePage").then((module) => ({ default: module.AnswerSheetTemplatePage })));
 const CaptureBatchPage = lazy(() => import("./pages/CaptureBatchPage").then((module) => ({ default: module.CaptureBatchPage })));
@@ -259,6 +260,8 @@ export function AppShell() {
       <TeacherManagementPage />
     ) : route.path === "/platform/schools" ? (
       <PlatformSchoolsPage />
+    ) : route.path === "/platform/model-config" ? (
+      <PlatformModelConfigPage />
     ) : route.path === "/papers" ? (
       <PaperRubricPage canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} canManageAssessment={experience === "admin" && hasEveryPermission(user, ["exam:manage"])} />
     ) : route.path === "/capture" ? (

@@ -36,6 +36,9 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.Service.Port == 0 {
 		t.Fatal("expected non-zero default port")
 	}
+	if len(cfg.ModelSecrets.MasterKey) < 32 {
+		t.Fatal("development must have an encryption key for managed model credentials")
+	}
 }
 
 func TestLoadReadsEnvironment(t *testing.T) {
@@ -258,6 +261,7 @@ func setSecureProductionEnvironment(t *testing.T) {
 	t.Setenv("EDUGRADE_POSTGRES_DSN", "postgres://edugrade:strong-password@db.internal:5432/edugrade?sslmode=require")
 	t.Setenv("EDUGRADE_MINIO_ACCESS_KEY", "production-access")
 	t.Setenv("EDUGRADE_MINIO_SECRET_KEY", "production-secret")
+	t.Setenv("EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY", "production-model-credential-key-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_CORS_ALLOWED_ORIGINS", "https://grading.example.edu")
 	t.Setenv("EDUGRADE_BARCODE_ACTIVE_KEY_ID", "production-v1")
 	t.Setenv("EDUGRADE_BARCODE_HMAC_KEYS", "production-v1:0123456789abcdef0123456789abcdef")

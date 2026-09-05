@@ -17,6 +17,7 @@ test("local runtime manifest pins a CPU-only 4B grading baseline", () => {
   assert.match(manifest.runtime.expected_sha256, /^[a-f0-9]{64}$/);
   assert.equal(manifest.execution.gpu_layers, 0);
   assert.equal(manifest.execution.parallel_requests, 1);
+  assert.equal(manifest.execution.context_tokens, 16384);
   assert.equal(manifest.execution.temperature, 0);
 });
 

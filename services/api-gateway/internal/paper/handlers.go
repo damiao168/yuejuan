@@ -1,6 +1,7 @@
 package paper
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,6 +20,13 @@ type Handler struct {
 
 func (h *Handler) WithDocumentImport(service *DocumentImportService) *Handler {
 	h.documentImport = service
+	return h
+}
+
+func (h *Handler) WithDocumentModelResolver(resolve func(context.Context, string) (*DocumentModelConfig, error)) *Handler {
+	if h.documentImport != nil {
+		h.documentImport.WithModelResolver(resolve)
+	}
 	return h
 }
 
@@ -137,6 +145,20 @@ func (h *Handler) ApplyPaperImport(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, 200, map[string]any{"import": out})
 }
 
+func (h *Handler) CancelPaperImport(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	out, err := h.store.CancelPaperImport(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	if h.documentImport != nil {
+		h.documentImport.Cancel(user.TenantID, out.ID)
+	}
+	h.auditAction(r, "paper.import_cancelled", "paper_import_job", out.ID, "manually stop paper OCR and AI parsing")
+	httpx.JSON(w, http.StatusOK, map[string]any{"import": out})
+}
+
 func (h *Handler) CompletePaperImportDecode(w http.ResponseWriter, r *http.Request) {
 	runtime, ok := h.store.(PaperImportRuntime)
 	if !ok {
@@ -170,7 +192,12 @@ func (h *Handler) CompletePaperImportOCR(w http.ResponseWriter, r *http.Request)
 		writeStoreError(w, r, err)
 		return
 	}
-	out, err := h.documentImport.CompleteOCR(r.Context(), user.TenantID, r.PathValue("id"), input.Blocks)
+	// Completing the Worker Runtime task is intentionally committed before the
+	// slower model parse. The OCR worker's HTTP client may time out or disconnect
+	// while a large local-model prompt is still being evaluated; do not let that
+	// client cancellation strand the durable import in "processing".
+	parseContext := context.WithoutCancel(r.Context())
+	out, err := h.documentImport.CompleteOCR(parseContext, user.TenantID, r.PathValue("id"), input.Blocks)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return

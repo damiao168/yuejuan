@@ -144,6 +144,14 @@ try {
 
 OCR 首次构建会下载 PaddleOCR/PaddlePaddle 依赖和模型，耗时及磁盘占用显著增加。没有配置 worker 凭据时不得启用 profile。
 
+Ryzen 7 5800H / 16 GB 本地压测可执行 `scripts/start-local-ocr-fast.ps1`（或 `.sh`）。
+该脚本保留 PostgreSQL、Redis、MinIO、API Gateway，只请求启动一个 `ocr-worker`，不主动启动
+`math-recognition-worker`；已运行的其他 worker 不会被脚本停止。压测时需记录其他负载。
+本机实际 CPU 为 Ryzen 5 5500U，5800H 仍需在目标机复测。当前候选配置为 `EDUGRADE_OCR_CPU_THREADS=4`、
+`EDUGRADE_OCR_WORKER_CPU_LIMIT=4.0`、`EDUGRADE_OCR_BATCH_SIZE=1`；先运行
+`benchmark_local.py --run-id local-baseline-v1` 再比较优化 profile。HPI 依赖通过
+`EDUGRADE_OCR_INSTALL_PADDLEOCR_HPI` 独立 build arg 控制，默认关闭。
+
 ## 9. 镜像仓库与离线部署
 
 基础镜像可通过以下变量替换为企业镜像仓库：

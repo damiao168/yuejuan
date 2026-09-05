@@ -13,11 +13,16 @@ import (
 )
 
 type PostgresStore struct {
-	db *sql.DB
+	db               *sql.DB
+	credentialCipher *CredentialCipher
 }
 
-func NewPostgresStore(db *sql.DB) *PostgresStore {
-	return &PostgresStore{db: db}
+func NewPostgresStore(db *sql.DB, credentialCiphers ...*CredentialCipher) *PostgresStore {
+	var credentialCipher *CredentialCipher
+	if len(credentialCiphers) > 0 {
+		credentialCipher = credentialCiphers[0]
+	}
+	return &PostgresStore{db: db, credentialCipher: credentialCipher}
 }
 
 func (s *PostgresStore) ValidateProductionReadiness(ctx context.Context, secrets SecretReferenceResolver) error {

@@ -25,6 +25,18 @@ import (
 const tenantID = "00000000-0000-0000-0000-000000000002"
 const userID = "00000000-0000-0000-0000-000000000401"
 
+type regionSubmissionStore struct {
+	*submission.MemoryStore
+	regions []submission.AnswerRegion
+}
+
+func (s *regionSubmissionStore) ListAnswerRegions(_ context.Context, tenant, submissionID string) ([]submission.AnswerRegion, error) {
+	if tenant != tenantID {
+		return nil, submission.ErrNotFound
+	}
+	return append([]submission.AnswerRegion{}, s.regions...), nil
+}
+
 func TestCreateStartCompleteOCRTaskWithLowConfidence(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"ocr:manage"})
 	submissionStore := submission.NewMemoryStore()
@@ -190,6 +202,57 @@ func TestOCRTaskInputOmitsStudentIdentityAndIncludesPages(t *testing.T) {
 	}
 	if !strings.Contains(body, page.ID) || !strings.Contains(body, page.FileAssetID) {
 		t.Fatalf("input should include submission page and file asset ids, got %s", body)
+	}
+}
+
+func TestOCRTaskInputIncludesPrivacySafeAnswerRegions(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"ocr:manage"})
+	submissionStore := &regionSubmissionStore{MemoryStore: submission.NewMemoryStore()}
+	page := readySubmission(t, submissionStore.MemoryStore)
+	submissionStore.regions = []submission.AnswerRegion{{
+		ID: "segment-1", QuestionID: "question-1", QuestionNo: "Q1",
+		QuestionType: "text", BBox: []float64{10, 20, 100, 40}, PageID: page.ID,
+	}}
+	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue())
+	token := login(t, router)
+	task := createTask(t, router, token, page.SubmissionID)
+
+	req := authedRequest(http.MethodGet, "/api/v1/ocr-tasks/"+task.ID+"/input", nil, token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, want := range []string{`"answer_segment_id":"segment-1"`, `"question_no":"Q1"`, `"bbox":[10,20,100,40]`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("region input missing %s: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "candidate_no") || strings.Contains(body, "student_id") {
+		t.Fatalf("region input exposed identity: %s", body)
+	}
+}
+
+func TestOCRTaskInputFallsBackForMixedCoordinateSpaces(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"ocr:manage"})
+	submissionStore := &regionSubmissionStore{MemoryStore: submission.NewMemoryStore()}
+	page := readySubmission(t, submissionStore.MemoryStore)
+	submissionStore.regions = []submission.AnswerRegion{
+		{ID: "legacy", PageID: page.ID, BBox: []float64{10, 20, 30, 40}},
+		{ID: "registered", PageID: page.ID, BBox: []float64{30, 40, 50, 60}, RequiresFullPage: true},
+		{ID: "foreign-page", PageID: "another-page", BBox: []float64{1, 2, 3, 4}},
+	}
+	router := testRouter(authStore, submissionStore, ocrpkg.NewMemoryStore(), ocrpkg.NewMemoryQueue())
+	token := login(t, router)
+	task := createTask(t, router, token, page.SubmissionID)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/ocr-tasks/"+task.ID+"/input", nil, token))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("input expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"regions"`) || strings.Contains(rec.Body.String(), "foreign-page") {
+		t.Fatalf("unsafe partial ROI input: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"download_url":"/api/v1/files/file-1/download"`) {
+		t.Fatalf("full-page fallback changed image coordinates: %s", rec.Body.String())
 	}
 }
 

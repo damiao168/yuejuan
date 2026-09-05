@@ -14,6 +14,7 @@ type Config struct {
 	Service       ServiceConfig
 	Auth          AuthConfig
 	Security      SecurityConfig
+	ModelSecrets  ModelSecretConfig
 	Postgres      PostgresConfig
 	Redis         RedisConfig
 	MinIO         MinIOConfig
@@ -69,6 +70,12 @@ type SecurityConfig struct {
 	CORSAllowedHeaders  []string
 	TrustedProxyCIDRs   []string
 }
+
+type ModelSecretConfig struct {
+	MasterKey string
+}
+
+const localModelCredentialMasterKey = "edugrade-local-model-credential-key-change-before-production"
 
 type RedisConfig struct {
 	Addr     string
@@ -134,13 +141,14 @@ func Load(envFile string) (Config, error) {
 
 	environment := getEnv("EDUGRADE_ENV", "development")
 	secretDefaults := map[string]string{
-		"EDUGRADE_POSTGRES_DSN":      "postgres://edugrade:edugrade_dev@127.0.0.1:5432/edugrade?sslmode=disable",
-		"EDUGRADE_REDIS_PASSWORD":    "",
-		"EDUGRADE_MINIO_ACCESS_KEY":  "edugrade",
-		"EDUGRADE_MINIO_SECRET_KEY":  "edugrade_dev_secret",
-		"EDUGRADE_QDRANT_API_KEY":    "",
-		"EDUGRADE_AI_SERVICE_TOKEN":  "",
-		"EDUGRADE_BARCODE_HMAC_KEYS": "",
+		"EDUGRADE_POSTGRES_DSN":                "postgres://edugrade:edugrade_dev@127.0.0.1:5432/edugrade?sslmode=disable",
+		"EDUGRADE_REDIS_PASSWORD":              "",
+		"EDUGRADE_MINIO_ACCESS_KEY":            "edugrade",
+		"EDUGRADE_MINIO_SECRET_KEY":            "edugrade_dev_secret",
+		"EDUGRADE_QDRANT_API_KEY":              "",
+		"EDUGRADE_AI_SERVICE_TOKEN":            "",
+		"EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY": localModelCredentialMasterKey,
+		"EDUGRADE_BARCODE_HMAC_KEYS":           "",
 	}
 	secretValues := make(map[string]string, len(secretDefaults))
 	for key, fallback := range secretDefaults {
@@ -186,6 +194,9 @@ func Load(envFile string) (Config, error) {
 			CORSAllowedMethods:  splitCSV(getEnv("EDUGRADE_CORS_ALLOWED_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")),
 			CORSAllowedHeaders:  splitCSV(getEnv("EDUGRADE_CORS_ALLOWED_HEADERS", "Authorization,Content-Type,X-Request-ID,X-Trace-ID,Idempotency-Key,X-EduGrade-CSRF")),
 			TrustedProxyCIDRs:   splitCSV(getEnv("EDUGRADE_TRUSTED_PROXY_CIDRS", "")),
+		},
+		ModelSecrets: ModelSecretConfig{
+			MasterKey: secretValues["EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY"],
 		},
 		Postgres: PostgresConfig{
 			DSN:              secretValues["EDUGRADE_POSTGRES_DSN"],
@@ -331,6 +342,9 @@ func validateProductionConfig(cfg Config) error {
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("unsafe production configuration: %s", strings.Join(problems, "; "))
+	}
+	if len(cfg.ModelSecrets.MasterKey) < 32 || cfg.ModelSecrets.MasterKey == localModelCredentialMasterKey {
+		return fmt.Errorf("unsafe production configuration: EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY must be a unique secret with at least 32 characters")
 	}
 	return nil
 }

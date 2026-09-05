@@ -159,6 +159,16 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if duplicate && (!hasLifecycle || existing.Lifecycle == LifecycleActive) {
+		// Exam-material imports are retryable workflows. Re-uploading identical
+		// material should reuse the active asset so a failed import can attach a
+		// fresh source and run again without duplicating object storage.
+		if ownerType == "import" {
+			httpx.JSON(w, http.StatusOK, map[string]any{
+				"file":      existing.Response(),
+				"duplicate": true,
+			})
+			return
+		}
 		httpx.JSON(w, http.StatusConflict, map[string]any{
 			"request_id": logger.RequestID(r.Context()),
 			"error": map[string]string{

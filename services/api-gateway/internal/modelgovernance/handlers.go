@@ -15,11 +15,12 @@ import (
 )
 
 type Handler struct {
-	store    Store
-	audit    auth.Store
-	secrets  SecretReferenceResolver
-	baseline LocalBaseline
-	prompts  RuntimePromptSource
+	store            Store
+	audit            auth.Store
+	secrets          SecretReferenceResolver
+	baseline         LocalBaseline
+	prompts          RuntimePromptSource
+	managedAPIProber ManagedAPIProber
 }
 
 func NewHandler(store Store, audit auth.Store, secrets SecretReferenceResolver, baseline LocalBaseline) *Handler {

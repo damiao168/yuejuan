@@ -97,6 +97,35 @@ func TestDuplicateUploadRejected(t *testing.T) {
 	}
 }
 
+func TestDuplicateImportUploadReusesActiveAsset(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"file:manage"})
+	router := testRouter(authStore, files.NewMemoryStore(), files.NewMemoryObjectStorage())
+	token := login(t, router)
+	content := []byte("\x89PNG\r\n\x1a\nsynthetic")
+	fields := map[string]string{"owner_type": "import", "owner_id": "00000000-0000-0000-0000-000000000101", "exam_id": "00000000-0000-0000-0000-000000000101"}
+
+	first := uploadFile(t, router, token, "paper.png", "image/png", content, fields)
+	body, contentType := multipartUploadBody(t, "paper.png", "image/png", content, fields)
+	req := authedRequest(http.MethodPost, "/api/v1/files", body, token)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("duplicate import expected reusable 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		File      files.FileAsset `json:"file"`
+		Duplicate bool            `json:"duplicate"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Duplicate || response.File.ID != first.ID {
+		t.Fatalf("expected active asset %s to be reused: %#v", first.ID, response)
+	}
+}
+
 func TestUploadFailureRemainsDurablyRetryable(t *testing.T) {
 	store := files.NewMemoryStore()
 	objects := &faultStorage{MemoryObjectStorage: files.NewMemoryObjectStorage(), failPut: true}

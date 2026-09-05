@@ -24,6 +24,45 @@ func issueCodes(job PaperImportJob) map[string]bool {
 	return out
 }
 
+func TestAddPaperImportSourcesClearsPreviousFailure(t *testing.T) {
+	store, job := candidateImport(t)
+	if _, err := store.FailPaperImport(context.Background(), "tenant", job.ID, "ai_parse_failed", []string{"stale failure"}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := store.AddPaperImportSources(context.Background(), "tenant", job.ID, "user", AddPaperImportSourcesInput{Sources: []CreatePaperImportSourceInput{{FileAssetID: "asset-2", DocumentIndex: 1, RoleHint: "auto"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "processing" || updated.ErrorCode != "" || len(updated.Issues) != 0 {
+		t.Fatalf("new source must clear stale failure while processing: %#v", updated)
+	}
+}
+
+func TestRestartClearsPreviousStructuredIssues(t *testing.T) {
+	for _, action := range []string{"add", "replace"} {
+		t.Run(action, func(t *testing.T) {
+			store, job := candidateImport(t)
+			_, err := store.CompletePaperImportCandidates(context.Background(), "tenant", job.ID, nil, nil, nil, nil, nil, []PaperImportIssue{{Code: "NO_EXAM_CONTENT_DETECTED", Severity: "error", Message: "old result"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var restarted PaperImportJob
+			if action == "add" {
+				restarted, err = store.AddPaperImportSources(context.Background(), "tenant", job.ID, "user", AddPaperImportSourcesInput{Sources: []CreatePaperImportSourceInput{{FileAssetID: "new", DocumentIndex: 1, RoleHint: "auto"}}})
+			} else {
+				restarted, err = store.ReplacePaperImportSources(context.Background(), "tenant", job.ID, "user", ReplacePaperImportSourcesInput{Sources: []ReplacePaperImportSourceInput{{ID: job.Sources[0].ID, DocumentIndex: 0, RoleHint: "auto"}}})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if restarted.Status != "processing" || len(restarted.StructuredIssues) > 0 || len(restarted.Issues) > 0 {
+				t.Fatal("restart retained stale recognition warnings")
+			}
+		})
+	}
+}
+
 func confirmRequiredDraftFields(draft *PaperImportDraftQuestion) {
 	draft.HumanConfirmedFields = requiredHumanConfirmedFields(*draft)
 }
