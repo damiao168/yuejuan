@@ -4,6 +4,8 @@ import math
 import os
 from dataclasses import dataclass
 
+from edugrade_worker_runtime import validate_lease_timing
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -50,12 +52,7 @@ def validate_settings(settings: Settings) -> None:
             raise ValueError(f"{name} must not be empty")
     if not math.isfinite(settings.poll_interval) or settings.poll_interval <= 0:
         raise ValueError("poll_interval must be greater than 0")
-    if settings.lease_seconds < 30 or settings.lease_seconds > 3600:
-        raise ValueError("lease_seconds must be between 30 and 3600")
-    if not math.isfinite(settings.heartbeat_interval) or settings.heartbeat_interval <= 0 or not math.isfinite(settings.heartbeat_timeout) or settings.heartbeat_timeout <= 0:
-        raise ValueError("heartbeat values must be greater than 0")
-    if settings.heartbeat_interval + settings.heartbeat_timeout >= settings.lease_seconds:
-        raise ValueError("heartbeat interval plus timeout must be shorter than the lease")
+    validate_lease_timing(settings.lease_seconds, settings.heartbeat_interval, settings.heartbeat_timeout)
     if not math.isfinite(settings.execute_timeout) or settings.execute_timeout <= 0:
         raise ValueError("execute_timeout must be greater than 0")
     if not settings.health_file.strip():

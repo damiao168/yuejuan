@@ -5,6 +5,8 @@ import json
 import time
 from typing import Protocol
 
+from edugrade_worker_runtime import LeaseHeartbeat
+
 from image_quality.config import EngineConfig
 from image_quality.engine import ImageQualityError, analyze_and_normalize
 
@@ -14,6 +16,9 @@ class ImageQualityClient(Protocol):
         ...
 
     def download(self, url: str) -> bytes:
+        ...
+
+    def heartbeat(self, job: dict, worker_instance_id: str, lease_seconds: int, timeout: float) -> None:
         ...
 
     def request_normalized_asset(self, run_id: str, payload: dict) -> dict:
@@ -42,7 +47,16 @@ class ImageQualityRunner:
             if callable(activate_job):
                 activate_job(job)
             try:
-                self._process_job(job)
+                with LeaseHeartbeat(
+                    send=lambda active_job=job: self.client.heartbeat(
+                        active_job, self.config.worker_instance_id, self.config.lease_seconds, self.config.heartbeat_timeout
+                    ),
+                    interval=self.config.heartbeat_interval,
+                    lease_seconds=self.config.lease_seconds,
+                    request_timeout=self.config.heartbeat_timeout,
+                    thread_name=f"image-quality-heartbeat-{self.config.worker_instance_id}",
+                ) as heartbeat:
+                    self._process_job(job, heartbeat)
             except Exception as exc:  # noqa: BLE001 - task boundary must report arbitrary decoder/client failures.
                 self._fail_job(job, exc)
             processed += 1
@@ -54,10 +68,12 @@ class ImageQualityRunner:
             if processed == 0:
                 time.sleep(self.config.poll_interval)
 
-    def _process_job(self, job: dict) -> None:
+    def _process_job(self, job: dict, heartbeat: LeaseHeartbeat) -> None:
         started = time.perf_counter()
         image_bytes = self.client.download(str(job["download_url"]))
+        heartbeat.raise_if_failed()
         result = analyze_and_normalize(image_bytes)
+        heartbeat.raise_if_failed()
         png_hash = hashlib.sha256(result.normalized_png).hexdigest()
         slot = self.client.request_normalized_asset(
             str(job["run_id"]),
@@ -71,6 +87,7 @@ class ImageQualityRunner:
             },
         )
         normalized_file_asset_id = self.client.upload_normalized(slot, job, result.normalized_png, png_hash)
+        heartbeat.raise_if_failed()
         payload = {
             "lease_token": job["lease_token"],
             "attempt_no": job["attempt_no"],
@@ -83,6 +100,7 @@ class ImageQualityRunner:
             "quality_issues": result.quality_issues,
             "normalization_transform": result.normalization_transform,
         }
+        heartbeat.stop(raise_on_error=False)
         self.client.submit_result(str(job["run_id"]), payload)
 
     def _fail_job(self, job: dict, exc: Exception) -> None:

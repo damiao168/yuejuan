@@ -97,26 +97,37 @@ func stableContentHash(value any) string {
 }
 
 func buildReadiness(total float64, classCount int, studentCount int, papers []Paper, questions []Question, templates []AnswerSheetTemplate) ReadinessResult {
+	classIDs := make([]string, classCount)
+	for index := range classIDs {
+		classIDs[index] = fmt.Sprintf("counted-class-%d", index)
+	}
+	candidateIDs := make([]string, studentCount)
+	for index := range candidateIDs {
+		candidateIDs[index] = fmt.Sprintf("counted-candidate-%d", index)
+	}
+	return buildReadinessForScope(total, classIDs, candidateIDs, papers, questions, templates)
+}
+
+func buildReadinessForScope(total float64, classIDs, candidateIDs []string, papers []Paper, questions []Question, templates []AnswerSheetTemplate) ReadinessResult {
 	checks := []ReadinessCheck{}
 	add := func(code string, label string, passed bool, message string, section string) {
 		checks = append(checks, ReadinessCheck{Code: code, Label: label, Passed: passed, Severity: "blocker", Message: message, Section: section})
 	}
+	classCount, studentCount := len(classIDs), len(candidateIDs)
 	add("student_scope", "学生范围", classCount > 0 && studentCount > 0, fmt.Sprintf("已关联 %d 个班级、%d 名在读学生", classCount, studentCount), "students")
 	add("paper_file", "试卷文件", len(papers) > 0, fmt.Sprintf("已登记 %d 个试卷版本", len(papers)), "paper")
 	add("questions", "题目结构", len(questions) > 0, fmt.Sprintf("已配置 %d 道题", len(questions)), "questions")
 
-	canonicalQuestions := append([]Question(nil), questions...)
 	scoreTotal := 0.0
-	answersOK := len(canonicalQuestions) > 0
-	rubricsOK := len(canonicalQuestions) > 0
+	answersOK := len(questions) > 0
+	rubricsOK := len(questions) > 0
 	requiredAnswers, configuredAnswers := 0, 0
 	requiredRubrics, configuredRubrics, lockedRubrics := 0, 0, 0
 	missingAnswers, missingRubrics, unlockedRubrics, mismatchRubrics := []string{}, []string{}, []string{}, []string{}
-	for index := range canonicalQuestions {
-		question := &canonicalQuestions[index]
+	for index := range questions {
+		question := &questions[index]
 		scoreTotal += question.Score
 		archetype := readinessAssessmentArchetype(*question)
-		question.AssessmentArchetype = archetype
 		if questionRequiresStandardAnswerForArchetype(archetype) {
 			requiredAnswers++
 			if question.AnswerKey == nil || emptyAnswer(question.AnswerKey.StandardAnswer) {
@@ -193,14 +204,7 @@ func buildReadiness(total float64, classCount int, studentCount int, papers []Pa
 			ready = false
 		}
 	}
-	configuration := struct {
-		Total        float64
-		ClassCount   int
-		StudentCount int
-		Papers       []Paper
-		Questions    []Question
-		Templates    []AnswerSheetTemplate
-	}{total, classCount, studentCount, papers, canonicalQuestions, templates}
+	configuration := newReadinessConfigurationSnapshot(total, classIDs, candidateIDs, papers, questions, locked)
 	return ReadinessResult{Ready: ready, ConfigurationHash: stableContentHash(configuration), Checks: checks}
 }
 

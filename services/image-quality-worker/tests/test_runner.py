@@ -15,6 +15,7 @@ def test_runner_claims_downloads_processes_uploads_and_submits() -> None:
     processed = runner.run_once()
 
     assert processed == 1
+    assert client.heartbeats >= 1
     assert client.upload_requested
     assert client.result_submitted is not None
     assert client.result_submitted["quality_status"] == "passed"
@@ -45,6 +46,7 @@ class FakeClient:
         self.uploaded_dimensions: tuple[int, int] | None = None
         self.result_submitted: dict | None = None
         self.failure_submitted: dict | None = None
+        self.heartbeats = 0
 
     def claim_jobs(self, worker_instance_id: str, limit: int, lease_seconds: int) -> list[dict]:
         assert worker_instance_id == "worker-a"
@@ -73,6 +75,13 @@ class FakeClient:
     def download(self, url: str) -> bytes:
         assert url == "/api/v1/files/file-original-1/download"
         return self.image_bytes
+
+    def heartbeat(self, job: dict, worker_instance_id: str, lease_seconds: int, timeout: float) -> None:
+        assert job["runtime_task_id"] == "runtime-task-1"
+        assert worker_instance_id == "worker-a"
+        assert lease_seconds == 300
+        assert timeout == 3
+        self.heartbeats += 1
 
     def request_normalized_asset(self, run_id: str, payload: dict) -> dict:
         assert run_id == "quality-run-1"

@@ -5,6 +5,8 @@ import os
 import socket
 from dataclasses import dataclass
 
+from edugrade_worker_runtime import validate_lease_timing
+
 
 @dataclass(frozen=True)
 class Config:
@@ -35,8 +37,7 @@ class Config:
         # it silently clamps out-of-range leases to 300s, so validating the
         # heartbeat cadence against an unclamped value would compare against a
         # lease the server never grants.
-        if self.lease_seconds < 30 or self.lease_seconds > 3600:
-            raise ValueError("lease_seconds must be between 30 and 3600")
+        validate_lease_timing(self.lease_seconds, self.heartbeat_interval, self.heartbeat_timeout)
         if not math.isfinite(self.poll_interval) or self.poll_interval <= 0:
             raise ValueError("poll_interval must be greater than zero")
         for name, value in (
@@ -46,15 +47,6 @@ class Config:
         ):
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
-        if (
-            not math.isfinite(self.heartbeat_interval)
-            or not math.isfinite(self.heartbeat_timeout)
-            or self.heartbeat_interval <= 0
-            or self.heartbeat_timeout <= 0
-        ):
-            raise ValueError("heartbeat interval and timeout must be greater than zero")
-        if self.heartbeat_interval + self.heartbeat_timeout >= self.lease_seconds:
-            raise ValueError("heartbeat interval plus timeout must be shorter than lease_seconds")
 
 
 def load_config() -> Config:

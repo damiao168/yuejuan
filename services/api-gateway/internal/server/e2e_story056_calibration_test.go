@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -237,6 +239,80 @@ func TestStory056TemplateCloneIsRejectedAfterReadinessConfirmationE2E(t *testing
 	errorBody, ok := response["error"].(map[string]any)
 	if !ok || e2eString(t, errorBody, "code") != "exam_frozen" {
 		t.Fatalf("readiness-confirmed clone must fail with exam_frozen: %#v", response)
+	}
+}
+
+func TestReadinessConfirmationSerializesConcurrentConfigurationWriteE2E(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("EDUGRADE_E2E_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("EDUGRADE_E2E_DATABASE_URL is not set; skipping transactional readiness PostgreSQL test")
+	}
+
+	db := e2eOpenPostgresTestDB(t, dsn)
+	e2eApplyPostgresMigrations(t, db)
+	e2eActivatePostgresDemoUsers(t, db, []string{"tenant_admin"})
+	router := e2ePostgresRouter(db)
+	suffix := time.Now().UTC().Format("20060102150405.000000000")
+	adminToken := e2eLoginWithTenant(t, router, "demo", "tenant_admin", "ChangeMe123!")
+	fixture := e2eCreateStory056MutableTemplateFixture(t, db, router, adminToken, suffix, nil)
+	if _, err := paper.NewPostgresStore(db).Readiness(context.Background(), fixture.TenantID, fixture.ExamID); err != nil {
+		t.Fatalf("calculate baseline readiness directly: %v", err)
+	}
+	before := e2eGetJSON(t, router, "/api/v1/exams/"+fixture.ExamID+"/readiness", adminToken, http.StatusOK)["readiness"].(map[string]any)
+	beforeHash := e2eString(t, before, "configuration_hash")
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin concurrent configuration write: %v", err)
+	}
+	defer tx.Rollback()
+	var lockedStatus string
+	if err := tx.QueryRow(`SELECT status FROM exam WHERE tenant_id=$1::uuid AND id=$2::uuid FOR UPDATE`, fixture.TenantID, fixture.ExamID).Scan(&lockedStatus); err != nil {
+		t.Fatalf("lock exam configuration: %v", err)
+	}
+	if _, err := tx.Exec(`UPDATE question SET stem=stem || ' committed-before-confirmation', updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`, fixture.TenantID, fixture.QuestionIDs["single_choice"]); err != nil {
+		t.Fatalf("update readiness input: %v", err)
+	}
+
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/exams/"+fixture.ExamID+"/readiness/confirm", strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		response <- rec
+	}()
+
+	select {
+	case rec := <-response:
+		t.Fatalf("readiness confirmation crossed an uncommitted configuration boundary: %d %s", rec.Code, rec.Body.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit concurrent configuration write: %v", err)
+	}
+
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-response:
+	case <-time.After(5 * time.Second):
+		t.Fatal("readiness confirmation did not resume after configuration commit")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("confirm readiness after serialized write: %d %s", rec.Code, rec.Body.String())
+	}
+	var confirmed map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &confirmed); err != nil {
+		t.Fatalf("decode readiness confirmation: %v", err)
+	}
+	confirmedHash := e2eString(t, confirmed["readiness"].(map[string]any), "configuration_hash")
+	if confirmedHash == beforeHash {
+		t.Fatal("confirmation reused the pre-write readiness snapshot")
+	}
+	after := e2eGetJSON(t, router, "/api/v1/exams/"+fixture.ExamID+"/readiness", adminToken, http.StatusOK)["readiness"].(map[string]any)
+	if afterHash := e2eString(t, after, "configuration_hash"); afterHash != confirmedHash {
+		t.Fatalf("confirmed hash %s does not match committed configuration %s", confirmedHash, afterHash)
 	}
 }
 

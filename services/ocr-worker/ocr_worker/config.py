@@ -4,6 +4,8 @@ import math
 import os
 from dataclasses import dataclass
 
+from edugrade_worker_runtime import validate_lease_timing
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -105,16 +107,7 @@ def _validate_settings(settings: Settings) -> None:
         raise ValueError("EDUGRADE_OCR_TEXT_DET_LIMIT_SIDE_LEN must be between 32 and 4096")
     if settings.text_recognition_batch_size < 1 or settings.text_recognition_batch_size > 64:
         raise ValueError("EDUGRADE_OCR_TEXT_RECOGNITION_BATCH_SIZE must be between 1 and 64")
-    if settings.lease_seconds < 30 or settings.lease_seconds > 3600:
-        raise ValueError("EDUGRADE_OCR_LEASE_SECONDS must be between 30 and 3600")
-    if not math.isfinite(settings.heartbeat_interval) or settings.heartbeat_interval <= 0:
-        raise ValueError("EDUGRADE_OCR_HEARTBEAT_INTERVAL must be greater than 0")
-    if not math.isfinite(settings.heartbeat_timeout) or settings.heartbeat_timeout <= 0:
-        raise ValueError("EDUGRADE_OCR_HEARTBEAT_TIMEOUT must be greater than 0")
-    if settings.heartbeat_interval >= settings.lease_seconds:
-        raise ValueError("EDUGRADE_OCR_HEARTBEAT_INTERVAL must be shorter than the lease")
-    if settings.heartbeat_interval + settings.heartbeat_timeout >= settings.lease_seconds:
-        raise ValueError("OCR heartbeat interval plus timeout must be shorter than the lease")
+    validate_lease_timing(settings.lease_seconds, settings.heartbeat_interval, settings.heartbeat_timeout)
     if not settings.ocr_runtime_enabled and not settings.math_runtime_enabled:
         raise ValueError("at least one OCR worker runtime must be enabled")
     if settings.math_runtime_enabled:

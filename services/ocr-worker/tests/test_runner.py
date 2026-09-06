@@ -364,7 +364,7 @@ class RunnerTests(unittest.TestCase):
                 )
                 if len(self.heartbeats) >= 2:
                     self.periodic_attempted.set()
-                    raise APIError("heartbeat unavailable")
+                    raise APIError("heartbeat unavailable", status_code=409)
 
         class WaitForFailedHeartbeat(FakeEngine):
             def recognize(self, image_bytes):

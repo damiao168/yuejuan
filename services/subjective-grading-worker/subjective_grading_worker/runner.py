@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import threading
 import time
-from typing import Any, Self
+from typing import Any
+
+from edugrade_worker_runtime import LeaseHeartbeat
 
 from .api import APIError
 from .config import Settings
@@ -51,37 +52,16 @@ class Runner:
                 self.api.fail(run_id, runtime_id, lease, "subjective_agent_failed", True, int((time.monotonic() - started) * 1000))
 
 
-class _Heartbeat:
+class _Heartbeat(LeaseHeartbeat):
     def __init__(self, api: Any, task_id: str, token: str, settings: Settings) -> None:
         self.api, self.task_id, self.token, self.settings = api, task_id, token, settings
-        self._stop = threading.Event()
-        self._error: Exception | None = None
-        self._thread: threading.Thread | None = None
+        super().__init__(
+            send=self._send,
+            interval=settings.heartbeat_interval,
+            lease_seconds=settings.lease_seconds,
+            request_timeout=settings.heartbeat_timeout,
+            thread_name=f"subjective-grading-heartbeat-{settings.worker_id}",
+        )
 
-    def __enter__(self) -> Self:
+    def _send(self) -> None:
         self.api.heartbeat(self.task_id, self.token, self.settings.worker_id, self.settings.lease_seconds, self.settings.heartbeat_timeout)
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        self.stop()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=self.settings.heartbeat_timeout + 0.5)
-            self._thread = None
-        self.raise_if_failed()
-
-    def raise_if_failed(self) -> None:
-        if self._error:
-            raise self._error
-
-    def _run(self) -> None:
-        while not self._stop.wait(self.settings.heartbeat_interval):
-            try:
-                self.api.heartbeat(self.task_id, self.token, self.settings.worker_id, self.settings.lease_seconds, self.settings.heartbeat_timeout)
-            except Exception as exc:  # noqa: BLE001
-                self._error = exc
-                return

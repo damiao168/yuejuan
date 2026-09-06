@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -13,27 +14,14 @@ import (
 	"testing"
 	"time"
 
-	"edugrade-enterprise/services/api-gateway/internal/appeal"
-	"edugrade-enterprise/services/api-gateway/internal/assessment"
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/capture"
 	"edugrade-enterprise/services/api-gateway/internal/config"
-	"edugrade-enterprise/services/api-gateway/internal/dashboard"
-	"edugrade-enterprise/services/api-gateway/internal/evidence"
-	"edugrade-enterprise/services/api-gateway/internal/exam"
 	"edugrade-enterprise/services/api-gateway/internal/files"
-	"edugrade-enterprise/services/api-gateway/internal/grading"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
-	ocrpkg "edugrade-enterprise/services/api-gateway/internal/ocr"
 	"edugrade-enterprise/services/api-gateway/internal/org"
-	"edugrade-enterprise/services/api-gateway/internal/paper"
 	"edugrade-enterprise/services/api-gateway/internal/processing"
 	"edugrade-enterprise/services/api-gateway/internal/review"
-	"edugrade-enterprise/services/api-gateway/internal/score"
-	"edugrade-enterprise/services/api-gateway/internal/segment"
-	"edugrade-enterprise/services/api-gateway/internal/subjective"
-	"edugrade-enterprise/services/api-gateway/internal/submission"
-	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -217,13 +205,13 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	segmentID := e2eString(t, segments[0].(map[string]any), "id")
 	e2ePostJSON(t, router, http.MethodPut, "/api/v1/answer-segments/"+segmentID+"/answer", adminToken, `{"answer_text":"`+answerText+`","answer_payload":{"answer":"`+answerText+`"},"source":"ocr_text","confidence":0.76}`, http.StatusOK)
 	aiGrade := e2ePostJSON(t, router, http.MethodPost, "/api/v1/answer-segments/"+segmentID+"/subjective-ai-grade", adminToken, `{"model_policy":{"model_version":"mock-llm-story041","prompt_version":"story041-synthetic","min_confidence":0.8}}`, http.StatusCreated)["grade"].(map[string]any)
-	if aiGrade["mock"] != true || aiGrade["needs_human_review"] != true {
-		t.Fatalf("PostgreSQL subjective grade must be explicit mock requiring review: %#v", aiGrade)
+	if aiGrade["mock"] != false || aiGrade["needs_human_review"] != true || aiGrade["failure_reason"] != "ai_eligibility_abstained" {
+		t.Fatalf("production PostgreSQL composition must enforce AI eligibility and route missing policy to review: %#v", aiGrade)
 	}
 	aiGradeID := e2eString(t, aiGrade, "id")
 	evidenceJob := e2ePostJSON(t, router, http.MethodPost, "/api/v1/ai-grades/"+aiGradeID+"/verify-evidence", adminToken, `{}`, http.StatusCreated)["job"].(map[string]any)
 	if evidenceJob["needs_human_review"] != true {
-		t.Fatalf("PostgreSQL evidence job should require review for mock grade: %#v", evidenceJob)
+		t.Fatalf("PostgreSQL evidence job should require review for an eligibility abstention: %#v", evidenceJob)
 	}
 
 	reviewTask := e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks", adminToken, `{"answer_segment_id":"`+segmentID+`","source":"evidence_verification_failed","priority":5}`, http.StatusCreated)["task"].(map[string]any)
@@ -476,26 +464,20 @@ func e2ePostgresRouter(db *sql.DB) http.Handler {
 			AllowedExtensions: []string{".pdf", ".png", ".jpg", ".jpeg", ".csv", ".docx"},
 		},
 		Security: config.SecurityConfig{MaxRequestBodyBytes: 2 * 1024 * 1024},
+		AIService: config.AIServiceConfig{
+			ProviderKey: "local", DeploymentKey: "postgres-e2e", AdapterType: "local_llama_cpp",
+			ModelVersion: "postgres-e2e-model", DeploymentRegion: "on_premise", CapabilityProfile: "test",
+		},
+		ModelSecrets: config.ModelSecretConfig{
+			MasterKey: "postgres-e2e-model-credential-master-key",
+		},
 	}
-	stores := NewMemoryApplicationStores()
-	stores.Identity = IdentityStores{Auth: auth.NewPostgresStore(db), Org: org.NewPostgresStore(db)}
-	stores.Exam.Exam = exam.NewPostgresStore(db)
-	stores.Exam.Paper = paper.NewPostgresStore(db)
-	stores.Exam.Files = files.NewPostgresStore(db)
-	stores.Exam.Submissions = submission.NewPostgresStore(db)
-	stores.Exam.Segments = segment.NewPostgresStore(db)
-	stores.Exam.Assessments = assessment.NewPostgresStore(db)
-	stores.Exam.DashboardOrganizations = dashboard.NewPostgresOrganizationSummaryStore(db)
-	stores.Capture.OCR = ocrpkg.NewPostgresStore(db)
-	stores.Capture.WorkerRuntime = workerruntime.NewPostgresStore(db)
-	stores.Capture.Capture = capture.NewPostgresStoreWithBarcodeKeyring(db, e2eBarcodeKeyring())
-	stores.Grading.Grading = grading.NewPostgresStore(db)
-	stores.Grading.Subjective = subjective.NewPostgresStore(db)
-	stores.Grading.Evidence = evidence.NewPostgresStore(db)
-	stores.Grading.Review = review.NewPostgresStore(db)
-	stores.Release.Score = score.NewPostgresStore(db)
-	stores.Release.Appeal = appeal.NewPostgresStore(db)
-	return NewRouterWithApplicationStores(cfg, logger.New(io.Discard, "error"), nil, files.NewMemoryObjectStorage(), stores)
+	objectStore := files.NewMemoryObjectStorage()
+	stores, err := NewPostgresApplicationStores(&Infrastructure{Config: cfg, DB: db, ObjectStore: objectStore})
+	if err != nil {
+		panic(fmt.Sprintf("build production PostgreSQL application stores: %v", err))
+	}
+	return NewRouterWithApplicationStores(cfg, logger.New(io.Discard, "error"), nil, objectStore, stores)
 }
 
 func e2eBarcodeKeyring() capture.BarcodeKeyring {

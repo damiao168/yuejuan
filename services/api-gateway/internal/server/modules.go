@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"reflect"
 	"strings"
 
 	"edugrade-enterprise/services/api-gateway/internal/aidisagreement"
@@ -77,13 +79,6 @@ func NewIdentityModule(cfg config.Config, stores IdentityStores, limiter auth.Lo
 		}),
 		OrgHandler: org.NewHandler(stores.Org, stores.Auth),
 	}
-}
-
-func NewPostgresIdentityModule(infra *Infrastructure) *IdentityModule {
-	return NewIdentityModule(infra.Config, IdentityStores{
-		Auth: auth.NewPostgresStore(infra.DB),
-		Org:  org.NewPostgresStore(infra.DB),
-	}, infra.LoginLimiter)
 }
 
 type ExamPreparationStores struct {
@@ -170,21 +165,6 @@ func (m *ExamPreparationModule) ConnectOperations(reviews review.Store, processi
 	})
 }
 
-func NewPostgresExamPreparationModule(infra *Infrastructure, identity *IdentityModule) *ExamPreparationModule {
-	return NewExamPreparationModule(infra.Config, ExamPreparationStores{
-		Exam:                   exam.NewPostgresStore(infra.DB),
-		Paper:                  paper.NewPostgresStore(infra.DB),
-		Files:                  files.NewPostgresStore(infra.DB),
-		Submissions:            submission.NewPostgresStore(infra.DB),
-		Segments:               segment.NewPostgresStore(infra.DB),
-		Assessments:            assessment.NewPostgresStore(infra.DB),
-		DashboardOrganizations: dashboard.NewPostgresOrganizationSummaryStore(infra.DB),
-		DashboardActivities:    dashboard.NewPostgresActivityStore(infra.DB),
-	}, ExamPreparationDependencies{
-		AuthStore: identity.AuthStore, ObjectStore: infra.ObjectStore, Reconciliation: infra.FileReconciler,
-	})
-}
-
 type CaptureProcessingStores struct {
 	ImageQuality  imagequality.Store
 	WorkerRuntime workerruntime.Store
@@ -232,21 +212,6 @@ func NewCaptureProcessingModule(cfg config.Config, stores CaptureProcessingStore
 	return module
 }
 
-func NewPostgresCaptureProcessingModule(infra *Infrastructure, identity *IdentityModule, examModule *ExamPreparationModule) *CaptureProcessingModule {
-	return NewCaptureProcessingModule(infra.Config, CaptureProcessingStores{
-		ImageQuality:  imagequality.NewPostgresStore(infra.DB),
-		WorkerRuntime: workerruntime.NewPostgresStore(infra.DB),
-		OCR:           ocrpkg.NewPostgresStore(infra.DB),
-		OCRQueue:      ocrpkg.NewMemoryQueue(),
-		Orchestrator:  orchestrator.NewPostgresStore(infra.DB),
-		Capture: capture.NewPostgresStoreWithBarcodeKeyring(infra.DB, capture.BarcodeKeyring{
-			ActiveKeyID: infra.Config.Barcode.ActiveKeyID, Keys: infra.Config.Barcode.HMACKeys,
-		}),
-		CaptureUpload: captureupload.NewPostgresStore(infra.DB),
-		Processing:    processing.NewPostgresStore(infra.DB),
-	}, identity, examModule)
-}
-
 type AIFoundationStores struct {
 	Eligibility       aieligibility.Store
 	GradingEvaluation gradingevaluation.Store
@@ -283,15 +248,6 @@ func NewAIFoundation(stores AIFoundationStores) *AIFoundation {
 		module.EligibilityHandler = aieligibility.NewHandler(module.EligibilityService)
 	}
 	return module
-}
-
-func NewPostgresAIFoundation(infra *Infrastructure) *AIFoundation {
-	return NewAIFoundation(AIFoundationStores{
-		Eligibility:       aieligibility.NewPostgresStore(infra.DB),
-		GradingEvaluation: gradingevaluation.NewPostgresStore(infra.DB),
-		ModelCalibration:  modelcalibration.NewPostgresStore(infra.DB),
-		Disagreement:      aidisagreement.NewPostgresStore(infra.DB),
-	})
 }
 
 type GradingQualityStores struct {
@@ -370,16 +326,7 @@ func NewGradingQualityModule(cfg config.Config, stores GradingQualityStores, dep
 
 	qualityDashboardService := stores.QualityDashboard
 	if qualityDashboardService == nil && dependencies.DB != nil {
-		qualityDashboardService = qualitydashboard.NewService(qualitydashboard.Sources{
-			Questions:   qualitydashboard.NewPostgresQuestionReader(dependencies.DB),
-			Gold:        stores.GoldPaper,
-			Calibration: qualitydashboard.NewPostgresCalibrationReader(dependencies.DB),
-			Seeds:       stores.SeedQuality,
-			Groups:      stores.AnswerGroup,
-			Review:      stores.Review,
-			Drift:       qualitydashboard.NewDriftReader(graderDriftService),
-			Backmark:    qualitydashboard.NewBackmarkReader(backmarkService),
-		})
+		qualityDashboardService = newQualityDashboardService(dependencies.DB, stores, graderDriftService, backmarkService)
 	}
 
 	module := &GradingQualityModule{
@@ -410,21 +357,17 @@ func NewGradingQualityModule(cfg config.Config, stores GradingQualityStores, dep
 	return module
 }
 
-func NewPostgresGradingQualityModule(infra *Infrastructure, identity *IdentityModule, examModule *ExamPreparationModule, captureModule *CaptureProcessingModule, ai *AIFoundation) *GradingQualityModule {
-	return NewGradingQualityModule(infra.Config, GradingQualityStores{
-		Grading:          grading.NewPostgresStore(infra.DB),
-		Subjective:       subjective.NewPostgresStore(infra.DB),
-		Evidence:         evidence.NewPostgresStore(infra.DB),
-		Review:           review.NewPostgresStore(infra.DB),
-		ReviewAnnotation: reviewannotation.NewPostgresStore(infra.DB),
-		GoldPaper:        goldpaper.NewPostgresStore(infra.DB),
-		Calibration:      calibration.NewPostgresStore(infra.DB),
-		AnswerGroup:      answergroup.NewPostgresStore(infra.DB, nil, answergroup.DefaultPolicy()),
-		Backmark:         backmark.NewPostgresStore(infra.DB),
-		Regrade:          regrade.NewPostgresStore(infra.DB),
-		GraderDrift:      graderdrift.NewPostgresStore(infra.DB),
-		SeedQuality:      seedquality.NewPostgresStore(infra.DB),
-	}, GradingQualityDependencies{DB: infra.DB, Identity: identity, Exam: examModule, Capture: captureModule, AI: ai})
+func newQualityDashboardService(db *sql.DB, stores GradingQualityStores, graderDriftService *graderdrift.Service, backmarkService *backmark.Service) *qualitydashboard.Service {
+	return qualitydashboard.NewService(qualitydashboard.Sources{
+		Questions:   qualitydashboard.NewPostgresQuestionReader(db),
+		Gold:        stores.GoldPaper,
+		Calibration: qualitydashboard.NewPostgresCalibrationReader(db),
+		Seeds:       stores.SeedQuality,
+		Groups:      stores.AnswerGroup,
+		Review:      stores.Review,
+		Drift:       qualitydashboard.NewDriftReader(graderDriftService),
+		Backmark:    qualitydashboard.NewBackmarkReader(backmarkService),
+	})
 }
 
 func newSubjectiveAdapter(cfg config.Config) subjective.LLMGradingAdapter {
@@ -496,18 +439,6 @@ func NewReleaseModule(stores ReleaseStores, identity *IdentityModule, examModule
 	}
 }
 
-func NewPostgresReleaseModule(infra *Infrastructure, identity *IdentityModule, examModule *ExamPreparationModule, gradingQuality *GradingQualityModule) *ReleaseModule {
-	return NewReleaseModule(ReleaseStores{
-		Score:                   score.NewPostgresStore(infra.DB),
-		ScoreRelease:            scorerelease.NewPostgresStore(infra.DB, gradingQuality.QualityDashboardService),
-		ReleaseGate:             releasegate.NewPostgresStore(infra.DB),
-		StudentPortal:           studentportal.NewPostgresStore(infra.DB),
-		Appeal:                  appeal.NewPostgresStore(infra.DB),
-		PublishedQuestionAppeal: appeal.NewPublishedQuestionAppealPostgresStore(infra.DB),
-		Report:                  report.NewPostgresStore(infra.DB),
-	}, identity, examModule, gradingQuality)
-}
-
 type AIGovernanceStores struct {
 	ModelGovernance   modelgovernance.Store
 	MathUnderstanding mathunderstanding.Store
@@ -542,29 +473,6 @@ func NewAIGovernanceModule(cfg config.Config, stores AIGovernanceStores, identit
 	}
 }
 
-func NewPostgresAIGovernanceModule(infra *Infrastructure, identity *IdentityModule, captureModule *CaptureProcessingModule, gradingQuality *GradingQualityModule, foundation *AIFoundation) (*AIGovernanceModule, error) {
-	credentialCipher, err := modelgovernance.NewCredentialCipher(infra.Config.ModelSecrets.MasterKey)
-	if err != nil {
-		return nil, err
-	}
-	governanceStore := modelgovernance.NewPostgresStore(infra.DB, credentialCipher)
-	if err := governanceStore.EnsureLocalBaseline(context.Background(), "", localModelBaseline(infra.Config)); err != nil {
-		return nil, err
-	}
-	if strings.EqualFold(strings.TrimSpace(infra.Config.Service.Environment), "production") && infra.Config.AIService.Enabled {
-		if err := governanceStore.ValidateProductionReadiness(context.Background(), modelgovernance.NewEnvironmentSecretResolver("")); err != nil {
-			return nil, err
-		}
-	}
-	mathStore := mathunderstanding.NewPostgresStore(infra.DB)
-	return NewAIGovernanceModule(infra.Config, AIGovernanceStores{
-		ModelGovernance:   governanceStore,
-		MathUnderstanding: mathStore,
-		MathCorrections:   mathunderstanding.NewPostgresCorrectionStore(infra.DB, mathStore),
-		MathPilotGates:    mathunderstanding.NewPostgresPilotGateStore(infra.DB),
-	}, identity, captureModule, gradingQuality, foundation), nil
-}
-
 type ApplicationModules struct {
 	Identity     *IdentityModule
 	Exam         *ExamPreparationModule
@@ -588,7 +496,7 @@ type ApplicationStores struct {
 
 func NewMemoryApplicationStores() ApplicationStores {
 	mathStore := mathunderstanding.NewMemoryStore()
-	return ApplicationStores{
+	stores := ApplicationStores{
 		Identity: IdentityStores{Auth: auth.NewMemoryStore(), Org: org.NewMemoryStore()},
 		Exam: ExamPreparationStores{
 			Exam: exam.NewMemoryStore(), Paper: paper.NewMemoryStore(), Files: files.NewMemoryStore(),
@@ -621,9 +529,128 @@ func NewMemoryApplicationStores() ApplicationStores {
 		},
 		Idempotency: idempotency.NewMemoryStore(),
 	}
+	return stores
 }
 
-type MemoryApplicationDependencies struct {
+// NewPostgresApplicationStores is the single production persistence graph.
+// Integration tests use this factory too, so adding a new application store
+// cannot silently leave the production-style suite backed by memory.
+func NewPostgresApplicationStores(infra *Infrastructure) (ApplicationStores, error) {
+	assessmentStore := assessment.NewPostgresStore(infra.DB)
+	gradingStores := GradingQualityStores{
+		Grading:          grading.NewPostgresStore(infra.DB),
+		Subjective:       subjective.NewPostgresStore(infra.DB),
+		Evidence:         evidence.NewPostgresStore(infra.DB),
+		Review:           review.NewPostgresStore(infra.DB),
+		ReviewAnnotation: reviewannotation.NewPostgresStore(infra.DB),
+		GoldPaper:        goldpaper.NewPostgresStore(infra.DB),
+		Calibration:      calibration.NewPostgresStore(infra.DB),
+		AnswerGroup:      answergroup.NewPostgresStore(infra.DB, nil, answergroup.DefaultPolicy()),
+		Backmark:         backmark.NewPostgresStore(infra.DB),
+		Regrade:          regrade.NewPostgresStore(infra.DB),
+		GraderDrift:      graderdrift.NewPostgresStore(infra.DB),
+		SeedQuality:      seedquality.NewPostgresStore(infra.DB),
+	}
+	gradingStores.QualityDashboard = newPostgresQualityDashboard(infra.DB, gradingStores, assessmentStore)
+
+	credentialCipher, err := modelgovernance.NewCredentialCipher(infra.Config.ModelSecrets.MasterKey)
+	if err != nil {
+		return ApplicationStores{}, err
+	}
+	governanceStore := modelgovernance.NewPostgresStore(infra.DB, credentialCipher)
+	if err := governanceStore.EnsureLocalBaseline(context.Background(), "", localModelBaseline(infra.Config)); err != nil {
+		return ApplicationStores{}, err
+	}
+	if strings.EqualFold(strings.TrimSpace(infra.Config.Service.Environment), "production") && infra.Config.AIService.Enabled {
+		if err := governanceStore.ValidateProductionReadiness(context.Background(), modelgovernance.NewEnvironmentSecretResolver("")); err != nil {
+			return ApplicationStores{}, err
+		}
+	}
+	mathStore := mathunderstanding.NewPostgresStore(infra.DB)
+
+	stores := ApplicationStores{
+		Identity: IdentityStores{Auth: auth.NewPostgresStore(infra.DB), Org: org.NewPostgresStore(infra.DB)},
+		Exam: ExamPreparationStores{
+			Exam: exam.NewPostgresStore(infra.DB), Paper: paper.NewPostgresStore(infra.DB), Files: files.NewPostgresStore(infra.DB),
+			Submissions: submission.NewPostgresStore(infra.DB), Segments: segment.NewPostgresStore(infra.DB), Assessments: assessmentStore,
+			DashboardOrganizations: dashboard.NewPostgresOrganizationSummaryStore(infra.DB), DashboardActivities: dashboard.NewPostgresActivityStore(infra.DB),
+		},
+		Capture: CaptureProcessingStores{
+			ImageQuality: imagequality.NewPostgresStore(infra.DB), WorkerRuntime: workerruntime.NewPostgresStore(infra.DB),
+			OCR: ocrpkg.NewPostgresStore(infra.DB), Orchestrator: orchestrator.NewPostgresStore(infra.DB),
+			Capture: capture.NewPostgresStoreWithBarcodeKeyring(infra.DB, capture.BarcodeKeyring{
+				ActiveKeyID: infra.Config.Barcode.ActiveKeyID, Keys: infra.Config.Barcode.HMACKeys,
+			}),
+			CaptureUpload: captureupload.NewPostgresStore(infra.DB), Processing: processing.NewPostgresStore(infra.DB),
+		},
+		AIFoundation: AIFoundationStores{
+			Eligibility: aieligibility.NewPostgresStore(infra.DB), GradingEvaluation: gradingevaluation.NewPostgresStore(infra.DB),
+			ModelCalibration: modelcalibration.NewPostgresStore(infra.DB), Disagreement: aidisagreement.NewPostgresStore(infra.DB),
+		},
+		Grading: gradingStores,
+		Release: ReleaseStores{
+			Score: score.NewPostgresStore(infra.DB), ScoreRelease: scorerelease.NewPostgresStore(infra.DB, gradingStores.QualityDashboard),
+			ReleaseGate: releasegate.NewPostgresStore(infra.DB), StudentPortal: studentportal.NewPostgresStore(infra.DB),
+			Appeal: appeal.NewPostgresStore(infra.DB), PublishedQuestionAppeal: appeal.NewPublishedQuestionAppealPostgresStore(infra.DB),
+			Report: report.NewPostgresStore(infra.DB),
+		},
+		AIGovernance: AIGovernanceStores{
+			ModelGovernance: governanceStore, MathUnderstanding: mathStore,
+			MathCorrections: mathunderstanding.NewPostgresCorrectionStore(infra.DB, mathStore), MathPilotGates: mathunderstanding.NewPostgresPilotGateStore(infra.DB),
+		},
+		Idempotency: idempotency.NewPostgresStore(infra.DB),
+	}
+	if err := validatePostgresStoreGraph(stores); err != nil {
+		return ApplicationStores{}, err
+	}
+	return stores, nil
+}
+
+func validatePostgresStoreGraph(stores ApplicationStores) error {
+	return validatePostgresStoreValue(reflect.ValueOf(stores), "stores")
+}
+
+func validatePostgresStoreValue(value reflect.Value, path string) error {
+	typeOfValue := value.Type()
+	for index := 0; index < value.NumField(); index++ {
+		field := value.Field(index)
+		name := path + "." + typeOfValue.Field(index).Name
+		if name == "stores.Capture.OCRQueue" {
+			// PostgreSQL worker runtime is the durable OCR queue. This legacy
+			// seam is used only by the memory router when no runtime is present.
+			continue
+		}
+		switch field.Kind() {
+		case reflect.Struct:
+			if err := validatePostgresStoreValue(field, name); err != nil {
+				return err
+			}
+		case reflect.Interface, reflect.Pointer:
+			if field.IsNil() {
+				return fmt.Errorf("production application store %s is not configured", name)
+			}
+			concreteType := field.Elem().Type().String()
+			if strings.Contains(concreteType, "Memory") {
+				return fmt.Errorf("production application store %s uses %s", name, concreteType)
+			}
+		}
+	}
+	return nil
+}
+
+func newPostgresQualityDashboard(db *sql.DB, stores GradingQualityStores, assessments assessment.Store) *qualitydashboard.Service {
+	calibrationService := calibration.NewService(stores.Calibration, stores.GoldPaper)
+	seedQualityService := seedquality.NewService(stores.SeedQuality, stores.GoldPaper, calibrationService, assessments)
+	graderDriftService := graderdrift.NewService(stores.GraderDrift, seedQualityService, calibrationService)
+	backmarkService := backmark.NewService(stores.Backmark)
+	if contextStore, ok := stores.Review.(review.TaskContextStore); ok {
+		backmarkService.WithContextSource(contextStore)
+	}
+	backmarkService.WithTaskSource(stores.Review)
+	return newQualityDashboardService(db, stores, graderDriftService, backmarkService)
+}
+
+type ApplicationDependencies struct {
 	Config         config.Config
 	ObjectStore    files.ObjectStorage
 	Reconciliation files.ReconciliationReader
@@ -631,7 +658,7 @@ type MemoryApplicationDependencies struct {
 	DB             *sql.DB
 }
 
-func NewMemoryApplicationModules(dependencies MemoryApplicationDependencies, stores ApplicationStores) ApplicationModules {
+func NewApplicationModules(dependencies ApplicationDependencies, stores ApplicationStores) ApplicationModules {
 	identity := NewIdentityModule(dependencies.Config, stores.Identity, dependencies.LoginLimiter)
 	examModule := NewExamPreparationModule(dependencies.Config, stores.Exam, ExamPreparationDependencies{
 		AuthStore: identity.AuthStore, ObjectStore: dependencies.ObjectStore, Reconciliation: dependencies.Reconciliation,
@@ -652,22 +679,14 @@ func NewMemoryApplicationModules(dependencies MemoryApplicationDependencies, sto
 }
 
 func NewPostgresApplicationModules(infra *Infrastructure) (ApplicationModules, error) {
-	identity := NewPostgresIdentityModule(infra)
-	examModule := NewPostgresExamPreparationModule(infra, identity)
-	captureModule := NewPostgresCaptureProcessingModule(infra, identity, examModule)
-	aiFoundation := NewPostgresAIFoundation(infra)
-	gradingQuality := NewPostgresGradingQualityModule(infra, identity, examModule, captureModule, aiFoundation)
-	examModule.ConnectOperations(gradingQuality.ReviewStore, captureModule.ProcessingService)
-	releaseModule := NewPostgresReleaseModule(infra, identity, examModule, gradingQuality)
-	aiGovernance, err := NewPostgresAIGovernanceModule(infra, identity, captureModule, gradingQuality, aiFoundation)
+	stores, err := NewPostgresApplicationStores(infra)
 	if err != nil {
 		return ApplicationModules{}, err
 	}
-	connectSchoolDocumentModels(examModule, aiGovernance.modelStore)
-	return ApplicationModules{
-		Identity: identity, Exam: examModule, Capture: captureModule, Grading: gradingQuality,
-		Release: releaseModule, AIGovernance: aiGovernance, Idempotency: idempotency.NewPostgresStore(infra.DB),
-	}, nil
+	return NewApplicationModules(ApplicationDependencies{
+		Config: infra.Config, ObjectStore: infra.ObjectStore, Reconciliation: infra.FileReconciler,
+		LoginLimiter: infra.LoginLimiter, DB: infra.DB,
+	}, stores), nil
 }
 
 func connectSchoolDocumentModels(examModule *ExamPreparationModule, store modelgovernance.Store) {

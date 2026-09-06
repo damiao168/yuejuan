@@ -15,6 +15,11 @@ type PostgresStore struct {
 	db *sql.DB
 }
 
+type postgresQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 func NewPostgresStore(db *sql.DB) *PostgresStore {
 	return &PostgresStore{db: db}
 }
@@ -25,6 +30,9 @@ func (s *PostgresStore) CreatePaper(ctx context.Context, tenantID string, examID
 		return Paper{}, err
 	}
 	defer tx.Rollback()
+	if err := ensureExamPaperMutableTx(ctx, tx, tenantID, examID); err != nil {
+		return Paper{}, err
+	}
 	version := 1
 	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version_no), 0) + 1 FROM exam_paper WHERE tenant_id = $1 AND exam_id = $2`, tenantID, examID).Scan(&version)
 	var paperID string
@@ -84,7 +92,11 @@ RETURNING id::text, tenant_id::text, exam_id::text, file_asset_id::text, version
 }
 
 func (s *PostgresStore) ListPapers(ctx context.Context, tenantID string, examID string) ([]Paper, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return listPapers(ctx, s.db, tenantID, examID)
+}
+
+func listPapers(ctx context.Context, queryer postgresQueryer, tenantID string, examID string) ([]Paper, error) {
+	rows, err := queryer.QueryContext(ctx, `
 SELECT p.id::text, p.tenant_id::text, p.exam_id::text, p.file_asset_id::text, p.version_no, p.status,
        f.original_name, f.content_type, f.size_bytes, f.hash_sha256, f.storage_bucket, f.storage_key
 FROM exam_paper p
@@ -873,7 +885,11 @@ RETURNING id::text, tenant_id::text, exam_id::text, COALESCE(exam_paper_id::text
 }
 
 func (s *PostgresStore) ListQuestions(ctx context.Context, tenantID string, examID string) ([]Question, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return listQuestions(ctx, s.db, tenantID, examID)
+}
+
+func listQuestions(ctx context.Context, queryer postgresQueryer, tenantID string, examID string) ([]Question, error) {
+	rows, err := queryer.QueryContext(ctx, `
 SELECT id::text, tenant_id::text, exam_id::text, COALESCE(exam_paper_id::text, ''), question_no, question_type, score::float8, COALESCE(stem, ''), knowledge_points, answer_area, sort_order, status
 FROM question
 WHERE tenant_id = $1 AND exam_id = $2 AND deleted_at IS NULL AND status <> 'deleted'
@@ -898,23 +914,23 @@ ORDER BY sort_order, question_no
 		return nil, err
 	}
 	for index := range out {
-		if err := s.loadQuestionImportProvenance(ctx, tenantID, &out[index]); err != nil {
+		if err := loadQuestionImportProvenance(ctx, queryer, tenantID, &out[index]); err != nil {
 			return nil, err
 		}
-		if err := s.loadQuestionAssessmentArchetype(ctx, tenantID, &out[index]); err != nil {
+		if err := loadQuestionAssessmentArchetype(ctx, queryer, tenantID, &out[index]); err != nil {
 			return nil, err
 		}
-		if key, ok, err := s.latestAnswerKey(ctx, tenantID, out[index].ID); err != nil {
+		if key, ok, err := latestAnswerKey(ctx, queryer, tenantID, out[index].ID); err != nil {
 			return nil, err
 		} else if ok {
 			out[index].AnswerKey = &key
 		}
-		if rubric, ok, err := s.latestRubric(ctx, tenantID, out[index].ID); err != nil {
+		if rubric, ok, err := latestRubric(ctx, queryer, tenantID, out[index].ID); err != nil {
 			return nil, err
 		} else if ok {
 			out[index].Rubric = &rubric
 		}
-		if solution, ok, err := s.latestQuestionSolution(ctx, tenantID, out[index].ID); err != nil {
+		if solution, ok, err := latestQuestionSolution(ctx, queryer, tenantID, out[index].ID); err != nil {
 			return nil, err
 		} else if ok {
 			out[index].Solution = &solution
@@ -1162,7 +1178,11 @@ func ensureExamPaperMutableTx(ctx context.Context, tx *sql.Tx, tenantID, examID 
 }
 
 func (s *PostgresStore) latestRubric(ctx context.Context, tenantID string, questionID string) (Rubric, bool, error) {
-	row := s.db.QueryRowContext(ctx, `
+	return latestRubric(ctx, s.db, tenantID, questionID)
+}
+
+func latestRubric(ctx context.Context, queryer postgresQueryer, tenantID string, questionID string) (Rubric, bool, error) {
+	row := queryer.QueryRowContext(ctx, `
 SELECT qr.id::text, qr.question_id::text, rv.version, qr.status, qr.max_score::float8, qr.points, qr.deductions, qr.examples,
        COALESCE(qr.paper_import_id::text,''),COALESCE(qr.paper_import_candidate_id,''),qr.paper_import_source_refs
 FROM question_rubric qr
@@ -1187,7 +1207,11 @@ LIMIT 1
 }
 
 func (s *PostgresStore) latestAnswerKey(ctx context.Context, tenantID string, questionID string) (AnswerKey, bool, error) {
-	row := s.db.QueryRowContext(ctx, `
+	return latestAnswerKey(ctx, s.db, tenantID, questionID)
+}
+
+func latestAnswerKey(ctx context.Context, queryer postgresQueryer, tenantID string, questionID string) (AnswerKey, bool, error) {
+	row := queryer.QueryRowContext(ctx, `
 SELECT id::text, question_id::text, answer_version, standard_answer, equivalent_answers, tolerance,
        COALESCE(paper_import_id::text,''),COALESCE(paper_import_candidate_id,''),paper_import_source_refs
 FROM question_answer_key
@@ -1211,8 +1235,12 @@ LIMIT 1
 }
 
 func (s *PostgresStore) loadQuestionImportProvenance(ctx context.Context, tenantID string, question *Question) error {
+	return loadQuestionImportProvenance(ctx, s.db, tenantID, question)
+}
+
+func loadQuestionImportProvenance(ctx context.Context, queryer postgresQueryer, tenantID string, question *Question) error {
 	var refs []byte
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(paper_import_id::text,''),COALESCE(paper_import_candidate_id,''),paper_import_source_refs FROM question WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, question.ID).Scan(&question.PaperImportID, &question.PaperImportCandidateID, &refs); err != nil {
+	if err := queryer.QueryRowContext(ctx, `SELECT COALESCE(paper_import_id::text,''),COALESCE(paper_import_candidate_id,''),paper_import_source_refs FROM question WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, question.ID).Scan(&question.PaperImportID, &question.PaperImportCandidateID, &refs); err != nil {
 		return err
 	}
 	_ = json.Unmarshal(refs, &question.PaperImportSourceRefs)
@@ -1220,11 +1248,19 @@ func (s *PostgresStore) loadQuestionImportProvenance(ctx context.Context, tenant
 }
 
 func (s *PostgresStore) loadQuestionAssessmentArchetype(ctx context.Context, tenantID string, question *Question) error {
-	return s.db.QueryRowContext(ctx, `SELECT COALESCE((SELECT archetype_code FROM question_assessment_config WHERE tenant_id=$1 AND question_id=$2::uuid),'')`, tenantID, question.ID).Scan(&question.AssessmentArchetype)
+	return loadQuestionAssessmentArchetype(ctx, s.db, tenantID, question)
+}
+
+func loadQuestionAssessmentArchetype(ctx context.Context, queryer postgresQueryer, tenantID string, question *Question) error {
+	return queryer.QueryRowContext(ctx, `SELECT COALESCE((SELECT archetype_code FROM question_assessment_config WHERE tenant_id=$1 AND question_id=$2::uuid),'')`, tenantID, question.ID).Scan(&question.AssessmentArchetype)
 }
 
 func (s *PostgresStore) latestQuestionSolution(ctx context.Context, tenantID string, questionID string) (QuestionSolution, bool, error) {
-	row := s.db.QueryRowContext(ctx, `
+	return latestQuestionSolution(ctx, s.db, tenantID, questionID)
+}
+
+func latestQuestionSolution(ctx context.Context, queryer postgresQueryer, tenantID string, questionID string) (QuestionSolution, bool, error) {
+	row := queryer.QueryRowContext(ctx, `
 SELECT id::text,question_id::text,COALESCE(paper_import_id::text,''),solution_version,raw_text,steps,source_refs,verification_status
 FROM question_solution
 WHERE tenant_id=$1 AND question_id=$2::uuid AND deleted_at IS NULL

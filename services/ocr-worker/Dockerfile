@@ -12,6 +12,7 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+COPY packages/worker-runtime-python /tmp/worker-runtime-python
 COPY services/ocr-worker/pyproject.toml ./pyproject.toml
 
 RUN python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
@@ -25,7 +26,7 @@ RUN python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
     fi
 
 COPY services/ocr-worker/ocr_worker ./ocr_worker
-RUN python -m pip install --no-cache-dir --no-deps .
+RUN python -m pip install --no-cache-dir --no-deps /tmp/worker-runtime-python .
 
 RUN sed -i \
       -e "s|http://deb.debian.org/debian-security|$DEBIAN_SECURITY_MIRROR|g" \

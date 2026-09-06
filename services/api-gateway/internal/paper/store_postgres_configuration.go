@@ -6,13 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/exam"
 )
 
 func (s *PostgresStore) ListTemplates(ctx context.Context, tenantID string, examID string) ([]AnswerSheetTemplate, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return listTemplates(ctx, s.db, tenantID, examID)
+}
+
+func listTemplates(ctx context.Context, queryer postgresQueryer, tenantID string, examID string) ([]AnswerSheetTemplate, error) {
+	rows, err := queryer.QueryContext(ctx, `
 SELECT id::text, tenant_id::text, exam_id::text, exam_paper_id::text, version_no, revision,
        name, status, page_count, layout, content_hash, created_by::text,
        COALESCE(locked_by::text, ''), locked_at, created_at, updated_at
@@ -299,13 +304,18 @@ JOIN omr_calibration_case c
 }
 
 func (s *PostgresStore) Readiness(ctx context.Context, tenantID string, examID string) (ReadinessResult, error) {
-	result, status, _, err := s.calculateReadiness(ctx, tenantID, examID)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return ReadinessResult{}, err
+	}
+	defer tx.Rollback()
+	result, status, _, err := calculateReadiness(ctx, tx, tenantID, examID)
 	if err != nil {
 		return ReadinessResult{}, err
 	}
 	var confirmedAt time.Time
 	var confirmedBy string
-	err = s.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 SELECT confirmed_at, confirmed_by::text
 FROM exam_readiness_snapshot
 WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND status = 'passed' AND configuration_hash = $3
@@ -316,18 +326,14 @@ ORDER BY confirmed_at DESC LIMIT 1
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return ReadinessResult{}, err
 	}
+	if err = tx.Commit(); err != nil {
+		return ReadinessResult{}, err
+	}
 	return result, nil
 }
 
 func (s *PostgresStore) ConfirmReadiness(ctx context.Context, tenantID string, examID string, userID string) (ReadinessResult, error) {
-	result, status, candidateCount, err := s.calculateReadiness(ctx, tenantID, examID)
-	if err != nil {
-		return ReadinessResult{}, err
-	}
-	if !result.Ready || (status != "draft" && status != "configured" && status != "ready") {
-		return result, ErrNotReady
-	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return ReadinessResult{}, err
 	}
@@ -342,18 +348,36 @@ func (s *PostgresStore) ConfirmReadiness(ctx context.Context, tenantID string, e
 		}
 		return ReadinessResult{}, err
 	}
-	if lockedStatus != status || (lockedStatus != "draft" && lockedStatus != "configured" && lockedStatus != "ready") {
+	if lockedStatus != "draft" && lockedStatus != "configured" && lockedStatus != "ready" {
+		return ReadinessResult{}, ErrNotReady
+	}
+	// Every paper-configuration write takes the same exam row lock. Read all
+	// readiness inputs only after that lock is held so the semantic snapshot,
+	// candidate freeze, and status transition describe one committed version.
+	result, status, candidateIDs, err := calculateReadiness(ctx, tx, tenantID, examID)
+	if err != nil {
+		return ReadinessResult{}, err
+	}
+	if !result.Ready || lockedStatus != status {
 		return result, ErrNotReady
 	}
 	if lockedStatus == "draft" || lockedStatus == "configured" {
 		if err := exam.RebuildCandidateSnapshot(ctx, tx, tenantID, examID); err != nil {
 			return ReadinessResult{}, err
 		}
-		var frozenCount int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM exam_candidate_snapshot WHERE tenant_id=$1::uuid AND exam_id=$2::uuid`, tenantID, examID).Scan(&frozenCount); err != nil {
+		var frozenCandidateIDsJSON []byte
+		if err := tx.QueryRowContext(ctx, `
+SELECT COALESCE(jsonb_agg(candidate.student_id::text ORDER BY candidate.student_id::text), '[]'::jsonb)
+FROM exam_candidate_snapshot candidate
+WHERE candidate.tenant_id=$1::uuid AND candidate.exam_id=$2::uuid
+`, tenantID, examID).Scan(&frozenCandidateIDsJSON); err != nil {
 			return ReadinessResult{}, err
 		}
-		if frozenCount != candidateCount {
+		var frozenCandidateIDs []string
+		if err := json.Unmarshal(frozenCandidateIDsJSON, &frozenCandidateIDs); err != nil {
+			return ReadinessResult{}, err
+		}
+		if !slices.Equal(frozenCandidateIDs, candidateIDs) {
 			return result, ErrConflict
 		}
 	}
@@ -388,7 +412,25 @@ RETURNING confirmed_at
 }
 
 func (s *PostgresStore) StartCollection(ctx context.Context, tenantID string, examID string, _ string) (ReadinessResult, error) {
-	result, status, _, err := s.calculateReadiness(ctx, tenantID, examID)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return ReadinessResult{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, examID); err != nil {
+		return ReadinessResult{}, err
+	}
+	var lockedStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM exam WHERE tenant_id=$1::uuid AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, tenantID, examID).Scan(&lockedStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ReadinessResult{}, ErrNotFound
+		}
+		return ReadinessResult{}, err
+	}
+	if lockedStatus != "ready" {
+		return ReadinessResult{}, ErrNotReady
+	}
+	result, status, _, err := calculateReadiness(ctx, tx, tenantID, examID)
 	if err != nil {
 		return ReadinessResult{}, err
 	}
@@ -397,7 +439,7 @@ func (s *PostgresStore) StartCollection(ctx context.Context, tenantID string, ex
 	}
 	var confirmedAt time.Time
 	var confirmedBy string
-	if err := s.db.QueryRowContext(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 SELECT confirmed_at, confirmed_by::text FROM exam_readiness_snapshot
 WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND status = 'passed' AND configuration_hash = $3
 ORDER BY confirmed_at DESC LIMIT 1
@@ -407,7 +449,7 @@ ORDER BY confirmed_at DESC LIMIT 1
 		}
 		return ReadinessResult{}, err
 	}
-	updated, err := s.db.ExecContext(ctx, `UPDATE exam SET status = 'collecting', updated_at = now() WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'ready'`, tenantID, examID)
+	updated, err := tx.ExecContext(ctx, `UPDATE exam SET status = 'collecting', updated_at = now() WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'ready'`, tenantID, examID)
 	if err != nil {
 		return ReadinessResult{}, err
 	}
@@ -415,49 +457,75 @@ ORDER BY confirmed_at DESC LIMIT 1
 	if count != 1 {
 		return result, ErrNotReady
 	}
+	if err := tx.Commit(); err != nil {
+		return ReadinessResult{}, err
+	}
 	result.Confirmed, result.ConfirmedAt, result.ConfirmedBy = true, &confirmedAt, confirmedBy
 	return result, nil
 }
 
-func (s *PostgresStore) calculateReadiness(ctx context.Context, tenantID string, examID string) (ReadinessResult, string, int, error) {
+func calculateReadiness(ctx context.Context, queryer postgresQueryer, tenantID string, examID string) (ReadinessResult, string, []string, error) {
 	var total float64
 	var status string
-	var classCount, studentCount int
-	err := s.db.QueryRowContext(ctx, `
+	var classIDsJSON, candidateIDsJSON []byte
+	err := queryer.QueryRowContext(ctx, `
 SELECT e.total_score::float8, e.status,
-       (SELECT COUNT(DISTINCT ec.class_id)::int FROM exam_class ec WHERE ec.tenant_id=e.tenant_id AND ec.exam_id=e.id AND ec.deleted_at IS NULL),
+       COALESCE((
+         SELECT jsonb_agg(scope.class_id ORDER BY scope.class_id)
+         FROM (
+           SELECT DISTINCT ec.class_id::text AS class_id
+           FROM exam_class ec
+           WHERE ec.tenant_id=e.tenant_id AND ec.exam_id=e.id AND ec.deleted_at IS NULL
+         ) scope
+       ), '[]'::jsonb),
        CASE WHEN e.status IN ('draft','configured') THEN
-         (SELECT COUNT(DISTINCT st.id)::int
-          FROM exam_class ec
-          JOIN school_class cls ON cls.tenant_id=ec.tenant_id AND cls.id=ec.class_id AND cls.deleted_at IS NULL
-          JOIN student_enrollment enrollment ON enrollment.tenant_id=ec.tenant_id AND enrollment.class_id=ec.class_id AND enrollment.academic_year_id=cls.academic_year_id AND enrollment.status='enrolled' AND enrollment.end_date IS NULL AND enrollment.deleted_at IS NULL
-          JOIN student st ON st.tenant_id=enrollment.tenant_id AND st.id=enrollment.student_id AND st.status='active' AND st.deleted_at IS NULL
-          WHERE ec.tenant_id=e.tenant_id AND ec.exam_id=e.id AND ec.deleted_at IS NULL)
+         COALESCE((
+           SELECT jsonb_agg(scope.student_id ORDER BY scope.student_id)
+           FROM (
+             SELECT DISTINCT st.id::text AS student_id
+             FROM exam_class ec
+             JOIN school_class cls ON cls.tenant_id=ec.tenant_id AND cls.id=ec.class_id AND cls.deleted_at IS NULL
+             JOIN student_enrollment enrollment ON enrollment.tenant_id=ec.tenant_id AND enrollment.class_id=ec.class_id AND enrollment.academic_year_id=cls.academic_year_id AND enrollment.status='enrolled' AND enrollment.end_date IS NULL AND enrollment.deleted_at IS NULL
+             JOIN student st ON st.tenant_id=enrollment.tenant_id AND st.id=enrollment.student_id AND st.status='active' AND st.deleted_at IS NULL
+             WHERE ec.tenant_id=e.tenant_id AND ec.exam_id=e.id AND ec.deleted_at IS NULL
+           ) scope
+         ), '[]'::jsonb)
        ELSE
-         (SELECT COUNT(*)::int FROM exam_candidate_snapshot candidate WHERE candidate.tenant_id=e.tenant_id AND candidate.exam_id=e.id)
+         COALESCE((
+           SELECT jsonb_agg(candidate.student_id::text ORDER BY candidate.student_id::text)
+           FROM exam_candidate_snapshot candidate
+           WHERE candidate.tenant_id=e.tenant_id AND candidate.exam_id=e.id
+         ), '[]'::jsonb)
        END
 FROM exam e
 WHERE e.tenant_id = $1::uuid AND e.id = $2::uuid AND e.deleted_at IS NULL
-`, tenantID, examID).Scan(&total, &status, &classCount, &studentCount)
+`, tenantID, examID).Scan(&total, &status, &classIDsJSON, &candidateIDsJSON)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ReadinessResult{}, "", 0, ErrNotFound
+			return ReadinessResult{}, "", nil, ErrNotFound
 		}
-		return ReadinessResult{}, "", 0, err
+		return ReadinessResult{}, "", nil, err
 	}
-	papers, err := s.ListPapers(ctx, tenantID, examID)
+	var classIDs, candidateIDs []string
+	if err := json.Unmarshal(classIDsJSON, &classIDs); err != nil {
+		return ReadinessResult{}, "", nil, err
+	}
+	if err := json.Unmarshal(candidateIDsJSON, &candidateIDs); err != nil {
+		return ReadinessResult{}, "", nil, err
+	}
+	papers, err := listPapers(ctx, queryer, tenantID, examID)
 	if err != nil {
-		return ReadinessResult{}, "", 0, err
+		return ReadinessResult{}, "", nil, err
 	}
-	questions, err := s.ListQuestions(ctx, tenantID, examID)
+	questions, err := listQuestions(ctx, queryer, tenantID, examID)
 	if err != nil {
-		return ReadinessResult{}, "", 0, err
+		return ReadinessResult{}, "", nil, err
 	}
-	templates, err := s.ListTemplates(ctx, tenantID, examID)
+	templates, err := listTemplates(ctx, queryer, tenantID, examID)
 	if err != nil {
-		return ReadinessResult{}, "", 0, err
+		return ReadinessResult{}, "", nil, err
 	}
-	return buildReadiness(total, classCount, studentCount, papers, questions, templates), status, studentCount, nil
+	return buildReadinessForScope(total, classIDs, candidateIDs, papers, questions, templates), status, candidateIDs, nil
 }
 
 func (s *PostgresStore) templateWriteError(ctx context.Context, tenantID string, id string, expectedRevision int) error {

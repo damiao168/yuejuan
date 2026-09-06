@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
-import threading
 import time
 import traceback
-from typing import Self
+
+from edugrade_worker_runtime import LeaseHeartbeat
 
 from page_processing.api import APIError, Client
 from page_processing.barcode import detect_barcodes
@@ -298,17 +298,7 @@ class Runner:
             self.client.fail_task(task, code, detail)
 
 
-class _LeaseHeartbeat:
-    """Renew the task lease from a background thread while a handler runs.
-
-    Page-processing tasks download, decode, and upload large documents in
-    single blocking calls, so a one-shot inline heartbeat lets the lease expire
-    mid-task and the runtime re-assigns work that is still in flight. Handlers
-    call ``raise_if_failed`` between expensive steps to abort early once the
-    lease is lost, and ``stop`` right before reporting completion so no renewal
-    races with the terminal state transition.
-    """
-
+class _LeaseHeartbeat(LeaseHeartbeat):
     def __init__(
         self,
         *,
@@ -322,76 +312,13 @@ class _LeaseHeartbeat:
         self.client = client
         self.task = task
         self.worker_id = worker_id
-        self.interval = interval
-        self.lease_seconds = lease_seconds
-        self.request_timeout = request_timeout
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._error: Exception | None = None
-        self._last_success = time.monotonic()
-
-    def __enter__(self) -> Self:
-        self._send()
-        self._last_success = time.monotonic()
-        self._thread = threading.Thread(
-            target=self._run,
-            name=f"page-processing-heartbeat-{self.worker_id}",
-            daemon=True,
+        super().__init__(
+            send=self._send,
+            interval=interval,
+            lease_seconds=lease_seconds,
+            request_timeout=request_timeout,
+            thread_name=f"page-processing-heartbeat-{worker_id}",
         )
-        self._thread.start()
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        try:
-            self.stop()
-        except Exception:
-            if exc_type is None:
-                raise
-
-    def stop(self, raise_on_error: bool = True) -> None:
-        self._stop.set()
-        thread = self._thread
-        if thread is None:
-            return
-        thread.join(timeout=self.request_timeout + 0.5)
-        if thread.is_alive():
-            raise RuntimeError("heartbeat request did not stop within its bounded timeout")
-        self._thread = None
-        if raise_on_error:
-            self.raise_if_failed()
-
-    def raise_if_failed(self) -> None:
-        if self._error is not None:
-            raise self._error
-
-    def _run(self) -> None:
-        # A renewal failure is only fatal once the lease can no longer be saved.
-        # Transient transport errors and gateway 5xx/429 are retried on the next
-        # tick; giving up on the first blip would discard an entire in-flight
-        # document even though the previous renewal is still valid for most of
-        # the lease window.
-        while not self._stop.wait(self.interval):
-            try:
-                self._send()
-                self._last_success = time.monotonic()
-            except Exception as exc:  # noqa: BLE001 - heartbeat transports may raise non-API exceptions.
-                if _lease_is_lost(exc) or self._renewal_window_exhausted():
-                    self._error = exc
-                    return
-
-    def _renewal_window_exhausted(self) -> bool:
-        elapsed = time.monotonic() - self._last_success
-        return elapsed + self.interval + self.request_timeout >= self.lease_seconds
 
     def _send(self) -> None:
         self.client.heartbeat(self.task, self.worker_id, self.lease_seconds, timeout=self.request_timeout)
-
-
-# The runtime rejects a renewal with 409 once the lease expired or was taken
-# over, and with 403/404 when the task is no longer ours. Anything else (5xx,
-# 429, socket timeouts) is a transient failure worth retrying.
-_LEASE_LOST_STATUS = frozenset({403, 404, 409})
-
-
-def _lease_is_lost(exc: Exception) -> bool:
-    return isinstance(exc, APIError) and exc.status_code in _LEASE_LOST_STATUS

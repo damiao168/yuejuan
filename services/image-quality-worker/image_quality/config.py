@@ -5,6 +5,8 @@ import os
 import socket
 from dataclasses import dataclass
 
+from edugrade_worker_runtime import validate_lease_timing
+
 
 @dataclass
 class EngineConfig:
@@ -12,6 +14,8 @@ class EngineConfig:
     lease_seconds: int = 300
     worker_instance_id: str = "image-quality-worker"
     poll_interval: float = 5.0
+    heartbeat_interval: float = 10.0
+    heartbeat_timeout: float = 3.0
 
     def __post_init__(self) -> None:
         # Jobs are processed sequentially and the image-quality API does not
@@ -19,8 +23,7 @@ class EngineConfig:
         # jobs expire while the first image is downloaded and uploaded.
         if self.batch_size != 1:
             raise ValueError("EDUGRADE_IMAGE_QUALITY_BATCH_SIZE must be 1")
-        if self.lease_seconds < 30 or self.lease_seconds > 3600:
-            raise ValueError("EDUGRADE_IMAGE_QUALITY_LEASE_SECONDS must be between 30 and 3600")
+        validate_lease_timing(self.lease_seconds, self.heartbeat_interval, self.heartbeat_timeout)
         if not self.worker_instance_id.strip():
             raise ValueError("EDUGRADE_IMAGE_QUALITY_WORKER_ID must not be empty")
         if not math.isfinite(self.poll_interval) or self.poll_interval <= 0:
@@ -52,6 +55,8 @@ def load_engine_config() -> EngineConfig:
         lease_seconds=_int_env("EDUGRADE_IMAGE_QUALITY_LEASE_SECONDS", 300),
         worker_instance_id=os.getenv("EDUGRADE_IMAGE_QUALITY_WORKER_ID") or f"{socket.gethostname()}-image-quality",
         poll_interval=float(os.getenv("EDUGRADE_IMAGE_QUALITY_POLL_INTERVAL", "5")),
+        heartbeat_interval=float(os.getenv("EDUGRADE_IMAGE_QUALITY_HEARTBEAT_INTERVAL", "10")),
+        heartbeat_timeout=float(os.getenv("EDUGRADE_IMAGE_QUALITY_HEARTBEAT_TIMEOUT", "3")),
     )
 
 

@@ -4,10 +4,11 @@ import hashlib
 import io
 import logging
 import math
-import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Self
+from typing import Any
+
+from edugrade_worker_runtime import LeaseHeartbeat, validate_lease_timing
 
 from .api import APIError, AuthenticationError
 from .engine import OCREngine
@@ -41,19 +42,7 @@ class WorkerConfig:
             raise ValueError("engine and engine_version must be configured")
         if self.cpu_threads < 1 or self.cpu_threads > 64:
             raise ValueError("cpu_threads must be between 1 and 64")
-        if self.lease_seconds < 30 or self.lease_seconds > 3600:
-            raise ValueError("lease_seconds must be between 30 and 3600")
-        if (
-            not math.isfinite(self.heartbeat_interval)
-            or not math.isfinite(self.heartbeat_timeout)
-            or self.heartbeat_interval <= 0
-            or self.heartbeat_timeout <= 0
-        ):
-            raise ValueError("heartbeat interval and timeout must be greater than zero")
-        if self.heartbeat_interval >= self.lease_seconds:
-            raise ValueError("heartbeat_interval must be shorter than lease_seconds")
-        if self.heartbeat_interval + self.heartbeat_timeout >= self.lease_seconds:
-            raise ValueError("heartbeat interval plus timeout must be shorter than the lease")
+        validate_lease_timing(self.lease_seconds, self.heartbeat_interval, self.heartbeat_timeout)
 
 
 class OCRRunner:
@@ -304,7 +293,7 @@ class OCRRunner:
         return None
 
 
-class _LeaseHeartbeat:
+class _LeaseHeartbeat(LeaseHeartbeat):
     def __init__(
         self,
         *,
@@ -321,49 +310,14 @@ class _LeaseHeartbeat:
         self.runtime_task_id = runtime_task_id
         self.lease_token = lease_token
         self.worker_id = worker_id
-        self.interval = interval
-        self.lease_seconds = lease_seconds
-        self.request_timeout = request_timeout
         self.tenant_id = tenant_id
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._error: Exception | None = None
-
-    def __enter__(self) -> Self:
-        self._send()
-        self._thread = threading.Thread(target=self._run, name=f"ocr-heartbeat-{self.worker_id}", daemon=True)
-        self._thread.start()
-        return self
-
-    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
-        try:
-            self.stop()
-        except Exception:
-            if _exc_type is None:
-                raise
-
-    def stop(self) -> None:
-        self._stop.set()
-        thread = self._thread
-        if thread is None:
-            return
-        thread.join(timeout=self.request_timeout + 0.5)
-        if thread.is_alive():
-            raise RuntimeError("heartbeat request did not stop within its bounded timeout")
-        self._thread = None
-        self.raise_if_failed()
-
-    def raise_if_failed(self) -> None:
-        if self._error is not None:
-            raise self._error
-
-    def _run(self) -> None:
-        while not self._stop.wait(self.interval):
-            try:
-                self._send()
-            except Exception as exc:  # noqa: BLE001 - heartbeat transports may raise non-API exceptions.
-                self._error = exc
-                return
+        super().__init__(
+            send=self._send,
+            interval=interval,
+            lease_seconds=lease_seconds,
+            request_timeout=request_timeout,
+            thread_name=f"ocr-heartbeat-{worker_id}",
+        )
 
     def _send(self) -> None:
         self.api.heartbeat_task(

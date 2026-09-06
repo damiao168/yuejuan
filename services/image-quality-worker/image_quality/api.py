@@ -63,6 +63,24 @@ class EduGradeImageQualityClient:
             "worker_instance_id": worker_instance_id,
         }
 
+    def heartbeat(self, job: dict[str, Any], worker_instance_id: str, lease_seconds: int, timeout: float) -> None:
+        task_id = str(job.get("runtime_task_id") or "").strip()
+        lease_token = str(job.get("lease_token") or "").strip()
+        if not task_id or not lease_token:
+            raise APIError("image quality job is missing its task capability")
+        self._request(
+            "POST",
+            f"/api/v1/internal/worker/tasks/{task_id}/heartbeat",
+            {
+                "lease_token": lease_token,
+                "worker_service": "image-quality-worker",
+                "worker_instance_id": worker_instance_id,
+                "state": "running",
+                "lease_seconds": lease_seconds,
+            },
+            timeout=timeout,
+        )
+
     def download(self, url: str) -> bytes:
         req = self._build_request("GET", url, None)
         try:
@@ -112,10 +130,10 @@ class EduGradeImageQualityClient:
     def submit_failure(self, run_id: str, payload: dict[str, Any]) -> None:
         self.submit_result(run_id, payload)
 
-    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None, require_auth: bool = True) -> dict[str, Any]:
+    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None, require_auth: bool = True, timeout: float = 60) -> dict[str, Any]:
         req = self._build_request(method, path, payload if method != "GET" else None, require_auth=require_auth)
         try:
-            with request.urlopen(req, timeout=60) as response:
+            with request.urlopen(req, timeout=timeout) as response:
                 raw = response.read()
         except error.HTTPError as exc:
             if exc.code == 401:

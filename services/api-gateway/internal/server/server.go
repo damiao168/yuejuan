@@ -131,7 +131,7 @@ func NewRouterFull(cfg config.Config, logg *logger.Logger, checkers []deps.Check
 }
 
 func NewRouterWithApplicationStores(cfg config.Config, logg *logger.Logger, checkers []deps.Checker, objectStore files.ObjectStorage, stores ApplicationStores) http.Handler {
-	modules := NewMemoryApplicationModules(MemoryApplicationDependencies{
+	modules := NewApplicationModules(ApplicationDependencies{
 		Config: cfg, ObjectStore: objectStore,
 	}, stores)
 	return NewRouterComplete(RouterDependencies{

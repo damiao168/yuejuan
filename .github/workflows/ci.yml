@@ -280,15 +280,16 @@ jobs:
           cache: pip
           cache-dependency-path: |
             ai-services/requirements.txt
+            packages/worker-runtime-python/pyproject.toml
             services/ocr-worker/pyproject.toml
             services/image-quality-worker/pyproject.toml
             services/page-processing-worker/pyproject.toml
             services/subjective-grading-worker/pyproject.toml
             services/math-verification-worker/pyproject.toml
       - run: python -m pip install --upgrade pip==26.1.2 setuptools==83.0.0
-      - run: python -m pip install ruff==0.16.0 -r ai-services/requirements.txt -e services/ocr-worker -e services/image-quality-worker -e services/page-processing-worker -e services/subjective-grading-worker -e services/math-verification-worker
+      - run: python -m pip install ruff==0.16.0 -r ai-services/requirements.txt -e packages/worker-runtime-python -e services/ocr-worker -e services/image-quality-worker -e services/page-processing-worker -e services/subjective-grading-worker -e services/math-verification-worker
       - run: python -m pip check
-      - run: ruff check ai-services services/image-quality-worker services/ocr-worker services/page-processing-worker services/subjective-grading-worker services/math-verification-worker lab/evals/math-recognition
+      - run: ruff check ai-services packages/worker-runtime-python services/image-quality-worker services/ocr-worker services/page-processing-worker services/subjective-grading-worker services/math-verification-worker lab/evals/math-recognition
 
   python-security:
     runs-on: ubuntu-latest
@@ -304,6 +305,7 @@ jobs:
       - run: >-
           python -m pip install pip-audit==2.10.1
           -r ai-services/requirements.txt
+          -e packages/worker-runtime-python
           -e services/ocr-worker
           -e services/image-quality-worker
           -e services/page-processing-worker
@@ -325,19 +327,19 @@ jobs:
         include:
           - name: ocr
             package: services/ocr-worker
-            install: python -m pip install -e 'services/ocr-worker[test]'
+            install: python -m pip install -e packages/worker-runtime-python -e 'services/ocr-worker[test]'
             command: python -m pytest -q services/ocr-worker/tests
           - name: image-quality
             package: services/image-quality-worker
-            install: python -m pip install -e services/image-quality-worker
+            install: python -m pip install -e packages/worker-runtime-python -e services/image-quality-worker
             command: python -m pytest -q services/image-quality-worker/tests
           - name: page-processing
             package: services/page-processing-worker
-            install: python -m pip install -e services/page-processing-worker
+            install: python -m pip install -e packages/worker-runtime-python -e services/page-processing-worker
             command: python -m pytest -q services/page-processing-worker/tests
           - name: subjective-grading
             package: services/subjective-grading-worker
-            install: python -m pip install -e services/subjective-grading-worker
+            install: python -m pip install -e packages/worker-runtime-python -e services/subjective-grading-worker
             command: python -m pytest -q services/subjective-grading-worker/tests
           - name: math-verification
             package: services/math-verification-worker

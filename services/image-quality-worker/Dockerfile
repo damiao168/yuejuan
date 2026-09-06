@@ -6,6 +6,7 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+COPY packages/worker-runtime-python /tmp/worker-runtime-python
 COPY services/image-quality-worker/pyproject.toml ./pyproject.toml
 RUN python -m pip install --no-cache-dir --timeout 180 --retries 10 \
       "pip==26.1.2" "setuptools==83.0.0" \
@@ -13,7 +14,7 @@ RUN python -m pip install --no-cache-dir --timeout 180 --retries 10 \
       "numpy==2.4.6" "opencv-python-headless==5.0.0.93" "pillow==12.3.0"
 
 COPY services/image-quality-worker/image_quality ./image_quality
-RUN python -m pip install --no-cache-dir --no-deps .
+RUN python -m pip install --no-cache-dir --no-deps /tmp/worker-runtime-python .
 
 USER nobody
 
