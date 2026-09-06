@@ -179,8 +179,25 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 		t.Fatalf("ocr task should complete in test database workflow: %#v", ocrDone)
 	}
 	processingStore := processing.NewPostgresStore(db)
-	if err := processingStore.RefreshExam(context.Background(), demoTenantID, examID); err != nil {
-		t.Fatalf("refresh processing projection: %v", err)
+	e2eProjectProcessingUntilCurrent(t, db, processingStore, demoTenantID, examID)
+	var requestedBefore, projectedBefore int64
+	if err := db.QueryRow(`SELECT requested_version,projected_version FROM processing_projection_cursor WHERE tenant_id=$1::uuid AND exam_id=$2::uuid`, demoTenantID, examID).Scan(&requestedBefore, &projectedBefore); err != nil {
+		t.Fatalf("read processing cursor before API queries: %v", err)
+	}
+	summaryResponse := e2eGetJSON(t, router, "/api/v1/exams/"+examID+"/processing/summary", adminToken, http.StatusOK)["summary"].(map[string]any)
+	if summaryResponse["generated_at"] == "1970-01-01T00:00:00Z" {
+		t.Fatalf("processing summary must expose the completed projection time: %#v", summaryResponse)
+	}
+	exceptionResponse := e2eGetJSON(t, router, "/api/v1/processing/exceptions?exam_id="+examID, adminToken, http.StatusOK)
+	if exceptionResponse["projected_at"] == nil {
+		t.Fatalf("processing exception list must expose the completed projection time: %#v", exceptionResponse)
+	}
+	var requestedAfter, projectedAfter int64
+	if err := db.QueryRow(`SELECT requested_version,projected_version FROM processing_projection_cursor WHERE tenant_id=$1::uuid AND exam_id=$2::uuid`, demoTenantID, examID).Scan(&requestedAfter, &projectedAfter); err != nil {
+		t.Fatalf("read processing cursor after API queries: %v", err)
+	}
+	if requestedAfter != requestedBefore || projectedAfter != projectedBefore {
+		t.Fatalf("GET processing endpoints must be read-only: before=(%d,%d) after=(%d,%d)", requestedBefore, projectedBefore, requestedAfter, projectedAfter)
 	}
 	exceptions, err := processingStore.ListExceptions(context.Background(), demoTenantID, processing.ExceptionFilter{ExamID: examID, Limit: 25})
 	if err != nil || len(exceptions.Exceptions) != 1 {
@@ -190,9 +207,10 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	if err != nil || assigned.Status != processing.ExceptionAssigned {
 		t.Fatalf("assign projected OCR exception: %#v, %v", assigned, err)
 	}
-	if err := processingStore.RefreshExam(context.Background(), demoTenantID, examID); err != nil {
-		t.Fatalf("refresh processing projection after assignment: %v", err)
+	if _, err := db.Exec(`UPDATE ocr_task SET updated_at=clock_timestamp() WHERE tenant_id=$1::uuid AND id=$2::uuid`, demoTenantID, ocrTaskID); err != nil {
+		t.Fatalf("request processing projection after assignment: %v", err)
 	}
+	e2eProjectProcessingUntilCurrent(t, db, processingStore, demoTenantID, examID)
 	preserved, err := processingStore.GetException(context.Background(), demoTenantID, assigned.ID)
 	if err != nil || preserved.Status != processing.ExceptionAssigned || preserved.AssignedTo != graderID {
 		t.Fatalf("query refresh must preserve manual assignment: %#v, %v", preserved, err)
@@ -281,6 +299,34 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	audits := e2eGetJSON(t, router, "/api/v1/audit-logs?limit=200", adminToken, http.StatusOK)["audit_logs"].([]any)
 	e2eAssertAuditActions(t, audits, []string{"score.roster_attendance_updated", "score.published", "appeal.assigned", "appeal.teacher_recommendation_submitted", "appeal.reviewed", "review.human_grade_submitted"})
+}
+
+func e2eProjectProcessingUntilCurrent(t *testing.T, db *sql.DB, store *processing.PostgresStore, tenantID, examID string) {
+	t.Helper()
+	projector := processing.NewProjector(store, processing.ProjectorOptions{
+		Owner: "e2e-processing-projector-" + uuid.NewString(), PollInterval: time.Millisecond,
+	})
+	for attempt := 0; attempt < 50; attempt++ {
+		var current bool
+		if err := db.QueryRow(`
+SELECT projected_version >= requested_version
+FROM processing_projection_cursor
+WHERE tenant_id=$1::uuid AND exam_id=$2::uuid
+`, tenantID, examID).Scan(&current); err != nil {
+			t.Fatalf("read processing projection cursor: %v", err)
+		}
+		if current {
+			return
+		}
+		worked, err := projector.RunOnce(context.Background())
+		if err != nil {
+			t.Fatalf("run durable processing projector: %v", err)
+		}
+		if !worked {
+			t.Fatalf("processing projection remained dirty without a claimable job")
+		}
+	}
+	t.Fatal("processing projection did not catch up to its requested source version")
 }
 
 func e2eAssertSchoolAdminRBACBackfill(t *testing.T, db *sql.DB) {

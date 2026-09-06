@@ -646,7 +646,7 @@ export type ProcessingSummaryResponse = { "summary": ProcessingSummary; };
 
 export type ProcessingException = { "id": string; "exam_id": string; "page_id": string; "source_type": string; "source_id": string; "code": ProcessingIssueCode; "severity": ProcessingExceptionSeverity; "blocking": boolean; "status": ProcessingExceptionStatus; "assigned_to"?: string; "details": Record<string, unknown>; "created_at": string; "updated_at": string; "resolved_at"?: string | null; "resolution"?: string; "retry_source_type"?: string; "retry_source_id"?: string; };
 
-export type ProcessingExceptionListResponse = { "exceptions": Array<ProcessingException>; "next_cursor"?: string; "has_more": boolean; };
+export type ProcessingExceptionListResponse = { "exceptions": Array<ProcessingException>; "next_cursor"?: string; "has_more": boolean; "projected_at"?: string; };
 
 export type AssignProcessingExceptionRequest = { "assignee_id": string; };
 

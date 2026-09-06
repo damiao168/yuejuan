@@ -22,7 +22,7 @@ func (s *PostgresStore) RefreshExam(ctx context.Context, tenantID, examID string
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(examID) == "" {
 		return ErrInvalidInput
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return err
 	}
@@ -46,15 +46,17 @@ func (s *PostgresStore) Summary(ctx context.Context, tenantID, examID string) (S
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(examID) == "" {
 		return Summary{}, ErrInvalidInput
 	}
-	result := Summary{ExamID: examID, ByStage: []StageCount{}, Issues: []IssueCount{}, GeneratedAt: time.Now().UTC()}
+	result := Summary{ExamID: examID, ByStage: []StageCount{}, Issues: []IssueCount{}}
 	if err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*),
        COUNT(*) FILTER (WHERE current_stage='READY'),
        COUNT(*) FILTER (WHERE blocking),
-       COUNT(*) FILTER (WHERE current_stage<>'READY' AND NOT blocking)
+       COUNT(*) FILTER (WHERE current_stage<>'READY' AND NOT blocking),
+       COALESCE((SELECT projected_at FROM processing_projection_cursor
+                 WHERE tenant_id=$1::uuid AND exam_id=$2::uuid), 'epoch'::timestamptz)
 FROM submission_page_processing_state
 WHERE tenant_id=$1::uuid AND exam_id=$2::uuid
-`, tenantID, examID).Scan(&result.TotalPages, &result.ReadyPages, &result.BlockedPages, &result.PendingPages); err != nil {
+`, tenantID, examID).Scan(&result.TotalPages, &result.ReadyPages, &result.BlockedPages, &result.PendingPages, &result.GeneratedAt); err != nil {
 		return Summary{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
@@ -148,6 +150,18 @@ LIMIT $9
 	if result.HasMore && len(result.Exceptions) > 0 {
 		last := result.Exceptions[len(result.Exceptions)-1]
 		result.NextCursor = last.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + last.ID
+	}
+	var projectedAt sql.NullTime
+	if err := s.db.QueryRowContext(ctx, `
+SELECT MAX(projected_at)
+FROM processing_projection_cursor
+WHERE tenant_id=$1::uuid AND ($2='' OR exam_id::text=$2)
+`, tenantID, filter.ExamID).Scan(&projectedAt); err != nil {
+		return ListResult{}, err
+	}
+	if projectedAt.Valid {
+		value := projectedAt.Time.UTC()
+		result.ProjectedAt = &value
 	}
 	return result, nil
 }

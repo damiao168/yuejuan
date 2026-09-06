@@ -14245,7 +14245,7 @@
           "blocked_pages": { "type": "integer", "minimum": 0 }, "pending_pages": { "type": "integer", "minimum": 0 },
           "by_stage": { "type": "array", "items": { "$ref": "#/components/schemas/ProcessingStageCount" } },
           "issues": { "type": "array", "items": { "$ref": "#/components/schemas/ProcessingIssueCount" } },
-          "generated_at": { "type": "string", "format": "date-time" }
+          "generated_at": { "type": "string", "format": "date-time", "description": "Time the durable processing projection most recently completed; epoch when it has not run yet." }
         }
       },
       "ProcessingSummaryResponse": {
@@ -14265,7 +14265,7 @@
       },
       "ProcessingExceptionListResponse": {
         "type": "object", "additionalProperties": false, "required": ["exceptions", "has_more"],
-        "properties": { "exceptions": { "type": "array", "items": { "$ref": "#/components/schemas/ProcessingException" } }, "next_cursor": { "type": "string" }, "has_more": { "type": "boolean" } }
+        "properties": { "exceptions": { "type": "array", "items": { "$ref": "#/components/schemas/ProcessingException" } }, "next_cursor": { "type": "string" }, "has_more": { "type": "boolean" }, "projected_at": { "type": "string", "format": "date-time", "description": "Most recent durable projection completion in the selected scope." } }
       },
       "AssignProcessingExceptionRequest": {
         "type": "object", "additionalProperties": false, "required": ["assignee_id"], "properties": { "assignee_id": { "type": "string", "minLength": 1 } }

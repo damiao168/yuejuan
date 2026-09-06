@@ -190,9 +190,10 @@ type ExceptionFilter struct {
 }
 
 type ListResult struct {
-	Exceptions []Exception `json:"exceptions"`
-	NextCursor string      `json:"next_cursor,omitempty"`
-	HasMore    bool        `json:"has_more"`
+	Exceptions  []Exception `json:"exceptions"`
+	NextCursor  string      `json:"next_cursor,omitempty"`
+	HasMore     bool        `json:"has_more"`
+	ProjectedAt *time.Time  `json:"projected_at,omitempty"`
 }
 
 type AssignInput struct {
@@ -210,7 +211,6 @@ type RetryTarget struct {
 }
 
 type Store interface {
-	RefreshExam(context.Context, string, string) error
 	Summary(context.Context, string, string) (Summary, error)
 	ListExceptions(context.Context, string, ExceptionFilter) (ListResult, error)
 	GetException(context.Context, string, string) (Exception, error)
@@ -218,4 +218,21 @@ type Store interface {
 	ResolveException(context.Context, string, string, string, ResolveInput) (Exception, error)
 	RetryTarget(context.Context, string, string) (RetryTarget, error)
 	ParserQualityForSegment(context.Context, string, string, assessment.SubjectCode, string) (*float64, error)
+}
+
+// ProjectionRefresh identifies one durable source version claimed by the
+// background projector. RequestedVersion prevents a concurrent source change
+// from being acknowledged by an older refresh.
+type ProjectionRefresh struct {
+	TenantID         string
+	ExamID           string
+	RequestedVersion int64
+	AttemptCount     int
+}
+
+type ProjectionStore interface {
+	ClaimProjection(context.Context, string, time.Duration) (ProjectionRefresh, bool, error)
+	RefreshExam(context.Context, string, string) error
+	CompleteProjection(context.Context, string, ProjectionRefresh) error
+	FailProjection(context.Context, string, ProjectionRefresh, string, time.Duration) error
 }

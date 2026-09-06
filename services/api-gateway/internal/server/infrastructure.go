@@ -14,6 +14,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/observability"
 	"edugrade-enterprise/services/api-gateway/internal/outbox"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
+	"edugrade-enterprise/services/api-gateway/internal/processing"
 )
 
 // Infrastructure owns process-level resources shared by application modules.
@@ -88,6 +89,7 @@ func newInfrastructure(cfg config.Config, logg *logger.Logger) (*Infrastructure,
 	infra.FileReconciler = files.NewReconciler(postgresDB, infra.ObjectStore)
 	infra.startFileReconciliation()
 	infra.startOutboxDispatcher()
+	infra.startProcessingProjector()
 	return infra, nil
 }
 
@@ -156,6 +158,35 @@ func (i *Infrastructure) startOutboxDispatcher() {
 		stopDispatch()
 		select {
 		case <-dispatchDone:
+		case <-time.After(5 * time.Second):
+			return context.DeadlineExceeded
+		}
+		return nil
+	})
+}
+
+func (i *Infrastructure) startProcessingProjector() {
+	projector := processing.NewProjector(
+		processing.NewPostgresStore(i.DB),
+		processing.ProjectorOptions{
+			Owner:    i.Config.Service.Name + "-processing-" + time.Now().UTC().Format("20060102T150405.000000000"),
+			LeaseTTL: 5 * time.Minute,
+		},
+	)
+	projectContext, stopProject := context.WithCancel(context.Background())
+	projectDone := make(chan struct{})
+	go func() {
+		defer close(projectDone)
+		projector.Run(projectContext, func(err error) {
+			i.Logger.Error(context.Background(), "processing projection refresh failed", map[string]any{
+				"event": "processing_projection_failed", "error": err.Error(),
+			})
+		})
+	}()
+	i.cleanup = append(i.cleanup, func() error {
+		stopProject()
+		select {
+		case <-projectDone:
 		case <-time.After(5 * time.Second):
 			return context.DeadlineExceeded
 		}

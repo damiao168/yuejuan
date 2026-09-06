@@ -66,6 +66,10 @@ func TestStoryA14ToA26OpenAPIContract(t *testing.T) {
 	assertRequired(t, object(t, schemas, "CaptureUploadInitRequest"), []string{"sha256", "size", "mime", "exam", "batch", "idempotency_key"})
 	assertRequired(t, object(t, schemas, "ProcessingSummary"), []string{"total_pages", "ready_pages", "blocked_pages", "pending_pages", "by_stage", "issues"})
 	assertRequired(t, object(t, schemas, "ProcessingException"), []string{"code", "severity", "blocking", "status", "details"})
+	projectionTimestamp := object(t, object(t, object(t, schemas, "ProcessingExceptionListResponse"), "properties"), "projected_at")
+	if projectionTimestamp["type"] != "string" || projectionTimestamp["format"] != "date-time" {
+		t.Fatalf("processing exception list must expose its projection timestamp: %#v", projectionTimestamp)
+	}
 
 	studentQuestion := object(t, schemas, "StudentPublishedQuestion")
 	studentQuestionProperties := object(t, studentQuestion, "properties")

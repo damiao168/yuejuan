@@ -3,7 +3,6 @@ package processing
 import (
 	"context"
 	"strings"
-	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/assessment"
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
@@ -12,22 +11,18 @@ import (
 type Service struct {
 	store   Store
 	runtime workerruntime.Store
-	now     func() time.Time
 }
 
 func NewService(store Store, runtime workerruntime.Store) *Service {
-	return &Service{store: store, runtime: runtime, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{store: store, runtime: runtime}
 }
 
-// Summary refreshes only the compact projection before aggregating it. The
-// implementation is set-oriented in Postgres; it never starts processing in
-// an HTTP request.
+// Summary is deliberately read-only. Source changes are projected by the
+// durable background projector, so a GET never takes write locks or starts
+// pipeline work.
 func (s *Service) Summary(ctx context.Context, tenantID, examID string) (Summary, error) {
 	if s == nil || s.store == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(examID) == "" {
 		return Summary{}, ErrInvalidInput
-	}
-	if err := s.store.RefreshExam(ctx, tenantID, examID); err != nil {
-		return Summary{}, err
 	}
 	return s.store.Summary(ctx, tenantID, examID)
 }
@@ -41,14 +36,6 @@ func (s *Service) ListExceptions(ctx context.Context, tenantID string, filter Ex
 	}
 	if filter.Severity != "" && !filter.Severity.Valid() || filter.Stage != "" && !filter.Stage.Valid() || filter.Status != "" && !filter.Status.Valid() {
 		return ListResult{}, ErrInvalidInput
-	}
-	// An exam-specific exception list is also refreshed. Global operations
-	// searches deliberately read the durable projection rather than issuing an
-	// unbounded refresh across every school exam.
-	if filter.ExamID != "" {
-		if err := s.store.RefreshExam(ctx, tenantID, filter.ExamID); err != nil {
-			return ListResult{}, err
-		}
 	}
 	return s.store.ListExceptions(ctx, tenantID, filter)
 }

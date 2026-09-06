@@ -3,6 +3,7 @@ package processing
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,13 +15,14 @@ import (
 // MemoryStore is intentionally a projection-only test adapter. Production
 // composes PostgresStore, which reads the actual capture/OCR/quality facts.
 type MemoryStore struct {
-	mu         sync.RWMutex
-	states     map[string]PageState
-	exceptions map[string]Exception
+	mu          sync.RWMutex
+	states      map[string]PageState
+	exceptions  map[string]Exception
+	projectedAt map[string]time.Time
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{states: map[string]PageState{}, exceptions: map[string]Exception{}}
+	return &MemoryStore{states: map[string]PageState{}, exceptions: map[string]Exception{}, projectedAt: map[string]time.Time{}}
 }
 
 func stateKey(tenantID, pageID string) string { return tenantID + ":" + pageID }
@@ -38,6 +40,10 @@ func (s *MemoryStore) PutState(tenantID string, state PageState) {
 		state.UpdatedAt = state.SourceObservedAt
 	}
 	s.states[stateKey(tenantID, state.PageID)] = state
+	projectionKey := tenantID + ":" + state.ExamID
+	if current := s.projectedAt[projectionKey]; state.UpdatedAt.After(current) {
+		s.projectedAt[projectionKey] = state.UpdatedAt
+	}
 	if state.IssueCode == "" {
 		return
 	}
@@ -79,12 +85,10 @@ func stateDetails(state PageState) map[string]any {
 	return map[string]any{"current_stage": state.CurrentStage, "retryable": state.Retryable, "retry_source_type": state.RetrySourceType, "retry_source_id": state.RetrySourceID, "source_observed_at": state.SourceObservedAt.UTC().Format(time.RFC3339Nano)}
 }
 
-func (s *MemoryStore) RefreshExam(_ context.Context, _ string, _ string) error { return nil }
-
 func (s *MemoryStore) Summary(_ context.Context, tenantID, examID string) (Summary, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	result := Summary{ExamID: examID, ByStage: []StageCount{}, Issues: []IssueCount{}, GeneratedAt: time.Now().UTC()}
+	result := Summary{ExamID: examID, ByStage: []StageCount{}, Issues: []IssueCount{}, GeneratedAt: s.projectedAt[tenantID+":"+examID]}
 	stages := map[Stage]int{}
 	issues := map[IssueCode]int{}
 	for key, state := range s.states {
@@ -136,6 +140,18 @@ func (s *MemoryStore) ListExceptions(_ context.Context, tenantID string, filter 
 		filter.Limit = 25
 	}
 	result := ListResult{Exceptions: items}
+	var latest time.Time
+	for key, projectedAt := range s.projectedAt {
+		if (filter.ExamID == "" && strings.HasPrefix(key, tenantID+":")) || key == tenantID+":"+filter.ExamID {
+			if projectedAt.After(latest) {
+				latest = projectedAt
+			}
+		}
+	}
+	if !latest.IsZero() {
+		value := latest
+		result.ProjectedAt = &value
+	}
 	if len(result.Exceptions) > filter.Limit {
 		result.HasMore = true
 		result.Exceptions = result.Exceptions[:filter.Limit]
