@@ -70,8 +70,10 @@ if (!Array.isArray(capability.permissions) || capability.permissions.length !== 
 const expectedCommands = new Set([
   "archive_durable_scan_queue_items",
   "append_local_log",
+  "begin_spool_local_asset",
   "capability_statuses",
   "clear_local_logs",
+  "complete_spool_local_asset",
   "delete_desktop_credentials",
   "delete_scanner_profile",
   "list_durable_drafts",
@@ -83,14 +85,15 @@ const expectedCommands = new Set([
   "persist_durable_scan_queue_item",
   "purge_expired_durable_drafts",
   "read_durable_local_asset",
+  "read_durable_local_asset_chunk",
   "runtime_diagnostics",
   "run_scanner_preflight",
   "save_durable_draft",
   "save_desktop_credentials",
   "save_scanner_profile",
   "scanner_integration_status",
-  "spool_local_asset",
-  "update_durable_draft_status"
+  "update_durable_draft_status",
+  "write_spool_local_asset_chunk"
 ]);
 const invokedCommands = new Set();
 
