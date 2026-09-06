@@ -220,6 +220,7 @@ FROM inserted_submissions
 		t.Fatalf("seed 497 roster submissions: %v", err)
 	}
 
+	const rosterReadBudget = 5 * time.Second
 	storeStarted := time.Now()
 	directRoster, err := score.NewPostgresStore(db).ListRoster(t.Context(), tenantID, examID)
 	if err != nil {
@@ -228,7 +229,11 @@ FROM inserted_submissions
 	if directRoster.Summary.Expected != 500 {
 		t.Fatalf("direct roster expected 500 students: %#v", directRoster.Summary)
 	}
-	t.Logf("store reconciled 500 roster entries in %s", time.Since(storeStarted).Round(time.Millisecond))
+	storeElapsed := time.Since(storeStarted)
+	t.Logf("store reconciled 500 roster entries in %s (budget %s)", storeElapsed.Round(time.Millisecond), rosterReadBudget)
+	if storeElapsed > rosterReadBudget {
+		t.Fatalf("500-student roster store read exceeded performance baseline: %s > %s", storeElapsed, rosterReadBudget)
+	}
 	started := time.Now()
 	roster := e2eGetJSON(t, router, "/api/v1/exams/"+examID+"/roster", adminToken, http.StatusOK)["roster"].(map[string]any)
 	summary := roster["summary"].(map[string]any)
@@ -236,7 +241,11 @@ FROM inserted_submissions
 		e2eFloat(t, summary, "graded") != 497 || e2eFloat(t, summary, "unresolved") != 3 {
 		t.Fatalf("500-student roster summary mismatch: %#v", summary)
 	}
-	t.Logf("reconciled 500 roster entries in %s", time.Since(started).Round(time.Millisecond))
+	httpElapsed := time.Since(started)
+	t.Logf("HTTP reconciled 500 roster entries in %s (budget %s)", httpElapsed.Round(time.Millisecond), rosterReadBudget)
+	if httpElapsed > rosterReadBudget {
+		t.Fatalf("500-student roster HTTP read exceeded performance baseline: %s > %s", httpElapsed, rosterReadBudget)
+	}
 	quality := e2eGetJSON(t, router, "/api/v1/exams/"+examID+"/grades/quality?stage=publish", adminToken, http.StatusOK)
 	e2eAssertStory060QualityIssue(t, quality, "missing_submission_unresolved", 3)
 

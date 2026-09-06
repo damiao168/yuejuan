@@ -31,6 +31,7 @@ export interface ApiErrorShape {
   code: string;
   message: string;
   request_id?: string;
+  trace_id?: string;
   field_errors?: Record<string, string[]>;
   conflict_revision?: number;
 }
@@ -42,6 +43,7 @@ export function normalizeApiError(payload: unknown): ApiErrorShape {
     code: typeof envelope.code === "string" ? envelope.code : "request_failed",
     message: typeof envelope.message === "string" ? envelope.message : "Request failed",
     request_id: typeof candidate.request_id === "string" ? candidate.request_id : undefined,
+    trace_id: typeof candidate.trace_id === "string" ? candidate.trace_id : undefined,
     field_errors: isFieldErrors(candidate.field_errors) ? candidate.field_errors : undefined,
     conflict_revision: typeof candidate.conflict_revision === "number" ? candidate.conflict_revision : undefined
   };

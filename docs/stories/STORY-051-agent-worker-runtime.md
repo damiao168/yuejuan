@@ -696,6 +696,12 @@ docker compose --env-file infra/docker-compose/.env.example -f infra/docker-comp
 - source record 与 runtime task 当前由同一 HTTP 请求顺序创建，但还不是同一个数据库 transaction。创建失败会显式返回错误，不会假报成功；后续应在引入 River transactional enqueue 或专用 transaction coordinator 时收敛。
 - River/Temporal 均未接入，不能在部署材料中宣称已经使用。
 
+## 2026-09 Behavior Gate Migration
+
+原 `check:story051` 只检查固定源码字符串，无法证明并发领取、租约过期恢复、迟到结果拒绝或事务回滚。该脚本及 CI 项已移除；这些不变量现在由 `internal/workerruntime`、`internal/imagequality` 的 Go 行为测试、各 Python worker 测试以及 PostgreSQL/生产装配 E2E 直接验证。
+
+路由材料完整性由生成的 `openapi/route-coverage.json` 覆盖清单管理，新增或移动实现不再依赖 Story 脚本中的固定文件路径。
+
 ## References
 
 - [River documentation](https://riverqueue.com/docs)

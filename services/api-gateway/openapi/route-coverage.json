@@ -1,0 +1,2917 @@
+{
+  "schema_version": 1,
+  "generated_from": "services/api-gateway/internal/**/*.go",
+  "policy": "Every registered API route is either covered by OpenAPI or explicitly listed as a registered gap.",
+  "counts": {
+    "registered": 415,
+    "openapi": 137,
+    "registered_gaps": 278
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/academic-years",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/agent-tasks/{id}/complete",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/agent-tasks/{id}/fail",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/agent-tasks/{id}/retry",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/agent-tasks/{id}/start",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai-eligibility/decisions/{runItemId}",
+      "source": "services/api-gateway/internal/aieligibility/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getAIEligibilityDecision"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai-eligibility/policy",
+      "source": "services/api-gateway/internal/aieligibility/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getAIEligibilityPolicy"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/ai-eligibility/policy",
+      "source": "services/api-gateway/internal/aieligibility/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "putAIEligibilityPolicy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/ai-grades/{id}/verify-evidence",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai-grading/status",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai-human-disagreements",
+      "source": "services/api-gateway/internal/aidisagreement/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listAIHumanDisagreements"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai-human-disagreements/{id}",
+      "source": "services/api-gateway/internal/aidisagreement/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getAIHumanDisagreement"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/ai-human-disagreements/{id}/classification",
+      "source": "services/api-gateway/internal/aidisagreement/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "classifyAIHumanDisagreement"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/ai-human-disagreements/{id}/route",
+      "source": "services/api-gateway/internal/aidisagreement/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "routeAIHumanDisagreement"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai-human-disagreements/dataset",
+      "source": "services/api-gateway/internal/aidisagreement/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getAIHumanDisagreementDataset"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/answer-groups/{groupId}",
+      "source": "services/api-gateway/internal/answergroup/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getAnswerGroup"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-groups/{groupId}/confirm",
+      "source": "services/api-gateway/internal/answergroup/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "confirmAnswerGroup"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/answer-groups/{groupId}/decision",
+      "source": "services/api-gateway/internal/answergroup/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "putAnswerGroupDecision"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-groups/{groupId}/rollback",
+      "source": "services/api-gateway/internal/answergroup/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "rollbackAnswerGroup"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/answer-groups/{groupId}/samples/{segmentId}",
+      "source": "services/api-gateway/internal/answergroup/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "reviewAnswerGroupSample"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/answer-segments/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/answer-segments/{id}/ai-grades",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/answer-segments/{id}/answer",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/answer-segments/{id}/evidence",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/answer-segments/{id}/image",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "HEAD",
+      "path": "/api/v1/answer-segments/{id}/image",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-segments/{id}/reprocess-score",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-segments/{id}/rule-grade",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-segments/{id}/subjective-ai-grade",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/answer-sheet-print-batches/{id}/package.pdf",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-sheet-print-sheets/{id}/reprint",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-sheet-print-sheets/{id}/revoke",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/answer-sheet-templates/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-sheet-templates/{id}/clone",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-sheet-templates/{id}/lock",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/answer-sheet-templates/{id}/omr-calibrations",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-sheet-templates/{id}/omr-calibrations",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-sheet-templates/{id}/page-barcodes",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/answer-sheet-templates/{id}/print-context",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/answer-sheet-templates/{id}/student-barcodes",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/appeals",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listAppeals"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/appeals",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/appeals/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/appeals/{id}/assign",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/appeals/{id}/close",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/appeals/{id}/recommendation",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/appeals/{id}/review",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/appeals/statistics",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/arbitration-tasks",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/arbitration-tasks",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/arbitration-tasks/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/arbitration-tasks/{id}/assign",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/arbitration-tasks/{id}/submit",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/assessment/question-archetypes",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listAssessmentQuestionArchetypes"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/assessment/subject-profiles",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listAssessmentSubjectProfiles"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/audit-logs",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/audit-logs/export",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/logout",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/logout-all",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/password",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/sessions",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/auth/sessions/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/backmark-batches",
+      "source": "services/api-gateway/internal/backmark/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listBackmarkBatches"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/backmark-batches/{batchId}",
+      "source": "services/api-gateway/internal/backmark/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getBackmarkBatch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/backmark-batches/{batchId}/regrade-jobs",
+      "source": "services/api-gateway/internal/backmark/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "createBackmarkBatchRegradeJob"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/backmark-batches/{batchId}/regrade-preview",
+      "source": "services/api-gateway/internal/backmark/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "previewBackmarkBatchRegrade"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/backmark-items/{itemId}/claim",
+      "source": "services/api-gateway/internal/backmark/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "claimBackmarkItem"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/backmark-items/{itemId}/context",
+      "source": "services/api-gateway/internal/backmark/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getBackmarkItemContext"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/backmark-items/{itemId}/segment-image",
+      "source": "services/api-gateway/internal/backmark/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getBackmarkItemSegmentImage"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/backmark-items/{itemId}/submit",
+      "source": "services/api-gateway/internal/backmark/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "submitBackmarkItem"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/backmark-items/mine",
+      "source": "services/api-gateway/internal/backmark/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listMyBackmarkItems"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/calibration-sessions/{id}",
+      "source": "services/api-gateway/internal/calibration/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/calibration-sessions/{id}/attempts",
+      "source": "services/api-gateway/internal/calibration/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/capture-batches/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture-batches/{id}/cancel",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture-batches/{id}/complete",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture-batches/{id}/files",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/capture-batches/{id}/matching-queue",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/capture-batches/{id}/pages",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture-batches/{id}/process",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture-batches/{id}/reopen",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture-batches/{id}/submissions/merge",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture-batches/{id}/submissions/split",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/capture-pages/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture-pages/{id}/delete",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture-pages/{id}/page-match/confirm",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture-pages/{id}/restore",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture/uploads:init",
+      "source": "services/api-gateway/internal/captureupload/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "initCaptureUpload"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/capture/uploads/{id}/chunks",
+      "source": "services/api-gateway/internal/captureupload/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "putCaptureUploadChunk"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/capture/uploads/{id}/complete",
+      "source": "services/api-gateway/internal/captureupload/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "completeCaptureUpload"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/classes",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/classes",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/classes/{id}/teachers",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/summary",
+      "source": "services/api-gateway/internal/dashboard/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/double-mark-policies",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/double-mark-sessions",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/double-mark-sessions",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/double-mark-sessions/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exam-sessions",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exam-templates",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listExams"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/answer-sheet-templates",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/answer-sheet-templates",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/automation-results",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/capture-batches",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/capture-batches",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/confirm-grades",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/exams/{examId}/double-mark-policy",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/finalize",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/grades",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/grades/export",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/grades/quality",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/paper-imports",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listPaperImports"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/paper-imports",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "createPaperImport"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/papers",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/papers",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/processing/summary",
+      "source": "services/api-gateway/internal/processing/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getExamProcessingSummary"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/publish",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/quality-dashboard",
+      "source": "services/api-gateway/internal/qualitydashboard/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getExamQualityDashboard"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/questions",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/questions",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/answer-group-metrics",
+      "source": "services/api-gateway/internal/answergroup/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getAnswerGroupMetrics"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/answer-groups",
+      "source": "services/api-gateway/internal/answergroup/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listAnswerGroups"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/answer-groups/build",
+      "source": "services/api-gateway/internal/answergroup/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "buildAnswerGroups"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/assessment-profile",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "getExamQuestionAssessmentProfile"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/assessment-profile",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "putExamQuestionAssessmentProfile"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/assessment-snapshot",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "getExamQuestionAssessmentSnapshot"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/backmark-batches",
+      "source": "services/api-gateway/internal/backmark/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "createBackmarkBatch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/backmark-preview",
+      "source": "services/api-gateway/internal/backmark/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "previewBackmarkBatch"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/calibration-policy",
+      "source": "services/api-gateway/internal/calibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getCalibrationPolicy"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/calibration-policy",
+      "source": "services/api-gateway/internal/calibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "putCalibrationPolicy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/calibration-sessions",
+      "source": "services/api-gateway/internal/calibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "createCalibrationSession"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/gold-coverage",
+      "source": "services/api-gateway/internal/goldpaper/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getGoldCoverage"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/gold-papers",
+      "source": "services/api-gateway/internal/goldpaper/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "nominateGoldPaper"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/grader-drift/recompute",
+      "source": "services/api-gateway/internal/graderdrift/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "recomputeGraderDrift"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/grader-qualification",
+      "source": "services/api-gateway/internal/calibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getGraderQualification"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/grader-quality-windows",
+      "source": "services/api-gateway/internal/graderdrift/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listGraderQualityWindows"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/regrade-jobs",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "createRegradeJob"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/regrade-preview",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "previewRegrade"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/seed-policy",
+      "source": "services/api-gateway/internal/seedquality/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/exams/{examId}/questions/{questionId}/seed-policy",
+      "source": "services/api-gateway/internal/seedquality/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/readiness",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/readiness/confirm",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/release-gate",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getScoreReleaseGate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/release-gate/policies",
+      "source": "services/api-gateway/internal/releasegate/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "createReleaseGatePolicy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/release-gate/preview",
+      "source": "services/api-gateway/internal/releasegate/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "previewReleaseGate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/release-gate/waivers",
+      "source": "services/api-gateway/internal/releasegate/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "requestReleaseGateWaiver"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/reports/classes",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/reports/export",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/reports/grading-quality",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/reports/overview",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/reports/questions",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/roster",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/exams/{examId}/roster/{studentId}/attendance",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/score-releases",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listScoreReleases"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/score-releases",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "createScoreRelease"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/score-releases/current-published",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getCurrentPublishedScoreRelease"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/score-releases/rollback",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "createScoreReleaseRollback"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/scoring-readiness",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/scoring-runs",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/scoring-summary",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/start-collection",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/submissions",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listExamSubmissions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/submissions",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{examId}/validate-paper-config",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/workspace",
+      "source": "services/api-gateway/internal/workspace/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getExamWorkspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/exams/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{id}/archive",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{id}/candidates/refresh",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/exams/{id}/status",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/files",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/files/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/files/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/files/{id}/download",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/gold-papers",
+      "source": "services/api-gateway/internal/goldpaper/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listGoldPapers"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/gold-papers/{id}",
+      "source": "services/api-gateway/internal/goldpaper/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/gold-papers/{id}/retire",
+      "source": "services/api-gateway/internal/goldpaper/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/gold-papers/{id}/versions",
+      "source": "services/api-gateway/internal/goldpaper/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/gold-papers/{id}/versions/{version}/approve",
+      "source": "services/api-gateway/internal/goldpaper/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/grade-cohorts",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/grades",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/grades",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/grading-evaluations",
+      "source": "services/api-gateway/internal/gradingevaluation/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listGradingEvaluations"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/grading-evaluations",
+      "source": "services/api-gateway/internal/gradingevaluation/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "createGradingEvaluation"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/grading-evaluations/{runId}",
+      "source": "services/api-gateway/internal/gradingevaluation/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getGradingEvaluation"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/grading-evaluations/{runId}/complete",
+      "source": "services/api-gateway/internal/gradingevaluation/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "completeGradingEvaluation"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/grading-evaluations/{runId}/invalidate",
+      "source": "services/api-gateway/internal/gradingevaluation/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "invalidateGradingEvaluation"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/grading-evaluations/{runId}/observations",
+      "source": "services/api-gateway/internal/gradingevaluation/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "addGradingEvaluationObservation"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/grading-evaluations/{runId}/quality-summary",
+      "source": "services/api-gateway/internal/gradingevaluation/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getGradingEvaluationQualitySummary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/grading-evaluations/{runId}/response-difficulty",
+      "source": "services/api-gateway/internal/gradingevaluation/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listGradingEvaluationResponseDifficulty"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/grading-evaluations/{runId}/slice-metrics",
+      "source": "services/api-gateway/internal/gradingevaluation/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listGradingEvaluationSliceMetrics"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/grading-quality-incidents",
+      "source": "services/api-gateway/internal/graderdrift/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listGradingQualityIncidents"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/grading-quality-incidents/{id}/resolve",
+      "source": "services/api-gateway/internal/graderdrift/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "resolveGradingQualityIncident"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/internal/answer-segments/{id}/image",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/capture/files/{fileId}/fail",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/capture/files/{fileId}/result",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/image-quality/jobs/claim",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/image-quality/runs/{runId}/normalized-assets",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/image-quality/runs/{runId}/result",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/math-understanding/tasks/{taskId}/complete",
+      "source": "services/api-gateway/internal/mathunderstanding/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/internal/math-understanding/tasks/{taskId}/input",
+      "source": "services/api-gateway/internal/mathunderstanding/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/omr-runs/{runId}/failure",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/omr-runs/{runId}/result",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/page-registration-corrections/{id}/failure",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/page-registration-corrections/{id}/result",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/page-registration-runs/{runId}/fail",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/page-registration-runs/{runId}/result",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/paper-imports/{id}/decode-result",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/paper-imports/{id}/failure",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/paper-imports/{id}/ocr-result",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/subjective-grading/runs/{runId}/execute",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/subjective-grading/runs/{runId}/failure",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/subjective-grading/runs/{runId}/result",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/internal/worker/metrics",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/worker/tasks",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/internal/worker/tasks/{taskId}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/worker/tasks/{taskId}/cancel",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/worker/tasks/{taskId}/complete",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/worker/tasks/{taskId}/fail",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/worker/tasks/{taskId}/heartbeat",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/worker/tasks/{taskId}/requeue",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/worker/tasks/claim",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/math-answer-segments/{segmentId}/understanding",
+      "source": "services/api-gateway/internal/mathunderstanding/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getMathUnderstanding"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/math-pilot-gates",
+      "source": "services/api-gateway/internal/mathunderstanding/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listMathPilotGates"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/math-pilot-gates/evaluate",
+      "source": "services/api-gateway/internal/mathunderstanding/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "evaluateMathPilotGate"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/math-understanding/{artifactId}/corrections",
+      "source": "services/api-gateway/internal/mathunderstanding/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listMathUnderstandingCorrections"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/math-understanding/{artifactId}/corrections",
+      "source": "services/api-gateway/internal/mathunderstanding/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "createMathUnderstandingCorrection"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/math-understanding/training-export",
+      "source": "services/api-gateway/internal/mathunderstanding/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "exportMathUnderstandingCorrections"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/model-approvals",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-approvals",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-approvals/{id}/revoke",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/model-calibrations",
+      "source": "services/api-gateway/internal/modelcalibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listModelCalibrations"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-calibrations",
+      "source": "services/api-gateway/internal/modelcalibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "createModelCalibration"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/model-calibrations/{calibrationId}",
+      "source": "services/api-gateway/internal/modelcalibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getModelCalibration"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-calibrations/{calibrationId}/approve",
+      "source": "services/api-gateway/internal/modelcalibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "approveModelCalibration"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-calibrations/{calibrationId}/complete",
+      "source": "services/api-gateway/internal/modelcalibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "completeModelCalibration"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/model-calibrations/{calibrationId}/evidence",
+      "source": "services/api-gateway/internal/modelcalibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listModelCalibrationEvidence"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-calibrations/{calibrationId}/evidence",
+      "source": "services/api-gateway/internal/modelcalibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "addModelCalibrationEvidence"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-calibrations/{calibrationId}/invalidate",
+      "source": "services/api-gateway/internal/modelcalibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "invalidateModelCalibration"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/model-deployments",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-deployments",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/model-deployments/{id}/state",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/model-evaluation-runs",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-evaluation-runs",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-evaluation-runs/{id}/candidates",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-evaluation-runs/{id}/complete",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-evaluation-runs/{id}/invalidate",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/model-policy",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/model-policy",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/model-prompts/current",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/model-providers",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-providers",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/model-providers/{id}/status",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/model-sandbox-approvals",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-sandbox-approvals",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-sandbox-approvals/{id}/revoke",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-score-candidates",
+      "source": "services/api-gateway/internal/modelcalibration/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "recordModelScoreCandidate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/model-secrets/probe",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ocr-tasks/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/ocr-tasks/{id}/fail",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ocr-tasks/{id}/input",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/ocr-tasks/{id}/results",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/ocr-tasks/{id}/start",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ocr-tasks/pending",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ocr/availability",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/omr-calibrations/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/omr-calibrations/{id}/approve",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/omr-calibrations/{id}/cases/{caseId}/label",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/omr-calibrations/{id}/discard",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/omr-calibrations/{id}/revoke",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/orchestrations",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/orchestrations/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/orchestrations/{id}/tasks",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/orchestrations/{id}/tasks",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/page-registration-corrections/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/page-registration-corrections/{id}/apply",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/page-registration-corrections/{id}/preview",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/page-registration-corrections/{id}/undo",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/page-registration-runs/{id}/confirm",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/page-registration-runs/{id}/correction-context",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/page-registration-runs/{id}/corrections",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/page-registration-runs/{id}/retry",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/paper-imports/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/paper-imports/{id}/apply",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/paper-imports/{id}/cancel",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/paper-imports/{id}/review",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/paper-imports/{id}/sources",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/paper-imports/{id}/sources",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/model-api-configs",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/model-api-configs",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/platform/model-api-configs/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/model-api-configs/{id}/probe",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/processing/exceptions",
+      "source": "services/api-gateway/internal/processing/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listProcessingExceptions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/processing/exceptions/{id}/assign",
+      "source": "services/api-gateway/internal/processing/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "assignProcessingException"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/processing/exceptions/{id}/resolve",
+      "source": "services/api-gateway/internal/processing/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "resolveProcessingException"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/processing/exceptions/{id}/retry",
+      "source": "services/api-gateway/internal/processing/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "retryProcessingException"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/question-appeals",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listQuestionAppeals"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/question-appeals/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "getQuestionAppeal"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/question-appeals/{id}/answer-image",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "getQuestionAppealAnswerImage"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/question-appeals/{id}/context",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "getQuestionAppealContext"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/question-appeals/{id}/decide",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "decideQuestionAppeal"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/question-appeals/{id}/events",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listQuestionAppealEvents"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/question-appeals/{id}/resolve",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "resolveQuestionAppeal"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/question-appeals/{id}/start-review",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "startQuestionAppealReview"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/questions/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/questions/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/questions/{id}/double-mark-policy",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/questions/{id}/rubric",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/questions/{id}/scoring-rules",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/questions/{id}/scoring-rules",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/regrade-items/{itemId}/candidate",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "recordRegradeCandidate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/regrade-items/{itemId}/claim",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "claimRegradeItem"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/regrade-items/{itemId}/context",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getRegradeItemContext"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/regrade-items/{itemId}/review",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "reviewRegradeItem"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/regrade-items/{itemId}/segment-image",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "downloadRegradeItemSegmentImage"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/regrade-items/mine",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listMyRegradeItems"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/regrade-jobs",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listRegradeJobs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/regrade-jobs/{jobId}",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getRegradeJob"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/regrade-jobs/{jobId}/approve",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "approveRegradeJob"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/regrade-jobs/{jobId}/finalize",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "finalizeRegradeJob"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/regrade-jobs/{jobId}/pause",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "pauseRegradeJob"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/regrade-jobs/{jobId}/resume",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "resumeRegradeJob"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/regrade-jobs/{jobId}/score-release",
+      "source": "services/api-gateway/internal/regraderelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "createRegradeScoreRelease"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/regrade-jobs/{jobId}/start",
+      "source": "services/api-gateway/internal/regrade/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "startRegradeJob"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/release-gate-evidence/{evidenceId}",
+      "source": "services/api-gateway/internal/releasegate/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getReleaseGateEvidence"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/release-gate-waivers/{waiverId}/decision",
+      "source": "services/api-gateway/internal/releasegate/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "decideReleaseGateWaiver"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/review-tasks",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listReviewTasks"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/review-tasks",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/review-tasks/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/review-tasks/{id}/annotations",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/review-tasks/{id}/annotations",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/review-tasks/{id}/assign",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/review-tasks/{id}/context",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/review-tasks/{id}/draft",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/review-tasks/{id}/draft",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/review-tasks/{id}/original-image",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/review-tasks/{id}/release",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/review-tasks/{id}/renew",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/review-tasks/{id}/return",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/review-tasks/{id}/segment-image",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/review-tasks/{id}/submit",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/review-tasks/{id}/workspace",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/review-tasks/batch-assign",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/review-tasks/next",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/review/annotations/{annotationId}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "deleteReviewAnnotation"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/review/annotations/{annotationId}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "getReviewAnnotation"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/review/annotations/{annotationId}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "updateReviewAnnotation"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/review/comment-templates",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listReviewCommentTemplates"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/review/comment-templates",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "createReviewCommentTemplate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/review/comment-templates/{shortcut}/use",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "useReviewCommentTemplate"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/review/comment-templates/{templateId}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "deleteReviewCommentTemplate"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/review/comment-templates/{templateId}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "getReviewCommentTemplate"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/review/comment-templates/{templateId}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "updateReviewCommentTemplate"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/roles",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/schools",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/schools",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/score-releases/{id}",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getScoreRelease"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/score-releases/{id}/diff",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getScoreReleaseDiff"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/score-releases/{id}/publish",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "publishScoreRelease"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/scoring-rules/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/scoring-rules/{id}/publish",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/scoring-runs/{runId}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/scoring-runs/{runId}/cancel",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/scoring-runs/{runId}/retry-failed",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/seed-observations",
+      "source": "services/api-gateway/internal/seedquality/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/student/exams",
+      "source": "services/api-gateway/internal/studentportal/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "listStudentPublishedExams"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/student/exams/{examId}/question-appeals",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "createStudentQuestionAppeal"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/student/exams/{examId}/questions/{questionId}",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getStudentPublishedQuestion"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/student/exams/{examId}/questions/{questionId}/annotations",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listStudentQuestionReviewAnnotations"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/student/exams/{examId}/questions/{questionId}/answer-image",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getStudentPublishedQuestionAnswerImage"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/student/exams/{examId}/questions/{questionId}/page-image",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/student/exams/{examId}/result",
+      "source": "services/api-gateway/internal/scorerelease/handlers.go",
+      "coverage": "openapi",
+      "operation_id": "getStudentPublishedResult"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/student/question-appeals",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listStudentQuestionAppeals"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/students",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/students",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/students/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/students/{id}/enrollment",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/students/{id}/enrollments",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/students/{studentId}/exams/{examId}/grade",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/students/{studentId}/reports/{examId}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/students/import-csv",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/subjective-grading-batches",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/subjective-grading-batches/{batchId}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/subjective-grading-batches/{batchId}/enqueue",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "enqueueSubjectiveGradingBatch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/submission-pages/{id}/quality-override",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/submission-pages/{id}/registration-runs",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/submissions/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/submissions/{id}/answer-segments",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/submissions/{id}/ocr-tasks",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/submissions/{id}/ocr-tasks",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/submissions/{id}/pages",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/submissions/{id}/pages",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/submissions/{id}/pages/{pageNo}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/submissions/{id}/process-pages",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/submissions/{id}/processing-summary",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/submissions/{id}/quality-check",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/submissions/{id}/run-quality-check",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/submissions/{id}/segment-answers",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/submissions/{id}/status",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/submissions/{id}/student-match/confirm",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/submissions/{id}/student-match/unknown",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/system/file-reconciliation",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/system/info",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenants",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenants",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/tenants/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/users/{id}/sessions",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/ready",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "reason": "not yet part of the public generated SDK contract"
+    }
+  ]
+}

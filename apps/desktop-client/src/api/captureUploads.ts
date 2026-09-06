@@ -1,5 +1,4 @@
-import { ApiClientError, type ApiErrorPayload, type DesktopApiClient } from "./client";
-import { getApiErrorMessage } from "./userError";
+import { ApiClientError, apiClientErrorFromResponse, type DesktopApiClient } from "./client";
 
 export interface CaptureUploadInitInput {
   sha256: string;
@@ -65,7 +64,7 @@ export async function putCaptureUploadChunk(client: DesktopApiClient, uploadId: 
     body: bytes
   });
   if (!response.ok) {
-    throw await toApiError(response);
+    throw await apiClientErrorFromResponse(response);
   }
   return (await response.json()) as Pick<CaptureUploadInitResponse, "remote_upload_id" | "confirmed_offset" | "status">;
 }
@@ -78,7 +77,7 @@ export function completeCaptureUpload(client: DesktopApiClient, uploadId: string
 }
 
 export interface ResumeCaptureUploadInput extends Omit<CaptureUploadInitInput, "sha256" | "size" | "mime" | "filename"> {
-  file: File;
+  file: File | CaptureUploadSource;
 }
 
 export interface CaptureUploadProgress {
@@ -90,12 +89,20 @@ export interface CaptureUploadProgress {
   captureFileId?: string;
 }
 
+export interface CaptureUploadSource {
+  name: string;
+  type: string;
+  size: number;
+  sha256: string;
+  slice(start: number, end: number): Blob | Promise<Blob>;
+}
+
 export async function resumeCaptureUpload(
   client: DesktopApiClient,
   input: ResumeCaptureUploadInput,
   onProgress: (progress: CaptureUploadProgress) => Promise<void> | void
 ) {
-  const sha256 = await sha256ForFile(input.file);
+  const sha256 = "sha256" in input.file ? input.file.sha256 : await sha256ForFile(input.file);
   const initialized = await initCaptureUpload(client, {
     sha256,
     size: input.file.size,
@@ -122,7 +129,8 @@ export async function resumeCaptureUpload(
   }
   while (confirmedOffset < input.file.size) {
     const end = Math.min(confirmedOffset + initialized.chunk_size, input.file.size);
-    const chunkResult = await putCaptureUploadChunk(client, initialized.remote_upload_id, confirmedOffset, input.file.slice(confirmedOffset, end));
+    const chunk = await input.file.slice(confirmedOffset, end);
+    const chunkResult = await putCaptureUploadChunk(client, initialized.remote_upload_id, confirmedOffset, chunk);
     if (chunkResult.confirmed_offset <= confirmedOffset || chunkResult.confirmed_offset > input.file.size) {
       throw new ApiClientError(409, "capture_upload_invalid_offset", "server returned an invalid confirmed offset");
     }
@@ -146,16 +154,6 @@ async function sha256ForBytes(bytes: Uint8Array) {
   new Uint8Array(material).set(bytes);
   const digest = await crypto.subtle.digest("SHA-256", material);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function toApiError(response: Response) {
-  try {
-    const payload = (await response.json()) as ApiErrorPayload;
-    const code = payload.error?.code ?? payload.code ?? "request_failed";
-    return new ApiClientError(response.status, code, getApiErrorMessage(code, response.status));
-  } catch {
-    return new ApiClientError(response.status, "request_failed", getApiErrorMessage("request_failed", response.status));
-  }
 }
 
 function inferCaptureMime(name: string) {

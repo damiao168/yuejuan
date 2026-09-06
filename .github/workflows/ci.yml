@@ -24,12 +24,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Generate OpenAPI SDK and reject stale generated files
-        run: |
-          npm run generate:sdk
-          git diff --exit-code -- packages/sdk/src/generated
-      - run: npm run check:openapi-breaking
-      - run: npm run check:schema-version
+      - name: Verify generated SDK, registered route coverage, and schema compatibility
+        run: npm run ci:contracts
       - run: npm run lint
       - run: npm run typecheck
 
@@ -90,10 +86,6 @@ jobs:
         include:
           - story: '049'
             command: npm run check:story049
-          - story: '050'
-            command: npm run check:story050
-          - story: '051'
-            command: npm run check:story051
           - story: '052'
             command: npm run check:story052
           - story: '053'

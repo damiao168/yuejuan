@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { sha256ForFile, type CaptureUploadSource } from "../api/captureUploads";
 import type { OfflineDraftRecord, OfflineSyncStatus, ScanQualityCheck, SyncQueueItem } from "../types";
 import { isTauriRuntime } from "./localRuntime";
 
@@ -27,7 +28,16 @@ export interface SpoolAssetInput {
 export interface DurableSpoolFile {
   filename: string;
   mime: string;
-  bytes: number[];
+  size: number;
+  sha256: string;
+  chunkSize: number;
+}
+
+interface SpoolAssetSession {
+  localAssetId: string;
+  chunkSize: number;
+  confirmedOffset: number;
+  item?: SyncQueueItem;
 }
 
 export function hasDurableDesktopStore() {
@@ -36,12 +46,13 @@ export function hasDurableDesktopStore() {
 
 export async function spoolScanAsset(input: SpoolAssetInput): Promise<SyncQueueItem> {
   requireDurableRuntime();
-  const bytes = Array.from(new Uint8Array(await input.file.arrayBuffer()));
-  return invoke<SyncQueueItem>("spool_local_asset", {
+  const sha256 = await sha256ForFile(input.file);
+  const session = await invoke<SpoolAssetSession>("begin_spool_local_asset", {
     input: {
       filename: input.file.name,
       mime: input.file.type || inferContentType(input.file.name),
-      bytes,
+      size: input.file.size,
+      sha256,
       examId: input.examId,
       captureBatchId: input.captureBatchId,
       submissionId: input.submissionId,
@@ -49,6 +60,18 @@ export async function spoolScanAsset(input: SpoolAssetInput): Promise<SyncQueueI
       qualityChecks: input.qualityChecks
     }
   });
+  if (session.item) return session.item;
+  let offset = session.confirmedOffset;
+  while (offset < input.file.size) {
+    const end = Math.min(offset + session.chunkSize, input.file.size);
+    const bytes = Array.from(new Uint8Array(await input.file.slice(offset, end).arrayBuffer()));
+    offset = await invoke<number>("write_spool_local_asset_chunk", {
+      localAssetId: session.localAssetId,
+      offset,
+      bytes
+    });
+  }
+  return invoke<SyncQueueItem>("complete_spool_local_asset", { localAssetId: session.localAssetId });
 }
 
 export async function listDurableScanQueue(): Promise<SyncQueueItem[]> {
@@ -66,10 +89,28 @@ export async function archiveDurableScanQueueItems(ids: string[]): Promise<void>
   await invoke("archive_durable_scan_queue_items", { ids });
 }
 
-export async function loadDurableSpoolFile(localAssetId: string): Promise<File> {
+export async function loadDurableSpoolFile(localAssetId: string): Promise<CaptureUploadSource> {
   requireDurableRuntime();
   const stored = await invoke<DurableSpoolFile>("read_durable_local_asset", { localAssetId });
-  return new File([new Uint8Array(stored.bytes)], stored.filename, { type: stored.mime });
+  return {
+    name: stored.filename,
+    type: stored.mime,
+    size: stored.size,
+    sha256: stored.sha256,
+    async slice(start: number, end: number) {
+      if (start < 0 || end < start || end > stored.size) throw new Error("本地扫描原件读取范围无效");
+      const parts: BlobPart[] = [];
+      let offset = start;
+      while (offset < end) {
+        const length = Math.min(stored.chunkSize, end - offset);
+        const bytes = await invoke<number[]>("read_durable_local_asset_chunk", { localAssetId, offset, length });
+        if (bytes.length !== length) throw new Error("本地扫描原件分块不完整");
+        parts.push(new Uint8Array(bytes));
+        offset += bytes.length;
+      }
+      return new Blob(parts, { type: stored.mime });
+    }
+  };
 }
 
 export async function saveDurableDraft(record: OfflineDraftRecord): Promise<void> {

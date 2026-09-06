@@ -337,11 +337,29 @@ fn delete_desktop_credentials() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn spool_local_asset(
+fn begin_spool_local_asset(
     app: AppHandle,
     input: durable_store::SpoolAssetInput,
+) -> Result<durable_store::SpoolAssetSession, String> {
+    durable_store::begin_spool_local_asset(app, input)
+}
+
+#[tauri::command]
+fn write_spool_local_asset_chunk(
+    app: AppHandle,
+    local_asset_id: String,
+    offset: i64,
+    bytes: Vec<u8>,
+) -> Result<i64, String> {
+    durable_store::write_spool_local_asset_chunk(app, local_asset_id, offset, bytes)
+}
+
+#[tauri::command]
+fn complete_spool_local_asset(
+    app: AppHandle,
+    local_asset_id: String,
 ) -> Result<durable_store::DurableQueueItem, String> {
-    durable_store::spool_local_asset(app, input)
+    durable_store::complete_spool_local_asset(app, local_asset_id)
 }
 
 #[tauri::command]
@@ -368,6 +386,16 @@ fn read_durable_local_asset(
     local_asset_id: String,
 ) -> Result<durable_store::DurableSpoolFile, String> {
     durable_store::read_durable_local_asset(app, local_asset_id)
+}
+
+#[tauri::command]
+fn read_durable_local_asset_chunk(
+    app: AppHandle,
+    local_asset_id: String,
+    offset: i64,
+    length: usize,
+) -> Result<Vec<u8>, String> {
+    durable_store::read_durable_local_asset_chunk(app, local_asset_id, offset, length)
 }
 
 #[tauri::command]
@@ -413,11 +441,14 @@ pub fn run() {
     if let Err(error) = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             capability_statuses,
-            spool_local_asset,
+            begin_spool_local_asset,
+            write_spool_local_asset_chunk,
+            complete_spool_local_asset,
             list_durable_scan_queue,
             persist_durable_scan_queue_item,
             archive_durable_scan_queue_items,
             read_durable_local_asset,
+            read_durable_local_asset_chunk,
             save_durable_draft,
             list_durable_drafts,
             load_durable_draft,

@@ -7,17 +7,29 @@ export interface ApiErrorPayload {
   };
   code?: string;
   message?: string;
+  request_id?: string;
+  trace_id?: string;
+  field_errors?: Record<string, string[]>;
+  conflict_revision?: number;
 }
 
 export class ApiClientError extends Error {
   status: number;
   code: string;
+  requestId?: string;
+  traceId?: string;
+  fieldErrors?: Record<string, string[]>;
+  conflictRevision?: number;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, context: Pick<ApiErrorPayload, "request_id" | "trace_id" | "field_errors" | "conflict_revision"> = {}) {
     super(message);
     this.name = "ApiClientError";
     this.status = status;
     this.code = code;
+    this.requestId = context.request_id;
+    this.traceId = context.trace_id;
+    this.fieldErrors = context.field_errors;
+    this.conflictRevision = context.conflict_revision;
   }
 }
 
@@ -89,7 +101,7 @@ export class DesktopApiClient {
     addIdempotencyHeader(path, init.method, headers);
     const response = await fetch(this.url(path), { ...init, headers });
     if (!response.ok) {
-      throw await toApiError(response);
+      throw await apiClientErrorFromResponse(response);
     }
     if (response.status === 204) {
       return undefined as T;
@@ -114,7 +126,7 @@ export class DesktopApiClient {
     addIdempotencyHeader(path, init.method, headers);
     const response = await fetch(this.url(path), { ...init, headers });
     if (!response.ok) {
-      throw await toApiError(response);
+      throw await apiClientErrorFromResponse(response);
     }
     return {
       blob: await response.blob(),
@@ -162,11 +174,11 @@ function isLoopbackHost(hostname: string) {
   return normalized === "localhost" || normalized === "::1" || normalized.startsWith("127.");
 }
 
-async function toApiError(response: Response): Promise<ApiClientError> {
+export async function apiClientErrorFromResponse(response: Response): Promise<ApiClientError> {
   try {
     const payload = (await response.json()) as ApiErrorPayload;
     const code = payload.error?.code ?? payload.code ?? "request_failed";
-    return new ApiClientError(response.status, code, getApiErrorMessage(code, response.status));
+    return new ApiClientError(response.status, code, getApiErrorMessage(code, response.status), payload);
   } catch {
     return new ApiClientError(response.status, "request_failed", getApiErrorMessage("request_failed", response.status));
   }

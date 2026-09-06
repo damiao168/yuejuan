@@ -9,7 +9,6 @@ import {
   Input,
   InputNumber,
   Modal,
-  Progress,
   Select,
   Space,
   Table,
@@ -42,8 +41,9 @@ import { getSafeUserText, getUserErrorMessage } from "./api/userError";
 import { listCaptureBatches, listExams, type CaptureBatch } from "./api/exams";
 import { listReviewTasks } from "./api/review";
 import { runSubmissionQualityCheck } from "./api/submissions";
-import { resumeCaptureUpload } from "./api/captureUploads";
+import { resumeCaptureUpload, type CaptureUploadSource } from "./api/captureUploads";
 import { OfflineWorkbench } from "./components/OfflineWorkbench";
+import { CapabilityTag, QueueList, ScanQueueTable, SectionHead, StatusLine } from "./components/DesktopStatusViews";
 import {
   appendLocalLog,
   clearLocalLogs,
@@ -59,13 +59,25 @@ import {
 } from "./lib/localRuntime";
 import { listOfflineDraftEnvelopes, readOfflineDraftEnvelopes } from "./lib/offlineStore";
 import {
-	archiveDurableScanQueueItems,
+  archiveDurableScanQueueItems,
   hasDurableDesktopStore,
   listDurableScanQueue,
   loadDurableSpoolFile,
   persistDurableScanQueueItem,
-	spoolScanAsset
+  spoolScanAsset
 } from "./lib/durableStore";
+import {
+  dependencyLabel,
+  dependencyTone,
+  estimateLocalCacheBytes,
+  formatBytes,
+  formatDate,
+  inferContentType,
+  inspectScanFile,
+  persistScanQueue,
+  previewUrlForFile,
+  readPersistedScanQueue
+} from "./lib/scanFiles";
 import {
   inspectScannerSample,
   listScannerDevices,
@@ -86,21 +98,14 @@ import type {
   LocalCacheSecurityStatus,
   ReviewTask,
   RuntimeDiagnostics,
-  ScanQualityCheck,
   SubmissionQualityResult,
   SyncQueueItem,
   SystemStatus,
   WorkspaceKey
 } from "./types";
-import { genericStatusLabel, queueStatusLabels, subjectLabels } from "./statusLabels";
+import { genericStatusLabel, subjectLabels } from "./statusLabels";
 
 const defaultServer = "http://127.0.0.1:8080";
-const scanQueueStorageKey = "edugrade.desktop.scan_queue";
-const maxUploadBytes = 104857600;
-// Keep the workstation's local admission rule aligned with the capture
-// upload contract. TIFF is a normal scanner output and must not be shown as
-// selectable only to fail before it enters the encrypted spool.
-const allowedUploadExtensions = [".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"];
 
 const navItems: { key: WorkspaceKey; label: string; icon: React.ReactNode }[] = [
   { key: "connect", label: "连接登录", icon: <LogIn size={18} /> },
@@ -178,7 +183,7 @@ function App() {
   const [qualityError, setQualityError] = useState<string | null>(null);
   const [isCheckingQuality, setIsCheckingQuality] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const fileBufferRef = useRef(new Map<string, File>());
+  const fileBufferRef = useRef(new Map<string, File | CaptureUploadSource>());
   const uploadInFlightRef = useRef(new Set<string>());
   const queueRef = useRef(queue);
   const durablePersistenceRef = useRef<Promise<void>>(Promise.resolve());
@@ -1555,334 +1560,6 @@ function App() {
         </div>
       </section>
     );
-  }
-}
-
-function SectionHead(props: { icon: React.ReactNode; title: string; description: string; action?: React.ReactNode }) {
-  return (
-    <div className="section-head">
-      <div className="section-title">
-        <span>{props.icon}</span>
-        <div>
-          <h3>{props.title}</h3>
-          <p>{props.description}</p>
-        </div>
-      </div>
-      {props.action}
-    </div>
-  );
-}
-
-function StatusLine(props: { label: string; value: string; tone: "ready" | "warning" | "idle" }) {
-  return (
-    <div className="status-line">
-      <span>{props.label}</span>
-      <strong>{props.value}</strong>
-      <i className={props.tone} />
-    </div>
-  );
-}
-
-function CapabilityTag(props: { status: string }) {
-  if (props.status === "ready") {
-    return <Tag color="success">已配置</Tag>;
-  }
-  if (props.status === "browser_fallback") {
-    return <Tag color="processing">开发模式</Tag>;
-  }
-  if (props.status === "unavailable") {
-    return <Tag color="error">不可用</Tag>;
-  }
-  return <Tag color="warning">未配置/待接入</Tag>;
-}
-
-function QueueList(props: { items: SyncQueueItem[] }) {
-  if (!props.items.length) {
-    return <Empty description="暂无队列项目" />;
-  }
-  return (
-    <div className="queue-list">
-      {props.items.map((item) => (
-        <div className="queue-row" key={item.id}>
-          <div>
-            <strong>{item.title}</strong>
-            <p>{item.detail}</p>
-          </div>
-          <div className="queue-progress">
-            <CapabilityTag status={item.status === "not_configured" ? "not_configured" : item.status === "failed" ? "unavailable" : item.status === "succeeded" ? "ready" : "browser_fallback"} />
-            <Progress percent={item.progress} size="small" status={item.status === "failed" ? "exception" : undefined} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ScanQueueTable(props: { items: SyncQueueItem[]; onRetry: (id: string) => void }) {
-  const columns: TableColumnsType<SyncQueueItem> = [
-    {
-      title: "预览",
-      dataIndex: "previewUrl",
-      width: 82,
-      render: (_value, item) =>
-        item.previewUrl ? <img className="scan-preview" src={item.previewUrl} alt={item.fileName ?? item.title} /> : <span className="scan-preview placeholder">PDF</span>
-    },
-    {
-      title: "文件",
-      dataIndex: "fileName",
-      render: (_value, item) => (
-        <div className="scan-file-cell">
-          <strong>{item.fileName ?? item.title}</strong>
-          <span>
-            {item.contentType ?? "unknown"} / {formatBytes(item.fileSize)}
-          </span>
-          {item.requiresReselect && <Tag color="warning">需重新选择文件</Tag>}
-        </div>
-      )
-    },
-    {
-      title: "页码",
-      dataIndex: "pageNo",
-      width: 80,
-      render: (value?: number) => value ?? "未设置"
-    },
-    {
-      title: "本地质量检查",
-      dataIndex: "qualityChecks",
-      render: (checks?: ScanQualityCheck[]) => (
-        <div className="quality-checks">
-          {(checks ?? []).map((check) => (
-            <Tooltip key={check.key} title={check.detail}>
-              <Tag color={check.status === "passed" ? "success" : check.status === "failed" ? "error" : "warning"}>
-                {check.label}: {check.status === "passed" ? "通过" : check.status === "warning" ? "请关注" : check.status === "failed" ? "失败" : "未配置/待接入"}
-              </Tag>
-            </Tooltip>
-          ))}
-        </div>
-      )
-    },
-    {
-      title: "队列状态",
-      dataIndex: "status",
-      width: 130,
-      render: (status: SyncQueueItem["status"]) => <Tag color={status === "succeeded" ? "success" : status === "failed" ? "error" : status === "uploading" ? "processing" : "default"}>{queueStatusLabels[status]}</Tag>
-    },
-    {
-      title: "进度",
-      dataIndex: "progress",
-      width: 150,
-      render: (_value, item) => <Progress percent={item.progress} size="small" status={item.status === "failed" ? "exception" : undefined} />
-    },
-    {
-      title: "服务端状态",
-      dataIndex: "serverStatus",
-      render: (_value, item) => item.serverStatus ?? item.detail
-    },
-    {
-      title: "操作",
-      key: "action",
-      width: 92,
-      render: (_value, item) => (
-        <Button size="small" icon={<RotateCcw size={14} />} disabled={item.status === "uploading" || item.status === "succeeded"} onClick={() => props.onRetry(item.id)}>
-          重试
-        </Button>
-      )
-    }
-  ];
-  return (
-    <Table
-      rowKey="id"
-      size="middle"
-      columns={columns}
-      dataSource={props.items}
-      scroll={{ x: 1080 }}
-      pagination={{ pageSize: 8, showSizeChanger: false }}
-      locale={{ emptyText: <Empty description="尚未选择文件" /> }}
-    />
-  );
-}
-
-function formatDate(value?: string) {
-  if (!value) {
-    return "未记录";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString("zh-CN", { hour12: false });
-}
-
-function dependencyTone(status: "ok" | "error" | "not_configured") {
-  if (status === "ok") {
-    return "success";
-  }
-  if (status === "not_configured") {
-    return "warning";
-  }
-  return "error";
-}
-
-function dependencyLabel(status: "ok" | "error" | "not_configured") {
-  if (status === "ok") {
-    return "正常";
-  }
-  if (status === "not_configured") {
-    return "未配置/待接入";
-  }
-  return "异常";
-}
-
-function estimateLocalCacheBytes() {
-  let total = 0;
-  for (let index = 0; index < window.localStorage.length; index += 1) {
-    const key = window.localStorage.key(index);
-    if (!key || !key.startsWith("edugrade.desktop.")) {
-      continue;
-    }
-    total += key.length;
-    total += window.localStorage.getItem(key)?.length ?? 0;
-  }
-  return total;
-}
-
-async function inspectScanFile(file: File): Promise<ScanQualityCheck[]> {
-  const extension = fileExtension(file.name);
-  const allowedType = allowedUploadExtensions.includes(extension);
-  const checks: ScanQualityCheck[] = [
-    {
-      key: "file_type",
-      label: "文件类型",
-      status: allowedType ? "passed" : "failed",
-      detail: allowedType ? `${extension} 可上传` : `${extension || "无扩展名"} 不在允许范围`
-    },
-    {
-      key: "file_size",
-      label: "文件大小",
-      status: file.size <= maxUploadBytes ? "passed" : "failed",
-      detail: `${formatBytes(file.size)} / 上限 ${formatBytes(maxUploadBytes)}`
-    },
-    {
-      key: "page_count",
-      label: "页数",
-      status: "not_configured",
-      detail: "PDF 页数解析未配置/待接入；当前以后端 submission 质量门禁为准"
-    }
-  ];
-  if (file.type.startsWith("image/") && extension !== ".tif" && extension !== ".tiff") {
-    const resolution = await readImageResolution(file);
-    checks.push({
-      key: "resolution",
-      label: "分辨率",
-      status: resolution ? "passed" : "not_configured",
-      detail: resolution ?? "图片分辨率无法读取，预留人工复核"
-    });
-  } else {
-    checks.push({
-      key: "resolution",
-      label: "分辨率",
-      status: "not_configured",
-      detail: extension === ".tif" || extension === ".tiff"
-        ? "TIFF 本机分辨率解码未配置；已交由扫描样张预检和服务端质量门禁处理"
-        : "PDF/非图片分辨率检测未配置/待接入"
-    });
-  }
-  return checks;
-}
-
-function readImageResolution(file: File) {
-  return new Promise<string | null>((resolve) => {
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      const value = `${image.naturalWidth} x ${image.naturalHeight}`;
-      URL.revokeObjectURL(url);
-      resolve(value);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve(null);
-    };
-    image.src = url;
-  });
-}
-
-function previewUrlForFile(file: File) {
-  return file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
-}
-
-function fileExtension(filename: string) {
-  const index = filename.lastIndexOf(".");
-  return index >= 0 ? filename.slice(index).toLowerCase() : "";
-}
-
-function inferContentType(filename: string) {
-  const extension = fileExtension(filename);
-  if (extension === ".pdf") {
-    return "application/pdf";
-  }
-  if (extension === ".png") {
-    return "image/png";
-  }
-  if (extension === ".jpg" || extension === ".jpeg") {
-    return "image/jpeg";
-  }
-  if (extension === ".tif" || extension === ".tiff") {
-    return "image/tiff";
-  }
-  return "application/octet-stream";
-}
-
-function formatBytes(value?: number) {
-  if (typeof value !== "number") {
-    return "未记录";
-  }
-  if (value < 1024) {
-    return `${value} B`;
-  }
-  if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function readPersistedScanQueue(): SyncQueueItem[] {
-  try {
-    const raw = window.localStorage.getItem(scanQueueStorageKey);
-    if (!raw) {
-      return [];
-    }
-    const parsed = JSON.parse(raw) as SyncQueueItem[];
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.map((item) => {
-      if (item.kind !== "scan_upload" || item.status === "succeeded") {
-        return item;
-      }
-      return {
-        ...item,
-        status: item.status === "uploading" ? "failed" : item.status,
-        progress: item.status === "uploading" ? 0 : item.progress,
-        requiresReselect: !item.fileAssetId,
-        detail: item.fileAssetId ? item.detail : "本地队列已恢复；文件句柄不可恢复，请重新选择同名文件后继续",
-        previewUrl: undefined
-      };
-    });
-  } catch {
-    return [];
-  }
-}
-
-function persistScanQueue(items: SyncQueueItem[]) {
-  const serializable = items.map((item) => {
-    const { previewUrl: _previewUrl, ...rest } = item;
-    return rest;
-  });
-  try {
-    window.localStorage.setItem(scanQueueStorageKey, JSON.stringify(serializable.slice(0, 300)));
-  } catch (error) {
-    console.warn("scan queue persistence failed", error);
   }
 }
 

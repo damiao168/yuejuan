@@ -836,3 +836,13 @@ docker compose --env-file infra/docker-compose/.env.example -f infra/docker-comp
 结论：Approved。
 
 STORY-050 已完成规格、规格审阅修正、实现、实现自审、实现修正和验收记录。下一 Story 可进入 STORY-051 Agent Worker Runtime。
+
+## 2026-09 Behavior Gate Migration
+
+原 `check:story050` 仅按固定文件路径搜索源码字符串，不能验证租约恢复、结果幂等或业务状态激活。该脚本及 CI 项已移除；当前门禁由以下可执行行为测试承担：
+
+- `go test ./internal/imagequality ./internal/workerruntime -count=1`
+- `python -m pytest -q services/image-quality-worker/tests`
+- Compose 镜像冒烟测试与生产方式 E2E
+
+材料存在性仍由构建、迁移、Compose 配置和路由契约清单验证，不再把字符串命中当作运行正确性的证明。

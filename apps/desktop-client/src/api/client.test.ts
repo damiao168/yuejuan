@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { DesktopApiClient, normalizeBaseUrl } from "./client";
+import { readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import { ApiClientError, DesktopApiClient, normalizeBaseUrl } from "./client";
 
 describe("desktop API origin validation", () => {
   it("allows HTTPS servers and loopback HTTP development servers", () => {
@@ -25,5 +26,23 @@ describe("desktop API origin validation", () => {
       .toThrow("same-server absolute path");
     expect(client.url("/api/v1/auth/me"))
       .toBe("https://grading.example.edu/api/v1/auth/me");
+  });
+
+  it("preserves diagnostics from the shared Go response sample", async () => {
+    const client = new DesktopApiClient({ baseUrl: "https://grading.example.edu" });
+    const response = readFileSync(new URL("../../../../contracts/samples/error.response.json", import.meta.url), "utf8");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(response, {
+      status: 409,
+      headers: { "Content-Type": "application/json" }
+    })));
+
+    const error = await client.request("/api/v1/exams/exam-1", { method: "PUT", body: "{}" }).catch((value) => value);
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect(error).toMatchObject({
+      status: 409,
+      code: "revision_conflict",
+      requestId: "req-contract-001",
+      traceId: "trace-contract-001"
+    });
   });
 });
