@@ -1177,10 +1177,6 @@ func ensureExamPaperMutableTx(ctx context.Context, tx *sql.Tx, tenantID, examID 
 	return nil
 }
 
-func (s *PostgresStore) latestRubric(ctx context.Context, tenantID string, questionID string) (Rubric, bool, error) {
-	return latestRubric(ctx, s.db, tenantID, questionID)
-}
-
 func latestRubric(ctx context.Context, queryer postgresQueryer, tenantID string, questionID string) (Rubric, bool, error) {
 	row := queryer.QueryRowContext(ctx, `
 SELECT qr.id::text, qr.question_id::text, rv.version, qr.status, qr.max_score::float8, qr.points, qr.deductions, qr.examples,
@@ -1204,10 +1200,6 @@ LIMIT 1
 	_ = json.Unmarshal(examples, &out.Examples)
 	_ = json.Unmarshal(refs, &out.PaperImportSourceRefs)
 	return out, true, nil
-}
-
-func (s *PostgresStore) latestAnswerKey(ctx context.Context, tenantID string, questionID string) (AnswerKey, bool, error) {
-	return latestAnswerKey(ctx, s.db, tenantID, questionID)
 }
 
 func latestAnswerKey(ctx context.Context, queryer postgresQueryer, tenantID string, questionID string) (AnswerKey, bool, error) {
@@ -1234,10 +1226,6 @@ LIMIT 1
 	return out, true, nil
 }
 
-func (s *PostgresStore) loadQuestionImportProvenance(ctx context.Context, tenantID string, question *Question) error {
-	return loadQuestionImportProvenance(ctx, s.db, tenantID, question)
-}
-
 func loadQuestionImportProvenance(ctx context.Context, queryer postgresQueryer, tenantID string, question *Question) error {
 	var refs []byte
 	if err := queryer.QueryRowContext(ctx, `SELECT COALESCE(paper_import_id::text,''),COALESCE(paper_import_candidate_id,''),paper_import_source_refs FROM question WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, question.ID).Scan(&question.PaperImportID, &question.PaperImportCandidateID, &refs); err != nil {
@@ -1247,16 +1235,8 @@ func loadQuestionImportProvenance(ctx context.Context, queryer postgresQueryer, 
 	return nil
 }
 
-func (s *PostgresStore) loadQuestionAssessmentArchetype(ctx context.Context, tenantID string, question *Question) error {
-	return loadQuestionAssessmentArchetype(ctx, s.db, tenantID, question)
-}
-
 func loadQuestionAssessmentArchetype(ctx context.Context, queryer postgresQueryer, tenantID string, question *Question) error {
 	return queryer.QueryRowContext(ctx, `SELECT COALESCE((SELECT archetype_code FROM question_assessment_config WHERE tenant_id=$1 AND question_id=$2::uuid),'')`, tenantID, question.ID).Scan(&question.AssessmentArchetype)
-}
-
-func (s *PostgresStore) latestQuestionSolution(ctx context.Context, tenantID string, questionID string) (QuestionSolution, bool, error) {
-	return latestQuestionSolution(ctx, s.db, tenantID, questionID)
 }
 
 func latestQuestionSolution(ctx context.Context, queryer postgresQueryer, tenantID string, questionID string) (QuestionSolution, bool, error) {
