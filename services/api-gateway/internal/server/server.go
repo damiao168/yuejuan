@@ -522,6 +522,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	mux.Handle("GET /api/v1/submissions/{id}/pages", requireSubmissionManage(submissionHandler.ListPages))
 	mux.Handle("POST /api/v1/submissions/{id}/quality-check", requireSubmissionManage(submissionHandler.QualityCheck))
 	mux.Handle("POST /api/v1/submissions/{id}/run-quality-check", requireSubmissionManage(imageQualityHandler.RunQualityCheck))
+	mux.Handle("GET /api/v1/submission-pages/{id}/quality-runs", requireSubmissionManage(imageQualityHandler.ListPageRuns))
 	mux.Handle("POST /api/v1/submission-pages/{id}/quality-override", requireCaptureManage(imageQualityHandler.OverridePageQuality))
 	mux.Handle("POST /api/v1/submissions/{id}/status", requireSubmissionManage(submissionHandler.UpdateStatus))
 	mux.Handle("POST /api/v1/exams/{examId}/capture-batches", requireCaptureManage(withScopedExam(captureHandler.CreateBatch)))

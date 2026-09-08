@@ -20,6 +20,52 @@
     }
   ],
   "paths": {
+    "/api/v1/submission-pages/{id}/quality-runs": {
+      "get": {
+        "operationId": "listSubmissionPageQualityRuns",
+        "description": "Returns newest-first immutable image-quality runs for one submission page. Results include explainable metrics, local focus map, hard-gate outcomes, and normalization evidence; worker lease secrets are never exposed.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image-quality run history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "runs"
+                  ],
+                  "properties": {
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "submission:manage permission required"
+          }
+        }
+      }
+    },
     "/api/v1/exams": {
       "get": {
         "operationId": "listExams",

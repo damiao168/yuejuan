@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
+	"edugrade-enterprise/services/api-gateway/internal/capture"
 	"edugrade-enterprise/services/api-gateway/internal/config"
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/imagequality"
@@ -21,6 +22,44 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/submission"
 	"edugrade-enterprise/services/api-gateway/internal/workerruntime"
 )
+
+type transactionalStoreDecorator struct {
+	imagequality.Store
+}
+
+func (s *transactionalStoreDecorator) CreateRunsWithTasks(ctx context.Context, tenantID, _ string, input imagequality.CreateRunsInput) ([]imagequality.Run, error) {
+	return s.CreateRuns(ctx, tenantID, input)
+}
+
+func (s *transactionalStoreDecorator) SubmitResultCommand(ctx context.Context, tenantID, _ string, runID string, input imagequality.ResultInput) (imagequality.Run, error) {
+	return s.CompleteRun(ctx, tenantID, runID, input)
+}
+
+func TestTransactionalHandlerRejectsMissingAndTypedNilCoordinator(t *testing.T) {
+	dependencies := imagequality.TransactionalHandlerDependencies{
+		Submissions: submission.NewMemoryStore(), Files: files.NewMemoryStore(), Audit: auth.NewMemoryStore(),
+		Runtime: workerruntime.NewMemoryStore(), Captures: capture.NewMemoryStore(),
+	}
+	if _, err := imagequality.NewTransactionalHandler(dependencies); err == nil || !strings.Contains(err.Error(), "coordinator") {
+		t.Fatalf("missing coordinator accepted: %v", err)
+	}
+	var typedNil *transactionalStoreDecorator
+	dependencies.Coordinator = typedNil
+	if _, err := imagequality.NewTransactionalHandler(dependencies); err == nil || !strings.Contains(err.Error(), "coordinator") {
+		t.Fatalf("typed nil coordinator accepted: %v", err)
+	}
+}
+
+func TestTransactionalHandlerAcceptsCapabilityDecorator(t *testing.T) {
+	dependencies := imagequality.TransactionalHandlerDependencies{
+		Coordinator: &transactionalStoreDecorator{Store: imagequality.NewMemoryStore()},
+		Submissions: submission.NewMemoryStore(), Files: files.NewMemoryStore(), Audit: auth.NewMemoryStore(),
+		Runtime: workerruntime.NewMemoryStore(), Captures: capture.NewMemoryStore(),
+	}
+	if _, err := imagequality.NewTransactionalHandler(dependencies); err != nil {
+		t.Fatalf("capability decorator rejected: %v", err)
+	}
+}
 
 const handlerTenantID = "00000000-0000-0000-0000-000000000002"
 const handlerUserID = "00000000-0000-0000-0000-000000000401"
@@ -59,6 +98,44 @@ func TestRunQualityCheckCreatesRunsAndClaimOmitsStudentIdentity(t *testing.T) {
 	}
 	if !strings.Contains(body, `"runtime_task_id"`) {
 		t.Fatalf("claim response must expose runtime task id: %s", body)
+	}
+}
+
+func TestListPageQualityRunsReturnsExplainableHistoryWithoutLeaseSecrets(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"submission:manage", "ocr:manage"})
+	fileStore := files.NewMemoryStore()
+	submissionStore := submission.NewMemoryStore()
+	qualityStore := imagequality.NewMemoryStore()
+	item, page := submissionWithOriginalFile(t, fileStore, submissionStore, "source-hash-history")
+	router := testRouter(authStore, fileStore, submissionStore, qualityStore)
+	token := login(t, router)
+
+	for range 2 {
+		req := authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/run-quality-check", nil, token)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("create quality run expected 202, got %d %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	req := authedRequest(http.MethodGet, "/api/v1/submission-pages/"+page.ID+"/quality-runs", nil, token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list quality runs expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Runs []imagequality.Run `json:"runs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode quality history: %v", err)
+	}
+	if len(response.Runs) != 2 || response.Runs[0].SubmissionPageID != page.ID {
+		t.Fatalf("unexpected quality history: %#v", response.Runs)
+	}
+	if strings.Contains(rec.Body.String(), "lease_token") || strings.Contains(rec.Body.String(), "result_payload_hash") {
+		t.Fatalf("quality history leaked internal secrets: %s", rec.Body.String())
 	}
 }
 

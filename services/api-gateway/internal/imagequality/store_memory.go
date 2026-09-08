@@ -62,6 +62,27 @@ func (s *MemoryStore) CreateRuns(_ context.Context, tenantID string, input Creat
 	return out, nil
 }
 
+func (s *MemoryStore) ListRunsForPage(_ context.Context, tenantID string, submissionPageID string) ([]Run, error) {
+	if tenantID == "" || submissionPageID == "" {
+		return nil, ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	runs := make([]Run, 0)
+	for _, run := range s.runs {
+		if run.TenantID == tenantID && run.SubmissionPageID == submissionPageID {
+			runs = append(runs, cloneRun(run))
+		}
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		if runs[i].CreatedAt.Equal(runs[j].CreatedAt) {
+			return runs[i].ID > runs[j].ID
+		}
+		return runs[i].CreatedAt.After(runs[j].CreatedAt)
+	})
+	return runs, nil
+}
+
 func (s *MemoryStore) Claim(_ context.Context, tenantID string, input ClaimInput) ([]ClaimedJob, error) {
 	input = normalizeClaimInput(input)
 	s.mu.Lock()

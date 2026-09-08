@@ -59,6 +59,43 @@ export interface CaptureBatchDetail {
   processing_summaries: ProcessingSummary[];
 }
 
+export interface ImageQualityIssue {
+  code: string;
+  severity: "warning" | "review" | "failed" | string;
+  metric?: string;
+  observed?: unknown;
+  threshold?: unknown;
+  rule_id?: string;
+  action: string;
+  parameters?: Record<string, unknown>;
+}
+
+export interface ImageQualityRun {
+  id: string;
+  submission_id: string;
+  submission_page_id: string;
+  page_no: number;
+  source_file_asset_id: string;
+  normalized_file_asset_id?: string;
+  processing_status: string;
+  quality_status?: string;
+  profile_name: string;
+  profile_version: string;
+  metric_schema_version: string;
+  report_schema_version: string;
+  quality_report: Record<string, unknown>;
+  quality_issues: ImageQualityIssue[];
+  normalization_transform: Record<string, unknown>;
+  worker_service?: string;
+  worker_instance_id?: string;
+  attempt_no: number;
+  duration_ms?: number;
+  error_code?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
 export interface RegistrationRun {
   id: string;
   capture_page_id: string;
@@ -101,6 +138,19 @@ export async function listCaptureBatches(examId: string, filter: { limit?: numbe
 
 export async function getCaptureBatch(batchId: string) {
   return apiClient.request<CaptureBatchDetail>(`/api/v1/capture-batches/${encodeURIComponent(batchId)}`);
+}
+
+export function listPageQualityRuns(submissionPageId: string) {
+  return apiClient.request<{ runs: ImageQualityRun[] }>(
+    `/api/v1/submission-pages/${encodeURIComponent(submissionPageId)}/quality-runs`,
+  );
+}
+
+export function runImageQualityCheck(submissionId: string) {
+  return apiClient.request<{ runs: ImageQualityRun[] }>(
+    `/api/v1/submissions/${encodeURIComponent(submissionId)}/run-quality-check`,
+    { method: "POST" },
+  );
 }
 
 export async function registerCaptureFile(batchId: string, fileAssetId: string, idempotencyKey: string) {

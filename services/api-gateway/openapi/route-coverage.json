@@ -3,8 +3,8 @@
   "generated_from": "services/api-gateway/internal/**/*.go",
   "policy": "Every registered API route is either covered by OpenAPI or explicitly listed as a registered gap.",
   "counts": {
-    "registered": 415,
-    "openapi": 137,
+    "registered": 416,
+    "openapi": 138,
     "registered_gaps": 278
   },
   "routes": [
@@ -2723,6 +2723,13 @@
       "source": "services/api-gateway/internal/server/server.go",
       "coverage": "registered-gap",
       "reason": "not yet part of the public generated SDK contract"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/submission-pages/{id}/quality-runs",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "listSubmissionPageQualityRuns"
     },
     {
       "method": "GET",

@@ -12,16 +12,16 @@ func normalizeProfile(profile Profile) Profile {
 	profile.MetricSchemaVersion = strings.TrimSpace(profile.MetricSchemaVersion)
 	profile.ReportSchemaVersion = strings.TrimSpace(profile.ReportSchemaVersion)
 	if profile.Version == "" {
-		profile.Version = "v1"
+		profile.Version = "v2"
 	}
 	if profile.ConfigHash == "" {
 		profile.ConfigHash = "sha256:" + profile.Name + "-" + profile.Version
 	}
 	if profile.MetricSchemaVersion == "" {
-		profile.MetricSchemaVersion = "image-quality-metrics-v1"
+		profile.MetricSchemaVersion = "image-quality-metrics-v2"
 	}
 	if profile.ReportSchemaVersion == "" {
-		profile.ReportSchemaVersion = "image-quality-report-v1"
+		profile.ReportSchemaVersion = "image-quality-report-v2"
 	}
 	return profile
 }

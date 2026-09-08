@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ type Handler struct {
 	audit       auth.Store
 	runtime     workerruntime.Store
 	captures    capture.Store
+	coordinator TransactionalStore
 }
 
 func NewHandler(store Store, submissions submission.Store, fileStore files.Store, audit auth.Store, runtimes ...workerruntime.Store) *Handler {
@@ -32,6 +34,47 @@ func NewHandler(store Store, submissions submission.Store, fileStore files.Store
 		handler.runtime = runtimes[0]
 	}
 	return handler
+}
+
+type TransactionalHandlerDependencies struct {
+	Coordinator TransactionalStore
+	Submissions submission.Store
+	Files       files.Store
+	Audit       auth.Store
+	Runtime     workerruntime.Store
+	Captures    capture.Store
+}
+
+// NewTransactionalHandler constructs the production command boundary. Every
+// dependency needed by the coordinated transaction is explicit; wrappers are
+// accepted by capability and typed nil values are rejected.
+func NewTransactionalHandler(dependencies TransactionalHandlerDependencies) (*Handler, error) {
+	required := []struct {
+		name  string
+		value any
+	}{
+		{"coordinator", dependencies.Coordinator}, {"submissions", dependencies.Submissions},
+		{"files", dependencies.Files}, {"audit", dependencies.Audit},
+		{"runtime", dependencies.Runtime}, {"captures", dependencies.Captures},
+	}
+	for _, dependency := range required {
+		if nilDependency(dependency.value) {
+			return nil, errors.New("image quality transactional dependency " + dependency.name + " is required")
+		}
+	}
+	return &Handler{
+		store: dependencies.Coordinator, coordinator: dependencies.Coordinator,
+		submissions: dependencies.Submissions, files: dependencies.Files, audit: dependencies.Audit,
+		runtime: dependencies.Runtime, captures: dependencies.Captures,
+	}, nil
+}
+
+func nilDependency(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	return (reflected.Kind() == reflect.Interface || reflected.Kind() == reflect.Pointer || reflected.Kind() == reflect.Map || reflected.Kind() == reflect.Slice || reflected.Kind() == reflect.Func) && reflected.IsNil()
 }
 
 func (h *Handler) WithCaptureStore(store capture.Store) *Handler { h.captures = store; return h }
@@ -66,13 +109,9 @@ func (h *Handler) RunQualityCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	var runs []Run
 	tasksCreatedAtomically := false
-	if coordinated, ok := h.store.(TransactionalStore); ok && h.runtime != nil {
-		if _, runtimeIsPostgres := h.runtime.(*workerruntime.PostgresStore); runtimeIsPostgres {
-			runs, err = coordinated.CreateRunsWithTasks(r.Context(), user.TenantID, user.ID, createInput)
-			tasksCreatedAtomically = true
-		} else {
-			runs, err = h.store.CreateRuns(r.Context(), user.TenantID, createInput)
-		}
+	if h.coordinator != nil {
+		runs, err = h.coordinator.CreateRunsWithTasks(r.Context(), user.TenantID, user.ID, createInput)
+		tasksCreatedAtomically = true
 	} else {
 		runs, err = h.store.CreateRuns(r.Context(), user.TenantID, createInput)
 	}
@@ -91,6 +130,16 @@ func (h *Handler) RunQualityCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	h.auditAction(r, "image_quality.runs_created", "submission", submissionID, "create image quality runs")
 	httpx.JSON(w, http.StatusAccepted, map[string]any{"runs": runs})
+}
+
+func (h *Handler) ListPageRuns(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	runs, err := h.store.ListRunsForPage(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"runs": runs})
 }
 
 func (h *Handler) OverridePageQuality(w http.ResponseWriter, r *http.Request) {
@@ -255,20 +304,15 @@ func (h *Handler) SubmitResult(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if coordinated, ok := h.store.(TransactionalStore); ok && h.runtime != nil && h.captures != nil {
-		_, submissionIsPostgres := h.submissions.(*submission.PostgresStore)
-		_, runtimeIsPostgres := h.runtime.(*workerruntime.PostgresStore)
-		_, captureIsPostgres := h.captures.(*capture.PostgresStore)
-		if submissionIsPostgres && runtimeIsPostgres && captureIsPostgres {
-			run, err := coordinated.SubmitResultCommand(r.Context(), user.TenantID, user.ID, runID, input)
-			if err != nil {
-				writeStoreError(w, r, err)
-				return
-			}
-			h.auditAction(r, "image_quality.result_submitted", "image_quality_run", run.ID, "submit image quality result")
-			httpx.JSON(w, http.StatusOK, map[string]any{"run": run})
+	if h.coordinator != nil {
+		run, err := h.coordinator.SubmitResultCommand(r.Context(), user.TenantID, user.ID, runID, input)
+		if err != nil {
+			writeStoreError(w, r, err)
 			return
 		}
+		h.auditAction(r, "image_quality.result_submitted", "image_quality_run", run.ID, "submit image quality result")
+		httpx.JSON(w, http.StatusOK, map[string]any{"run": run})
+		return
 	}
 	run, err := h.store.CompleteRun(r.Context(), user.TenantID, runID, input)
 	if err != nil {

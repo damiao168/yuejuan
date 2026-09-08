@@ -42,7 +42,7 @@ func TestCreateRunsForCurrentSubmissionPages(t *testing.T) {
 	if run.SourceFileAssetID != "file-original-1" || run.SourceSHA256 != "source-hash-1" {
 		t.Fatalf("run did not preserve source file identity: %#v", run)
 	}
-	if run.ProfileName != "opencv-default" || run.ProfileVersion != "v1" || run.ProfileConfigHash == "" {
+	if run.ProfileName != "opencv-default" || run.ProfileVersion != "v2" || run.ProfileConfigHash == "" {
 		t.Fatalf("run did not preserve immutable profile: %#v", run)
 	}
 }
@@ -244,5 +244,37 @@ func TestCompleteRunRejectsExpiredOrStaleLease(t *testing.T) {
 	})
 	if !errors.Is(err, imagequality.ErrLeaseExpired) {
 		t.Fatalf("expected expired lease error, got %v", err)
+	}
+}
+
+func TestListRunsForPageIsNewestFirstAndTenantScoped(t *testing.T) {
+	store := imagequality.NewMemoryStore()
+	input := imagequality.CreateRunsInput{
+		SubmissionID: "submission-1",
+		Profile:      imagequality.DefaultProfile(),
+		Pages: []imagequality.PageSource{{
+			SubmissionPageID: "page-1", PageNo: 1, SourceFileAssetID: "file-1",
+			SourceSHA256: "hash-1", DownloadURL: "/api/v1/files/file-1/download",
+		}},
+	}
+	first, err := store.CreateRuns(context.Background(), tenantID, input)
+	if err != nil {
+		t.Fatalf("create first run: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	second, err := store.CreateRuns(context.Background(), tenantID, input)
+	if err != nil {
+		t.Fatalf("create second run: %v", err)
+	}
+	if _, err = store.CreateRuns(context.Background(), "another-tenant", input); err != nil {
+		t.Fatalf("create other tenant run: %v", err)
+	}
+
+	runs, err := store.ListRunsForPage(context.Background(), tenantID, "page-1")
+	if err != nil {
+		t.Fatalf("list page runs: %v", err)
+	}
+	if len(runs) != 2 || runs[0].ID != second[0].ID || runs[1].ID != first[0].ID {
+		t.Fatalf("expected newest tenant runs only, got %#v", runs)
 	}
 }

@@ -3,14 +3,18 @@ from __future__ import annotations
 import io
 import json
 
+from PIL import Image, ImageDraw
+
 from image_quality.config import EngineConfig
 from image_quality.runner import ImageQualityRunner
-from PIL import Image, ImageDraw
 
 
 def test_runner_claims_downloads_processes_uploads_and_submits() -> None:
     client = FakeClient(clear_png())
-    runner = ImageQualityRunner(client, EngineConfig(batch_size=1, lease_seconds=300, worker_instance_id="worker-a"))
+    runner = ImageQualityRunner(
+        client,
+        EngineConfig(batch_size=1, lease_seconds=300, worker_instance_id="worker-a"),
+    )
 
     processed = runner.run_once()
 
@@ -20,7 +24,10 @@ def test_runner_claims_downloads_processes_uploads_and_submits() -> None:
     assert client.result_submitted is not None
     assert client.result_submitted["quality_status"] == "passed"
     assert client.result_submitted["normalized_file_asset_id"] == "file-normalized-1"
-    assert "source_to_normalized_matrix" in client.result_submitted["normalization_transform"]
+    assert (
+        "source_to_normalized_matrix"
+        in client.result_submitted["normalization_transform"]
+    )
     assert client.requested_dimensions == client.uploaded_dimensions
     assert "student_id" not in json.dumps(client.result_submitted)
     assert "candidate_no" not in json.dumps(client.result_submitted)
@@ -28,7 +35,10 @@ def test_runner_claims_downloads_processes_uploads_and_submits() -> None:
 
 def test_runner_reports_terminal_failure_for_unreadable_image() -> None:
     client = FakeClient(b"not-an-image")
-    runner = ImageQualityRunner(client, EngineConfig(batch_size=1, lease_seconds=300, worker_instance_id="worker-a"))
+    runner = ImageQualityRunner(
+        client,
+        EngineConfig(batch_size=1, lease_seconds=300, worker_instance_id="worker-a"),
+    )
 
     processed = runner.run_once()
 
@@ -48,7 +58,9 @@ class FakeClient:
         self.failure_submitted: dict | None = None
         self.heartbeats = 0
 
-    def claim_jobs(self, worker_instance_id: str, limit: int, lease_seconds: int) -> list[dict]:
+    def claim_jobs(
+        self, worker_instance_id: str, limit: int, lease_seconds: int
+    ) -> list[dict]:
         assert worker_instance_id == "worker-a"
         assert limit == 1
         assert lease_seconds == 300
@@ -66,8 +78,8 @@ class FakeClient:
                 "attempt_no": 1,
                 "profile": {
                     "name": "opencv-default",
-                    "version": "v1",
-                    "config_hash": "sha256:opencv-default-v1",
+                    "version": "v2",
+                    "config_hash": "sha256:opencv-default-v2-local-focus-hard-gates",
                 },
             }
         ]
@@ -76,7 +88,9 @@ class FakeClient:
         assert url == "/api/v1/files/file-original-1/download"
         return self.image_bytes
 
-    def heartbeat(self, job: dict, worker_instance_id: str, lease_seconds: int, timeout: float) -> None:
+    def heartbeat(
+        self, job: dict, worker_instance_id: str, lease_seconds: int, timeout: float
+    ) -> None:
         assert job["runtime_task_id"] == "runtime-task-1"
         assert worker_instance_id == "worker-a"
         assert lease_seconds == 300
@@ -89,9 +103,15 @@ class FakeClient:
         assert payload["content_type"] == "image/png"
         assert payload["sha256"]
         self.requested_dimensions = (payload["pixel_width"], payload["pixel_height"])
-        return {"upload_url": "/api/v1/files", "upload_method": "POST", "expected_sha256": payload["sha256"]}
+        return {
+            "upload_url": "/api/v1/files",
+            "upload_method": "POST",
+            "expected_sha256": payload["sha256"],
+        }
 
-    def upload_normalized(self, slot: dict, job: dict, normalized_png: bytes, sha256: str) -> str:
+    def upload_normalized(
+        self, slot: dict, job: dict, normalized_png: bytes, sha256: str
+    ) -> str:
         assert slot["expected_sha256"] == sha256
         assert normalized_png.startswith(b"\x89PNG")
         with Image.open(io.BytesIO(normalized_png)) as normalized:
@@ -109,11 +129,11 @@ class FakeClient:
 
 
 def clear_png() -> bytes:
-    image = Image.new("RGB", (600, 800), "white")
+    image = Image.new("RGB", (1800, 2400), "white")
     draw = ImageDraw.Draw(image)
-    draw.rectangle((30, 30, 570, 770), outline="black", width=5)
-    for y in range(100, 700, 70):
-        draw.line((80, y, 520, y), fill="black", width=4)
+    draw.rectangle((75, 75, 1725, 2325), outline="black", width=12)
+    for y in range(250, 2150, 175):
+        draw.line((200, y, 1600, y), fill="black", width=10)
     output = io.BytesIO()
     image.save(output, format="PNG")
     return output.getvalue()

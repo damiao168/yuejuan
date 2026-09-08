@@ -169,6 +169,7 @@ import type {
 } from "./types";
 
 export interface operations {
+  "listSubmissionPageQualityRuns": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: { "runs": Array<Record<string, unknown>>; }; };
   "listExams": { args: { query?: { "limit"?: number; "cursor"?: string; "status"?: string; "school_id"?: string; }; signal?: AbortSignal; }; response: ExamPage; };
   "refreshExamCandidates": { args: { path: { "examId": string; }; signal?: AbortSignal; }; response: CandidateRefreshResponse; };
   "getExamWorkspace": { args: { path: { "examId": string; }; signal?: AbortSignal; }; response: ExamWorkspaceResponse; };
@@ -326,6 +327,11 @@ export interface operations {
 
 export class EduGradeApi {
   constructor(private readonly transport: ApiTransport) {}
+
+  listSubmissionPageQualityRuns(args: operations["listSubmissionPageQualityRuns"]["args"]): Promise<operations["listSubmissionPageQualityRuns"]["response"]> {
+    const requestPath = fillPath("/api/v1/submission-pages/{id}/quality-runs", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
 
   listExams(args: operations["listExams"]["args"] = {}): Promise<operations["listExams"]["response"]> {
     const requestPath = appendQuery("/api/v1/exams", args.query);

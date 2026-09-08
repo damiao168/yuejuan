@@ -425,7 +425,7 @@ RETURNING id::text`, tenantID, item.CaptureBatchID, item.ID, p.SourceIndex, subm
 		err = tx.QueryRowContext(ctx, `INSERT INTO submission_page_quality_run (
 tenant_id,submission_id,submission_page_id,source_file_asset_id,source_sha256,processing_status,
 profile_name,profile_version,profile_config_hash,metric_schema_version,report_schema_version)
-VALUES ($1,$2::uuid,$3::uuid,$4::uuid,$5,'pending','opencv-default','v1','sha256:opencv-default-v1','image-quality-metrics-v1','image-quality-report-v1') RETURNING id::text`, tenantID, submissionID, submissionPageID, p.FileAssetID, p.SHA256).Scan(&qualityRunID)
+VALUES ($1,$2::uuid,$3::uuid,$4::uuid,$5,'pending','opencv-default','v2','sha256:opencv-default-v2-local-focus-hard-gates','image-quality-metrics-v2','image-quality-report-v2') RETURNING id::text`, tenantID, submissionID, submissionPageID, p.FileAssetID, p.SHA256).Scan(&qualityRunID)
 		if err != nil {
 			return File{}, err
 		}
@@ -433,8 +433,8 @@ VALUES ($1,$2::uuid,$3::uuid,$4::uuid,$5,'pending','opencv-default','v1','sha256
 			"run_id": qualityRunID, "submission_id": submissionID, "submission_page_id": submissionPageID,
 			"capture_page_id": capturePageID, "page_no": p.SourceIndex, "source_file_asset_id": p.FileAssetID,
 			"source_sha256": p.SHA256, "download_url": "/api/v1/files/" + p.FileAssetID + "/download",
-			"profile_name": "opencv-default", "profile_version": "v1", "profile_config_hash": "sha256:opencv-default-v1",
-			"metric_schema_version": "image-quality-metrics-v1", "report_schema_version": "image-quality-report-v1",
+			"profile_name": "opencv-default", "profile_version": "v2", "profile_config_hash": "sha256:opencv-default-v2-local-focus-hard-gates",
+			"metric_schema_version": "image-quality-metrics-v2", "report_schema_version": "image-quality-report-v2",
 		})
 		key := "capture-quality:" + capturePageID + ":" + p.SHA256
 		_, err = tx.ExecContext(ctx, `INSERT INTO agent_worker_task (tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)

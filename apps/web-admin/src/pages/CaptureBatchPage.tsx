@@ -67,6 +67,7 @@ import { ErrorState, LoadingState } from "../components/PageState";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
 import { RegistrationCorrectionWorkspace } from "../components/RegistrationCorrectionWorkspace";
+import { ImageQualityWorkspace } from "../features/capture/ImageQualityWorkspace";
 
 const statusLabels: Record<string, string> = {
   draft: "等待上传",
@@ -1137,6 +1138,21 @@ export function CaptureBatchPage({
                             size="small"
                           />
                         </div>
+                      ),
+                    },
+                    {
+                      key: "image-quality",
+                      label: `图像质检 (${detail.pages.filter((page) => page.status !== "deleted").length})`,
+                      children: (
+                        <ImageQualityWorkspace
+                          pages={detail.pages}
+                          canManage={batchCanManage}
+                          onRefresh={() => loadDetail(detail.batch.id, true)}
+                          onOverride={(page) => {
+                            setQualityOverrideReason("");
+                            setQualityOverridePage(page);
+                          }}
+                        />
                       ),
                     },
                     {

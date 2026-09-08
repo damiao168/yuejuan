@@ -39,10 +39,10 @@ type Profile struct {
 func DefaultProfile() Profile {
 	return Profile{
 		Name:                "opencv-default",
-		Version:             "v1",
-		ConfigHash:          "sha256:opencv-default-v1",
-		MetricSchemaVersion: "image-quality-metrics-v1",
-		ReportSchemaVersion: "image-quality-report-v1",
+		Version:             "v2",
+		ConfigHash:          "sha256:opencv-default-v2-local-focus-hard-gates",
+		MetricSchemaVersion: "image-quality-metrics-v2",
+		ReportSchemaVersion: "image-quality-report-v2",
 	}
 }
 
@@ -145,6 +145,7 @@ type ResultInput struct {
 
 type Store interface {
 	CreateRuns(ctx context.Context, tenantID string, input CreateRunsInput) ([]Run, error)
+	ListRunsForPage(ctx context.Context, tenantID string, submissionPageID string) ([]Run, error)
 	Claim(ctx context.Context, tenantID string, input ClaimInput) ([]ClaimedJob, error)
 	LeaseRun(ctx context.Context, tenantID string, runID string, workerInstanceID string, leaseToken string, leaseExpiresAt time.Time, attemptNo int) (Run, error)
 	RenewLease(ctx context.Context, tenantID string, runID string, workerInstanceID string, leaseToken string, leaseExpiresAt time.Time, attemptNo int) (Run, error)

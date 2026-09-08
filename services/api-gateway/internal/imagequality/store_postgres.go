@@ -33,6 +33,37 @@ func (s *PostgresStore) CreateRuns(ctx context.Context, tenantID string, input C
 	return runs, tx.Commit()
 }
 
+func (s *PostgresStore) ListRunsForPage(ctx context.Context, tenantID string, submissionPageID string) ([]Run, error) {
+	if tenantID == "" || submissionPageID == "" {
+		return nil, ErrInvalidInput
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id::text, tenant_id::text, submission_id::text, submission_page_id::text,
+  source_file_asset_id::text, source_sha256, COALESCE(normalized_file_asset_id::text, ''),
+  processing_status, COALESCE(quality_status, ''), profile_name, profile_version, profile_config_hash,
+  metric_schema_version, report_schema_version, quality_report, quality_issues, normalization_transform,
+  COALESCE(worker_service, ''), COALESCE(worker_instance_id, ''), attempt_no, COALESCE(result_version, ''),
+  COALESCE(result_payload_hash, ''), COALESCE(lease_token, ''), lease_expires_at, started_at, completed_at,
+  COALESCE(duration_ms, 0), COALESCE(error_code, ''), error_detail, created_at
+FROM submission_page_quality_run
+WHERE tenant_id = $1 AND submission_page_id::text = $2 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+`, tenantID, submissionPageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	runs := make([]Run, 0)
+	for rows.Next() {
+		var run Run
+		if err := scanRun(rows, &run); err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
+}
+
 func createRunsInTx(ctx context.Context, tx *sql.Tx, tenantID string, input CreateRunsInput) ([]Run, error) {
 	if tx == nil {
 		return nil, ErrInvalidInput
