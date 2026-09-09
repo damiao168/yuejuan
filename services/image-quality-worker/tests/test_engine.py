@@ -4,9 +4,8 @@ import io
 
 import numpy as np
 import pytest
-from PIL import Image, ImageDraw, ImageFilter
-
 from image_quality.engine import ImageQualityError, analyze_and_normalize
+from PIL import Image, ImageDraw, ImageFilter
 
 
 def test_clear_image_passes_and_outputs_rgb_png() -> None:
