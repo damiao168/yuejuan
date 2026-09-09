@@ -54,18 +54,35 @@ func TestSubmissionCanBecomeReadyForOCRAfterQualityPass(t *testing.T) {
 	authStore := authStoreWithPermissions(t, []string{"submission:manage"})
 	fileStore := files.NewMemoryStore()
 	fileAsset := createFileAsset(t, fileStore)
-	router := testRouter(authStore, fileStore, submission.NewMemoryStore())
+	submissionStore := submission.NewMemoryStore()
+	router := testRouter(authStore, fileStore, submissionStore)
 	token := login(t, router)
 
 	item := createSubmission(t, router, token, "exam-1", 1)
-	addPage(t, router, token, item.ID, fileAsset.ID, 1)
+	page := addPage(t, router, token, item.ID, fileAsset.ID, 1)
 	req := authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/quality-check", nil, token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"valid":true`) {
-		t.Fatalf("expected quality pass, got %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected collection integrity pass, got %d %s", rec.Code, rec.Body.String())
 	}
 
+	req = authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/status", bytes.NewBufferString(`{"status":"ready_for_ocr","expected_revision":1}`), token)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("collection integrity alone must not enter OCR, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	if _, err := submissionStore.ApplyPageQualityResult(context.Background(), tenantID, submission.ApplyPageQualityInput{
+		SubmissionID:          item.ID,
+		PageID:                page.ID,
+		LatestQualityRunID:    "quality-run-1",
+		NormalizedFileAssetID: "normalized-file-1",
+		QualityStatus:         "passed",
+	}); err != nil {
+		t.Fatalf("apply page image quality result: %v", err)
+	}
 	req = authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/status", bytes.NewBufferString(`{"status":"ready_for_ocr","expected_revision":1}`), token)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -99,16 +116,28 @@ func TestAddingPageAfterQualityPassInvalidatesGate(t *testing.T) {
 	fileStore := files.NewMemoryStore()
 	fileAsset := createFileAsset(t, fileStore)
 	secondFile := createSecondFileAsset(t, fileStore)
-	router := testRouter(authStoreWithPermissions(t, []string{"submission:manage"}), fileStore, submission.NewMemoryStore())
+	submissionStore := submission.NewMemoryStore()
+	router := testRouter(authStoreWithPermissions(t, []string{"submission:manage"}), fileStore, submissionStore)
 	token := login(t, router)
 	item := createSubmission(t, router, token, "exam-1", 2)
-	addPage(t, router, token, item.ID, fileAsset.ID, 1)
-	addPage(t, router, token, item.ID, secondFile.ID, 2)
+	page1 := addPage(t, router, token, item.ID, fileAsset.ID, 1)
+	page2 := addPage(t, router, token, item.ID, secondFile.ID, 2)
 	req := authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/quality-check", nil, token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"valid":true`) {
-		t.Fatalf("quality pass expected 200, got %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("collection integrity pass expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	for index, page := range []submission.SubmissionPage{page1, page2} {
+		if _, err := submissionStore.ApplyPageQualityResult(context.Background(), tenantID, submission.ApplyPageQualityInput{
+			SubmissionID:          item.ID,
+			PageID:                page.ID,
+			LatestQualityRunID:    "quality-run-" + intString(index+1),
+			NormalizedFileAssetID: "normalized-file-" + intString(index+1),
+			QualityStatus:         "passed",
+		}); err != nil {
+			t.Fatalf("apply page image quality result: %v", err)
+		}
 	}
 
 	thirdFile := createThirdFileAsset(t, fileStore)
@@ -126,16 +155,26 @@ func TestReplacePageResetsQualityGateAndKeepsPageCount(t *testing.T) {
 	fileStore := files.NewMemoryStore()
 	fileAsset := createFileAsset(t, fileStore)
 	replacementFile := createSecondFileAsset(t, fileStore)
-	router := testRouter(authStore, fileStore, submission.NewMemoryStore())
+	submissionStore := submission.NewMemoryStore()
+	router := testRouter(authStore, fileStore, submissionStore)
 	token := login(t, router)
 	item := createSubmission(t, router, token, "exam-1", 1)
-	addPage(t, router, token, item.ID, fileAsset.ID, 1)
+	page := addPage(t, router, token, item.ID, fileAsset.ID, 1)
 
 	req := authedRequest(http.MethodPost, "/api/v1/submissions/"+item.ID+"/quality-check", nil, token)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"valid":true`) {
-		t.Fatalf("quality pass expected 200, got %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("collection integrity pass expected 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := submissionStore.ApplyPageQualityResult(context.Background(), tenantID, submission.ApplyPageQualityInput{
+		SubmissionID:          item.ID,
+		PageID:                page.ID,
+		LatestQualityRunID:    "quality-run-1",
+		NormalizedFileAssetID: "normalized-file-1",
+		QualityStatus:         "passed",
+	}); err != nil {
+		t.Fatalf("apply page image quality result: %v", err)
 	}
 
 	req = authedRequest(http.MethodPut, "/api/v1/submissions/"+item.ID+"/pages/1", bytes.NewBufferString(`{"file_asset_id":"`+replacementFile.ID+`"}`), token)

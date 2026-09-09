@@ -283,15 +283,12 @@ func (s *MemoryStore) RunQualityCheck(_ context.Context, tenantID string, submis
 	}
 	pages := s.pagesForLocked(tenantID, submissionID)
 	issues := qualityIssues(item, pages)
-	if len(issues) == 0 {
-		item.QualityStatus = "passed"
-		item.Status = "quality_checked"
-	} else {
-		item.QualityStatus = "failed"
-	}
 	item.QualityIssues = issues
 	item.ActualPageCount = len(pages)
 	s.submissions[submissionID] = item
+	// Collection integrity is only the first gate. The aggregate may pass only
+	// after every page has passed image quality or received a valid override.
+	s.aggregateQualityLocked(tenantID, submissionID)
 	return QualityResult{Valid: len(issues) == 0, Issues: issues}, nil
 }
 

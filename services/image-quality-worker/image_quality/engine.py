@@ -21,11 +21,13 @@ PREFERRED_EFFECTIVE_SHORT_EDGE = 2000
 
 # Initial engineering thresholds. They are deliberately centralized and
 # conservative until governed school answer-sheet benchmarks are available.
-MAX_SKEW_ANALYSIS_DEGREES = 15.0
+MAX_SKEW_ANALYSIS_DEGREES = 45.0
 MIN_LINE_LENGTH_RATIO = 0.12
 MIN_DESKEW_DEGREES = 0.5
 MAX_DESKEW_DEGREES = 7.0
 MIN_DESKEW_CONFIDENCE = 0.45
+LANDSCAPE_ROTATION_RATIO = 1.05
+SEVERE_BLUR_SHARPNESS_THRESHOLD = 0.12
 PERSPECTIVE_SUSPECTED_SCORE = 0.15
 
 
@@ -101,6 +103,9 @@ def analyze_and_normalize(data: bytes) -> QualityAnalysisResult:
             "detected_skew_angle": round(skew_angle, 4),
             "skew_confidence": round(skew_confidence, 4),
             "skew_correction_applied": deskew_applied,
+            "coarse_orientation": "landscape"
+            if pixel_width > pixel_height * LANDSCAPE_ROTATION_RATIO
+            else "portrait_or_square",
             "page_border_status": border_status,
             "page_border_confidence": round(border_confidence, 4),
             "perspective_status": perspective_status,
@@ -320,7 +325,7 @@ def _issues(
                 "failed",
                 "sharpness_score",
                 metrics["sharpness_score"],
-                0.18,
+                SEVERE_BLUR_SHARPNESS_THRESHOLD,
                 "recapture",
                 {"window": "local_focus_map", "blur_pattern": metrics["blur_pattern"]},
             )
@@ -398,6 +403,17 @@ def _issues(
                 "detected_skew_angle",
                 geometry["detected_skew_angle"],
                 MAX_DESKEW_DEGREES,
+                "manual_review",
+            )
+        )
+    if geometry["coarse_orientation"] == "landscape":
+        issues.append(
+            _issue(
+                "large_rotation_risk",
+                "review",
+                "coarse_orientation",
+                geometry["coarse_orientation"],
+                "portrait_or_square",
                 "manual_review",
             )
         )
@@ -787,7 +803,7 @@ def _hard_gates(
     metrics: dict[str, float | int], geometry: dict[str, Any]
 ) -> list[dict[str, Any]]:
     severe_blur = (
-        float(metrics["sharpness_score"]) < 0.12
+        float(metrics["sharpness_score"]) < SEVERE_BLUR_SHARPNESS_THRESHOLD
         and float(metrics["focus_laplacian_median"]) < 30.0
     ) or (
         float(metrics["bad_focus_patch_ratio"]) > 0.5
@@ -811,7 +827,7 @@ def _hard_gates(
             "severe_blur",
             "failed" if severe_blur else "passed",
             metrics["sharpness_score"],
-            0.18,
+            SEVERE_BLUR_SHARPNESS_THRESHOLD,
         ),
         _gate(
             "incomplete_page",
@@ -967,10 +983,10 @@ def _detect_skew(gray: np.ndarray) -> tuple[float, float]:
         if length < minimum_length:
             continue
         angle = float(np.degrees(np.arctan2(dy, dx)))
-        while angle <= -90.0:
-            angle += 180.0
-        while angle > 90.0:
-            angle -= 180.0
+        # Treat horizontal and vertical document structure as evidence for the
+        # same page-axis rotation. This keeps large rotations up to 45 degrees visible
+        # instead of discarding them before the quality decision.
+        angle = ((angle + 45.0) % 90.0) - 45.0
         if abs(angle) > MAX_SKEW_ANALYSIS_DEGREES:
             continue
         angles.append(angle)

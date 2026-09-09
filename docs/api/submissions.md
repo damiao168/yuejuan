@@ -4,9 +4,9 @@
 
 ## 边界
 
-本模块建立答卷采集数据结构：submission、submission page、文件关联、基础质量门禁和进入 OCR 前的状态流转。
+本模块建立答卷采集数据结构：submission、submission page、文件关联、答卷完整性门禁和进入 OCR 前的状态流转。
 
-质量门禁只做元数据级检查：是否有页面、页数是否匹配、页码是否缺失。它不做图像模糊、倾斜、条码识别、OCR 或答题区域切分。
+`POST /quality-check` 只做元数据级的答卷完整性检查：是否有页面、页数是否匹配、页码是否缺失。页面图像模糊、倾斜、分辨率等由 `POST /run-quality-check` 创建的逐页图像质检任务处理；条码识别、OCR 和答题区域切分不属于完整性检查。
 
 ## 权限
 
@@ -19,7 +19,7 @@ created -> pages_uploaded -> quality_checked -> ready_for_ocr
 created/pages_uploaded/quality_checked -> rejected
 ```
 
-`quality_checked` 只能由 `POST /quality-check` 产生，不能由客户端直接改状态。`ready_for_ocr` 只能在质量门禁通过后进入。
+`quality_checked` 不能由客户端直接改状态。只有答卷完整性通过，并且所有页面的图像质检均为 `passed`（包含有效人工放行）时，服务端才会聚合为 `quality_checked`；此后才能进入 `ready_for_ocr`。
 
 ## POST /api/v1/exams/{examId}/submissions
 
@@ -114,7 +114,7 @@ manual_import
 
 ## POST /api/v1/submissions/{id}/quality-check
 
-运行进入 OCR 前的元数据质量门禁。
+运行进入 OCR 前的答卷完整性门禁。
 
 响应示例：
 
@@ -130,7 +130,11 @@ manual_import
 }
 ```
 
-质量门禁通过时 submission 变为 `quality_checked`，`quality_status` 为 `passed`。质量门禁失败时保持在 `pages_uploaded`，`quality_status` 为 `failed`。
+`valid: true` 仅表示答卷完整性通过，不会单独把 submission 标记为 `quality_checked`。完整性失败时 submission 保持在 `pages_uploaded`，`quality_status` 为 `failed`；完整性通过后仍需执行 `POST /run-quality-check`，待所有页面图像质检通过或被有效人工放行，submission 才会聚合为 `quality_checked`、`quality_status: passed`。
+
+## POST /api/v1/submissions/{id}/run-quality-check
+
+为答卷当前的每一页创建异步图像质量检测任务。接口返回 `202 Accepted`；客户端应查询答卷及页面质量状态，只有 submission 聚合为 `quality_checked` 后才能请求进入 `ready_for_ocr`。
 
 ## POST /api/v1/submissions/{id}/status
 

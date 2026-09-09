@@ -450,18 +450,17 @@ func (s *PostgresStore) RunQualityCheck(ctx context.Context, tenantID string, su
 		return QualityResult{}, err
 	}
 	issues := qualityIssues(item, pages)
-	status := "pages_uploaded"
-	qualityStatus := "failed"
-	if len(issues) == 0 {
-		status = "quality_checked"
-		qualityStatus = "passed"
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return QualityResult{}, err
 	}
-	issuesJSON, _ := json.Marshal(issues)
-	if _, err := s.db.ExecContext(ctx, `
-UPDATE submission
-SET status = $3, quality_status = $4, quality_issues = $5, actual_page_count = $6, updated_at = now()
-WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
-`, tenantID, submissionID, status, qualityStatus, issuesJSON, len(pages)); err != nil {
+	defer tx.Rollback()
+	// Collection integrity is only the first gate. The aggregate may pass only
+	// after every page has passed image quality or received a valid override.
+	if err = aggregateQualityTx(ctx, tx, tenantID, submissionID); err != nil {
+		return QualityResult{}, err
+	}
+	if err = tx.Commit(); err != nil {
 		return QualityResult{}, err
 	}
 	return QualityResult{Valid: len(issues) == 0, Issues: issues}, nil
@@ -531,7 +530,7 @@ WHERE tenant_id = $1 AND submission_id = $2 AND page_no = $3 AND deleted_at IS N
 
 func aggregateQualityTx(ctx context.Context, tx *sql.Tx, tenantID string, submissionID string) error {
 	rows, err := tx.QueryContext(ctx, `
-SELECT quality_status
+SELECT page_no, quality_status
 FROM submission_page
 WHERE tenant_id = $1 AND submission_id = $2 AND deleted_at IS NULL
 `, tenantID, submissionID)
@@ -539,16 +538,17 @@ WHERE tenant_id = $1 AND submission_id = $2 AND deleted_at IS NULL
 		return err
 	}
 	defer rows.Close()
-	pageCount := 0
+	pages := []SubmissionPage{}
 	hasUnchecked := false
 	hasReview := false
 	hasFailed := false
 	for rows.Next() {
-		pageCount++
+		var page SubmissionPage
 		var status string
-		if err := rows.Scan(&status); err != nil {
+		if err := rows.Scan(&page.PageNo, &status); err != nil {
 			return err
 		}
+		pages = append(pages, page)
 		switch status {
 		case "failed":
 			hasFailed = true
@@ -562,6 +562,7 @@ WHERE tenant_id = $1 AND submission_id = $2 AND deleted_at IS NULL
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	pageCount := len(pages)
 	var expected int
 	if err := tx.QueryRowContext(ctx, `
 SELECT expected_page_count
@@ -570,9 +571,14 @@ WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
 `, tenantID, submissionID).Scan(&expected); err != nil {
 		return err
 	}
+	issues := qualityIssues(Submission{ExpectedPageCount: expected}, pages)
+	issuesJSON, err := json.Marshal(issues)
+	if err != nil {
+		return err
+	}
 	qualityStatus := "unchecked"
 	submissionStatus := "pages_uploaded"
-	if expected > 0 && pageCount != expected {
+	if len(issues) > 0 {
 		qualityStatus = "failed"
 	} else if hasFailed {
 		qualityStatus = "failed"
@@ -589,9 +595,10 @@ UPDATE submission
 SET actual_page_count = $3,
   quality_status = $4,
   status = $5,
+  quality_issues = $6,
   updated_at = now()
 WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
-`, tenantID, submissionID, pageCount, qualityStatus, submissionStatus)
+`, tenantID, submissionID, pageCount, qualityStatus, submissionStatus, issuesJSON)
 	return err
 }
 

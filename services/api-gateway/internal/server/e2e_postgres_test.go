@@ -22,6 +22,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/org"
 	"edugrade-enterprise/services/api-gateway/internal/processing"
 	"edugrade-enterprise/services/api-gateway/internal/review"
+	"edugrade-enterprise/services/api-gateway/internal/submission"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -157,6 +158,14 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	pageResp := e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/pages", adminToken, `{"file_asset_id":"`+answerFileID+`","page_no":1}`, http.StatusCreated)["page"].(map[string]any)
 	pageID := e2eString(t, pageResp, "id")
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/quality-check", adminToken, `{}`, http.StatusOK)
+	if _, err := submission.NewPostgresStore(db).ApplyPageQualityResult(context.Background(), demoTenantID, submission.ApplyPageQualityInput{
+		SubmissionID:          submissionID,
+		PageID:                pageID,
+		NormalizedFileAssetID: answerFileID,
+		QualityStatus:         "passed",
+	}); err != nil {
+		t.Fatalf("apply synthetic page image quality result: %v", err)
+	}
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/status", adminToken, `{"status":"ready_for_ocr","expected_revision":1}`, http.StatusOK)
 
 	ocrTask := e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/ocr-tasks", adminToken, `{"engine":"mock_ocr","engine_version":"story041-synthetic","min_confidence":0.8}`, http.StatusCreated)["task"].(map[string]any)

@@ -265,11 +265,21 @@ func readySubmission(t *testing.T, store submission.Store) submission.Submission
 	if err != nil {
 		t.Fatalf("create submission: %v", err)
 	}
-	if _, err := store.AddPage(ctx, tenantID, item.ID, userID, submission.AddPageInput{FileAssetID: "file-1", PageNo: 1}); err != nil {
+	page, err := store.AddPage(ctx, tenantID, item.ID, userID, submission.AddPageInput{FileAssetID: "file-1", PageNo: 1})
+	if err != nil {
 		t.Fatalf("add page: %v", err)
 	}
 	if _, err := store.RunQualityCheck(ctx, tenantID, item.ID, userID); err != nil {
-		t.Fatalf("quality check: %v", err)
+		t.Fatalf("collection integrity check: %v", err)
+	}
+	if _, err := store.ApplyPageQualityResult(ctx, tenantID, submission.ApplyPageQualityInput{
+		SubmissionID:          item.ID,
+		PageID:                page.ID,
+		LatestQualityRunID:    "quality-run-1",
+		NormalizedFileAssetID: "normalized-file-1",
+		QualityStatus:         "passed",
+	}); err != nil {
+		t.Fatalf("page image quality result: %v", err)
 	}
 	out, err := store.UpdateStatus(ctx, tenantID, item.ID, userID, "ready_for_ocr", item.Revision)
 	if err != nil {

@@ -28,6 +28,7 @@ import {
   Search,
 } from "lucide-react";
 import { ApiClientError, getSafeUserText, getUserErrorMessage } from "../api/client";
+import { runImageQualityCheck } from "../api/capture";
 import { downloadFileBlob, uploadFile, uploadFileWithProgress } from "../api/files";
 import { listExams, type Exam } from "../api/exams";
 import type { Student } from "../api/org";
@@ -465,15 +466,14 @@ export function SubmissionCapturePage({
       patchUpload(uploadId, { phase: "关联第 1 页", percent: 94 });
       await addSubmissionPage(submissionId, uploadResult.file.id, 1);
       pageUploaded = true;
-      patchUpload(uploadId, { phase: "检查图片质量", percent: 96 });
-      const quality = await runQualityCheck(submissionId);
-      if (quality.result.valid) {
-        patchUpload(uploadId, { phase: "提交文字识别", percent: 98 });
-        await updateSubmissionStatus(submissionId, "ready_for_ocr", submissionResult.submission.revision);
-        await createOcrTask(submissionId);
-        patchUpload(uploadId, { status: "success", phase: "已进入识别队列", percent: 100 });
+      patchUpload(uploadId, { phase: "检查答卷完整性", percent: 96 });
+      const integrity = await runQualityCheck(submissionId);
+      if (integrity.result.valid) {
+        patchUpload(uploadId, { phase: "提交图像质量检测", percent: 98 });
+        await runImageQualityCheck(submissionId);
+        patchUpload(uploadId, { status: "success", phase: "图像质检已进入队列", percent: 100 });
       } else {
-        patchUpload(uploadId, { status: "success", phase: "已上传，图片需要处理", percent: 100 });
+        patchUpload(uploadId, { status: "success", phase: "已上传，答卷完整性需处理", percent: 100 });
       }
       request.onSuccess?.({ ok: true });
       await loadCaptureData(selectedExam.id);
@@ -714,8 +714,12 @@ export function SubmissionCapturePage({
         const runNext = () => {
           if (qualityPending) {
             return runAction(`quality-${id}`, async () => {
-              await runQualityCheck(id);
-            }, "图片质量检查完成", () => refreshSingle(id));
+              const integrity = await runQualityCheck(id);
+              if (!integrity.result.valid) {
+                throw new Error("答卷完整性未通过，请先补齐或更正页面");
+              }
+              await runImageQualityCheck(id);
+            }, "图像质量检测已进入队列", () => refreshSingle(id));
           }
           if (needsReady) {
             return runAction(`ready-${id}`, async () => {

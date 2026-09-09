@@ -843,8 +843,18 @@ func importDataset(
 				Image:     sourceImage,
 			})
 		}
-		if _, createErr = client.json(ctx, http.MethodPost, "/api/v1/submissions/"+submissionID+"/quality-check", map[string]any{}, http.StatusOK); createErr != nil {
-			return importResult{}, fmt.Errorf("quality-check %s: %w", candidate.CandidateNo, createErr)
+		integrityResponse, integrityErr := client.json(ctx, http.MethodPost, "/api/v1/submissions/"+submissionID+"/quality-check", map[string]any{}, http.StatusOK)
+		if integrityErr != nil {
+			return importResult{}, fmt.Errorf("quality-check %s: %w", candidate.CandidateNo, integrityErr)
+		}
+		if integrityResult := nestedMap(integrityResponse, "result"); !boolField(integrityResult, "valid") {
+			return importResult{}, fmt.Errorf("collection integrity failed for %s: %v", candidate.CandidateNo, integrityResult["issues"])
+		}
+		if _, createErr = client.json(ctx, http.MethodPost, "/api/v1/submissions/"+submissionID+"/run-quality-check", map[string]any{}, http.StatusAccepted); createErr != nil {
+			return importResult{}, fmt.Errorf("run image quality check %s: %w", candidate.CandidateNo, createErr)
+		}
+		if createErr = waitForSubmissionImageQuality(ctx, client, submissionID); createErr != nil {
+			return importResult{}, fmt.Errorf("image quality %s: %w", candidate.CandidateNo, createErr)
 		}
 		if _, createErr = client.json(ctx, http.MethodPost, "/api/v1/submissions/"+submissionID+"/status", map[string]any{"status": "ready_for_ocr", "expected_revision": 1}, http.StatusOK); createErr != nil {
 			return importResult{}, fmt.Errorf("mark %s ready for OCR: %w", candidate.CandidateNo, createErr)
@@ -1555,6 +1565,33 @@ func (c *apiClient) json(ctx context.Context, method, path string, body any, wan
 		c.loginResponse = result
 	}
 	return result, nil
+}
+
+func waitForSubmissionImageQuality(ctx context.Context, client *apiClient, submissionID string) error {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(2 * time.Minute)
+	defer timeout.Stop()
+	for {
+		response, err := client.json(ctx, http.MethodGet, "/api/v1/submissions/"+submissionID, nil, http.StatusOK)
+		if err != nil {
+			return err
+		}
+		item := nestedMap(response, "submission")
+		switch stringField(item, "quality_status") {
+		case "passed":
+			return nil
+		case "review", "failed":
+			return fmt.Errorf("submission requires operator action: status=%s issues=%v", stringField(item, "quality_status"), item["quality_issues"])
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout.C:
+			return errors.New("timed out waiting for image quality worker")
+		case <-ticker.C:
+		}
+	}
 }
 
 func (c *apiClient) upload(ctx context.Context, path string, fields map[string]string) (map[string]any, error) {

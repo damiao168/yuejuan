@@ -121,16 +121,45 @@ def test_low_confidence_page_is_not_rotated() -> None:
     assert result.normalization_transform["content_rotation_degrees"] == 0
 
 
-def test_large_angle_is_not_treated_as_small_deskew() -> None:
+@pytest.mark.parametrize("rotation", [22.0, 40.0])
+def test_large_angle_is_not_treated_as_small_deskew_and_requires_review(
+    rotation: float,
+) -> None:
     with Image.open(io.BytesIO(make_clear_answer_like_image())) as source:
         rotated = source.rotate(
-            22.0, resample=Image.Resampling.BICUBIC, expand=True, fillcolor="white"
+            rotation,
+            resample=Image.Resampling.BICUBIC,
+            expand=True,
+            fillcolor="white",
         )
 
     result = analyze_and_normalize(encode_image(rotated))
 
-    assert result.quality_report["geometry"]["skew_correction_applied"] is False
+    geometry = result.quality_report["geometry"]
+    assert abs(abs(geometry["detected_skew_angle"]) - rotation) < 2.0
+    assert geometry["skew_confidence"] >= 0.45
+    assert geometry["skew_correction_applied"] is False
     assert result.normalization_transform["content_rotation_degrees"] == 0
+    assert result.quality_status in {"review", "failed"}
+    assert any(issue["code"] == "residual_skew" for issue in result.quality_issues)
+
+
+@pytest.mark.parametrize("rotation", [90.0, 270.0])
+def test_quarter_turn_requires_review_without_automatic_rotation(
+    rotation: float,
+) -> None:
+    with Image.open(io.BytesIO(make_clear_answer_like_image())) as source:
+        rotated = source.rotate(rotation, expand=True, fillcolor="white")
+
+    result = analyze_and_normalize(encode_image(rotated))
+
+    geometry = result.quality_report["geometry"]
+    assert geometry["coarse_orientation"] == "landscape"
+    assert geometry["skew_correction_applied"] is False
+    assert result.quality_status in {"review", "failed"}
+    assert any(
+        issue["code"] == "large_rotation_risk" for issue in result.quality_issues
+    )
 
 
 def test_complete_page_border_scores_higher_than_cropped_border() -> None:
@@ -205,6 +234,10 @@ def test_report_exposes_seven_quality_dimensions_and_hard_gates() -> None:
         "REJECT",
     }
     assert report["hard_gates"]
+    severe_blur_gate = next(
+        gate for gate in report["hard_gates"] if gate["code"] == "severe_blur"
+    )
+    assert severe_blur_gate["threshold"] == 0.12
     assert (
         report["predictor"]["calibration_status"]
         == "awaiting_real_answer_sheet_samples"

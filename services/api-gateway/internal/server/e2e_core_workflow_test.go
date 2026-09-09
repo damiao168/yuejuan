@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -46,6 +47,7 @@ type e2eMemoryFixture struct {
 	router          http.Handler
 	authStore       *auth.MemoryStore
 	paperStore      *paper.MemoryStore
+	submissionStore *submission.MemoryStore
 	gradingStore    *grading.MemoryStore
 	subjectiveStore *subjective.MemoryStore
 	evidenceStore   *evidence.MemoryStore
@@ -112,7 +114,16 @@ func TestCoreWorkflowE2EWithSyntheticMemoryStores(t *testing.T) {
 	pageID := e2eString(t, pageResp, "id")
 	qualityResp := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/quality-check", adminToken, `{}`, http.StatusOK)["result"].(map[string]any)
 	if qualityResp["valid"] != true {
-		t.Fatalf("submission quality should pass: %#v", qualityResp)
+		t.Fatalf("submission collection integrity should pass: %#v", qualityResp)
+	}
+	if _, err := fixture.submissionStore.ApplyPageQualityResult(context.Background(), e2eTenantID, submission.ApplyPageQualityInput{
+		SubmissionID:          submissionID,
+		PageID:                pageID,
+		LatestQualityRunID:    "quality-run-1",
+		NormalizedFileAssetID: answerFileID,
+		QualityStatus:         "passed",
+	}); err != nil {
+		t.Fatalf("apply synthetic page image quality result: %v", err)
 	}
 	readyResp := e2ePostJSON(t, fixture.router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/status", adminToken, `{"status":"ready_for_ocr","expected_revision":1}`, http.StatusOK)["submission"].(map[string]any)
 	if readyResp["status"] != "ready_for_ocr" {
@@ -394,6 +405,7 @@ func newE2EMemoryFixture(t *testing.T) *e2eMemoryFixture {
 		router:          router,
 		authStore:       authStore,
 		paperStore:      paperStore,
+		submissionStore: submissionStore,
 		gradingStore:    gradingStore,
 		subjectiveStore: subjectiveStore,
 		evidenceStore:   evidenceStore,
