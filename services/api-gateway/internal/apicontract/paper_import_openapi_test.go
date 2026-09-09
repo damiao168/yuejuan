@@ -20,11 +20,12 @@ func TestPaperImportOpenAPIContract(t *testing.T) {
 	operations := []struct{ path, method, id string }{
 		{"/api/v1/exams/{examId}/paper-imports", "get", "listPaperImports"},
 		{"/api/v1/exams/{examId}/paper-imports", "post", "createPaperImport"},
-		{"/api/v1/paper-imports/{paperImportId}", "get", "getPaperImport"},
-		{"/api/v1/paper-imports/{paperImportId}/sources", "post", "addPaperImportSources"},
-		{"/api/v1/paper-imports/{paperImportId}/sources", "put", "replacePaperImportSources"},
-		{"/api/v1/paper-imports/{paperImportId}/review", "put", "savePaperImportReview"},
-		{"/api/v1/paper-imports/{paperImportId}/apply", "post", "applyPaperImport"},
+		{"/api/v1/paper-imports/{id}", "get", "getPaperImport"},
+		{"/api/v1/paper-imports/{id}/sources", "post", "addPaperImportSources"},
+		{"/api/v1/paper-imports/{id}/sources", "put", "replacePaperImportSources"},
+		{"/api/v1/paper-imports/{id}/review", "put", "savePaperImportReview"},
+		{"/api/v1/paper-imports/{id}/apply", "post", "applyPaperImport"},
+		{"/api/v1/paper-imports/{id}/cancel", "post", "cancelPaperImport"},
 	}
 	for _, expected := range operations {
 		operation := object(t, object(t, paths, expected.path), expected.method)
@@ -56,6 +57,7 @@ func TestPaperImportOpenAPIContract(t *testing.T) {
 	assertRequired(t, object(t, schemas, "PaperImportRubricCandidate"), []string{"candidate_id", "points", "source_refs", "confidence"})
 	assertPropertyRef(t, object(t, schemas, "PaperImportRubricCandidatePoint"), "evidence_requirements", "#/components/schemas/PaperImportRubricEvidenceRequirement")
 	assertProperty(t, object(t, schemas, "PaperImportDraftQuestion"), "rubric_candidate_id")
+	assertRequired(t, object(t, schemas, "ReviewPaperImportRequest"), []string{"expected_generation", "questions"})
 	job := object(t, schemas, "PaperImportJob")
 	assertRequired(t, job, []string{"sources", "question_candidates", "answer_candidates", "solution_candidates", "rubric_candidates", "structured_issues", "questions"})
 	assertPropertyRef(t, job, "rubric_candidates", "#/components/schemas/PaperImportRubricCandidate")

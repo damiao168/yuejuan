@@ -82,6 +82,10 @@ export interface PaperImportJob {
   paper_file_asset_id: string;
   answer_file_asset_id: string;
   status: "processing" | "review_required" | "failed" | "cancelled" | "applied";
+  generation: number;
+  run_id: string;
+  source_revision: string;
+  result_generation?: number;
   subject: string;
 	sources: PaperImportSource[];
 	question_candidates: QuestionCandidate[];
@@ -218,29 +222,29 @@ export async function listPaperImports(examId: string) {
   return generatedApi.listPaperImports({ path: { examId } });
 }
 
-export async function createPaperImport(examId: string, payload: { exam_paper_id?: string; subject: string; sources: { file_asset_id: string; document_index: number; role_hint?: PaperImportRole }[]; paper_file_asset_id?: string; answer_file_asset_id?: string }) {
-  return generatedApi.createPaperImport({ path: { examId }, body: payload });
+export async function createPaperImport(examId: string, payload: { exam_paper_id?: string; subject: string; sources: { file_asset_id: string; document_index: number; role_hint?: PaperImportRole }[]; paper_file_asset_id?: string; answer_file_asset_id?: string }, commandId: string) {
+  return apiClient.request<{ import: PaperImportJob }>(`/api/v1/exams/${encodeURIComponent(examId)}/paper-imports`, { method: "POST", headers: { "Idempotency-Key": commandId }, body: JSON.stringify(payload) });
 }
 
-export async function addPaperImportSources(importId: string, sources: { file_asset_id: string; document_index: number; role_hint?: PaperImportRole }[]) {
-	return generatedApi.addPaperImportSources({ path: { paperImportId: importId }, body: { sources } });
+export async function addPaperImportSources(importId: string, expectedGeneration: number, sources: { file_asset_id: string; document_index: number; role_hint?: PaperImportRole }[], commandId: string) {
+	return apiClient.request<{ import: PaperImportJob }>(`/api/v1/paper-imports/${encodeURIComponent(importId)}/sources`, { method: "POST", headers: { "Idempotency-Key": commandId }, body: JSON.stringify({ sources, expected_generation: expectedGeneration }) });
 }
 
-export async function replacePaperImportSources(importId: string, sources: { id: string; document_index: number; role_hint: PaperImportRole }[]) {
-	return generatedApi.replacePaperImportSources({ path: { paperImportId: importId }, body: { sources } });
+export async function replacePaperImportSources(importId: string, expectedGeneration: number, sources: { id: string; document_index: number; role_hint: PaperImportRole }[], commandId: string) {
+	return apiClient.request<{ import: PaperImportJob }>(`/api/v1/paper-imports/${encodeURIComponent(importId)}/sources`, { method: "PUT", headers: { "Idempotency-Key": commandId }, body: JSON.stringify({ sources, expected_generation: expectedGeneration }) });
 }
 
-export async function savePaperImportReview(importId: string, questions: PaperImportDraftQuestion[]) {
-	return generatedApi.savePaperImportReview({ path: { paperImportId: importId }, body: { questions } });
+export async function savePaperImportReview(importId: string, expectedGeneration: number, questions: PaperImportDraftQuestion[]) {
+	return generatedApi.savePaperImportReview({ path: { id: importId }, body: { expected_generation: expectedGeneration, questions } });
 }
 
 export async function applyPaperImport(importId: string) {
-  return generatedApi.applyPaperImport({ path: { paperImportId: importId } });
+  return generatedApi.applyPaperImport({ path: { id: importId } });
 }
 
-export async function cancelPaperImport(importId: string) {
-  return apiClient.request<{ import: PaperImportJob }>(`/api/v1/paper-imports/${encodeURIComponent(importId)}/cancel`, {
-    method: "POST"
+export async function cancelPaperImport(importId: string, expectedGeneration: number, commandId: string) {
+  return apiClient.request<{ import: PaperImportJob }>(`/api/v1/paper-imports/${encodeURIComponent(importId)}/cancel?expected_generation=${expectedGeneration}`, {
+    method: "POST", headers: { "Idempotency-Key": commandId }
   });
 }
 

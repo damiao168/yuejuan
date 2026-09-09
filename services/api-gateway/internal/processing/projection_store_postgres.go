@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/google/uuid"
 	"strings"
 	"time"
 )
@@ -37,12 +38,13 @@ FOR UPDATE SKIP LOCKED
 	if err != nil {
 		return ProjectionRefresh{}, false, err
 	}
+	refresh.claimID = uuid.NewString()
 	if _, err = tx.ExecContext(ctx, `
 UPDATE processing_projection_cursor
 SET lease_owner=$3, lease_expires_at=now()+($4 * interval '1 millisecond'),
     attempt_count=attempt_count+1
 WHERE tenant_id=$1::uuid AND exam_id=$2::uuid
-`, refresh.TenantID, refresh.ExamID, owner, leaseTTL.Milliseconds()); err != nil {
+`, refresh.TenantID, refresh.ExamID, owner+":"+refresh.claimID, leaseTTL.Milliseconds()); err != nil {
 		return ProjectionRefresh{}, false, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -57,8 +59,8 @@ UPDATE processing_projection_cursor
 SET projected_version=GREATEST(projected_version,$4), projected_at=now(),
     available_at=now(), lease_owner=NULL, lease_expires_at=NULL,
     attempt_count=0, last_error=NULL
-WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND lease_owner=$3
-`, refresh.TenantID, refresh.ExamID, owner, refresh.RequestedVersion)
+WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND lease_owner=$3 AND lease_expires_at>clock_timestamp()
+`, refresh.TenantID, refresh.ExamID, owner+":"+refresh.claimID, refresh.RequestedVersion)
 	if err != nil {
 		return err
 	}
@@ -80,8 +82,8 @@ func (s *PostgresStore) FailProjection(ctx context.Context, owner string, refres
 UPDATE processing_projection_cursor
 SET available_at=now()+($4 * interval '1 millisecond'),
     lease_owner=NULL, lease_expires_at=NULL, last_error=$5
-WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND lease_owner=$3
-`, refresh.TenantID, refresh.ExamID, owner, backoff.Milliseconds(), strings.TrimSpace(message))
+WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND lease_owner=$3 AND lease_expires_at>clock_timestamp()
+`, refresh.TenantID, refresh.ExamID, owner+":"+refresh.claimID, backoff.Milliseconds(), strings.TrimSpace(message))
 	if err != nil {
 		return err
 	}

@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { SessionUser } from "../auth/session";
+import { acceptBatchCreateCommand, batchCreateCommandKey, loadBatchCreateCommand } from "../features/capture/batchCreateCommand";
+import { recoverCaptureBatchCommand } from "../api/capture";
+import { ApiClientError } from "../api/client";
 import {
   App,
   Button,
@@ -343,9 +347,11 @@ function MatchingWorkspace({
 }
 
 export function CaptureBatchPage({
+  user,
   examId,
   canManage,
 }: {
+  user: SessionUser;
   examId: string;
   canManage: boolean;
 }) {
@@ -365,6 +371,11 @@ export function CaptureBatchPage({
   const [error, setError] = useState<string>();
   const [modalOpen, setModalOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const creationBusy = useRef(false);
+  const creationCommandKey = batchCreateCommandKey(user.tenant, user.id, examId);
+  const [pendingCreation, setPendingCreation] = useState(() => {
+    try { return Boolean(loadBatchCreateCommand(localStorage, creationCommandKey)); } catch { return true; }
+  });
   const [uploading, setUploading] = useState(false);
   const [actioning, setActioning] = useState(false);
   const [preview, setPreview] = useState<{ url: string; page: CapturePage }>();
@@ -516,21 +527,32 @@ export function CaptureBatchPage({
   );
 
   async function submitBatch() {
-    const values = await form.validateFields();
-    setCreating(true);
+    if (creationBusy.current) return;
+    creationBusy.current = true;
     try {
-      const result = await createCaptureBatch(examId, {
-        ...values,
-        idempotency_key: crypto.randomUUID(),
-      });
+      const pending = loadBatchCreateCommand(localStorage, creationCommandKey);
+      const values = pending?.payload ?? await form.validateFields();
+      setCreating(true);
+      const command = acceptBatchCreateCommand(localStorage, creationCommandKey, values);
+      setPendingCreation(true);
+      const recovered = pending ? await recoverCaptureBatchCommand(examId, command.payload.idempotency_key) : null;
+      const result = recovered?.command.status === "succeeded" && recovered.command.batch
+        ? { batch: recovered.command.batch }
+        : await createCaptureBatch(examId, command.payload);
+      try { localStorage.removeItem(creationCommandKey); } catch { /* recovery still returns the same batch */ }
+      setPendingCreation(false);
       setModalOpen(false);
       form.resetFields();
       await loadBatches();
       setSelectedId(result.batch.id);
       message.success("采集批次已创建");
     } catch (currentError) {
+      if (currentError instanceof ApiClientError && currentError.code === "capture_invalid_input") {
+        try { localStorage.removeItem(creationCommandKey); setPendingCreation(false); } catch { /* retain recovery data */ }
+      }
       message.error(formatError(currentError));
     } finally {
+      creationBusy.current = false;
       setCreating(false);
     }
   }
@@ -1289,12 +1311,12 @@ export function CaptureBatchPage({
         <Input.TextArea value={reopenReason} rows={3} maxLength={300} placeholder="填写重开原因" onChange={(event) => setReopenReason(event.target.value)} />
       </Modal>
       <Modal
-        title="新建采集批次"
+        title={pendingCreation ? "恢复上次采集批次创建" : "新建采集批次"}
+        okText={pendingCreation ? "继续确认原操作" : "创建"}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         onOk={() => void submitBatch()}
         confirmLoading={creating}
-        okText="创建批次"
       >
         <Form
           form={form}

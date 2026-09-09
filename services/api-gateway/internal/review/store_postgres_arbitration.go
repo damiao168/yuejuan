@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"database/sql"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"errors"
 	"math"
 	"strings"
@@ -163,6 +164,10 @@ func (s *PostgresStore) SubmitArbitration(ctx context.Context, tenantID string, 
 		return ArbitrationTask{}, FinalGrade{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var replay ArbitrationSubmitResult
+	if found, err := commandreceipt.Load(ctx, tx, tenantID, arbitratorID, "review.arbitrate", id, input, &replay); err != nil || found {
+		return replay.Task, replay.Grade, err
+	}
 	task, err := scanArbitration(tx.QueryRowContext(ctx, arbitrationSelect()+`
 WHERE tenant_id = $1 AND id::text = $2 AND deleted_at IS NULL
 FOR UPDATE
@@ -222,6 +227,9 @@ WHERE tenant_id = $1 AND id::text = $2
 		return ArbitrationTask{}, FinalGrade{}, err
 	}
 	if err := s.completeSessionReviewTasksTx(ctx, tx, tenantID, session); err != nil {
+		return ArbitrationTask{}, FinalGrade{}, err
+	}
+	if err := commandreceipt.Save(ctx, tx, tenantID, arbitratorID, "review.arbitrate", id, input, ArbitrationSubmitResult{Task: task, Grade: finalGrade}); err != nil {
 		return ArbitrationTask{}, FinalGrade{}, err
 	}
 	if err := tx.Commit(); err != nil {

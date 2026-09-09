@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"errors"
 	"time"
 
@@ -367,6 +368,7 @@ type FinalGrade struct {
 }
 
 type Store interface {
+	RecoverCommand(context.Context, string, string, string) (commandreceipt.Receipt, error)
 	CreateTask(ctx context.Context, tenantID string, actorID string, input CreateTaskInput) (ReviewTask, error)
 	ListTasks(ctx context.Context, tenantID string, filter ListFilter) ([]ReviewTask, error)
 	HasActiveAssignment(ctx context.Context, tenantID string, reviewerID string, answerSegmentID string) (bool, error)
@@ -386,4 +388,9 @@ type Store interface {
 	GetArbitrationTask(ctx context.Context, tenantID string, id string) (ArbitrationTask, error)
 	AssignArbitrationTask(ctx context.Context, tenantID string, id string, actorID string, input AssignArbitrationTaskInput) (ArbitrationTask, error)
 	SubmitArbitration(ctx context.Context, tenantID string, id string, arbitratorID string, input SubmitArbitrationInput) (ArbitrationTask, FinalGrade, error)
+}
+
+type ArbitrationSubmitResult struct {
+	Task  ArbitrationTask `json:"arbitration_task"`
+	Grade FinalGrade      `json:"final_grade"`
 }

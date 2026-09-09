@@ -497,6 +497,7 @@ type BatchDetail struct {
 }
 
 type Store interface {
+	RecoverBatchCommand(context.Context, string, string, string, string) (BatchCommandRecovery, error)
 	IssueTemplateBarcodes(ctx context.Context, tenantID, templateID string) (IssuedTemplateBarcodes, error)
 	IssueStudentBarcodes(ctx context.Context, tenantID, templateID, actorID string, input IssueStudentBarcodesInput) (IssuedStudentBarcodes, error)
 	GetStudentPrintContext(ctx context.Context, tenantID, templateID string) (StudentPrintContext, error)

@@ -43,14 +43,31 @@ func (s *PostgresStore) startScoringRun(ctx context.Context, tenantID, examID, a
 		return ScoringRun{}, err
 	}
 	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, tenantID+":"+actorID+":"+input.IdempotencyKey+":scoring-command"); err != nil {
+		return ScoringRun{}, err
+	}
+	requestHash := scoringCommandHash(examID, segmentID)
+	var otherID string
+	err = tx.QueryRowContext(ctx, `SELECT id::text FROM scoring_run WHERE tenant_id=$1::uuid AND started_by=$2::uuid AND idempotency_key=$3 AND exam_id<>$4::uuid LIMIT 1`, tenantID, actorID, input.IdempotencyKey, examID).Scan(&otherID)
+	if err == nil {
+		return ScoringRun{}, ErrCommandConflict
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return ScoringRun{}, err
+	}
 	// Serialise starts for one exam. A second unresolved run would otherwise
 	// queue duplicate OMR work and compete to replace the same current grades.
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, examID+":scoring-run"); err != nil {
 		return ScoringRun{}, err
 	}
 	var existing string
-	err = tx.QueryRowContext(ctx, `SELECT id::text FROM scoring_run WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND idempotency_key=$3 AND deleted_at IS NULL`, tenantID, examID, input.IdempotencyKey).Scan(&existing)
+	var existingActor string
+	var existingHash sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT id::text,started_by::text,command_request_hash FROM scoring_run WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND idempotency_key=$3`, tenantID, examID, input.IdempotencyKey).Scan(&existing, &existingActor, &existingHash)
 	if err == nil {
+		if existingActor != actorID || (existingHash.Valid && existingHash.String != requestHash) {
+			return ScoringRun{}, ErrCommandConflict
+		}
 		run, getErr := scanScoringRun(tx.QueryRowContext(ctx, scoringRunSelect+` WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, existing))
 		if getErr != nil {
 			return ScoringRun{}, getErr
@@ -112,10 +129,10 @@ WHERE seg.tenant_id=$1::uuid AND sub.exam_id=$2::uuid AND seg.id=$3::uuid
 	}
 	var runID string
 	err = tx.QueryRowContext(ctx, `
-INSERT INTO scoring_run (tenant_id, exam_id, idempotency_key, status, started_by, started_at)
-SELECT $1::uuid, e.id, $3, 'processing', $4::uuid, now()
+INSERT INTO scoring_run (tenant_id, exam_id, idempotency_key, status, started_by, started_at, command_request_hash)
+SELECT $1::uuid, e.id, $3, 'processing', $4::uuid, now(), $5
 FROM exam e WHERE e.tenant_id=$1::uuid AND e.id=$2::uuid AND e.deleted_at IS NULL AND e.status IN ('collecting','processing','grading')
-RETURNING id::text`, tenantID, examID, input.IdempotencyKey, actorID).Scan(&runID)
+RETURNING id::text`, tenantID, examID, input.IdempotencyKey, actorID, requestHash).Scan(&runID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ScoringRun{}, ErrInvalidInput
 	}
@@ -181,7 +198,7 @@ ORDER BY q.sort_order, seg.created_at`, tenantID, examID, segmentID)
 	insertReviewTask := func(segment segmentRow, source, reason string) (bool, error) {
 		result, insertErr := tx.ExecContext(ctx, `INSERT INTO review_task (tenant_id,exam_id,question_id,question_no,answer_segment_id,submission_id,anonymous_code,source,status,priority,grade_round,reason_code,scoring_run_id,created_by)
 VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7,$8,'pending',50,'single',$9,$10::uuid,$11::uuid)
-ON CONFLICT (tenant_id,answer_segment_id,source) WHERE status IN ('pending','assigned','in_progress','returned') AND deleted_at IS NULL DO NOTHING`, tenantID, examID, segment.questionID, segment.no, segment.id, segment.submissionID, segment.anonymous, source, reason, runID, actorID)
+ON CONFLICT (tenant_id,answer_segment_id,source,grade_round) WHERE status IN ('pending','assigned','in_progress','returned') AND deleted_at IS NULL DO NOTHING`, tenantID, examID, segment.questionID, segment.no, segment.id, segment.submissionID, segment.anonymous, source, reason, runID, actorID)
 		if insertErr != nil {
 			return false, insertErr
 		}

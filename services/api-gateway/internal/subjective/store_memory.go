@@ -11,12 +11,13 @@ import (
 )
 
 type MemoryStore struct {
-	mu       sync.RWMutex
-	next     int
-	contexts map[string]Context
-	grades   map[string][]Grade
-	runs     map[string]GradingRun
-	batches  map[string]GradingBatch
+	mu           sync.RWMutex
+	next         int
+	contexts     map[string]Context
+	grades       map[string][]Grade
+	runs         map[string]GradingRun
+	batches      map[string]GradingBatch
+	enqueuePlans map[string]memoryEnqueuePlan
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -192,7 +193,7 @@ func (s *MemoryStore) CreateBatch(_ context.Context, tenantID string, actorID st
 	defer s.mu.Unlock()
 	batchKey := key(tenantID, input.IdempotencyKey)
 	if existing, ok := s.batches[batchKey]; ok {
-		if !sameStringSlice(existing.SegmentIDs, segments) {
+		if existing.CreatedBy != actorID || !sameStringSlice(existing.SegmentIDs, segments) {
 			return GradingBatch{}, ErrIdempotencyConflict
 		}
 		return existing, nil

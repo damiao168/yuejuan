@@ -20,6 +20,11 @@ type routeCoverageDocument struct {
 		Coverage    string `json:"coverage"`
 		OperationID string `json:"operation_id"`
 		Reason      string `json:"reason"`
+		Category    string `json:"interface_category"`
+		Carrier     string `json:"contract_carrier"`
+		Scope       string `json:"exception_scope"`
+		Policy      string `json:"exception_policy"`
+		Owner       string `json:"owner"`
 	} `json:"routes"`
 }
 
@@ -48,8 +53,8 @@ func TestEveryRegisteredRouteHasContractDisposition(t *testing.T) {
 				t.Fatalf("OpenAPI route %s has no operation_id", key)
 			}
 		case "registered-gap":
-			if route.Reason == "" {
-				t.Fatalf("uncontracted route %s has no explicit reason", key)
+			if route.Reason == "" || route.Category == "" || route.Carrier == "" || route.Scope == "" || route.Policy == "" || route.Owner == "" {
+				t.Fatalf("uncontracted route %s lacks a reviewed disposition: %#v", key, route)
 			}
 		default:
 			t.Fatalf("route %s has unknown coverage disposition %q", key, route.Coverage)

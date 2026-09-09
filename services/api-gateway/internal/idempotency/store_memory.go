@@ -29,21 +29,26 @@ func (s *MemoryStore) Begin(_ context.Context, input BeginInput) (Record, bool, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := memoryKey(input)
-	if existing, ok := s.records[key]; ok && time.Now().UTC().Before(existing.expiresAt) {
-		if existing.record.RequestHash != input.RequestHash {
-			return Record{}, false, ErrKeyConflict
-		}
-		if existing.record.State == "processing" {
-			if input.AllowTakeover && !input.StaleBefore.IsZero() && existing.updatedAt.Before(input.StaleBefore) {
-				existing.updatedAt = time.Now().UTC()
-				existing.record.UpdatedAt = existing.updatedAt
-				existing.expiresAt = input.ExpiresAt
-				s.records[key] = existing
-				return cloneRecord(existing.record), true, nil
+	if existing, ok := s.records[key]; ok {
+		expired := !time.Now().UTC().Before(existing.expiresAt)
+		if expired && (existing.record.State == "completed" || !input.AllowTakeover) {
+			delete(s.records, key)
+		} else {
+			if existing.record.RequestHash != input.RequestHash {
+				return Record{}, false, ErrKeyConflict
 			}
-			return Record{}, false, ErrInProgress
+			if existing.record.State == "processing" {
+				if input.AllowTakeover && !input.StaleBefore.IsZero() && existing.updatedAt.Before(input.StaleBefore) {
+					existing.updatedAt = time.Now().UTC()
+					existing.record.UpdatedAt = existing.updatedAt
+					existing.expiresAt = input.ExpiresAt
+					s.records[key] = existing
+					return cloneRecord(existing.record), true, nil
+				}
+				return Record{}, false, ErrInProgress
+			}
+			return cloneRecord(existing.record), false, nil
 		}
-		return cloneRecord(existing.record), false, nil
 	}
 	record := Record{State: "processing", RequestHash: input.RequestHash}
 	now := time.Now().UTC()

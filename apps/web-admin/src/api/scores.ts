@@ -1,3 +1,4 @@
+import { executeBusinessCommand } from "./businessCommand";
 import { apiClient } from "./client";
 import { buildQueryString } from "./query";
 
@@ -159,17 +160,19 @@ export async function setExamAttendance(examId: string, studentId: string, statu
 }
 
 export async function confirmExamGrades(examId: string, reason: string) {
-  return apiClient.request<{ grades: SubmissionGrade[] }>(`/api/v1/exams/${encodeURIComponent(examId)}/confirm-grades`, {
+  return executeBusinessCommand("score.confirm", examId, { reason }, (commandId, original) => apiClient.request<{ grades: SubmissionGrade[] }>(`/api/v1/exams/${encodeURIComponent(examId)}/confirm-grades`, {
     method: "POST",
-    body: JSON.stringify({ reason })
-  });
+    headers: { "Idempotency-Key": commandId },
+    body: JSON.stringify(original)
+  }), result => ({ grades: result as SubmissionGrade[] }));
 }
 
 export async function publishExamGrades(examId: string, reason: string) {
-  return apiClient.request<PublishResult>(`/api/v1/exams/${encodeURIComponent(examId)}/publish`, {
+  return executeBusinessCommand("score.publish", examId, { reason }, (commandId, original) => apiClient.request<PublishResult>(`/api/v1/exams/${encodeURIComponent(examId)}/publish`, {
     method: "POST",
-    body: JSON.stringify({ reason })
-  });
+    headers: { "Idempotency-Key": commandId },
+    body: JSON.stringify(original)
+  }), result => result as PublishResult);
 }
 
 export async function exportExamGrades(examId: string): Promise<ScoreExport> {

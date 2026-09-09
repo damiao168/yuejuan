@@ -3,6 +3,7 @@ package seedquality
 import (
 	"context"
 	"crypto/sha256"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ type ContextSource interface {
 // routes. The handler tries these methods first, then falls through to its
 // normal store only when handled/issued is false.
 type ReviewHook interface {
+	RecoverCommand(context.Context, string, string, string) (commandreceipt.Receipt, error)
 	MaybeIssue(context.Context, string, string, string, string, string) (Task, bool, error)
 	GetGraderTaskContext(context.Context, string, string, string) (GraderTaskContext, bool, error)
 	GetGraderImageSource(context.Context, string, string, string) (GraderImageSource, bool, error)

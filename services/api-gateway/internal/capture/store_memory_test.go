@@ -13,9 +13,12 @@ func TestCaptureBatchDecodeFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := store.CreateBatch(ctx, "tenant-1", "exam-1", "user-1", CreateBatchInput{Name: "ignored", SourceType: "web_upload", IdempotencyKey: "batch-1"})
+	again, err := store.CreateBatch(ctx, "tenant-1", "exam-1", "user-1", CreateBatchInput{Name: "第一扫描批次", SourceType: "web_upload", IdempotencyKey: "batch-1"})
 	if err != nil || again.ID != batch.ID {
 		t.Fatalf("idempotent create returned %#v, %v", again, err)
+	}
+	if _, err := store.CreateBatch(ctx, "tenant-1", "exam-1", "user-1", CreateBatchInput{Name: "changed", SourceType: "web_upload", IdempotencyKey: "batch-1"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("same command with changed input must conflict, got %v", err)
 	}
 	file, err := store.RegisterFile(ctx, "tenant-1", batch.ID, "user-1", RegisterFileInput{FileAssetID: "asset-1", IdempotencyKey: "file-1"}, FileAssetSnapshot{ID: "asset-1", ExamID: "exam-1", OriginalName: "answers.pdf", ContentType: "application/pdf", SizeBytes: 2048, SHA256: "sha256:a"})
 	if err != nil {

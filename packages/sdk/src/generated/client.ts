@@ -3,6 +3,10 @@
 import type { ApiTransport } from "../runtime";
 import { appendQuery, fillPath } from "../runtime";
 import type {
+  CaptureUploadRecoveryResponse,
+  CaptureBatchCommandResponse,
+  CaptureBatchResponse,
+  CaptureBatchCreateRequest,
   CreateMathCorrectionRequest,
   MathUnderstandingResponse,
   MathCorrectionListResponse,
@@ -159,17 +163,39 @@ import type {
   AssignProcessingExceptionRequest,
   ResolveProcessingExceptionRequest,
   ProcessingExceptionResponse,
+  CreateExamSessionRequest,
+  ExamSessionResponse,
+  ExamSessionCommandResponse,
   CreatePaperImportRequest,
   AddPaperImportSourcesRequest,
   ReplacePaperImportSourcesRequest,
   ReviewPaperImportRequest,
   PaperImportResponse,
   PaperImportListResponse,
-  ProcessingRetryResponse
+  ProcessingRetryResponse,
+  StartScoringRunRequest,
+  ScoringRunResponse,
+  ScoringCommandRecovery,
+  SubjectiveBatchResponse,
+  SubjectiveBatchCreateRequest,
+  SubjectiveBatchCommandRecovery,
+  SubjectiveEnqueueCommandRecovery,
+  ReviewCommandSubmitResult,
+  ReviewCommandSubmitGradeInput,
+  ReviewCommandArbitrationSubmitResult,
+  ReviewCommandSubmitArbitrationInput,
+  ScoreCommandSubmissionGrade,
+  ScoreCommandConfirmInput,
+  ScoreCommandPublishResult,
+  ScoreCommandPublishInput,
+  BusinessCommandReceipt
 } from "./types";
 
 export interface operations {
   "listSubmissionPageQualityRuns": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: { "runs": Array<Record<string, unknown>>; }; };
+  "recoverCaptureUpload": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: CaptureUploadRecoveryResponse; };
+  "recoverCaptureBatchCommand": { args: { path: { "examId": string; "commandId": string; }; signal?: AbortSignal; }; response: CaptureBatchCommandResponse; };
+  "createCaptureBatch": { args: { path: { "examId": string; }; headers: { "Idempotency-Key": string; }; body: CaptureBatchCreateRequest; signal?: AbortSignal; }; response: CaptureBatchResponse; };
   "listExams": { args: { query?: { "limit"?: number; "cursor"?: string; "status"?: string; "school_id"?: string; }; signal?: AbortSignal; }; response: ExamPage; };
   "refreshExamCandidates": { args: { path: { "examId": string; }; signal?: AbortSignal; }; response: CandidateRefreshResponse; };
   "getExamWorkspace": { args: { path: { "examId": string; }; signal?: AbortSignal; }; response: ExamWorkspaceResponse; };
@@ -315,14 +341,30 @@ export interface operations {
   "exportMathUnderstandingCorrections": { args: { query: { "subject": "mathematics" | "physics" | "chemistry"; "limit"?: number; }; signal?: AbortSignal; }; response: MathTrainingExportResponse; };
   "listMathPilotGates": { args: { query?: { "subject"?: "mathematics" | "physics" | "chemistry"; "limit"?: number; }; signal?: AbortSignal; }; response: MathPilotGateListResponse; };
   "evaluateMathPilotGate": { args: { body: EvaluateMathPilotGateRequest; signal?: AbortSignal; }; response: MathPilotGateResponse; };
+  "createExamSession": { args: { headers: { "Idempotency-Key": string; }; body: CreateExamSessionRequest; signal?: AbortSignal; }; response: ExamSessionResponse; };
+  "recoverExamSessionCommand": { args: { path: { "commandId": string; }; signal?: AbortSignal; }; response: ExamSessionCommandResponse; };
   "listPaperImports": { args: { path: { "examId": string; }; signal?: AbortSignal; }; response: PaperImportListResponse; };
-  "createPaperImport": { args: { path: { "examId": string; }; body: CreatePaperImportRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
-  "getPaperImport": { args: { path: { "paperImportId": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
-  "addPaperImportSources": { args: { path: { "paperImportId": string; }; body: AddPaperImportSourcesRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
-  "replacePaperImportSources": { args: { path: { "paperImportId": string; }; body: ReplacePaperImportSourcesRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
-  "savePaperImportReview": { args: { path: { "paperImportId": string; }; body: ReviewPaperImportRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
-  "applyPaperImport": { args: { path: { "paperImportId": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
-  "cancelPaperImport": { args: { path: { "paperImportId": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "createPaperImport": { args: { path: { "examId": string; }; headers: { "Idempotency-Key": string; }; body: CreatePaperImportRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "getPaperImport": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "addPaperImportSources": { args: { path: { "id": string; }; headers: { "Idempotency-Key": string; }; body: AddPaperImportSourcesRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "replacePaperImportSources": { args: { path: { "id": string; }; headers: { "Idempotency-Key": string; }; body: ReplacePaperImportSourcesRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "savePaperImportReview": { args: { path: { "id": string; }; body: ReviewPaperImportRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "applyPaperImport": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "cancelPaperImport": { args: { path: { "id": string; }; query: { "expected_generation": number; }; headers: { "Idempotency-Key": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "startScoringRun": { args: { path: { "examId": string; }; headers: { "Idempotency-Key": string; }; body: StartScoringRunRequest; signal?: AbortSignal; }; response: ScoringRunResponse; };
+  "recoverScoringCommand": { args: { path: { "examId": string; "commandId": string; }; signal?: AbortSignal; }; response: ScoringCommandRecovery; };
+  "createSubjectiveGradingBatch": { args: { headers: { "Idempotency-Key": string; }; body: SubjectiveBatchCreateRequest; signal?: AbortSignal; }; response: SubjectiveBatchResponse; };
+  "recoverSubjectiveBatchCommand": { args: { path: { "commandId": string; }; signal?: AbortSignal; }; response: SubjectiveBatchCommandRecovery; };
+  "getSubjectiveGradingBatch": { args: { path: { "batchId": string; }; signal?: AbortSignal; }; response: SubjectiveBatchResponse; };
+  "recoverSubjectiveEnqueueCommand": { args: { path: { "batchId": string; }; signal?: AbortSignal; }; response: SubjectiveEnqueueCommandRecovery; };
+  "submitHumanGrade": { args: { path: { "id": string; }; headers: { "Idempotency-Key": string; }; body: ReviewCommandSubmitGradeInput; signal?: AbortSignal; }; response: ReviewCommandSubmitResult; };
+  "submitArbitration": { args: { path: { "id": string; }; headers: { "Idempotency-Key": string; }; body: ReviewCommandSubmitArbitrationInput; signal?: AbortSignal; }; response: ReviewCommandArbitrationSubmitResult; };
+  "confirmExamGrades": { args: { path: { "examId": string; }; headers: { "Idempotency-Key": string; }; body: ScoreCommandConfirmInput; signal?: AbortSignal; }; response: { "grades": Array<ScoreCommandSubmissionGrade>; }; };
+  "publishExamGrades": { args: { path: { "examId": string; }; headers: { "Idempotency-Key": string; }; body: ScoreCommandPublishInput; signal?: AbortSignal; }; response: ScoreCommandPublishResult; };
+  "recoverReviewCommand": { args: { path: { "commandId": string; }; signal?: AbortSignal; }; response: BusinessCommandReceipt; };
+  "recoverScoreCommand": { args: { path: { "commandId": string; }; signal?: AbortSignal; }; response: BusinessCommandReceipt; };
+  "recoverReportCommand": { args: { path: { "commandId": string; }; signal?: AbortSignal; }; response: BusinessCommandReceipt; };
+  "exportLearningReport": { args: { path: { "examId": string; }; headers: { "Idempotency-Key": string; }; signal?: AbortSignal; }; response: unknown; };
 }
 
 export class EduGradeApi {
@@ -331,6 +373,21 @@ export class EduGradeApi {
   listSubmissionPageQualityRuns(args: operations["listSubmissionPageQualityRuns"]["args"]): Promise<operations["listSubmissionPageQualityRuns"]["response"]> {
     const requestPath = fillPath("/api/v1/submission-pages/{id}/quality-runs", args.path);
     return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  recoverCaptureUpload(args: operations["recoverCaptureUpload"]["args"]): Promise<operations["recoverCaptureUpload"]["response"]> {
+    const requestPath = fillPath("/api/v1/capture/uploads/{id}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  recoverCaptureBatchCommand(args: operations["recoverCaptureBatchCommand"]["args"]): Promise<operations["recoverCaptureBatchCommand"]["response"]> {
+    const requestPath = fillPath("/api/v1/exams/{examId}/capture-batches/commands/{commandId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  createCaptureBatch(args: operations["createCaptureBatch"]["args"]): Promise<operations["createCaptureBatch"]["response"]> {
+    const requestPath = fillPath("/api/v1/exams/{examId}/capture-batches", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
   }
 
   listExams(args: operations["listExams"]["args"] = {}): Promise<operations["listExams"]["response"]> {
@@ -1058,6 +1115,16 @@ export class EduGradeApi {
     return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
   }
 
+  createExamSession(args: operations["createExamSession"]["args"]): Promise<operations["createExamSession"]["response"]> {
+    const requestPath = "/api/v1/exam-sessions";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  recoverExamSessionCommand(args: operations["recoverExamSessionCommand"]["args"]): Promise<operations["recoverExamSessionCommand"]["response"]> {
+    const requestPath = fillPath("/api/v1/exam-sessions/commands/{commandId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
   listPaperImports(args: operations["listPaperImports"]["args"]): Promise<operations["listPaperImports"]["response"]> {
     const requestPath = fillPath("/api/v1/exams/{examId}/paper-imports", args.path);
     return this.transport.request(requestPath, { method: "GET", signal: args.signal });
@@ -1069,32 +1136,102 @@ export class EduGradeApi {
   }
 
   getPaperImport(args: operations["getPaperImport"]["args"]): Promise<operations["getPaperImport"]["response"]> {
-    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}", args.path);
+    const requestPath = fillPath("/api/v1/paper-imports/{id}", args.path);
     return this.transport.request(requestPath, { method: "GET", signal: args.signal });
   }
 
   addPaperImportSources(args: operations["addPaperImportSources"]["args"]): Promise<operations["addPaperImportSources"]["response"]> {
-    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}/sources", args.path);
+    const requestPath = fillPath("/api/v1/paper-imports/{id}/sources", args.path);
     return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
   }
 
   replacePaperImportSources(args: operations["replacePaperImportSources"]["args"]): Promise<operations["replacePaperImportSources"]["response"]> {
-    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}/sources", args.path);
+    const requestPath = fillPath("/api/v1/paper-imports/{id}/sources", args.path);
     return this.transport.request(requestPath, { method: "PUT", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
   }
 
   savePaperImportReview(args: operations["savePaperImportReview"]["args"]): Promise<operations["savePaperImportReview"]["response"]> {
-    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}/review", args.path);
+    const requestPath = fillPath("/api/v1/paper-imports/{id}/review", args.path);
     return this.transport.request(requestPath, { method: "PUT", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
   }
 
   applyPaperImport(args: operations["applyPaperImport"]["args"]): Promise<operations["applyPaperImport"]["response"]> {
-    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}/apply", args.path);
+    const requestPath = fillPath("/api/v1/paper-imports/{id}/apply", args.path);
     return this.transport.request(requestPath, { method: "POST", signal: args.signal });
   }
 
   cancelPaperImport(args: operations["cancelPaperImport"]["args"]): Promise<operations["cancelPaperImport"]["response"]> {
-    const requestPath = fillPath("/api/v1/paper-imports/{paperImportId}/cancel", args.path);
-    return this.transport.request(requestPath, { method: "POST", signal: args.signal });
+    const requestPath = appendQuery(fillPath("/api/v1/paper-imports/{id}/cancel", args.path), args.query);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  startScoringRun(args: operations["startScoringRun"]["args"]): Promise<operations["startScoringRun"]["response"]> {
+    const requestPath = fillPath("/api/v1/exams/{examId}/scoring-runs", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  recoverScoringCommand(args: operations["recoverScoringCommand"]["args"]): Promise<operations["recoverScoringCommand"]["response"]> {
+    const requestPath = fillPath("/api/v1/exams/{examId}/scoring-runs/commands/{commandId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  createSubjectiveGradingBatch(args: operations["createSubjectiveGradingBatch"]["args"]): Promise<operations["createSubjectiveGradingBatch"]["response"]> {
+    const requestPath = "/api/v1/subjective-grading-batches";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  recoverSubjectiveBatchCommand(args: operations["recoverSubjectiveBatchCommand"]["args"]): Promise<operations["recoverSubjectiveBatchCommand"]["response"]> {
+    const requestPath = fillPath("/api/v1/subjective-grading-batch-commands/{commandId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  getSubjectiveGradingBatch(args: operations["getSubjectiveGradingBatch"]["args"]): Promise<operations["getSubjectiveGradingBatch"]["response"]> {
+    const requestPath = fillPath("/api/v1/subjective-grading-batches/{batchId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  recoverSubjectiveEnqueueCommand(args: operations["recoverSubjectiveEnqueueCommand"]["args"]): Promise<operations["recoverSubjectiveEnqueueCommand"]["response"]> {
+    const requestPath = fillPath("/api/v1/subjective-grading-batches/{batchId}/enqueue-command", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  submitHumanGrade(args: operations["submitHumanGrade"]["args"]): Promise<operations["submitHumanGrade"]["response"]> {
+    const requestPath = fillPath("/api/v1/review-tasks/{id}/submit", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  submitArbitration(args: operations["submitArbitration"]["args"]): Promise<operations["submitArbitration"]["response"]> {
+    const requestPath = fillPath("/api/v1/arbitration-tasks/{id}/submit", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  confirmExamGrades(args: operations["confirmExamGrades"]["args"]): Promise<operations["confirmExamGrades"]["response"]> {
+    const requestPath = fillPath("/api/v1/exams/{examId}/confirm-grades", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  publishExamGrades(args: operations["publishExamGrades"]["args"]): Promise<operations["publishExamGrades"]["response"]> {
+    const requestPath = fillPath("/api/v1/exams/{examId}/publish", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  recoverReviewCommand(args: operations["recoverReviewCommand"]["args"]): Promise<operations["recoverReviewCommand"]["response"]> {
+    const requestPath = fillPath("/api/v1/review-commands/{commandId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  recoverScoreCommand(args: operations["recoverScoreCommand"]["args"]): Promise<operations["recoverScoreCommand"]["response"]> {
+    const requestPath = fillPath("/api/v1/score-commands/{commandId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  recoverReportCommand(args: operations["recoverReportCommand"]["args"]): Promise<operations["recoverReportCommand"]["response"]> {
+    const requestPath = fillPath("/api/v1/report-commands/{commandId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  exportLearningReport(args: operations["exportLearningReport"]["args"]): Promise<operations["exportLearningReport"]["response"]> {
+    const requestPath = fillPath("/api/v1/exams/{examId}/reports/export", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 }

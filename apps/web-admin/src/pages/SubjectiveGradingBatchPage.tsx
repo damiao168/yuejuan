@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { submitSubjectiveBatchCommand } from "../features/grading/subjectiveBatchCommand";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, Input, Progress, Space, Tag } from "antd";
 import { Play, RefreshCw, Sparkles } from "lucide-react";
 import { getUserErrorMessage } from "../api/client";
-import { createSubjectiveGradingBatch, enqueueSubjectiveGradingBatch, getSubjectiveGradingBatch, type SubjectiveGradingBatch } from "../api/subjectiveGrading";
+import { enqueueSubjectiveGradingBatch, getSubjectiveGradingBatch, recoverSubjectiveEnqueueCommand, type SubjectiveGradingBatch } from "../api/subjectiveGrading";
 
 function errorMessage(error: unknown) {
   return getUserErrorMessage(error, "主观题批次操作失败");
@@ -21,7 +22,16 @@ function newBatchIdempotencyKey() {
   return `admin-${crypto.randomUUID()}`;
 }
 
-export function SubjectiveGradingBatchPage() {
+export function SubjectiveGradingBatchPage({ scopeKey }: { scopeKey: string }) {
+  const storageKey = `subjective-batch-command:${scopeKey}`;
+  const busy = useRef(false);
+  const [pending, setPending] = useState(() => Boolean(localStorage.getItem(storageKey)));
+  useEffect(() => {
+    const id = localStorage.getItem(`${storageKey}:batch`);
+    let disposed = false;
+    if (id) void getSubjectiveGradingBatch(id).then(result => { if (!disposed) setBatch(result.batch); }).catch(error => { if (!disposed) setError(errorMessage(error)); });
+    return () => { disposed = true; };
+  }, [storageKey]);
   const [idempotencyKey, setIdempotencyKey] = useState(newBatchIdempotencyKey);
   const [segmentText, setSegmentText] = useState("");
   const [batch, setBatch] = useState<SubjectiveGradingBatch>();
@@ -93,27 +103,39 @@ export function SubjectiveGradingBatchPage() {
   }, [batchId, batchStatus]);
 
   async function createBatch() {
+    if (busy.current) return;
+    busy.current = true;
     setLoading(true);
     setError(undefined);
     setEnqueueNotice(undefined);
     try {
       const segmentIds = segmentText.split(/[\s,，]+/).map((value) => value.trim()).filter(Boolean);
-      const result = await createSubjectiveGradingBatch(idempotencyKey.trim(), segmentIds);
+      const result = await submitSubjectiveBatchCommand(localStorage, storageKey, { commandId: idempotencyKey.trim(), segmentIds });
       setBatch(result.batch);
       setIdempotencyKey(newBatchIdempotencyKey());
+      setPending(false);
     } catch (createError) {
       setError(errorMessage(createError));
+      setPending(Boolean(localStorage.getItem(storageKey)));
     } finally {
+      busy.current = false;
       setLoading(false);
     }
   }
 
   async function enqueue() {
-    if (!batch) return;
+    if (!batch || busy.current) return;
+    busy.current = true;
     setLoading(true);
     setError(undefined);
     setEnqueueNotice(undefined);
     try {
+      const recovered = await recoverSubjectiveEnqueueCommand(batch.id);
+      if (recovered.status === "succeeded") {
+        const result = await getSubjectiveGradingBatch(batch.id);
+        setBatch(result.batch);
+        return;
+      }
       const result = await enqueueSubjectiveGradingBatch(batch.id);
       setBatch(result.batch);
       if (result.enqueue_result.failed_count > 0) {
@@ -123,6 +145,7 @@ export function SubjectiveGradingBatchPage() {
     } catch (enqueueError) {
       setError(errorMessage(enqueueError));
     } finally {
+      busy.current = false;
       setLoading(false);
     }
   }
@@ -138,6 +161,7 @@ export function SubjectiveGradingBatchPage() {
     } catch (refreshError) {
       setError(errorMessage(refreshError));
     } finally {
+      busy.current = false;
       setLoading(false);
     }
   }
@@ -155,7 +179,7 @@ export function SubjectiveGradingBatchPage() {
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Input value={idempotencyKey} onChange={(event) => setIdempotencyKey(event.target.value)} addonBefore="幂等键" />
           <Input.TextArea value={segmentText} onChange={(event) => { setSegmentText(event.target.value); setIdempotencyKey(newBatchIdempotencyKey()); }} placeholder="输入答题片段 ID，使用换行或逗号分隔（最多 1000 个）" autoSize={{ minRows: 4, maxRows: 8 }} />
-          <Button type="primary" loading={loading} onClick={() => void createBatch()}>创建批次</Button>
+          <Button type="primary" loading={loading} onClick={() => void createBatch()}>{pending ? "继续确认原批次" : "创建批次"}</Button>
         </Space>
       </Card>
       {batch ? <Card title={<Space>批次进度 <Tag color={batch.status === "failed" ? "red" : batch.status === "completed" ? "green" : "blue"}>{batchStatusLabels[batch.status] ?? "未知状态"}</Tag></Space>} extra={<Space><Button icon={<Play size={15} />} disabled={batch.status !== "planned" && batch.status !== "processing"} loading={loading} onClick={() => void enqueue()}>入队评分</Button><Button icon={<RefreshCw size={15} />} loading={loading} onClick={() => void refresh()}>刷新</Button></Space>}>

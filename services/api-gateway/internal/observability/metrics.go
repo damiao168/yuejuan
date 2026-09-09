@@ -19,6 +19,12 @@ type requestKey struct {
 	status int
 }
 
+type routeValueKey struct {
+	method string
+	route  string
+	value  string
+}
+
 type durationSeries struct {
 	count   uint64
 	sum     float64
@@ -30,6 +36,8 @@ type durationSeries struct {
 type Registry struct {
 	mu        sync.RWMutex
 	requests  map[requestKey]uint64
+	errors    map[routeValueKey]uint64
+	outcomes  map[routeValueKey]uint64
 	durations map[[2]string]durationSeries
 	dbQueries map[[2]string]durationSeries
 	dbSlow    map[string]uint64
@@ -48,6 +56,7 @@ type DatabaseStats struct {
 func NewRegistry() *Registry {
 	return &Registry{
 		requests: map[requestKey]uint64{}, durations: map[[2]string]durationSeries{},
+		errors: map[routeValueKey]uint64{}, outcomes: map[routeValueKey]uint64{},
 		dbQueries: map[[2]string]durationSeries{}, dbSlow: map[string]uint64{},
 	}
 }
@@ -85,6 +94,10 @@ func (r *Registry) SetDatabaseStats(provider func() DatabaseStats) {
 }
 
 func (r *Registry) ObserveRequest(method string, route string, status int, duration time.Duration) {
+	r.observeRequest(method, route, status, duration, "", "")
+}
+
+func (r *Registry) observeRequest(method string, route string, status int, duration time.Duration, errorCode string, outcome string) {
 	if route == "" {
 		route = "unmatched"
 	}
@@ -93,6 +106,12 @@ func (r *Registry) ObserveRequest(method string, route string, status int, durat
 	seconds := duration.Seconds()
 	r.mu.Lock()
 	r.requests[key]++
+	if errorCode != "" {
+		r.errors[routeValueKey{method: method, route: route, value: errorCode}]++
+	}
+	if outcome != "" {
+		r.outcomes[routeValueKey{method: method, route: route, value: outcome}]++
+	}
 	series := r.durations[durationKey]
 	series.count++
 	series.sum += seconds
@@ -117,7 +136,7 @@ func (r *Registry) Middleware() func(http.Handler) http.Handler {
 			if route == "" {
 				route = req.URL.Path
 			}
-			r.ObserveRequest(req.Method, route, recorder.status, time.Since(started))
+			r.observeRequest(req.Method, route, recorder.status, time.Since(started), recorder.Header().Get("X-EduGrade-Error-Code"), recorder.Header().Get("X-EduGrade-Operation-Outcome"))
 		})
 	}
 }
@@ -153,6 +172,14 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	for key, value := range r.durations {
 		durations[key] = value
 	}
+	errors := make(map[routeValueKey]uint64, len(r.errors))
+	for key, value := range r.errors {
+		errors[key] = value
+	}
+	outcomes := make(map[routeValueKey]uint64, len(r.outcomes))
+	for key, value := range r.outcomes {
+		outcomes[key] = value
+	}
 	dbQueries := make(map[[2]string]durationSeries, len(r.dbQueries))
 	for key, value := range r.dbQueries {
 		dbQueries[key] = value
@@ -169,6 +196,8 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	for _, key := range requestKeys {
 		fmt.Fprintf(&output, "edugrade_http_requests_total{method=%q,route=%q,status=%q} %d\n", escapeLabel(key.method), escapeLabel(key.route), strconv.Itoa(key.status), requests[key])
 	}
+	writeRouteValueCounters(&output, "edugrade_http_errors_total", "HTTP errors grouped by stable application error code.", "error_code", errors)
+	writeRouteValueCounters(&output, "edugrade_operation_outcomes_total", "Operation recovery outcomes grouped by stable result status.", "outcome", outcomes)
 	output.WriteString("# HELP edugrade_http_requests_in_flight Current in-flight HTTP requests.\n# TYPE edugrade_http_requests_in_flight gauge\n")
 	fmt.Fprintf(&output, "edugrade_http_requests_in_flight %d\n", r.inFlight.Load())
 	output.WriteString("# HELP edugrade_http_request_duration_seconds HTTP request duration.\n# TYPE edugrade_http_request_duration_seconds histogram\n")
@@ -217,6 +246,26 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(&output, "edugrade_postgres_slow_queries_total{operation=%q} %d\n", escapeLabel(operation), dbSlow[operation])
 	}
 	_, _ = w.Write([]byte(output.String()))
+}
+
+func writeRouteValueCounters(output *strings.Builder, name string, help string, valueLabel string, values map[routeValueKey]uint64) {
+	keys := make([]routeValueKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].route != keys[j].route {
+			return keys[i].route < keys[j].route
+		}
+		if keys[i].method != keys[j].method {
+			return keys[i].method < keys[j].method
+		}
+		return keys[i].value < keys[j].value
+	})
+	fmt.Fprintf(output, "# HELP %s %s\n# TYPE %s counter\n", name, help, name)
+	for _, key := range keys {
+		fmt.Fprintf(output, "%s{method=%q,route=%q,%s=%q} %d\n", name, escapeLabel(key.method), escapeLabel(key.route), valueLabel, escapeLabel(key.value), values[key])
+	}
 }
 
 func escapeLabel(value string) string {

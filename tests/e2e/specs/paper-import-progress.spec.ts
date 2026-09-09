@@ -4,7 +4,8 @@ import { installApiMocks } from "../fixtures/apiMocks";
 test("识别轮询在短暂失败后恢复，停止及重试保留资料和滚动位置", async ({ page }) => {
   await installApiMocks(page, { initiallyAuthenticated: true });
   const job = {
-    id: "import-1", exam_id: "exam-1", subject: "math", status: "processing",
+    id: "import-1", generation: 1, run_id: "run-1", source_revision: "source-revision-1",
+    exam_id: "exam-1", subject: "math", status: "processing",
     issues: [] as string[], structured_issues: [] as object[], questions: [],
     sources: [{ id: "source-1", file_asset_id: "file-1", document_index: 0,
       role_hint: "auto", detected_role: "unknown", original_name: "会议回放.png", processing_status: "processing" }]
@@ -21,7 +22,7 @@ test("识别轮询在短暂失败后恢复，停止及重试保留资料和滚�
     }
     return route.fulfill({ json: { imports: [job] } });
   });
-  await page.route("**/api/v1/paper-imports/import-1/cancel", route => {
+  await page.route("**/api/v1/paper-imports/import-1/cancel?expected_generation=1", route => {
     job.status = "cancelled";
     return route.fulfill({ json: { import: job } });
   });

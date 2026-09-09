@@ -26,8 +26,31 @@ func NewHandler(service *Service, audit auth.Store) *Handler {
 // syntax, which net/http ServeMux cannot safely bind as a path wildcard.
 func RegisterRoutes(mux *http.ServeMux, handler *Handler, requireCaptureManage func(http.HandlerFunc) http.Handler) {
 	mux.Handle("POST /api/v1/capture/uploads:init", requireCaptureManage(handler.Init))
+	mux.Handle("GET /api/v1/capture/uploads/{id}", requireCaptureManage(handler.Get))
 	mux.Handle("PUT /api/v1/capture/uploads/{id}/chunks", requireCaptureManage(handler.PutChunk))
 	mux.Handle("POST /api/v1/capture/uploads/{id}/complete", requireCaptureManage(handler.Complete))
+}
+
+// Get recovers transfer progress without reinitializing or advancing it.
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	session, err := h.service.Get(r.Context(), user.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if !h.allowsExam(r, session.ExamID) {
+		httpx.Error(w, r, http.StatusForbidden, "capture_upload_forbidden", "capture upload is outside the current data scope")
+		return
+	}
+	status := "processing"
+	if session.Status == "completed" {
+		status = "succeeded"
+	}
+	if session.Status == "failed" {
+		status = "failed"
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"command_id": session.IdempotencyKey, "status": status, "upload": session})
 }
 
 func (h *Handler) Init(w http.ResponseWriter, r *http.Request) {

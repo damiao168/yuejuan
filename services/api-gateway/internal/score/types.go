@@ -2,6 +2,7 @@ package score
 
 import (
 	"context"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"errors"
 	"strings"
 	"time"
@@ -164,6 +165,7 @@ type ExportResult struct {
 }
 
 type Store interface {
+	RecoverCommand(context.Context, string, string, string) (commandreceipt.Receipt, error)
 	FinalizeExam(ctx context.Context, tenantID string, examID string, actorID string) (FinalizeResult, error)
 	ListExamGrades(ctx context.Context, tenantID string, examID string, filter GradeListFilter) (GradeListResult, error)
 	CheckQuality(ctx context.Context, tenantID string, examID string, requirePendingPublish bool) (QualityReport, error)

@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"database/sql"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -17,7 +18,7 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 }
 
 func (s *PostgresStore) StudentReport(ctx context.Context, tenantID string, examID string, studentID string) (StudentReport, error) {
-	data, err := s.loadDataset(ctx, tenantID, examID)
+	data, err := s.loadDataset(ctx, s.db, tenantID, examID)
 	if err != nil {
 		return StudentReport{}, err
 	}
@@ -25,7 +26,7 @@ func (s *PostgresStore) StudentReport(ctx context.Context, tenantID string, exam
 }
 
 func (s *PostgresStore) Overview(ctx context.Context, tenantID string, examID string) (OverviewReport, error) {
-	data, err := s.loadDataset(ctx, tenantID, examID)
+	data, err := s.loadDataset(ctx, s.db, tenantID, examID)
 	if err != nil {
 		return OverviewReport{}, err
 	}
@@ -33,7 +34,7 @@ func (s *PostgresStore) Overview(ctx context.Context, tenantID string, examID st
 }
 
 func (s *PostgresStore) ClassReports(ctx context.Context, tenantID string, examID string) ([]ClassReport, error) {
-	data, err := s.loadDataset(ctx, tenantID, examID)
+	data, err := s.loadDataset(ctx, s.db, tenantID, examID)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +42,7 @@ func (s *PostgresStore) ClassReports(ctx context.Context, tenantID string, examI
 }
 
 func (s *PostgresStore) QuestionAnalysis(ctx context.Context, tenantID string, examID string) ([]QuestionAnalysis, error) {
-	data, err := s.loadDataset(ctx, tenantID, examID)
+	data, err := s.loadDataset(ctx, s.db, tenantID, examID)
 	if err != nil {
 		return nil, err
 	}
@@ -49,22 +50,47 @@ func (s *PostgresStore) QuestionAnalysis(ctx context.Context, tenantID string, e
 }
 
 func (s *PostgresStore) GradingQuality(ctx context.Context, tenantID string, examID string) (GradingQualityReport, error) {
-	data, err := s.loadDataset(ctx, tenantID, examID)
+	data, err := s.loadDataset(ctx, s.db, tenantID, examID)
 	if err != nil {
 		return GradingQualityReport{}, err
 	}
-	return s.loadQuality(ctx, tenantID, examID, data)
+	return s.loadQuality(ctx, s.db, tenantID, examID, data)
 }
 
 func (s *PostgresStore) Export(ctx context.Context, tenantID string, examID string, actorID string) (ExportResult, error) {
-	data, err := s.loadDataset(ctx, tenantID, examID)
+	result, err := s.exportOnce(ctx, tenantID, examID, actorID)
+	if err != nil && commandreceipt.ID(ctx) != "" && isUniqueViolation(err) {
+		// Under Repeatable Read, a concurrent transaction can take its snapshot
+		// before waiting for the same-command advisory lock. Its receipt INSERT
+		// then detects the winner through the unique index even though the old
+		// snapshot cannot see that row. The failed transaction has rolled back,
+		// so one fresh snapshot can safely return the winner's immutable receipt.
+		return s.exportOnce(ctx, tenantID, examID, actorID)
+	}
+	return result, err
+}
+
+func (s *PostgresStore) exportOnce(ctx context.Context, tenantID string, examID string, actorID string) (ExportResult, error) {
+	// The CSV and its durable command receipt describe one database snapshot.
+	// Every read below must use this transaction; using s.db here can deadlock a
+	// single-connection pool and can mix data from different commit points.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return ExportResult{}, err
+	}
+	defer tx.Rollback()
+	var replay ExportResult
+	if found, err := commandreceipt.Load(ctx, tx, tenantID, actorID, "report.export", examID, nil, &replay); err != nil || found {
+		return replay, err
+	}
+	data, err := s.loadDataset(ctx, tx, tenantID, examID)
 	if err != nil {
 		return ExportResult{}, err
 	}
 	overview := buildOverview(data)
 	classes := buildClassReports(data)
 	questions := buildQuestionAnalysis(data)
-	quality, err := s.loadQuality(ctx, tenantID, examID, data)
+	quality, err := s.loadQuality(ctx, tx, tenantID, examID, data)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -74,7 +100,7 @@ func (s *PostgresStore) Export(ctx context.Context, tenantID string, examID stri
 		"watermark":    result.Watermark,
 		"content_type": result.ContentType,
 	})
-	err = s.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 INSERT INTO report (tenant_id, exam_id, report_type, scope_type, status, data, generated_by, generated_at)
 VALUES ($1, $2::uuid, 'export', 'exam', 'succeeded', $3, $4::uuid, now())
 RETURNING id::text
@@ -82,12 +108,32 @@ RETURNING id::text
 	if err != nil {
 		return ExportResult{}, err
 	}
+	if err := commandreceipt.Save(ctx, tx, tenantID, actorID, "report.export", examID, nil, result); err != nil {
+		return ExportResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ExportResult{}, err
+	}
 	return result, nil
 }
 
-func (s *PostgresStore) loadDataset(ctx context.Context, tenantID string, examID string) (dataset, error) {
+type sqlStateError interface {
+	SQLState() string
+}
+
+func isUniqueViolation(err error) bool {
+	var state sqlStateError
+	return errors.As(err, &state) && state.SQLState() == "23505"
+}
+
+type reportQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *PostgresStore) loadDataset(ctx context.Context, q reportQueryer, tenantID string, examID string) (dataset, error) {
 	data := dataset{ExamID: examID}
-	subRows, err := s.db.QueryContext(ctx, `
+	subRows, err := q.QueryContext(ctx, `
 SELECT sg.submission_id::text, COALESCE(sg.student_id::text, ''), COALESCE(st.class_id::text, ''),
   COALESCE(sc.name, ''), sg.anonymous_code, sg.total_score::float8, sg.max_score::float8
 FROM submission_grade sg
@@ -111,7 +157,7 @@ ORDER BY sg.anonymous_code
 	if err := subRows.Err(); err != nil {
 		return dataset{}, err
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := q.QueryContext(ctx, `
 SELECT fg.submission_id::text, COALESCE(sg.student_id::text, ''), COALESCE(st.class_id::text, ''),
   COALESCE(sc.name, ''), fg.question_id::text, fg.question_no, q.question_type, fg.answer_segment_id::text,
   fg.score::float8, fg.max_score::float8, fg.source, q.knowledge_points,
@@ -217,10 +263,10 @@ ORDER BY fg.question_no, fg.created_at DESC
 	return data, rows.Err()
 }
 
-func (s *PostgresStore) loadQuality(ctx context.Context, tenantID string, examID string, data dataset) (GradingQualityReport, error) {
+func (s *PostgresStore) loadQuality(ctx context.Context, q reportQueryer, tenantID string, examID string, data dataset) (GradingQualityReport, error) {
 	out := GradingQualityReport{ExamID: examID}
 	var err error
-	out.TotalSegments, err = scalarCount(ctx, s.db, `SELECT COUNT(*) FROM answer_segment seg
+	out.TotalSegments, err = scalarCount(ctx, q, `SELECT COUNT(*) FROM answer_segment seg
 JOIN submission sub ON sub.tenant_id = seg.tenant_id AND sub.id = seg.submission_id AND sub.deleted_at IS NULL
 WHERE seg.tenant_id = $1 AND sub.exam_id::text = $2 AND seg.deleted_at IS NULL`, tenantID, examID)
 	if err != nil {
@@ -242,21 +288,21 @@ WHERE seg.tenant_id = $1 AND sub.exam_id::text = $2 AND seg.deleted_at IS NULL`,
 	}
 	out.AIAdoptionRate = metric(out.AIAcceptedCount, out.AIGradeCount, "no_ai_grades")
 	out.HumanModificationRate = metric(out.HumanModifiedCount, out.HumanComparableCount, "no_ai_human_comparison")
-	out.ArbitrationCount, err = scalarCount(ctx, s.db, `SELECT COUNT(*) FROM arbitration_task WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL`, tenantID, examID)
+	out.ArbitrationCount, err = scalarCount(ctx, q, `SELECT COUNT(*) FROM arbitration_task WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL`, tenantID, examID)
 	if err != nil {
 		return GradingQualityReport{}, err
 	}
-	out.LowConfidenceReviewCount, err = scalarCount(ctx, s.db, `SELECT COUNT(*) FROM review_task WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND source IN ('ai_low_confidence', 'ocr_low_confidence')`, tenantID, examID)
+	out.LowConfidenceReviewCount, err = scalarCount(ctx, q, `SELECT COUNT(*) FROM review_task WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND source IN ('ai_low_confidence', 'ocr_low_confidence')`, tenantID, examID)
 	if err != nil {
 		return GradingQualityReport{}, err
 	}
-	out.OCRTaskCount, err = scalarCount(ctx, s.db, `SELECT COUNT(*) FROM ocr_task ot
+	out.OCRTaskCount, err = scalarCount(ctx, q, `SELECT COUNT(*) FROM ocr_task ot
 JOIN submission sub ON sub.tenant_id = ot.tenant_id AND sub.id = ot.submission_id AND sub.deleted_at IS NULL
 WHERE ot.tenant_id = $1 AND sub.exam_id::text = $2 AND ot.deleted_at IS NULL`, tenantID, examID)
 	if err != nil {
 		return GradingQualityReport{}, err
 	}
-	out.OCRFailedCount, err = scalarCount(ctx, s.db, `SELECT COUNT(*) FROM ocr_task ot
+	out.OCRFailedCount, err = scalarCount(ctx, q, `SELECT COUNT(*) FROM ocr_task ot
 JOIN submission sub ON sub.tenant_id = ot.tenant_id AND sub.id = ot.submission_id AND sub.deleted_at IS NULL
 WHERE ot.tenant_id = $1 AND sub.exam_id::text = $2 AND ot.deleted_at IS NULL AND ot.status = 'failed'`, tenantID, examID)
 	if err != nil {
@@ -265,7 +311,7 @@ WHERE ot.tenant_id = $1 AND sub.exam_id::text = $2 AND ot.deleted_at IS NULL AND
 	out.OCRFailureRate = metric(out.OCRFailedCount, out.OCRTaskCount, "no_ocr_tasks")
 	var avgDiff sql.NullFloat64
 	var maxDiff sql.NullFloat64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), AVG(score_difference)::float8, MAX(score_difference)::float8 FROM double_mark_session WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND score_difference IS NOT NULL`, tenantID, examID).Scan(&out.DoubleMarkSessionCount, &avgDiff, &maxDiff); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*), AVG(score_difference)::float8, MAX(score_difference)::float8 FROM double_mark_session WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND score_difference IS NOT NULL`, tenantID, examID).Scan(&out.DoubleMarkSessionCount, &avgDiff, &maxDiff); err != nil {
 		return GradingQualityReport{}, err
 	}
 	if out.DoubleMarkSessionCount == 0 {

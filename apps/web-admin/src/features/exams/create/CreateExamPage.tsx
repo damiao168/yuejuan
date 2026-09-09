@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, App } from "antd";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, App, Button } from "antd";
 import { ApiClientError, getUserErrorMessage } from "../../../api/client";
-import { createExamSession } from "../../../api/exams";
+import { createExamSession, recoverExamSessionCommand, type ExamSessionPayload } from "../../../api/exams";
 import { listExamTemplates, type ExamTemplate } from "../../../api/examTemplates";
 import { listClasses, listGrades, listSchools, type Grade, type School, type SchoolClass } from "../../../api/org";
 import type { SessionUser } from "../../../auth/session";
@@ -9,6 +9,7 @@ import { ErrorState, LoadingState } from "../../../components/PageState";
 import { initialCreateExamDraft, subjectScore } from "./createExamDraft";
 import { CreateExamWizard } from "./CreateExamWizard";
 import type { CreateExamDraft } from "./types";
+import { beginExamCreateCommand, commandAfterFailure, commandRecoveryDelayMS, commandSnapshotKey, createExamCreateSubmissionGate, loadExamCreateCommand, nextCommandRecovery, persistExamCreateCommand, recordExamCreateSuccess, type ExamCreateCommandSnapshot } from "./examCreateCommand";
 
 function validationMessage(step: number, draft: CreateExamDraft) {
   if (step === 0 && !draft.schoolId) return "请选择考试所属学校";
@@ -41,15 +42,9 @@ export function CreateExamPage({ user, onNavigate }: { user: SessionUser; onNavi
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const commandStorageKey = `exam-create-command:${user.tenant}:${user.id}`;
-  const [commandId, setCommandId] = useState<string>(() => {
-    try {
-      const stored = localStorage.getItem(commandStorageKey);
-      return stored && stored.length >= 8 ? stored : crypto.randomUUID();
-    } catch {
-      return crypto.randomUUID();
-    }
-  });
+  const commandStorageKey = commandSnapshotKey(user.tenant, user.id);
+  const [command, setCommand] = useState<ExamCreateCommandSnapshot | null>(() => loadExamCreateCommand(localStorage, commandStorageKey));
+  const submissionGate = useRef(createExamCreateSubmissionGate());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -93,7 +88,7 @@ export function CreateExamPage({ user, onNavigate }: { user: SessionUser; onNavi
     } finally {
       setLoading(false);
     }
-  }, [commandStorageKey, user.id, user.school, user.tenant]);
+  }, [user.id, user.organizationScope, user.school, user.tenant]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -110,8 +105,57 @@ export function CreateExamPage({ user, onNavigate }: { user: SessionUser; onNavi
   }, [draft, loading, user.id, user.tenant]);
 
   useEffect(() => {
-    localStorage.setItem(commandStorageKey, commandId);
-  }, [commandId, commandStorageKey]);
+    if (!command) return;
+    try {
+      persistExamCreateCommand(localStorage, commandStorageKey, command);
+    } catch {
+      // The submit path remains the durability boundary and refuses to send
+      // when its synchronous persistence fails.
+    }
+  }, [command, commandStorageKey]);
+
+  useEffect(() => {
+    if (loading || !command || !["submitting", "unknown"].includes(command.state)) return;
+    let active = true;
+    let timer: number | undefined;
+    const recover = () => void recoverExamSessionCommand(command.commandId).then(({ command: recovered }) => {
+      if (!active) return;
+      if (recovered.status === "succeeded" && recovered.exam_session) {
+        const completed = recordExamCreateSuccess(localStorage, commandStorageKey, `exam-create-draft:${user.tenant}:${user.id}`, command, recovered.exam_session);
+        setCommand(completed);
+        const firstExam = recovered.exam_session.exams[0];
+        message.success("已恢复之前提交的考试创建结果");
+        onNavigate(firstExam ? `/exams/${encodeURIComponent(firstExam.id)}/settings` : "/exams");
+        return;
+      }
+      if (recovered.status === "rejected") {
+        const next = commandAfterFailure(command, new ApiClientError(recovered.http_status ?? 400, recovered.error_code ?? "request_rejected", "创建命令已被明确拒绝"));
+        setCommand(next);
+        try {
+          if (next) persistExamCreateCommand(localStorage, commandStorageKey, next);
+          else localStorage.removeItem(commandStorageKey);
+        } catch {
+          // The in-memory result remains authoritative for this page lifetime.
+        }
+        return;
+      }
+      if (recovered.status === "processing" || recovered.status === "unknown") {
+        const next = nextCommandRecovery(command);
+        if (next) timer = window.setTimeout(() => active && setCommand(next), commandRecoveryDelayMS(next));
+      }
+    }).catch((recoveryError: unknown) => {
+      if (!active) return;
+      // A failed GET cannot reject the original write. It may still ask us
+      // to delay all further recovery traffic, including an explicit retry.
+      const delayed = recoveryError instanceof ApiClientError && recoveryError.retryAfterSeconds
+        ? { ...command, retryNotBefore: new Date(Date.now() + recoveryError.retryAfterSeconds * 1000).toISOString() }
+        : command;
+      const next = nextCommandRecovery(delayed);
+      if (next) setCommand(next);
+    });
+    timer = window.setTimeout(recover, commandRecoveryDelayMS(command));
+    return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [command, commandStorageKey, loading, message, onNavigate, user.id, user.tenant]);
 
   const changeStep = (next: number) => {
     if (next > step) {
@@ -122,37 +166,59 @@ export function CreateExamPage({ user, onNavigate }: { user: SessionUser; onNavi
   };
 
   const submit = async () => {
-    const invalid = validationMessage(0, draft) || validationMessage(1, draft) || validationMessage(2, draft) || validationMessage(3, draft);
-    if (invalid) { message.warning(invalid); return; }
+    if (!submissionGate.current.enter()) return;
+    // A completed command is retained only as a recovery receipt. Starting a
+    // genuinely new creation must take a fresh immutable command snapshot.
+    const persisted = loadExamCreateCommand(localStorage, commandStorageKey);
+    const pending = persisted && persisted.state !== "succeeded" ? persisted : command;
+    const activeCommand = pending?.state === "succeeded" ? null : pending;
+    if (activeCommand?.retryNotBefore && Date.parse(activeCommand.retryNotBefore) > Date.now()) {
+      submissionGate.current.leave();
+      message.info("服务正在处理，请稍后继续确认原操作");
+      return;
+    }
+    const invalid = activeCommand ? "" : validationMessage(0, draft) || validationMessage(1, draft) || validationMessage(2, draft) || validationMessage(3, draft);
+    if (invalid) { submissionGate.current.leave(); message.warning(invalid); return; }
     setSubmitting(true);
+    const payload: ExamSessionPayload = activeCommand?.payload ?? {
+      school_id: draft.schoolId,
+      grade_id: draft.gradeId,
+      template_id: draft.templateId === "custom" ? undefined : draft.templateId,
+      name: draft.name.trim(),
+      exam_type: draft.examType,
+      grading_mode: draft.gradingMode,
+      appeal_enabled: draft.appealEnabled,
+      publish_policy: draft.publishPolicy,
+      class_ids: draft.classIds,
+      subjects: draft.subjects.map((subject) => ({ subject: subject.subject, total_score: subject.totalScore, duration_minutes: subject.durationMinutes, candidate_rule: subject.candidateRule, class_ids: subject.candidateRule === "subject_selected_classes" ? subject.classIds : [], sections: subject.sections.map((section) => ({ title: section.title.trim(), question_type: section.questionType, question_count: section.questionCount, score_per_question: section.scorePerQuestion })) }))
+    };
+    const submitted = activeCommand ?? beginExamCreateCommand(payload);
+    setCommand(submitted);
     try {
-      const result = await createExamSession({
-        school_id: draft.schoolId,
-        grade_id: draft.gradeId,
-        template_id: draft.templateId === "custom" ? undefined : draft.templateId,
-        name: draft.name.trim(),
-        exam_type: draft.examType,
-        grading_mode: draft.gradingMode,
-        appeal_enabled: draft.appealEnabled,
-        publish_policy: draft.publishPolicy,
-        class_ids: draft.classIds,
-        subjects: draft.subjects.map((subject) => ({ subject: subject.subject, total_score: subject.totalScore, duration_minutes: subject.durationMinutes, candidate_rule: subject.candidateRule, class_ids: subject.candidateRule === "subject_selected_classes" ? subject.classIds : [], sections: subject.sections.map((section) => ({ title: section.title.trim(), question_type: section.questionType, question_count: section.questionCount, score_per_question: section.scorePerQuestion })) }))
-      }, commandId);
-      localStorage.removeItem(`exam-create-draft:${user.tenant}:${user.id}`);
-      localStorage.removeItem(commandStorageKey);
+      // Persist synchronously before the first network byte is sent. React state
+      // effects are intentionally not the durability boundary for this command.
+      persistExamCreateCommand(localStorage, commandStorageKey, submitted);
+      const result = await createExamSession(submitted.payload, submitted.commandId);
+      const completed = recordExamCreateSuccess(localStorage, commandStorageKey, `exam-create-draft:${user.tenant}:${user.id}`, submitted, result.exam_session);
+      setCommand(completed);
       const firstExam = result.exam_session.exams[0];
       message.success(`已创建 ${result.exam_session.exams.length} 个科目工作区`);
       onNavigate(firstExam ? `/exams/${encodeURIComponent(firstExam.id)}/settings` : "/exams");
     } catch (submitError) {
-      // A received HTTP error proves that this attempt has a terminal response,
-      // so a corrected submission is a new command. Network failures retain the
-      // same ID because the server may already have committed successfully.
-      if (submitError instanceof ApiClientError) {
-        setCommandId(crypto.randomUUID());
+      const next = commandAfterFailure(submitted, submitError);
+      setCommand(next);
+      try {
+        if (next) persistExamCreateCommand(localStorage, commandStorageKey, next);
+        else localStorage.removeItem(commandStorageKey);
+      } catch {
+        // Storage can be unavailable (private mode/quota). The request is not
+        // sent until the first write succeeds, and the in-memory receipt still
+        // prevents an accidental command rotation during this page lifetime.
       }
       message.error(getUserErrorMessage(submitError, "考试创建失败"));
     } finally {
       setSubmitting(false);
+      submissionGate.current.leave();
     }
   };
 
@@ -160,6 +226,7 @@ export function CreateExamPage({ user, onNavigate }: { user: SessionUser; onNavi
   if (error) return <ErrorState message={error} onRetry={() => void load()} />;
   return (
     <div className="create-exam-page">
+      {command && command.state !== "succeeded" ? <Alert type={command.state === "conflict" ? "error" : "info"} showIcon message="正在恢复上一次考试创建命令" description="为避免重复创建，本次确认会继续使用首次提交时保存的内容和操作编号。" action={<Button loading={submitting} onClick={() => void submit()}>继续确认原操作</Button>} /> : null}
       {!grades.length ? <Alert type="warning" showIcon message="当前学校还没有可用年级" description="请先到成员管理建立年级和班级。" /> : null}
       <CreateExamWizard step={step} draft={draft} schools={schools} grades={visibleGrades} classes={visibleClasses} templates={templates} scopeLocked={user.organizationScope.resolved && !user.organizationScope.tenantWide} savedAt={savedAt} submitting={submitting} onChange={(patch) => setDraft((current) => ({ ...current, ...patch }))} onStepChange={changeStep} onSubmit={() => void submit()} onCancel={() => onNavigate("/exams")} />
     </div>

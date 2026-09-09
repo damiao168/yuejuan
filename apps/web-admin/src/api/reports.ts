@@ -1,3 +1,4 @@
+import { executeBusinessCommand } from "./businessCommand";
 import { apiClient } from "./client";
 
 export interface ReportEmptyState {
@@ -141,5 +142,11 @@ export async function getGradingQualityReport(examId: string) {
 }
 
 export async function exportLearningReport(examId: string) {
-  return apiClient.requestBlob(`/api/v1/exams/${encodeURIComponent(examId)}/reports/export`, { method: "POST" });
+  return executeBusinessCommand("report.export", examId, null,
+    commandId => apiClient.requestBlob(`/api/v1/exams/${encodeURIComponent(examId)}/reports/export`, { method: "POST", headers: { "Idempotency-Key": commandId } }),
+    value => {
+      const result = value as { Content: string; ContentType: string; Filename: string; Watermark: string };
+      const bytes = Uint8Array.from(atob(result.Content), character => character.charCodeAt(0));
+      return { blob: new Blob([bytes], { type: result.ContentType }), contentType: result.ContentType, filename: result.Filename, watermark: result.Watermark };
+    });
 }

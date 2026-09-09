@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
@@ -40,6 +42,7 @@ func (h *Handler) CreatePaperImport(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	input.CommandID = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if len(normalizePaperImportSourceInputs(input)) == 0 || input.Subject == "" {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_paper_import", "至少需要一份考试资料和学科")
 		return
@@ -63,7 +66,8 @@ func (h *Handler) AddPaperImportSources(w http.ResponseWriter, r *http.Request) 
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if len(input.Sources) == 0 {
+	input.CommandID = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if len(input.Sources) == 0 || input.ExpectedGeneration <= 0 {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_paper_import_sources", "请选择要追加的考试资料")
 		return
 	}
@@ -86,6 +90,11 @@ func (h *Handler) ReplacePaperImportSources(w http.ResponseWriter, r *http.Reque
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	input.CommandID = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if input.ExpectedGeneration <= 0 {
+		httpx.Error(w, r, http.StatusBadRequest, "expected_generation_required", "expected_generation is required")
+		return
+	}
 	out, err := h.documentImport.ReplaceSources(r.Context(), user.TenantID, user.ID, r.PathValue("id"), input)
 	if err != nil {
 		writeStoreError(w, r, err)
@@ -99,6 +108,10 @@ func (h *Handler) SavePaperImportReview(w http.ResponseWriter, r *http.Request) 
 	user := mustUser(r)
 	var input ReviewPaperImportInput
 	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.ExpectedGeneration <= 0 {
+		httpx.Error(w, r, http.StatusBadRequest, "expected_generation_required", "expected_generation is required")
 		return
 	}
 	if len(input.Questions) == 0 {
@@ -147,7 +160,20 @@ func (h *Handler) ApplyPaperImport(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) CancelPaperImport(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
-	out, err := h.store.CancelPaperImport(r.Context(), user.TenantID, r.PathValue("id"))
+	var out PaperImportJob
+	var err error
+	expected, parseErr := strconv.ParseInt(r.URL.Query().Get("expected_generation"), 10, 64)
+	if parseErr == nil && expected > 0 {
+		if versioned, ok := h.store.(interface {
+			CancelPaperImportGeneration(context.Context, string, string, int64) (PaperImportJob, error)
+		}); ok {
+			out, err = versioned.CancelPaperImportGeneration(r.Context(), user.TenantID, r.PathValue("id"), expected)
+		} else {
+			err = ErrConflict
+		}
+	} else {
+		err = ErrInvalidInput
+	}
 	if err != nil {
 		writeStoreError(w, r, err)
 		return

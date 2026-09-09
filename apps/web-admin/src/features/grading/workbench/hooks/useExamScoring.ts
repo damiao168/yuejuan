@@ -1,3 +1,4 @@
+import { submitScoringCommand } from "./scoringCommand";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { App } from "antd";
 import {
@@ -7,7 +8,7 @@ import {
   getScoringReadiness,
   getScoringSummary,
   retryFailedScoringRun,
-  startScoringRun,
+
   type ExamAutomationResults,
   type ScoringReadiness,
   type ScoringRunItem,
@@ -18,11 +19,13 @@ import type { ScoringImagePreview, ScoringResultState, ScoringResultType } from 
 
 export interface UseExamScoringOptions {
   initialExamId: string;
+  currentUserId: string;
+  currentTenantId: string;
   canGrade: boolean;
   onTasksChanged: () => Promise<void>;
 }
 
-export function useExamScoring({ initialExamId, canGrade, onTasksChanged }: UseExamScoringOptions) {
+export function useExamScoring({ initialExamId, currentUserId, currentTenantId, canGrade, onTasksChanged }: UseExamScoringOptions) {
   const { message } = App.useApp();
   const [summary, setSummary] = useState<ScoringSummary | null>(null);
   const [readiness, setReadiness] = useState<ScoringReadiness | null>(null);
@@ -35,6 +38,10 @@ export function useExamScoring({ initialExamId, canGrade, onTasksChanged }: UseE
   const [image, setImage] = useState<ScoringImagePreview | null>(null);
   const [imageLoading, setImageLoading] = useState("");
   const [actioning, setActioning] = useState<string | null>(null);
+  const commandStorageKey = `scoring-command:${currentTenantId}:${currentUserId}:${initialExamId}`;
+  const [pendingCommand, setPendingCommand] = useState(() => localStorage.getItem(commandStorageKey));
+  const startBusy = useRef(false);
+  useEffect(() => { setPendingCommand(localStorage.getItem(commandStorageKey)); }, [commandStorageKey]);
   const summaryRequestRef = useRef(0);
   const imageRequestRef = useRef(0);
 
@@ -86,16 +93,20 @@ export function useExamScoring({ initialExamId, canGrade, onTasksChanged }: UseE
   }, [canGrade, initialExamId, message]);
 
   const start = useCallback(async () => {
-    if (!initialExamId || !canGrade) return;
+    if (!initialExamId || !canGrade || startBusy.current) return;
+    startBusy.current = true;
     setActioning("start-scoring");
     try {
-      const readinessResult = await getScoringReadiness(initialExamId);
-      setReadiness(readinessResult.scoring_readiness);
-      if (!readinessResult.scoring_readiness.ready) {
-        message.warning("评分准备检查未通过，请先处理阻塞项");
-        return;
-      }
-      await startScoringRun(initialExamId, `web-${crypto.randomUUID()}`);
+      const completed = await submitScoringCommand({
+        examId: initialExamId, storageKey: commandStorageKey, storage: localStorage, pending: setPendingCommand,
+        ready: async () => {
+          const result = await getScoringReadiness(initialExamId);
+          setReadiness(result.scoring_readiness);
+          if (!result.scoring_readiness.ready) message.warning("评分准备检查未通过，请先处理阻塞项");
+          return result.scoring_readiness.ready;
+        }
+      });
+      if (!completed) return;
       message.success("评分任务已生成");
       setDetailOpen(true);
       const [nextSummary, detail, nextReadiness] = await Promise.all([
@@ -111,9 +122,10 @@ export function useExamScoring({ initialExamId, canGrade, onTasksChanged }: UseE
       message.error(formatError(error));
       void getScoringReadiness(initialExamId).then((result) => setReadiness(result.scoring_readiness)).catch(() => undefined);
     } finally {
+      startBusy.current = false;
       setActioning(null);
     }
-  }, [canGrade, initialExamId, message, onTasksChanged]);
+  }, [canGrade, initialExamId, commandStorageKey, message, onTasksChanged]);
 
   const showDetail = useCallback(async () => {
     if (!initialExamId) return;
@@ -225,6 +237,7 @@ export function useExamScoring({ initialExamId, canGrade, onTasksChanged }: UseE
   }, [image?.url]);
 
   return {
+    pendingCommand,
     summary,
     readiness,
     loading,

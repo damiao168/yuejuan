@@ -30,7 +30,7 @@ func TestAddPaperImportSourcesClearsPreviousFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	updated, err := store.AddPaperImportSources(context.Background(), "tenant", job.ID, "user", AddPaperImportSourcesInput{Sources: []CreatePaperImportSourceInput{{FileAssetID: "asset-2", DocumentIndex: 1, RoleHint: "auto"}}})
+	updated, err := store.AddPaperImportSources(context.Background(), "tenant", job.ID, "user", AddPaperImportSourcesInput{ExpectedGeneration: job.Generation, Sources: []CreatePaperImportSourceInput{{FileAssetID: "asset-2", DocumentIndex: 1, RoleHint: "auto"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,9 +49,9 @@ func TestRestartClearsPreviousStructuredIssues(t *testing.T) {
 			}
 			var restarted PaperImportJob
 			if action == "add" {
-				restarted, err = store.AddPaperImportSources(context.Background(), "tenant", job.ID, "user", AddPaperImportSourcesInput{Sources: []CreatePaperImportSourceInput{{FileAssetID: "new", DocumentIndex: 1, RoleHint: "auto"}}})
+				restarted, err = store.AddPaperImportSources(context.Background(), "tenant", job.ID, "user", AddPaperImportSourcesInput{ExpectedGeneration: job.Generation, Sources: []CreatePaperImportSourceInput{{FileAssetID: "new", DocumentIndex: 1, RoleHint: "auto"}}})
 			} else {
-				restarted, err = store.ReplacePaperImportSources(context.Background(), "tenant", job.ID, "user", ReplacePaperImportSourcesInput{Sources: []ReplacePaperImportSourceInput{{ID: job.Sources[0].ID, DocumentIndex: 0, RoleHint: "auto"}}})
+				restarted, err = store.ReplacePaperImportSources(context.Background(), "tenant", job.ID, "user", ReplacePaperImportSourcesInput{ExpectedGeneration: job.Generation, Sources: []ReplacePaperImportSourceInput{{ID: job.Sources[0].ID, DocumentIndex: 0, RoleHint: "auto"}}})
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -366,7 +366,7 @@ func TestHumanCorrectedLockedRubricAppliesWithAnswerAndRubricProvenance(t *testi
 	processed.Questions[0].Rubric.Points[1].Score = 4
 	processed.Questions[0].Rubric.Status = "locked"
 	confirmRequiredDraftFields(&processed.Questions[0])
-	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{Questions: processed.Questions})
+	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{ExpectedGeneration: processed.Generation, Questions: processed.Questions})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +401,7 @@ func TestLockedRubricCannotApplyWithoutExplicitRubricConfirmation(t *testing.T) 
 	}
 	processed.Questions[0].Rubric.Status = "locked"
 	processed.Questions[0].HumanConfirmedFields = []string{"question_no", "question_type", "score", "stem", "answer"}
-	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{Questions: processed.Questions})
+	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{ExpectedGeneration: processed.Generation, Questions: processed.Questions})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestCandidateImportRequiresExplicitHumanReviewBeforeApply(t *testing.T) {
 		t.Fatalf("unreviewed candidate apply error = %v, want ErrInvalidInput", err)
 	}
 	confirmRequiredDraftFields(&processed.Questions[0])
-	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{Questions: processed.Questions})
+	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{ExpectedGeneration: processed.Generation, Questions: processed.Questions})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +475,7 @@ func TestHumanReviewCannotClearARequiredFieldAndBypassApplyGate(t *testing.T) {
 	}
 	processed.Questions[0].AnswerKey.StandardAnswer = ""
 	confirmRequiredDraftFields(&processed.Questions[0])
-	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{Questions: processed.Questions})
+	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{ExpectedGeneration: processed.Generation, Questions: processed.Questions})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,14 +497,14 @@ func TestReplacePaperImportSourcesReordersRemovesAndChangesRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := store.ReplacePaperImportSources(context.Background(), "tenant", job.ID, "user", ReplacePaperImportSourcesInput{Sources: []ReplacePaperImportSourceInput{{ID: job.Sources[2].ID, DocumentIndex: 0, RoleHint: "solution"}, {ID: job.Sources[0].ID, DocumentIndex: 1, RoleHint: "auto"}}})
+	out, err := store.ReplacePaperImportSources(context.Background(), "tenant", job.ID, "user", ReplacePaperImportSourcesInput{ExpectedGeneration: job.Generation, Sources: []ReplacePaperImportSourceInput{{ID: job.Sources[2].ID, DocumentIndex: 0, RoleHint: "solution"}, {ID: job.Sources[0].ID, DocumentIndex: 1, RoleHint: "auto"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out.Status != "processing" || len(out.Sources) != 2 || out.Sources[0].FileAssetID != "c" || out.Sources[0].RoleHint != "solution" || out.Sources[1].DocumentIndex != 1 {
 		t.Fatalf("unexpected replacement: %#v", out.Sources)
 	}
-	out, err = store.ReplacePaperImportSources(context.Background(), "tenant", job.ID, "user", ReplacePaperImportSourcesInput{Sources: []ReplacePaperImportSourceInput{}})
+	out, err = store.ReplacePaperImportSources(context.Background(), "tenant", job.ID, "user", ReplacePaperImportSourcesInput{ExpectedGeneration: out.Generation, Sources: []ReplacePaperImportSourceInput{}})
 	if err != nil {
 		t.Fatalf("deleting all sources while processing should be allowed: %v", err)
 	}
@@ -573,7 +573,7 @@ func TestIncrementalRerunPreservesHumanConfirmedAnswer(t *testing.T) {
 	first.Questions[0].AnswerKey.StandardAnswer = "C"
 	first.Questions[0].Solution.RawText = "人工确认解析"
 	confirmRequiredDraftFields(&first.Questions[0])
-	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{Questions: first.Questions})
+	reviewed, err := store.SavePaperImportReview(context.Background(), "tenant", job.ID, "user", ReviewPaperImportInput{ExpectedGeneration: first.Generation, Questions: first.Questions})
 	if err != nil {
 		t.Fatal(err)
 	}

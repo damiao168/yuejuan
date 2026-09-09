@@ -200,7 +200,7 @@ func AccessLog(logg *logger.Logger, slowThresholds ...time.Duration) Middleware 
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)
 			duration := time.Since(start)
-			logg.Info(r.Context(), "http request", map[string]any{
+			fields := map[string]any{
 				"event":       "api_request",
 				"log_stream":  "system",
 				"method":      r.Method,
@@ -208,7 +208,17 @@ func AccessLog(logg *logger.Logger, slowThresholds ...time.Duration) Middleware 
 				"status":      rec.status,
 				"duration_ms": duration.Milliseconds(),
 				"remote_addr": r.RemoteAddr,
-			})
+			}
+			if errorCode := rec.Header().Get(httpx.ErrorCodeHeader); errorCode != "" {
+				fields["error_code"] = errorCode
+			}
+			if outcome := rec.Header().Get(httpx.OperationOutcomeHeader); outcome != "" {
+				fields["operation_outcome"] = outcome
+			}
+			if commandID := rec.Header().Get(httpx.CommandIDHeader); commandID != "" {
+				fields["command_id"] = commandID
+			}
+			logg.Info(r.Context(), "http request", fields)
 			if slowThreshold > 0 && duration >= slowThreshold {
 				logg.Warn(r.Context(), "slow request observed", map[string]any{
 					"event":        "slow_request",

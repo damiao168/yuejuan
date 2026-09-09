@@ -191,14 +191,41 @@ type CaptureProcessingModule struct {
 }
 
 func NewCaptureProcessingModule(cfg config.Config, stores CaptureProcessingStores, identity *IdentityModule, examModule *ExamPreparationModule) *CaptureProcessingModule {
+	module, _ := newCaptureProcessingModule(cfg, stores, identity, examModule, false)
+	return module
+}
+
+// NewTransactionalCaptureProcessingModule is the production composition root.
+// It fails startup unless the image-quality command can run through the atomic
+// coordinator, without depending on a concrete store implementation name.
+func NewTransactionalCaptureProcessingModule(cfg config.Config, stores CaptureProcessingStores, identity *IdentityModule, examModule *ExamPreparationModule) (*CaptureProcessingModule, error) {
+	return newCaptureProcessingModule(cfg, stores, identity, examModule, true)
+}
+
+func newCaptureProcessingModule(cfg config.Config, stores CaptureProcessingStores, identity *IdentityModule, examModule *ExamPreparationModule, transactional bool) (*CaptureProcessingModule, error) {
 	processingService := processing.NewService(stores.Processing, stores.WorkerRuntime)
+	imageQualityHandler := imagequality.NewHandler(stores.ImageQuality, examModule.SubmissionStore, examModule.FileStore, identity.AuthStore, stores.WorkerRuntime).WithCaptureStore(stores.Capture)
+	if transactional {
+		coordinator, ok := stores.ImageQuality.(imagequality.TransactionalStore)
+		if !ok {
+			return nil, fmt.Errorf("production image quality store does not provide transactional command coordination")
+		}
+		var err error
+		imageQualityHandler, err = imagequality.NewTransactionalHandler(imagequality.TransactionalHandlerDependencies{
+			Coordinator: coordinator, Submissions: examModule.SubmissionStore, Files: examModule.FileStore,
+			Audit: identity.AuthStore, Runtime: stores.WorkerRuntime, Captures: stores.Capture,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	module := &CaptureProcessingModule{
 		WorkerRuntimeStore:   stores.WorkerRuntime,
 		CaptureStore:         stores.Capture,
 		ProcessingService:    processingService,
 		OrchestratorHandler:  orchestrator.NewHandler(stores.Orchestrator, identity.AuthStore),
 		OCRHandler:           ocrpkg.NewHandler(stores.OCR, stores.OCRQueue, examModule.SubmissionStore, identity.AuthStore, stores.WorkerRuntime),
-		ImageQualityHandler:  imagequality.NewHandler(stores.ImageQuality, examModule.SubmissionStore, examModule.FileStore, identity.AuthStore, stores.WorkerRuntime).WithCaptureStore(stores.Capture),
+		ImageQualityHandler:  imageQualityHandler,
 		WorkerRuntimeHandler: workerruntime.NewHandler(stores.WorkerRuntime, identity.AuthStore, workerSourceLeaseRenewer{imageQuality: stores.ImageQuality}),
 		CaptureHandler:       capture.NewHandler(stores.Capture, examModule.FileStore, examModule.ExamStore, stores.WorkerRuntime, identity.AuthStore),
 		ProcessingHandler:    processing.NewHandler(processingService, identity.AuthStore),
@@ -209,7 +236,7 @@ func NewCaptureProcessingModule(cfg config.Config, stores CaptureProcessingStore
 			identity.AuthStore,
 		)
 	}
-	return module
+	return module, nil
 }
 
 type AIFoundationStores struct {
@@ -626,12 +653,14 @@ func validatePostgresStoreValue(value reflect.Value, path string) error {
 				return err
 			}
 		case reflect.Interface, reflect.Pointer:
+			for field.Kind() == reflect.Interface && !field.IsNil() {
+				field = field.Elem()
+			}
+			if field.Kind() != reflect.Pointer && field.Kind() != reflect.Interface {
+				continue
+			}
 			if field.IsNil() {
 				return fmt.Errorf("production application store %s is not configured", name)
-			}
-			concreteType := field.Elem().Type().String()
-			if strings.Contains(concreteType, "Memory") {
-				return fmt.Errorf("production application store %s uses %s", name, concreteType)
 			}
 		}
 	}
@@ -659,11 +688,32 @@ type ApplicationDependencies struct {
 }
 
 func NewApplicationModules(dependencies ApplicationDependencies, stores ApplicationStores) ApplicationModules {
+	modules, _ := newApplicationModules(dependencies, stores, false)
+	return modules
+}
+
+func NewTransactionalApplicationModules(dependencies ApplicationDependencies, stores ApplicationStores) (ApplicationModules, error) {
+	if err := validatePostgresStoreGraph(stores); err != nil {
+		return ApplicationModules{}, err
+	}
+	return newApplicationModules(dependencies, stores, true)
+}
+
+func newApplicationModules(dependencies ApplicationDependencies, stores ApplicationStores, transactional bool) (ApplicationModules, error) {
 	identity := NewIdentityModule(dependencies.Config, stores.Identity, dependencies.LoginLimiter)
 	examModule := NewExamPreparationModule(dependencies.Config, stores.Exam, ExamPreparationDependencies{
 		AuthStore: identity.AuthStore, ObjectStore: dependencies.ObjectStore, Reconciliation: dependencies.Reconciliation,
 	})
-	captureModule := NewCaptureProcessingModule(dependencies.Config, stores.Capture, identity, examModule)
+	var captureModule *CaptureProcessingModule
+	var err error
+	if transactional {
+		captureModule, err = NewTransactionalCaptureProcessingModule(dependencies.Config, stores.Capture, identity, examModule)
+	} else {
+		captureModule = NewCaptureProcessingModule(dependencies.Config, stores.Capture, identity, examModule)
+	}
+	if err != nil {
+		return ApplicationModules{}, err
+	}
 	aiFoundation := NewAIFoundation(stores.AIFoundation)
 	gradingQuality := NewGradingQualityModule(dependencies.Config, stores.Grading, GradingQualityDependencies{
 		DB: dependencies.DB, Identity: identity, Exam: examModule, Capture: captureModule, AI: aiFoundation,
@@ -675,7 +725,7 @@ func NewApplicationModules(dependencies ApplicationDependencies, stores Applicat
 	return ApplicationModules{
 		Identity: identity, Exam: examModule, Capture: captureModule, Grading: gradingQuality,
 		Release: releaseModule, AIGovernance: aiGovernance, Idempotency: stores.Idempotency,
-	}
+	}, nil
 }
 
 func NewPostgresApplicationModules(infra *Infrastructure) (ApplicationModules, error) {
@@ -683,10 +733,10 @@ func NewPostgresApplicationModules(infra *Infrastructure) (ApplicationModules, e
 	if err != nil {
 		return ApplicationModules{}, err
 	}
-	return NewApplicationModules(ApplicationDependencies{
+	return NewTransactionalApplicationModules(ApplicationDependencies{
 		Config: infra.Config, ObjectStore: infra.ObjectStore, Reconciliation: infra.FileReconciler,
 		LoginLimiter: infra.LoginLimiter, DB: infra.DB,
-	}, stores), nil
+	}, stores)
 }
 
 func connectSchoolDocumentModels(examModule *ExamPreparationModule, store modelgovernance.Store) {

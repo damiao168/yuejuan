@@ -166,6 +166,7 @@ type OMRFailureInput struct {
 }
 
 type ScoringRunStore interface {
+	RecoverScoringCommand(context.Context, string, string, string, string) (ScoringCommandRecovery, error)
 	GetScoringReadiness(context.Context, string, string) (ScoringReadiness, error)
 	StartScoringRun(context.Context, string, string, string, StartScoringRunInput) (ScoringRun, error)
 	GetScoringSummary(context.Context, string, string) (ScoringSummary, error)

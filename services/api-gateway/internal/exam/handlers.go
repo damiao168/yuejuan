@@ -66,6 +66,9 @@ func (h *Handler) CreateExamSession(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_exam_session", "command_id 必须与 Idempotency-Key 一致")
 		return
 	}
+	if input.CommandID != "" {
+		w.Header().Set(httpx.CommandIDHeader, input.CommandID)
+	}
 	if err := validateCreateSession(input); err != nil {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_exam_session", err.Error())
 		return
@@ -77,6 +80,27 @@ func (h *Handler) CreateExamSession(w http.ResponseWriter, r *http.Request) {
 	}
 	h.auditAction(r, "exam_session.created", "exam_session", out.ID, "create multi-subject exam session")
 	httpx.JSON(w, http.StatusCreated, map[string]any{"exam_session": out})
+}
+
+func (h *Handler) RecoverExamSessionCommand(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	scope, ok := mustAccessScope(w, r)
+	if !ok {
+		return
+	}
+	store, ok := h.store.(SessionCommandStore)
+	if !ok {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "exam_session_command_recovery_unavailable", "考试创建命令恢复服务未配置")
+		return
+	}
+	out, err := store.RecoverExamSessionCommand(r.Context(), scope, user.ID, r.PathValue("commandId"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	w.Header().Set(httpx.CommandIDHeader, out.CommandID)
+	w.Header().Set(httpx.OperationOutcomeHeader, out.Status)
+	httpx.JSON(w, http.StatusOK, map[string]any{"command": out})
 }
 
 func (h *Handler) ListExams(w http.ResponseWriter, r *http.Request) {
@@ -304,6 +328,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusForbidden, "access_scope_forbidden", "exam is outside the assigned data scope")
 	case errors.Is(err, ErrCandidatesFrozen):
 		httpx.Error(w, r, http.StatusConflict, "exam_candidates_frozen", "candidate roster is frozen after readiness confirmation")
+	case errors.Is(err, ErrCommandConflict):
+		httpx.Error(w, r, http.StatusConflict, "idempotency_key_reused_with_different_request", "command_id was already used for another exam-session request")
 	default:
 		httpx.Error(w, r, http.StatusInternalServerError, "exam_operation_failed", "exam operation failed")
 	}

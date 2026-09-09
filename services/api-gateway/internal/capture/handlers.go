@@ -42,13 +42,19 @@ func (h *Handler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusNotFound, "exam_not_found", "exam not found")
 		return
 	}
-	if current.Status != "collecting" {
-		httpx.Error(w, r, http.StatusConflict, "exam_not_collecting", "exam must be collecting before capture batches can be created")
-		return
-	}
 	var input CreateBatchInput
 	if !decodeStrict(w, r, &input) {
 		return
+	}
+	if input.IdempotencyKey == "" {
+		input.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	}
+	if current.Status != "collecting" {
+		recovery, recoveryErr := h.store.RecoverBatchCommand(r.Context(), user.TenantID, examID, user.ID, input.IdempotencyKey)
+		if recoveryErr != nil || recovery.Status != "succeeded" {
+			httpx.Error(w, r, http.StatusConflict, "exam_not_collecting", "exam must be collecting before capture batches can be created")
+			return
+		}
 	}
 	out, err := h.store.CreateBatch(r.Context(), user.TenantID, examID, user.ID, input)
 	if err != nil {
@@ -57,6 +63,21 @@ func (h *Handler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	h.auditAction(r, "capture_batch.created", "capture_batch", out.ID, "create capture batch")
 	httpx.JSON(w, http.StatusCreated, map[string]any{"batch": out})
+}
+
+func (h *Handler) RecoverBatchCommand(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	commandID := strings.TrimSpace(r.PathValue("commandId"))
+	if commandID == "" {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_capture_command", "command ID is required")
+		return
+	}
+	result, err := h.store.RecoverBatchCommand(r.Context(), user.TenantID, r.PathValue("examId"), user.ID, commandID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"command": result})
 }
 
 func (h *Handler) IssueTemplateBarcodes(w http.ResponseWriter, r *http.Request) {

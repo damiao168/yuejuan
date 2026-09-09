@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -201,11 +202,13 @@ func (h *Handler) BatchAssignTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) SubmitGrade(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(commandreceipt.WithID(r.Context(), r.Header.Get("Idempotency-Key")))
 	user := mustUser(r)
 	var input SubmitGradeInput
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	r = r.WithContext(commandreceipt.WithInput(r.Context(), input))
 	if h.seedHook != nil {
 		seedExamID, seedQuestionID := "", ""
 		if h.seedRefresher != nil {
@@ -808,18 +811,10 @@ func (h *Handler) AssignArbitrationTask(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) SubmitArbitration(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(commandreceipt.WithID(r.Context(), r.Header.Get("Idempotency-Key")))
 	user := mustUser(r)
 	var input SubmitArbitrationInput
 	if !decodeJSON(w, r, &input) {
-		return
-	}
-	task, err := h.store.GetArbitrationTask(r.Context(), user.TenantID, r.PathValue("id"))
-	if err != nil {
-		writeStoreError(w, r, err)
-		return
-	}
-	if task.AssignedTo == "" || task.AssignedTo != user.ID {
-		writeStoreError(w, r, ErrForbidden)
 		return
 	}
 	if !h.authorizeArbitrationAssignee(w, r, user.TenantID, user.ID) {
@@ -849,6 +844,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 }
 
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, commandreceipt.ErrConflict) {
+		httpx.Error(w, r, http.StatusConflict, "command_request_conflict", "command ID is associated with a different request")
+		return
+	}
 	switch {
 	case errors.Is(err, ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, "review_resource_not_found", "review resource not found")
@@ -903,6 +902,10 @@ func arbitrationManagerScoped(user auth.User) bool {
 }
 
 func writeSeedHookError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, commandreceipt.ErrConflict) {
+		writeStoreError(w, r, err)
+		return
+	}
 	switch {
 	case errors.Is(err, seedquality.ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, "review_resource_not_found", "review resource not found")

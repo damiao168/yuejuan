@@ -2,6 +2,7 @@ package seedquality
 
 import (
 	"context"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"errors"
 	"time"
 )
@@ -148,6 +149,7 @@ type IssueDecision struct {
 }
 
 type Store interface {
+	RecoverCommand(context.Context, string, string, string) (commandreceipt.Receipt, error)
 	PutPolicy(context.Context, string, string, string, string, PutPolicyInput, string) (Policy, error)
 	GetPolicy(context.Context, string, string, string) (Policy, error)
 	AdvanceAndMaybeCreate(context.Context, string, IssueDecision) (Task, bool, error)

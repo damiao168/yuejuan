@@ -264,6 +264,10 @@ type BatchContextStore interface {
 }
 
 type Store interface {
+	CompleteEnqueuePlan(context.Context, string, string, string) error
+	RecoverBatchCommand(context.Context, string, string, string) (BatchCommandRecovery, error)
+	GetEnqueuePlan(context.Context, string, string, string) (BatchEnqueuePlan, error)
+	SaveEnqueuePlan(context.Context, string, string, BatchEnqueuePlan) (BatchEnqueuePlan, error)
 	LoadContext(ctx context.Context, tenantID string, segmentID string) (Context, error)
 	GetRun(ctx context.Context, tenantID string, runID string) (GradingRun, error)
 	GetGradeByAdapterRequestID(ctx context.Context, tenantID string, requestID string) (Grade, error)

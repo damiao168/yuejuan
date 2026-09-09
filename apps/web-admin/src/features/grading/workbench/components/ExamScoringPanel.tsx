@@ -61,7 +61,7 @@ export function ExamScoringPanel({
                   <Button danger icon={<CircleStop size={15} />} loading={scoring.actioning === "cancel-scoring"}>取消评分</Button>
                 </Popconfirm>
               ) : null}
-              {!scoring.hasUnresolvedRun && scoring.summary?.run ? (
+              {scoring.pendingCommand ? <Button loading={scoring.actioning === "start-scoring"} onClick={() => void scoring.start()}>继续确认评分</Button> : !scoring.hasUnresolvedRun && scoring.summary?.run ? (
                 <Popconfirm title="重新开始自动评分？" description="已确认的结果会保留，未完成项将重新处理" okText="重新评分" cancelText="暂不" onConfirm={() => void scoring.start()}>
                   <Button icon={<Play size={15} />} disabled={!scoring.readiness?.ready} loading={scoring.actioning === "start-scoring"}>重新评分</Button>
                 </Popconfirm>

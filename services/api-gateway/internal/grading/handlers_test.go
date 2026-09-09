@@ -273,6 +273,10 @@ func (s *scoringRecoveryTestStore) GetScoringReadiness(_ context.Context, _ stri
 	return s.readiness, nil
 }
 
+func (s *scoringRecoveryTestStore) RecoverScoringCommand(_ context.Context, _, _, _, commandID string) (grading.ScoringCommandRecovery, error) {
+	return grading.ScoringCommandRecovery{CommandID: commandID, Status: "succeeded", Run: &s.run}, nil
+}
+
 func (s *scoringRecoveryTestStore) StartScoringRun(_ context.Context, _ string, _ string, _ string, _ grading.StartScoringRunInput) (grading.ScoringRun, error) {
 	if s.startErr != nil {
 		return grading.ScoringRun{}, s.startErr

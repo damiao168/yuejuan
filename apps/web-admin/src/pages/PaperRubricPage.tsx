@@ -604,7 +604,8 @@ export function PaperRubricPage({
 			const activeImport = paperImports.find((item) => item.status === "review_required" || item.status === "failed" || item.status === "cancelled");
 			const startIndex = activeImport?.sources.length ?? 0;
 			const sources = uploaded.map((file, index) => ({ file_asset_id: file.id, document_index: startIndex + index, role_hint: "auto" as const }));
-			const result = activeImport ? await addPaperImportSources(activeImport.id, sources) : await createPaperImport(selectedExam.id, { exam_paper_id: papers[0]?.id, subject: selectedExam.subject, sources });
+			const commandId = crypto.randomUUID();
+			const result = activeImport ? await addPaperImportSources(activeImport.id, activeImport.generation, sources, commandId) : await createPaperImport(selectedExam.id, { exam_paper_id: papers[0]?.id, subject: selectedExam.subject, sources }, commandId);
       if (result.import.status === "failed") {
 				message.error(getPaperImportUserMessage(result.import.issues[0], "考试资料识别失败，请检查资料后重试"));
       } else {
@@ -612,6 +613,7 @@ export function PaperRubricPage({
       }
       await loadConfig(selectedExam.id, { silent: true });
     } catch (currentError) {
+			await loadConfig(selectedExam.id, { silent: true }).catch(() => undefined);
       message.error(formatError(currentError));
     } finally {
 			setParsing(false);
@@ -623,7 +625,7 @@ export function PaperRubricPage({
 		if (job.status !== "processing" && job.status !== "review_required" && job.status !== "failed" && job.status !== "cancelled") return;
 		setUpdatingImportSources(true);
 		try {
-			await replacePaperImportSources(job.id, sources.map((source, documentIndex) => ({ id: source.id, document_index: documentIndex, role_hint: source.role_hint })));
+			await replacePaperImportSources(job.id, job.generation, sources.map((source, documentIndex) => ({ id: source.id, document_index: documentIndex, role_hint: source.role_hint })), crypto.randomUUID());
 			message.success(sources.length ? "资料顺序或类型已更新，系统正在重新匹配" : "已删除全部考试资料，请重新上传正确的资料");
 			if (selectedExam) await loadConfig(selectedExam.id, { silent: true });
 		} catch (currentError) {
@@ -644,7 +646,7 @@ export function PaperRubricPage({
 			onOk: async () => {
 				setStoppingImport(true);
 				try {
-					await cancelPaperImport(job.id);
+					await cancelPaperImport(job.id, job.generation, crypto.randomUUID());
 					message.success("已停止识别，上传资料仍然保留");
 					if (selectedExam) await loadConfig(selectedExam.id, { silent: true });
 				} catch (currentError) {
@@ -677,7 +679,7 @@ export function PaperRubricPage({
     if (invalidRubric) { message.error(`第${invalidRubric.question_no}题评分细则分值不一致，不能确认`); return; }
     setParsing(true);
     try {
-      await savePaperImportReview(job.id, confirmedImportDrafts(reviewDrafts));
+      await savePaperImportReview(job.id, job.generation, confirmedImportDrafts(reviewDrafts));
       await applyPaperImport(job.id);
       message.success("题目、标准答案、教师解析和评分点已写入当前考试");
       await loadConfig(selectedExam.id);
@@ -696,7 +698,7 @@ export function PaperRubricPage({
 		setSavingImportReview(true);
 		try {
 			const confirmedDrafts = confirmedImportDrafts(reviewDrafts);
-			await savePaperImportReview(job.id, confirmedDrafts);
+			await savePaperImportReview(job.id, job.generation, confirmedDrafts);
 			message.success("人工核对结果已保存，后续追加资料不会覆盖已确认字段");
 			await loadConfig(selectedExam.id);
 		} catch (currentError) {

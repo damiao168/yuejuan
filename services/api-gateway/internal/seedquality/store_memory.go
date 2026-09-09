@@ -2,6 +2,7 @@ package seedquality
 
 import (
 	"context"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"sort"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ type memoryObservation struct {
 }
 
 type MemoryStore struct {
+	receipts     commandreceipt.Memory
 	mu           sync.RWMutex
 	policies     map[string]memoryPolicy
 	cursors      map[string]samplingCursor
@@ -127,9 +129,13 @@ func (s *MemoryStore) GetTask(_ context.Context, tenantID, id string) (Task, err
 	return cloneTask(item.task), nil
 }
 
-func (s *MemoryStore) CompleteTask(_ context.Context, tenantID, taskID, graderID string, input SubmitInput, observation Observation) (Task, Observation, error) {
+func (s *MemoryStore) CompleteTask(ctx context.Context, tenantID, taskID, graderID string, input SubmitInput, observation Observation) (Task, Observation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var replay commandResult
+	if found, err := s.receipts.Load(ctx, tenantID, graderID, "review.submit", taskID, input, &replay); err != nil || found {
+		return Task{ID: replay.Task.ID, Status: replay.Task.Status, Revision: replay.Task.Revision}, Observation{}, err
+	}
 	key := taskKey(tenantID, taskID)
 	item, ok := s.tasks[key]
 	if !ok {
@@ -149,6 +155,9 @@ func (s *MemoryStore) CompleteTask(_ context.Context, tenantID, taskID, graderID
 	observation.TraitObservation = cloneObjectOrNil(observation.TraitObservation)
 	observation.CriterionObservation = cloneObjectOrNil(observation.CriterionObservation)
 	s.observations[taskKey(tenantID, observation.ID)] = memoryObservation{tenantID: tenantID, value: observation}
+	if err := s.receipts.Save(ctx, tenantID, graderID, "review.submit", taskID, input, seedCommandResult(item.task)); err != nil {
+		return Task{}, Observation{}, err
+	}
 	return cloneTask(item.task), cloneObservation(observation), nil
 }
 

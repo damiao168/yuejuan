@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 )
 
@@ -22,6 +23,10 @@ var keyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 var protectedRoutes = map[string]bool{
 	"POST /api/v1/exams":                                        true,
 	"POST /api/v1/exam-sessions":                                true,
+	"POST /api/v1/exams/{examId}/paper-imports":                 true,
+	"POST /api/v1/paper-imports/{id}/sources":                   true,
+	"PUT /api/v1/paper-imports/{id}/sources":                    true,
+	"POST /api/v1/paper-imports/{id}/cancel":                    true,
 	"POST /api/v1/exams/{examId}/capture-batches":               true,
 	"POST /api/v1/capture-batches/{id}/files":                   true,
 	"POST /api/v1/capture-batches/{id}/process":                 true,
@@ -48,9 +53,19 @@ var protectedRoutes = map[string]bool{
 }
 
 var recoverableRoutes = map[string]bool{
-	// This command persists its command_id in exam_session in the same
-	// transaction as all child exams, so a stale reservation can be replayed.
-	"POST /api/v1/exam-sessions": true,
+	// Every route in this allowlist has a durable business identity, request
+	// fingerprint, result/recovery relationship, and concurrent replay tests.
+	// Do not broaden this to all protected routes.
+	"POST /api/v1/exam-sessions":                                true,
+	"POST /api/v1/exams/{examId}/capture-batches":               true,
+	"POST /api/v1/exams/{examId}/scoring-runs":                  true,
+	"POST /api/v1/subjective-grading-batches":                   true,
+	"POST /api/v1/subjective-grading-batches/{batchId}/enqueue": true,
+	"POST /api/v1/review-tasks/{id}/submit":                     true,
+	"POST /api/v1/arbitration-tasks/{id}/submit":                true,
+	"POST /api/v1/exams/{examId}/confirm-grades":                true,
+	"POST /api/v1/exams/{examId}/publish":                       true,
+	"POST /api/v1/exams/{examId}/reports/export":                true,
 }
 
 type Options struct {
@@ -68,7 +83,7 @@ func Middleware(store Store, options Options) func(http.Handler) http.Handler {
 		options.MaxResponseBytes = 2 * 1024 * 1024
 	}
 	if options.ProcessingTimeout <= 0 {
-		options.ProcessingTimeout = 2 * time.Minute
+		options.ProcessingTimeout = commandreceipt.TransportProcessingTimeout
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

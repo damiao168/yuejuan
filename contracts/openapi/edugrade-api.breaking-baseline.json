@@ -1,6 +1,80 @@
 {
   "openapi": "3.1.0",
   "operations": {
+    "GET /api/v1/capture/uploads/{id}": {
+      "operationId": "recoverCaptureUpload",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/CaptureUploadRecoveryResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/capture-batches/commands/{commandId}": {
+      "operationId": "recoverCaptureBatchCommand",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "commandId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/CaptureBatchCommandResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/capture-batches": {
+      "operationId": "createCaptureBatch",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CaptureBatchCreateRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/CaptureBatchResponse"
+      }
+    },
     "GET /api/v1/exams": {
       "operationId": "listExams",
       "parameters": [
@@ -41,6 +115,24 @@
       "requestBody": null,
       "response": {
         "$ref": "#/components/schemas/ExamPage"
+      }
+    },
+    "POST /api/v1/exams/{examId}/candidates/refresh": {
+      "operationId": "refreshExamCandidates",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/CandidateRefreshResponse"
       }
     },
     "GET /api/v1/exams/{examId}/workspace": {
@@ -143,6 +235,751 @@
       "requestBody": null,
       "response": {
         "$ref": "#/components/schemas/ReviewTaskPage"
+      }
+    },
+    "GET /api/v1/review-tasks/{taskId}/context": {
+      "operationId": "getReviewTaskContext",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "taskId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ReviewTaskContextResponse"
+      }
+    },
+    "GET /api/v1/review-tasks/{taskId}/annotations": {
+      "operationId": "listReviewAnnotations",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "taskId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ReviewAnnotationListResponse"
+      }
+    },
+    "POST /api/v1/review-tasks/{taskId}/annotations": {
+      "operationId": "createReviewAnnotation",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "taskId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateReviewAnnotationRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ReviewAnnotationResponse"
+      }
+    },
+    "GET /api/v1/review/annotations/{annotationId}": {
+      "operationId": "getReviewAnnotation",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "annotationId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ReviewAnnotationResponse"
+      }
+    },
+    "PUT /api/v1/review/annotations/{annotationId}": {
+      "operationId": "updateReviewAnnotation",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "annotationId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/UpdateReviewAnnotationRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ReviewAnnotationResponse"
+      }
+    },
+    "DELETE /api/v1/review/annotations/{annotationId}": {
+      "operationId": "deleteReviewAnnotation",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "annotationId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/DeleteRevisionRequest"
+        }
+      },
+      "response": null
+    },
+    "GET /api/v1/review/comment-templates": {
+      "operationId": "listReviewCommentTemplates",
+      "parameters": [],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ReviewCommentTemplateListResponse"
+      }
+    },
+    "POST /api/v1/review/comment-templates": {
+      "operationId": "createReviewCommentTemplate",
+      "parameters": [],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateReviewCommentTemplateRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ReviewCommentTemplateResponse"
+      }
+    },
+    "GET /api/v1/review/comment-templates/{templateId}": {
+      "operationId": "getReviewCommentTemplate",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "templateId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ReviewCommentTemplateResponse"
+      }
+    },
+    "PUT /api/v1/review/comment-templates/{templateId}": {
+      "operationId": "updateReviewCommentTemplate",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "templateId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/UpdateReviewCommentTemplateRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ReviewCommentTemplateResponse"
+      }
+    },
+    "DELETE /api/v1/review/comment-templates/{templateId}": {
+      "operationId": "deleteReviewCommentTemplate",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "templateId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/DeleteRevisionRequest"
+        }
+      },
+      "response": null
+    },
+    "POST /api/v1/review/comment-templates/{shortcut}/use": {
+      "operationId": "useReviewCommentTemplate",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "shortcut",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ReviewCommentTemplateResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/questions/{questionId}/gold-papers": {
+      "operationId": "nominateGoldPaper",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/NominateGoldPaperRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/GoldPaperResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/questions/{questionId}/gold-coverage": {
+      "operationId": "getGoldCoverage",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GoldCoverageResponse"
+      }
+    },
+    "GET /api/v1/gold-papers": {
+      "operationId": "listGoldPapers",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "exam_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "question_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "status",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/GoldPaperStatus"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GoldPaperListResponse"
+      }
+    },
+    "GET /api/v1/gold-papers/{goldPaperId}": {
+      "operationId": "getGoldPaper",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "goldPaperId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GoldPaperResponse"
+      }
+    },
+    "POST /api/v1/gold-papers/{goldPaperId}/versions": {
+      "operationId": "createGoldPaperVersion",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "goldPaperId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateGoldPaperVersionRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/GoldPaperResponse"
+      }
+    },
+    "POST /api/v1/gold-papers/{goldPaperId}/versions/{version}/approve": {
+      "operationId": "approveGoldPaperVersion",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "goldPaperId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "version",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GoldPaperResponse"
+      }
+    },
+    "POST /api/v1/gold-papers/{goldPaperId}/retire": {
+      "operationId": "retireGoldPaper",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "goldPaperId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/RetireGoldPaperRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/GoldPaperResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/questions/{questionId}/calibration-policy": {
+      "operationId": "getCalibrationPolicy",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/CalibrationPolicyResponse"
+      }
+    },
+    "PUT /api/v1/exams/{examId}/questions/{questionId}/calibration-policy": {
+      "operationId": "putCalibrationPolicy",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/PutCalibrationPolicyRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/CalibrationPolicyResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/questions/{questionId}/calibration-sessions": {
+      "operationId": "createCalibrationSession",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateCalibrationSessionRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/CalibrationSessionResponse"
+      }
+    },
+    "GET /api/v1/calibration-sessions/{calibrationSessionId}": {
+      "operationId": "getCalibrationSession",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "calibrationSessionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/CalibrationSessionResponse"
+      }
+    },
+    "POST /api/v1/calibration-sessions/{calibrationSessionId}/attempts": {
+      "operationId": "submitCalibrationAttempt",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "calibrationSessionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/SubmitCalibrationAttemptRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/SubmitCalibrationAttemptResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/questions/{questionId}/grader-qualification": {
+      "operationId": "getGraderQualification",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "grader_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GraderQualificationResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/questions/{questionId}/answer-groups/build": {
+      "operationId": "buildAnswerGroups",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/BuildAnswerGroupsRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/BuildAnswerGroupsResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/questions/{questionId}/answer-groups": {
+      "operationId": "listAnswerGroups",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/AnswerGroupListResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/questions/{questionId}/answer-group-metrics": {
+      "operationId": "getAnswerGroupMetrics",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/AnswerGroupMetricsResponse"
+      }
+    },
+    "GET /api/v1/answer-groups/{groupId}": {
+      "operationId": "getAnswerGroup",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "groupId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/AnswerGroupResponse"
+      }
+    },
+    "PUT /api/v1/answer-groups/{groupId}/samples/{segmentId}": {
+      "operationId": "reviewAnswerGroupSample",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "groupId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "segmentId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ReviewAnswerGroupSampleRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/AnswerGroupMutationResponse"
+      }
+    },
+    "PUT /api/v1/answer-groups/{groupId}/decision": {
+      "operationId": "putAnswerGroupDecision",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "groupId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/PutAnswerGroupDecisionRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/AnswerGroupMutationResponse"
+      }
+    },
+    "POST /api/v1/answer-groups/{groupId}/confirm": {
+      "operationId": "confirmAnswerGroup",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "groupId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ConfirmAnswerGroupRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ConfirmAnswerGroupResponse"
+      }
+    },
+    "POST /api/v1/answer-groups/{groupId}/rollback": {
+      "operationId": "rollbackAnswerGroup",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "groupId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/RollbackAnswerGroupRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/RollbackAnswerGroupResponse"
       }
     },
     "GET /api/v1/appeals": {
@@ -328,9 +1165,3026 @@
       "response": {
         "$ref": "#/components/schemas/ExamQuestionAssessmentSnapshotResponse"
       }
+    },
+    "GET /api/v1/exams/{examId}/quality-dashboard": {
+      "operationId": "getExamQualityDashboard",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/QualityDashboardResponse"
+      }
+    },
+    "GET /api/v1/ai-eligibility/policy": {
+      "operationId": "getAIEligibilityPolicy",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "subject_code",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "education_stage",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "archetype_code",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "risk_tier",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/AIEligibilityPolicyResponse"
+      }
+    },
+    "PUT /api/v1/ai-eligibility/policy": {
+      "operationId": "putAIEligibilityPolicy",
+      "parameters": [],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/PutAIEligibilityPolicyRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/AIEligibilityPolicyResponse"
+      }
+    },
+    "GET /api/v1/ai-eligibility/decisions/{runItemId}": {
+      "operationId": "getAIEligibilityDecision",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "runItemId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/AIEligibilityDecisionResponse"
+      }
+    },
+    "GET /api/v1/grading-evaluations": {
+      "operationId": "listGradingEvaluations",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GradingEvaluationRunListResponse"
+      }
+    },
+    "POST /api/v1/grading-evaluations": {
+      "operationId": "createGradingEvaluation",
+      "parameters": [],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateGradingEvaluationRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/GradingEvaluationRunResponse"
+      }
+    },
+    "GET /api/v1/grading-evaluations/{runId}": {
+      "operationId": "getGradingEvaluation",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "runId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GradingEvaluationRunResponse"
+      }
+    },
+    "POST /api/v1/grading-evaluations/{runId}/observations": {
+      "operationId": "addGradingEvaluationObservation",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "runId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/AddGradingEvaluationObservationRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/GradingEvaluationObservationResponse"
+      }
+    },
+    "POST /api/v1/grading-evaluations/{runId}/complete": {
+      "operationId": "completeGradingEvaluation",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "runId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GradingEvaluationRunResponse"
+      }
+    },
+    "POST /api/v1/grading-evaluations/{runId}/invalidate": {
+      "operationId": "invalidateGradingEvaluation",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "runId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/InvalidationReasonRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/GradingEvaluationRunResponse"
+      }
+    },
+    "GET /api/v1/grading-evaluations/{runId}/slice-metrics": {
+      "operationId": "listGradingEvaluationSliceMetrics",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "runId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GradingEvaluationSliceMetricsResponse"
+      }
+    },
+    "GET /api/v1/grading-evaluations/{runId}/response-difficulty": {
+      "operationId": "listGradingEvaluationResponseDifficulty",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "runId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GradingEvaluationResponseDifficultyResponse"
+      }
+    },
+    "GET /api/v1/grading-evaluations/{runId}/quality-summary": {
+      "operationId": "getGradingEvaluationQualitySummary",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "runId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GradingEvaluationQualitySummaryResponse"
+      }
+    },
+    "GET /api/v1/model-calibrations": {
+      "operationId": "listModelCalibrations",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "model_reference",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "prompt_version",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "rubric_version",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "subject",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "archetype",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "slice_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ModelCalibrationListResponse"
+      }
+    },
+    "POST /api/v1/model-calibrations": {
+      "operationId": "createModelCalibration",
+      "parameters": [],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateModelCalibrationRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ModelCalibrationResponse"
+      }
+    },
+    "GET /api/v1/model-calibrations/{calibrationId}": {
+      "operationId": "getModelCalibration",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "calibrationId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ModelCalibrationResponse"
+      }
+    },
+    "GET /api/v1/model-calibrations/{calibrationId}/evidence": {
+      "operationId": "listModelCalibrationEvidence",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "calibrationId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ModelCalibrationEvidenceListResponse"
+      }
+    },
+    "POST /api/v1/model-calibrations/{calibrationId}/evidence": {
+      "operationId": "addModelCalibrationEvidence",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "calibrationId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/AddModelCalibrationEvidenceRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ModelCalibrationEvidenceResponse"
+      }
+    },
+    "POST /api/v1/model-calibrations/{calibrationId}/complete": {
+      "operationId": "completeModelCalibration",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "calibrationId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ModelCalibrationResponse"
+      }
+    },
+    "POST /api/v1/model-calibrations/{calibrationId}/approve": {
+      "operationId": "approveModelCalibration",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "calibrationId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ModelCalibrationResponse"
+      }
+    },
+    "POST /api/v1/model-calibrations/{calibrationId}/invalidate": {
+      "operationId": "invalidateModelCalibration",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "calibrationId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/InvalidationReasonRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ModelCalibrationResponse"
+      }
+    },
+    "POST /api/v1/model-score-candidates": {
+      "operationId": "recordModelScoreCandidate",
+      "parameters": [],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/RecordModelScoreCandidateRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ModelScoreCandidateResponse"
+      }
+    },
+    "GET /api/v1/ai-human-disagreements": {
+      "operationId": "listAIHumanDisagreements",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "exam_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "question_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "status",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/AIHumanDisagreementStatus"
+          }
+        },
+        {
+          "in": "query",
+          "name": "severity",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/AIHumanDisagreementSeverity"
+          }
+        },
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/AIHumanDisagreementListResponse"
+      }
+    },
+    "GET /api/v1/ai-human-disagreements/dataset": {
+      "operationId": "getAIHumanDisagreementDataset",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "exam_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "question_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "status",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/AIHumanDisagreementStatus"
+          }
+        },
+        {
+          "in": "query",
+          "name": "severity",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/AIHumanDisagreementSeverity"
+          }
+        },
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/AIHumanDisagreementDatasetResponse"
+      }
+    },
+    "GET /api/v1/ai-human-disagreements/{id}": {
+      "operationId": "getAIHumanDisagreement",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/AIHumanDisagreementResponse"
+      }
+    },
+    "PUT /api/v1/ai-human-disagreements/{id}/classification": {
+      "operationId": "classifyAIHumanDisagreement",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ClassifyAIHumanDisagreementRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/AIHumanDisagreementResponse"
+      }
+    },
+    "POST /api/v1/ai-human-disagreements/{id}/route": {
+      "operationId": "routeAIHumanDisagreement",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/RouteAIHumanDisagreementRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/AIHumanDisagreementResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/score-releases": {
+      "operationId": "listScoreReleases",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ScoreReleaseListResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/score-releases": {
+      "operationId": "createScoreRelease",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateScoreReleaseRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ScoreReleaseResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/release-gate": {
+      "operationId": "getScoreReleaseGate",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ScoreReleaseGateResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/score-releases/current-published": {
+      "operationId": "getCurrentPublishedScoreRelease",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ScoreReleaseDetail"
+      }
+    },
+    "GET /api/v1/score-releases/{id}": {
+      "operationId": "getScoreRelease",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ScoreReleaseDetail"
+      }
+    },
+    "GET /api/v1/score-releases/{id}/diff": {
+      "operationId": "getScoreReleaseDiff",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "base",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ScoreReleaseDiffResponse"
+      }
+    },
+    "POST /api/v1/score-releases/{id}/publish": {
+      "operationId": "publishScoreRelease",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ScoreReleaseResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/score-releases/rollback": {
+      "operationId": "createScoreReleaseRollback",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateScoreReleaseRollbackRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ScoreReleaseResponse"
+      }
+    },
+    "GET /api/v1/student/exams": {
+      "operationId": "listStudentPublishedExams",
+      "parameters": [],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/StudentPublishedExamListResponse"
+      }
+    },
+    "GET /api/v1/student/exams/{examId}/result": {
+      "operationId": "getStudentPublishedResult",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/StudentPublishedResultResponse"
+      }
+    },
+    "GET /api/v1/student/exams/{examId}/questions/{questionId}": {
+      "operationId": "getStudentPublishedQuestion",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/StudentPublishedQuestionResponse"
+      }
+    },
+    "GET /api/v1/student/exams/{examId}/questions/{questionId}/annotations": {
+      "operationId": "listStudentQuestionReviewAnnotations",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/StudentQuestionReviewAnnotationListResponse"
+      }
+    },
+    "GET /api/v1/student/exams/{examId}/questions/{questionId}/answer-image": {
+      "operationId": "getStudentPublishedQuestionAnswerImage",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": null
+    },
+    "POST /api/v1/exams/{examId}/questions/{questionId}/regrade-preview": {
+      "operationId": "previewRegrade",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateRegradePreviewRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/RegradePreviewResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/questions/{questionId}/regrade-jobs": {
+      "operationId": "createRegradeJob",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateRegradeJobRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/RegradeSummaryResponse"
+      }
+    },
+    "GET /api/v1/regrade-jobs": {
+      "operationId": "listRegradeJobs",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "exam_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "question_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/RegradeJobListResponse"
+      }
+    },
+    "GET /api/v1/regrade-jobs/{jobId}": {
+      "operationId": "getRegradeJob",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "jobId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/RegradeSummaryResponse"
+      }
+    },
+    "POST /api/v1/regrade-jobs/{jobId}/approve": {
+      "operationId": "approveRegradeJob",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "jobId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/RegradeJobResponse"
+      }
+    },
+    "POST /api/v1/regrade-jobs/{jobId}/start": {
+      "operationId": "startRegradeJob",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "jobId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/RegradeJobResponse"
+      }
+    },
+    "POST /api/v1/regrade-jobs/{jobId}/pause": {
+      "operationId": "pauseRegradeJob",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "jobId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/RegradeJobResponse"
+      }
+    },
+    "POST /api/v1/regrade-jobs/{jobId}/resume": {
+      "operationId": "resumeRegradeJob",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "jobId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/RegradeJobResponse"
+      }
+    },
+    "POST /api/v1/regrade-jobs/{jobId}/finalize": {
+      "operationId": "finalizeRegradeJob",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "jobId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/RegradeJobResponse"
+      }
+    },
+    "POST /api/v1/regrade-jobs/{jobId}/score-release": {
+      "operationId": "createRegradeScoreRelease",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "jobId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateRegradeScoreReleaseRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ScoreReleaseResponse"
+      }
+    },
+    "GET /api/v1/regrade-items/mine": {
+      "operationId": "listMyRegradeItems",
+      "parameters": [],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/RegradeWorkItemListResponse"
+      }
+    },
+    "POST /api/v1/regrade-items/{itemId}/claim": {
+      "operationId": "claimRegradeItem",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/RegradeWorkItemResponse"
+      }
+    },
+    "GET /api/v1/regrade-items/{itemId}/context": {
+      "operationId": "getRegradeItemContext",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/RegradeGraderContextResponse"
+      }
+    },
+    "GET /api/v1/regrade-items/{itemId}/segment-image": {
+      "operationId": "downloadRegradeItemSegmentImage",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": null
+    },
+    "POST /api/v1/regrade-items/{itemId}/candidate": {
+      "operationId": "recordRegradeCandidate",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/RecordRegradeCandidateRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/RegradeWorkItemResponse"
+      }
+    },
+    "POST /api/v1/regrade-items/{itemId}/review": {
+      "operationId": "reviewRegradeItem",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ReviewRegradeItemRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/RegradeItemResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/release-gate/policies": {
+      "operationId": "createReleaseGatePolicy",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateReleaseGatePolicyRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ReleaseGatePolicyResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/release-gate/preview": {
+      "operationId": "previewReleaseGate",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/PreviewReleaseGateRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ReleaseGateEvidenceResponse"
+      }
+    },
+    "GET /api/v1/release-gate-evidence/{evidenceId}": {
+      "operationId": "getReleaseGateEvidence",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "evidenceId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ReleaseGateEvidenceResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/release-gate/waivers": {
+      "operationId": "requestReleaseGateWaiver",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/RequestReleaseGateWaiverRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ReleaseGateWaiverResponse"
+      }
+    },
+    "POST /api/v1/release-gate-waivers/{waiverId}/decision": {
+      "operationId": "decideReleaseGateWaiver",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "waiverId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/DecideReleaseGateWaiverRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ReleaseGateWaiverResponse"
+      }
+    },
+    "POST /api/v1/student/exams/{examId}/question-appeals": {
+      "operationId": "createStudentQuestionAppeal",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreatePublishedQuestionAppealRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/StudentPublishedQuestionAppealResponse"
+      }
+    },
+    "GET /api/v1/student/question-appeals": {
+      "operationId": "listStudentQuestionAppeals",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "exam_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "status",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/StudentPublishedQuestionAppealListResponse"
+      }
+    },
+    "GET /api/v1/question-appeals": {
+      "operationId": "listQuestionAppeals",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "exam_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "status",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/PublishedQuestionAppealListResponse"
+      }
+    },
+    "GET /api/v1/question-appeals/{id}": {
+      "operationId": "getQuestionAppeal",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/PublishedQuestionAppealResponse"
+      }
+    },
+    "GET /api/v1/question-appeals/{id}/context": {
+      "operationId": "getQuestionAppealContext",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/PublishedQuestionAppealContextResponse"
+      }
+    },
+    "GET /api/v1/question-appeals/{id}/answer-image": {
+      "operationId": "getQuestionAppealAnswerImage",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": null
+    },
+    "POST /api/v1/question-appeals/{id}/start-review": {
+      "operationId": "startQuestionAppealReview",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/StartQuestionAppealReviewRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/PublishedQuestionAppealResponse"
+      }
+    },
+    "POST /api/v1/question-appeals/{id}/decide": {
+      "operationId": "decideQuestionAppeal",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/DecideQuestionAppealRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/PublishedQuestionAppealResponse"
+      }
+    },
+    "POST /api/v1/question-appeals/{id}/resolve": {
+      "operationId": "resolveQuestionAppeal",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ResolveQuestionAppealRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/PublishedQuestionAppealResponse"
+      }
+    },
+    "GET /api/v1/question-appeals/{id}/events": {
+      "operationId": "listQuestionAppealEvents",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/PublishedQuestionAppealEventsResponse"
+      }
+    },
+    "POST /api/v1/capture/uploads:init": {
+      "operationId": "initCaptureUpload",
+      "parameters": [],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CaptureUploadInitRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/CaptureUploadInitResponse"
+      }
+    },
+    "PUT /api/v1/capture/uploads/{id}/chunks": {
+      "operationId": "putCaptureUploadChunk",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Upload-Offset",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "in": "header",
+          "name": "X-Chunk-SHA256",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "binary"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/CaptureUploadChunkResponse"
+      }
+    },
+    "POST /api/v1/capture/uploads/{id}/complete": {
+      "operationId": "completeCaptureUpload",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CaptureUploadCompleteRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/CaptureUploadSession"
+      }
+    },
+    "GET /api/v1/exams/{examId}/processing/summary": {
+      "operationId": "getExamProcessingSummary",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ProcessingSummaryResponse"
+      }
+    },
+    "GET /api/v1/processing/exceptions": {
+      "operationId": "listProcessingExceptions",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "exam_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "severity",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/ProcessingExceptionSeverity"
+          }
+        },
+        {
+          "in": "query",
+          "name": "stage",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/ProcessingStage"
+          }
+        },
+        {
+          "in": "query",
+          "name": "subject",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "status",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/ProcessingExceptionStatus"
+          }
+        },
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "in": "query",
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ProcessingExceptionListResponse"
+      }
+    },
+    "POST /api/v1/processing/exceptions/{id}/retry": {
+      "operationId": "retryProcessingException",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ProcessingRetryResponse"
+      }
+    },
+    "POST /api/v1/processing/exceptions/{id}/assign": {
+      "operationId": "assignProcessingException",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/AssignProcessingExceptionRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ProcessingExceptionResponse"
+      }
+    },
+    "POST /api/v1/processing/exceptions/{id}/resolve": {
+      "operationId": "resolveProcessingException",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ResolveProcessingExceptionRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ProcessingExceptionResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/questions/{questionId}/backmark-preview": {
+      "operationId": "previewBackmarkBatch",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/BackmarkPreviewRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/BackmarkPreviewResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/questions/{questionId}/backmark-batches": {
+      "operationId": "createBackmarkBatch",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateBackmarkBatchRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/BackmarkSummaryResponse"
+      }
+    },
+    "GET /api/v1/backmark-batches": {
+      "operationId": "listBackmarkBatches",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "exam_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "question_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/BackmarkBatchListResponse"
+      }
+    },
+    "GET /api/v1/backmark-batches/{batchId}": {
+      "operationId": "getBackmarkBatch",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "batchId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/BackmarkSummaryResponse"
+      }
+    },
+    "POST /api/v1/backmark-batches/{batchId}/regrade-preview": {
+      "operationId": "previewBackmarkBatchRegrade",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "batchId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/BackmarkRegradeInput"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/RegradePreviewResponse"
+      }
+    },
+    "POST /api/v1/backmark-batches/{batchId}/regrade-jobs": {
+      "operationId": "createBackmarkBatchRegradeJob",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "batchId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/BackmarkRegradeInput"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/RegradeSummaryResponse"
+      }
+    },
+    "GET /api/v1/backmark-items/mine": {
+      "operationId": "listMyBackmarkItems",
+      "parameters": [],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/BackmarkGraderItemListResponse"
+      }
+    },
+    "POST /api/v1/backmark-items/{itemId}/claim": {
+      "operationId": "claimBackmarkItem",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/BackmarkGraderItemResponse"
+      }
+    },
+    "GET /api/v1/backmark-items/{itemId}/context": {
+      "operationId": "getBackmarkItemContext",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/BackmarkGraderContextResponse"
+      }
+    },
+    "GET /api/v1/backmark-items/{itemId}/segment-image": {
+      "operationId": "getBackmarkItemSegmentImage",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": null
+    },
+    "POST /api/v1/backmark-items/{itemId}/submit": {
+      "operationId": "submitBackmarkItem",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/SubmitBackmarkItemRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/SubmitBackmarkItemResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/questions/{questionId}/grader-quality-windows": {
+      "operationId": "listGraderQualityWindows",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "grader_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GraderQualityWindowListResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/questions/{questionId}/grader-drift/recompute": {
+      "operationId": "recomputeGraderDrift",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "path",
+          "name": "questionId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/RecomputeGraderDriftRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/RecomputeGraderDriftResponse"
+      }
+    },
+    "GET /api/v1/grading-quality-incidents": {
+      "operationId": "listGradingQualityIncidents",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "exam_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "question_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "grader_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "status",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "open",
+              "acknowledged",
+              "resolved"
+            ]
+          }
+        },
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GradingQualityIncidentListResponse"
+      }
+    },
+    "POST /api/v1/grading-quality-incidents/{id}/resolve": {
+      "operationId": "resolveGradingQualityIncident",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/GradingQualityIncidentResponse"
+      }
+    },
+    "GET /api/v1/math-answer-segments/{segmentId}/understanding": {
+      "operationId": "getMathUnderstanding",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "segmentId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/MathUnderstandingResponse"
+      }
+    },
+    "GET /api/v1/math-understanding/{artifactId}/corrections": {
+      "operationId": "listMathUnderstandingCorrections",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "artifactId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/MathCorrectionListResponse"
+      }
+    },
+    "POST /api/v1/math-understanding/{artifactId}/corrections": {
+      "operationId": "createMathUnderstandingCorrection",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "artifactId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateMathCorrectionRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/MathCorrectionResponse"
+      }
+    },
+    "GET /api/v1/math-understanding/training-export": {
+      "operationId": "exportMathUnderstandingCorrections",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "subject",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "mathematics",
+              "physics",
+              "chemistry"
+            ]
+          }
+        },
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/MathTrainingExportResponse"
+      }
+    },
+    "GET /api/v1/math-pilot-gates": {
+      "operationId": "listMathPilotGates",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "subject",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "mathematics",
+              "physics",
+              "chemistry"
+            ]
+          }
+        },
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/MathPilotGateListResponse"
+      }
+    },
+    "POST /api/v1/math-pilot-gates/evaluate": {
+      "operationId": "evaluateMathPilotGate",
+      "parameters": [],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/EvaluateMathPilotGateRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/MathPilotGateResponse"
+      }
+    },
+    "POST /api/v1/exam-sessions": {
+      "operationId": "createExamSession",
+      "parameters": [
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreateExamSessionRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ExamSessionResponse"
+      }
+    },
+    "GET /api/v1/exam-sessions/commands/{commandId}": {
+      "operationId": "recoverExamSessionCommand",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "commandId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ExamSessionCommandResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/paper-imports": {
+      "operationId": "listPaperImports",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/PaperImportListResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/paper-imports": {
+      "operationId": "createPaperImport",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CreatePaperImportRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/PaperImportResponse"
+      }
+    },
+    "GET /api/v1/paper-imports/{id}": {
+      "operationId": "getPaperImport",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/PaperImportResponse"
+      }
+    },
+    "POST /api/v1/paper-imports/{id}/sources": {
+      "operationId": "addPaperImportSources",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/AddPaperImportSourcesRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/PaperImportResponse"
+      }
+    },
+    "PUT /api/v1/paper-imports/{id}/sources": {
+      "operationId": "replacePaperImportSources",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ReplacePaperImportSourcesRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/PaperImportResponse"
+      }
+    },
+    "PUT /api/v1/paper-imports/{id}/review": {
+      "operationId": "savePaperImportReview",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ReviewPaperImportRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/PaperImportResponse"
+      }
+    },
+    "POST /api/v1/paper-imports/{id}/apply": {
+      "operationId": "applyPaperImport",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/PaperImportResponse"
+      }
+    },
+    "POST /api/v1/paper-imports/{id}/cancel": {
+      "operationId": "cancelPaperImport",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "expected_generation",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/PaperImportResponse"
+      }
+    },
+    "POST /api/v1/exams/{examId}/scoring-runs": {
+      "operationId": "startScoringRun",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/StartScoringRunRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ScoringRunResponse"
+      }
+    },
+    "GET /api/v1/exams/{examId}/scoring-runs/commands/{commandId}": {
+      "operationId": "recoverScoringCommand",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "commandId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/ScoringCommandRecovery"
+      }
+    },
+    "POST /api/v1/subjective-grading-batches": {
+      "operationId": "createSubjectiveGradingBatch",
+      "parameters": [
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/SubjectiveBatchCreateRequest"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/SubjectiveBatchResponse"
+      }
+    },
+    "GET /api/v1/subjective-grading-batch-commands/{commandId}": {
+      "operationId": "recoverSubjectiveBatchCommand",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "commandId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/SubjectiveBatchCommandRecovery"
+      }
+    },
+    "GET /api/v1/subjective-grading-batches/{batchId}": {
+      "operationId": "getSubjectiveGradingBatch",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "batchId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/SubjectiveBatchResponse"
+      }
+    },
+    "GET /api/v1/subjective-grading-batches/{batchId}/enqueue-command": {
+      "operationId": "recoverSubjectiveEnqueueCommand",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "batchId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/SubjectiveEnqueueCommandRecovery"
+      }
+    },
+    "POST /api/v1/review-tasks/{id}/submit": {
+      "operationId": "submitHumanGrade",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ReviewCommandSubmitGradeInput"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ReviewCommandSubmitResult"
+      }
+    },
+    "POST /api/v1/arbitration-tasks/{id}/submit": {
+      "operationId": "submitArbitration",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ReviewCommandSubmitArbitrationInput"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ReviewCommandArbitrationSubmitResult"
+      }
+    },
+    "POST /api/v1/exams/{examId}/confirm-grades": {
+      "operationId": "confirmExamGrades",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ScoreCommandConfirmInput"
+        }
+      },
+      "response": {
+        "type": "object",
+        "required": [
+          "grades"
+        ],
+        "properties": {}
+      }
+    },
+    "POST /api/v1/exams/{examId}/publish": {
+      "operationId": "publishExamGrades",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ScoreCommandPublishInput"
+        }
+      },
+      "response": {
+        "$ref": "#/components/schemas/ScoreCommandPublishResult"
+      }
+    },
+    "GET /api/v1/review-commands/{commandId}": {
+      "operationId": "recoverReviewCommand",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "commandId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/BusinessCommandReceipt"
+      }
+    },
+    "GET /api/v1/score-commands/{commandId}": {
+      "operationId": "recoverScoreCommand",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "commandId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/BusinessCommandReceipt"
+      }
+    },
+    "GET /api/v1/report-commands/{commandId}": {
+      "operationId": "recoverReportCommand",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "commandId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/BusinessCommandReceipt"
+      }
+    },
+    "POST /api/v1/exams/{examId}/reports/export": {
+      "operationId": "exportLearningReport",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "examId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "header",
+          "name": "Idempotency-Key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": null
     }
   },
   "schemas": {
+    "CaptureUploadRecoveryResponse": {
+      "type": "object",
+      "required": [
+        "command_id",
+        "status",
+        "upload"
+      ],
+      "properties": {}
+    },
+    "CaptureBatchCommandResponse": {
+      "type": "object",
+      "required": [
+        "command"
+      ],
+      "properties": {}
+    },
+    "CaptureBatchResponse": {
+      "type": "object",
+      "required": [
+        "batch"
+      ],
+      "properties": {}
+    },
+    "CaptureBatchCreateRequest": {
+      "type": "object",
+      "required": [
+        "name",
+        "source_type",
+        "idempotency_key"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CaptureBatch": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "name",
+        "source_type",
+        "status",
+        "revision",
+        "operator_id",
+        "created_at"
+      ],
+      "properties": {}
+    },
+    "MathUnderstandingArtifact": {
+      "type": "object",
+      "required": [
+        "id",
+        "subject_code",
+        "answer_segment_id",
+        "exam_question_snapshot_id",
+        "version",
+        "engine_version",
+        "blocks",
+        "formulas",
+        "solution_graph",
+        "verifications",
+        "rubric_evidence",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": true
+    },
+    "MathCorrectionOperation": {
+      "type": "object",
+      "required": [
+        "type",
+        "target_id",
+        "payload"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "move_step",
+            "connect_edge",
+            "delete_edge",
+            "restore_block",
+            "correct_formula",
+            "merge_blocks",
+            "split_step"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "CreateMathCorrectionRequest": {
+      "type": "object",
+      "required": [
+        "expected_artifact_version",
+        "operations",
+        "corrected_contract",
+        "reason"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "MathCorrection": {
+      "type": "object",
+      "required": [
+        "id",
+        "artifact_id",
+        "answer_segment_id",
+        "revision",
+        "operations",
+        "corrected_contract",
+        "reason",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": true
+    },
+    "MathUnderstandingResponse": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "corrections"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "MathCorrectionListResponse": {
+      "type": "object",
+      "required": [
+        "corrections"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "MathCorrectionResponse": {
+      "type": "object",
+      "required": [
+        "correction"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "MathTrainingExportResponse": {
+      "type": "object",
+      "required": [
+        "samples"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "MathPilotMetrics": {
+      "type": "object",
+      "required": [
+        "formula_exact_rate",
+        "ast_exact_rate",
+        "spatial_relation_f1",
+        "solution_graph_edge_f1",
+        "equivalence_precision",
+        "rubric_evidence_precision",
+        "unsafe_suggestion_rate",
+        "risky_case_recall",
+        "sample_count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "MathPilotPolicy": {
+      "type": "object",
+      "required": [
+        "minimum_samples",
+        "minimum_formula_exact",
+        "minimum_ast_exact",
+        "minimum_spatial_f1",
+        "minimum_graph_f1",
+        "minimum_equivalence_precision",
+        "minimum_rubric_precision",
+        "maximum_unsafe_suggestion_rate",
+        "minimum_risky_case_recall"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "MathPilotGateDecision": {
+      "type": "object",
+      "required": [
+        "passed",
+        "blockers",
+        "scope"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "MathPilotGateEvaluation": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "subject_code",
+        "benchmark_ref",
+        "metrics",
+        "policy",
+        "decision",
+        "evaluated_by",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "EvaluateMathPilotGateRequest": {
+      "type": "object",
+      "required": [
+        "subject_code",
+        "benchmark_ref",
+        "metrics",
+        "policy"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "MathPilotGateResponse": {
+      "type": "object",
+      "required": [
+        "evaluation"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "MathPilotGateListResponse": {
+      "type": "object",
+      "required": [
+        "evaluations"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
     "ErrorResponse": {
       "type": "object",
       "required": [
@@ -448,6 +4302,25 @@
       "properties": {},
       "additionalProperties": false
     },
+    "CandidateRefreshResult": {
+      "type": "object",
+      "required": [
+        "before_count",
+        "after_count",
+        "added_count",
+        "removed_count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CandidateRefreshResponse": {
+      "type": "object",
+      "required": [
+        "candidate_refresh"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
     "ExamPage": {
       "allOf": [
         {
@@ -512,6 +4385,345 @@
           "properties": {}
         }
       ]
+    },
+    "ReviewQuestion": {
+      "type": "object",
+      "required": [
+        "id",
+        "exam_id",
+        "question_no",
+        "question_type",
+        "score"
+      ],
+      "properties": {},
+      "additionalProperties": true
+    },
+    "FrozenReviewRubric": {
+      "type": "object",
+      "required": [
+        "id",
+        "question_id",
+        "version",
+        "status",
+        "max_score",
+        "points"
+      ],
+      "properties": {},
+      "additionalProperties": true
+    },
+    "ReviewAnswerArtifact": {
+      "type": "object",
+      "required": [
+        "answer_segment_id",
+        "status",
+        "segment_image_url"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewAnswerCandidate": {
+      "type": "object",
+      "required": [
+        "id",
+        "answer_segment_id",
+        "source",
+        "payload",
+        "display_text",
+        "decision",
+        "evidence",
+        "engine_version",
+        "profile_version",
+        "is_current",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoringEvidence": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "submission_id",
+        "question_id",
+        "exam_question_snapshot_id",
+        "evidence_type",
+        "source_artifact_id",
+        "payload",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewAISecondOpinion": {
+      "type": "object",
+      "required": [
+        "available",
+        "presentation",
+        "score_prefill_allowed",
+        "metadata"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewTaskClaim": {
+      "type": "object",
+      "required": [
+        "state",
+        "can_renew"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewDraft": {
+      "type": "object",
+      "required": [
+        "id",
+        "review_task_id",
+        "reviewer_id",
+        "rubric_selections",
+        "comments",
+        "private_note",
+        "student_feedback",
+        "viewer_state",
+        "revision",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewSubjectToolHints": {
+      "type": "object",
+      "required": [
+        "subject_code",
+        "archetype_code",
+        "allowed_evidence_types",
+        "parser_policy",
+        "evidence_policy",
+        "response_schema"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewAutomationResult": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewTaskContext": {
+      "type": "object",
+      "required": [
+        "task",
+        "expected_revision",
+        "question_snapshot",
+        "question",
+        "answer_artifact",
+        "frozen_rubric",
+        "ai_candidates",
+        "scoring_evidence",
+        "claim",
+        "draft",
+        "subject_tool_hints"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewTaskContextResponse": {
+      "type": "object",
+      "required": [
+        "context"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewAnnotationVisibility": {
+      "type": "string",
+      "enum": [
+        "private",
+        "student_after_publish"
+      ]
+    },
+    "ReviewAnnotationType": {
+      "type": "string",
+      "enum": [
+        "note",
+        "highlight",
+        "rectangle",
+        "freehand"
+      ]
+    },
+    "CanonicalImageGeometry": {
+      "type": "object",
+      "required": [
+        "coordinate_space",
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewAnnotation": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "review_task_id",
+        "answer_segment_id",
+        "submission_page_id",
+        "type",
+        "geometry",
+        "payload",
+        "content",
+        "visibility",
+        "revision",
+        "created_by",
+        "updated_by",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/components/schemas/ReviewAnnotationType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StudentReviewAnnotation": {
+      "type": "object",
+      "required": [
+        "id",
+        "answer_segment_id",
+        "submission_page_id",
+        "type",
+        "geometry",
+        "content",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/components/schemas/ReviewAnnotationType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StudentQuestionReviewAnnotationListResponse": {
+      "type": "object",
+      "required": [
+        "annotations"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateReviewAnnotationRequest": {
+      "type": "object",
+      "required": [
+        "type",
+        "geometry",
+        "content"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/components/schemas/ReviewAnnotationType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UpdateReviewAnnotationRequest": {
+      "type": "object",
+      "required": [
+        "type",
+        "geometry",
+        "content",
+        "visibility",
+        "expected_revision"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/components/schemas/ReviewAnnotationType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DeleteRevisionRequest": {
+      "type": "object",
+      "required": [
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewAnnotationResponse": {
+      "type": "object",
+      "required": [
+        "annotation"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewAnnotationListResponse": {
+      "type": "object",
+      "required": [
+        "annotations"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewCommentTemplate": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "owner_id",
+        "title",
+        "content",
+        "shortcut",
+        "usage_count",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateReviewCommentTemplateRequest": {
+      "type": "object",
+      "required": [
+        "title",
+        "content",
+        "shortcut"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "UpdateReviewCommentTemplateRequest": {
+      "type": "object",
+      "required": [
+        "title",
+        "content",
+        "shortcut",
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewCommentTemplateResponse": {
+      "type": "object",
+      "required": [
+        "comment_template"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewCommentTemplateListResponse": {
+      "type": "object",
+      "required": [
+        "comment_templates"
+      ],
+      "properties": {},
+      "additionalProperties": false
     },
     "AppealPage": {
       "allOf": [
@@ -740,6 +4952,525 @@
       "properties": {},
       "additionalProperties": false
     },
+    "GoldPaperStatus": {
+      "type": "string",
+      "enum": [
+        "pending_approval",
+        "active",
+        "retired"
+      ]
+    },
+    "GoldPaperVersion": {
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "exam_question_snapshot_id",
+        "reference_score",
+        "max_score",
+        "rubric_snapshot",
+        "explanation",
+        "trait_scores",
+        "error_tags",
+        "source_grade_ids",
+        "nominated_by",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GoldPaper": {
+      "type": "object",
+      "required": [
+        "id",
+        "exam_id",
+        "question_id",
+        "submission_id",
+        "status",
+        "subject_code",
+        "archetype_code",
+        "risk_tier",
+        "nominated_by",
+        "created_at",
+        "updated_at",
+        "versions"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GoldPaperResponse": {
+      "type": "object",
+      "required": [
+        "gold_paper"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GoldPaperListResponse": {
+      "type": "object",
+      "required": [
+        "gold_papers"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateGoldPaperVersionRequest": {
+      "type": "object",
+      "required": [
+        "reference_score",
+        "explanation",
+        "source_grade_ids"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "NominateGoldPaperRequest": {
+      "type": "object",
+      "required": [
+        "submission_id",
+        "reference_score",
+        "explanation",
+        "source_grade_ids"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RetireGoldPaperRequest": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GoldScoreBandCoverage": {
+      "type": "object",
+      "required": [
+        "band",
+        "count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GoldCoverage": {
+      "type": "object",
+      "required": [
+        "exam_id",
+        "question_id",
+        "subject_code",
+        "archetype_code",
+        "risk_tier",
+        "active_approved_count",
+        "score_bands",
+        "trait_patterns",
+        "error_tags",
+        "gaps",
+        "ready"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GoldCoverageResponse": {
+      "type": "object",
+      "required": [
+        "coverage"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CalibrationPolicy": {
+      "type": "object",
+      "required": [
+        "id",
+        "exam_id",
+        "question_id",
+        "archetype_code",
+        "max_score",
+        "minimum_samples",
+        "maximum_mae",
+        "minimum_exact_agreement",
+        "minimum_within_one_agreement",
+        "maximum_severe_rate",
+        "severe_error_threshold",
+        "qualification_validity_days",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PutCalibrationPolicyRequest": {
+      "type": "object",
+      "required": [
+        "archetype_code",
+        "max_score",
+        "minimum_samples",
+        "maximum_mae",
+        "minimum_exact_agreement",
+        "minimum_within_one_agreement",
+        "maximum_severe_rate",
+        "severe_error_threshold",
+        "qualification_validity_days",
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CalibrationPolicyResponse": {
+      "type": "object",
+      "required": [
+        "policy"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CalibrationGoldSample": {
+      "type": "object",
+      "required": [
+        "gold_paper_id",
+        "gold_version",
+        "submission_id",
+        "max_score",
+        "rubric_snapshot"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CalibrationMetrics": {
+      "type": "object",
+      "required": [
+        "sample_count",
+        "criterion_sample_count",
+        "mae",
+        "exact_agreement",
+        "within_one_agreement",
+        "severe_disagreement_rate"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CalibrationSession": {
+      "type": "object",
+      "required": [
+        "id",
+        "exam_id",
+        "question_id",
+        "grader_id",
+        "exam_question_snapshot_id",
+        "archetype_code",
+        "risk_tier",
+        "gold_set_hash",
+        "status",
+        "samples",
+        "submitted_count",
+        "started_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateCalibrationSessionRequest": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CalibrationSessionResponse": {
+      "type": "object",
+      "required": [
+        "session"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "SubmitCalibrationAttemptRequest": {
+      "type": "object",
+      "required": [
+        "gold_paper_id",
+        "submitted_score",
+        "rubric_selections"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CalibrationCriterionDifference": {
+      "type": "object",
+      "required": [
+        "criterion"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CalibrationAttempt": {
+      "type": "object",
+      "required": [
+        "id",
+        "session_id",
+        "gold_paper_id",
+        "gold_version",
+        "submitted_score",
+        "reference_score",
+        "rubric_selections",
+        "absolute_error",
+        "exact_match",
+        "within_one",
+        "severe_disagreement",
+        "criterion_correct",
+        "criterion_count",
+        "criterion_differences",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GraderQualification": {
+      "type": "object",
+      "required": [
+        "id",
+        "exam_id",
+        "question_id",
+        "grader_id",
+        "status",
+        "gold_set_hash",
+        "calibration_session_id",
+        "valid_until",
+        "metrics",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GraderQualificationResponse": {
+      "type": "object",
+      "required": [
+        "qualification"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "SubmitCalibrationAttemptResponse": {
+      "type": "object",
+      "required": [
+        "attempt",
+        "session"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AnswerGroupStatus": {
+      "type": "string",
+      "enum": [
+        "sampling",
+        "ready_for_confirmation",
+        "confirmed",
+        "rolled_back"
+      ]
+    },
+    "AnswerGroupSampleOutcome": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "rejected"
+      ]
+    },
+    "AnswerGroupMember": {
+      "type": "object",
+      "required": [
+        "submission_id",
+        "segment_id",
+        "similarity",
+        "outlier_score",
+        "representative",
+        "boundary",
+        "outlier",
+        "representation_hash"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AnswerGroupDecision": {
+      "type": "object",
+      "required": [
+        "id",
+        "score_candidate",
+        "rubric_selection",
+        "sample_size",
+        "minimum_sample",
+        "revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AnswerGroup": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "question_id",
+        "exam_question_snapshot_id",
+        "algorithm_version",
+        "representation_version",
+        "member_count",
+        "representative_submission_id",
+        "homogeneity",
+        "status",
+        "minimum_sample",
+        "reviewed_sample_count",
+        "can_confirm",
+        "members",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "TeacherReferenceCase": {
+      "type": "object",
+      "required": [
+        "gold_paper_id",
+        "submission_id",
+        "version",
+        "reference_score",
+        "max_score",
+        "explanation",
+        "trait_scores",
+        "error_tags"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AnswerAutomationCandidate": {
+      "type": "object",
+      "required": [
+        "id",
+        "group_id",
+        "submission_id",
+        "segment_id",
+        "decision_revision",
+        "kind",
+        "score_candidate",
+        "rubric_selection",
+        "status",
+        "algorithm_version",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AnswerGroupMetrics": {
+      "type": "object",
+      "required": [
+        "group_count",
+        "member_count",
+        "group_homogeneity",
+        "batch_override_rate",
+        "human_actions_saved",
+        "post_audit_evidence_status"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BuildAnswerGroupsRequest": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewAnswerGroupSampleRequest": {
+      "type": "object",
+      "required": [
+        "outcome"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PutAnswerGroupDecisionRequest": {
+      "type": "object",
+      "required": [
+        "score_candidate",
+        "rubric_selection",
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ConfirmAnswerGroupRequest": {
+      "type": "object",
+      "required": [
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RollbackAnswerGroupRequest": {
+      "type": "object",
+      "required": [
+        "rollback_reference",
+        "reason"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BuildAnswerGroupsResponse": {
+      "type": "object",
+      "required": [
+        "answer_groups"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AnswerGroupListResponse": {
+      "type": "object",
+      "required": [
+        "answer_groups",
+        "teacher_reference_cases"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AnswerGroupResponse": {
+      "type": "object",
+      "required": [
+        "answer_group",
+        "teacher_reference_cases"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AnswerGroupMutationResponse": {
+      "type": "object",
+      "required": [
+        "answer_group"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AnswerGroupMetricsResponse": {
+      "type": "object",
+      "required": [
+        "metrics"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ConfirmAnswerGroupResponse": {
+      "type": "object",
+      "required": [
+        "answer_group",
+        "automation_candidates"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RollbackAnswerGroupResponse": {
+      "type": "object",
+      "required": [
+        "answer_group",
+        "automation_candidates"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
     "QuestionScoringPolicy": {
       "type": "object",
       "required": [
@@ -748,6 +5479,3094 @@
       ],
       "properties": {},
       "additionalProperties": false
+    },
+    "QualityRatio": {
+      "type": "object",
+      "required": [
+        "numerator",
+        "denominator",
+        "sample_size"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "QualityFinding": {
+      "type": "object",
+      "required": [
+        "code",
+        "status",
+        "reason",
+        "owner",
+        "resolution",
+        "question_id",
+        "question_no"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "QualityQuestion": {
+      "type": "object",
+      "required": [
+        "id",
+        "question_no",
+        "archetype_code",
+        "risk_tier",
+        "max_score"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "QualityQuestionDashboard": {
+      "type": "object",
+      "required": [
+        "question",
+        "gate",
+        "gold",
+        "calibration",
+        "seed",
+        "human_human_agreement",
+        "answer_groups",
+        "drift",
+        "backmark",
+        "findings"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "QualityDashboard": {
+      "type": "object",
+      "required": [
+        "exam_id",
+        "gate",
+        "blocking",
+        "warnings",
+        "questions",
+        "generated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "QualityDashboardResponse": {
+      "type": "object",
+      "required": [
+        "dashboard"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIEligibilityPolicyStatus": {
+      "type": "string",
+      "enum": [
+        "active",
+        "disabled"
+      ]
+    },
+    "AIEligibilityReason": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "blocking"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIEligibilityEvaluationEvidence": {
+      "type": "object",
+      "required": [
+        "approved",
+        "sample_count",
+        "severe_error_rate"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIEligibilityCalibrationEvidence": {
+      "type": "object",
+      "required": [
+        "available"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIEligibilityOutputConstraint": {
+      "type": "object",
+      "required": [
+        "criteria_evidence_only",
+        "allow_model_final_score",
+        "final_score_authority",
+        "max_severe_error_risk"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIEligibilityPolicy": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "subject_code",
+        "education_stage",
+        "archetype_code",
+        "risk_tier",
+        "min_ocr_quality",
+        "min_parser_quality",
+        "min_eval_n",
+        "max_severe_error_rate",
+        "allowed_modes",
+        "version",
+        "status",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PutAIEligibilityPolicyRequest": {
+      "type": "object",
+      "required": [
+        "subject_code",
+        "education_stage",
+        "archetype_code",
+        "risk_tier",
+        "min_ocr_quality",
+        "min_parser_quality",
+        "min_eval_n",
+        "max_severe_error_rate",
+        "allowed_modes",
+        "status",
+        "expected_version"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIEligibilityDecision": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "run_item_id",
+        "policy_version",
+        "decision",
+        "external_ai_allowed",
+        "input_snapshot",
+        "reasons",
+        "output_constraint",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIEligibilityPolicyResponse": {
+      "type": "object",
+      "required": [
+        "policy"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIEligibilityDecisionResponse": {
+      "type": "object",
+      "required": [
+        "decision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationRunStatus": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "completed",
+        "invalidated"
+      ]
+    },
+    "GradingEvaluationReferenceKind": {
+      "type": "string",
+      "enum": [
+        "gold",
+        "human_adjudicated"
+      ]
+    },
+    "GradingEvaluationRun": {
+      "type": "object",
+      "required": [
+        "id",
+        "key",
+        "display_name",
+        "model_reference",
+        "prompt_version",
+        "rubric_version",
+        "dataset_reference",
+        "dataset_sha256",
+        "status",
+        "observation_count",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateGradingEvaluationRequest": {
+      "type": "object",
+      "required": [
+        "key",
+        "display_name",
+        "model_reference",
+        "prompt_version",
+        "rubric_version",
+        "dataset_reference",
+        "dataset_sha256"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationErrorSource": {
+      "type": "string",
+      "enum": [
+        "none",
+        "image_quality",
+        "page_matching",
+        "answer_crop",
+        "handwriting_ocr",
+        "formula_recognition",
+        "answer_structuring",
+        "rubric",
+        "model_scoring",
+        "score_calculation",
+        "system",
+        "unattributed"
+      ]
+    },
+    "AddGradingEvaluationObservationRequest": {
+      "type": "object",
+      "required": [
+        "response_key",
+        "response_fingerprint",
+        "reference_kind",
+        "subject",
+        "archetype",
+        "ocr_quality",
+        "answer_length",
+        "rubric_complexity",
+        "reference_score",
+        "model_score",
+        "max_score"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationObservation": {
+      "type": "object",
+      "required": [
+        "id",
+        "run_id",
+        "response_key",
+        "response_fingerprint",
+        "reference_kind",
+        "subject",
+        "archetype",
+        "ocr_quality",
+        "answer_length",
+        "rubric_complexity",
+        "reference_score",
+        "model_score",
+        "max_score",
+        "reference_score_band",
+        "error_source",
+        "needs_human_review",
+        "reference_reviewer_count",
+        "reference_adjudicated",
+        "observed_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationMetrics": {
+      "type": "object",
+      "required": [
+        "sample_count",
+        "mae",
+        "exact_rate",
+        "within_one_rate",
+        "severe_error_rate",
+        "false_zero_rate",
+        "false_full_rate",
+        "qwk_available"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationSliceMetric": {
+      "type": "object",
+      "required": [
+        "id",
+        "run_id",
+        "dimension",
+        "value",
+        "metrics",
+        "computed_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationResponseDifficulty": {
+      "type": "object",
+      "required": [
+        "id",
+        "run_id",
+        "response_key",
+        "response_fingerprint",
+        "difficulty_score",
+        "difficulty_band",
+        "normalized_error",
+        "severe_error",
+        "ocr_quality",
+        "answer_length",
+        "rubric_complexity",
+        "evidence_note",
+        "computed_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationRunResponse": {
+      "type": "object",
+      "required": [
+        "evaluation_run"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationRunListResponse": {
+      "type": "object",
+      "required": [
+        "evaluation_runs"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationObservationResponse": {
+      "type": "object",
+      "required": [
+        "observation"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationSliceMetricsResponse": {
+      "type": "object",
+      "required": [
+        "slice_metrics"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationResponseDifficultyResponse": {
+      "type": "object",
+      "required": [
+        "response_difficulty"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationCoveredRate": {
+      "type": "object",
+      "required": [
+        "observed_count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationCoveredMean": {
+      "type": "object",
+      "required": [
+        "observed_count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationErrorAttribution": {
+      "type": "object",
+      "required": [
+        "source",
+        "count",
+        "rate",
+        "severe_error_count",
+        "human_review_count",
+        "human_routing_recall"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationQualitySummary": {
+      "type": "object",
+      "required": [
+        "sample_count",
+        "page_match_accuracy",
+        "mean_crop_iou",
+        "mean_transcription_cer",
+        "formula_exact_rate",
+        "mean_rubric_criterion_agreement",
+        "human_review_rate",
+        "risky_error_routing_recall",
+        "error_attribution"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingEvaluationQualitySummaryResponse": {
+      "type": "object",
+      "required": [
+        "quality_summary"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "InvalidationReasonRequest": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelCalibrationMethod": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "isotonic",
+        "logistic",
+        "conformal"
+      ]
+    },
+    "ModelCalibrationStatus": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "completed",
+        "approved",
+        "invalidated"
+      ]
+    },
+    "ModelCalibrationAxis": {
+      "type": "object",
+      "required": [
+        "model_reference",
+        "prompt_version",
+        "rubric_version",
+        "subject",
+        "archetype",
+        "slice_key"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelCalibrationBin": {
+      "type": "object",
+      "required": [
+        "min_raw_confidence",
+        "max_raw_confidence",
+        "calibrated_confidence",
+        "sample_count",
+        "correct_count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelCalibrationRiskCoveragePoint": {
+      "type": "object",
+      "required": [
+        "threshold",
+        "coverage",
+        "sample_count",
+        "empirical_risk",
+        "severe_error_rate"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelCalibrationMetrics": {
+      "type": "object",
+      "required": [
+        "sample_count",
+        "brier_score",
+        "expected_calibration_error",
+        "middle_score_sample_count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelCalibrationArtifact": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "method",
+        "bins",
+        "metrics",
+        "risk_coverage_curve"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelCalibration": {
+      "type": "object",
+      "required": [
+        "id",
+        "key",
+        "evaluation_run_id",
+        "axis",
+        "method",
+        "status",
+        "calibration_n",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateModelCalibrationRequest": {
+      "type": "object",
+      "required": [
+        "key",
+        "evaluation_run_id",
+        "axis",
+        "method"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AddModelCalibrationEvidenceRequest": {
+      "type": "object",
+      "required": [
+        "response_key",
+        "raw_confidence"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelCalibrationEvidence": {
+      "type": "object",
+      "required": [
+        "id",
+        "calibration_id",
+        "evaluation_run_id",
+        "response_key",
+        "raw_confidence",
+        "correct",
+        "severe_error",
+        "score_band",
+        "ocr_quality",
+        "observed_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RecordModelScoreCandidateRequest": {
+      "type": "object",
+      "required": [
+        "candidate_key",
+        "axis",
+        "raw_confidence"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelScoreCandidate": {
+      "type": "object",
+      "required": [
+        "id",
+        "candidate_key",
+        "axis",
+        "raw_confidence",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelCalibrationResponse": {
+      "type": "object",
+      "required": [
+        "calibration"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelCalibrationListResponse": {
+      "type": "object",
+      "required": [
+        "calibrations"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelCalibrationEvidenceResponse": {
+      "type": "object",
+      "required": [
+        "evidence"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelCalibrationEvidenceListResponse": {
+      "type": "object",
+      "required": [
+        "evidence"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelScoreCandidateResponse": {
+      "type": "object",
+      "required": [
+        "candidate"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIHumanDisagreementSeverity": {
+      "type": "string",
+      "enum": [
+        "warning",
+        "severe"
+      ]
+    },
+    "AIHumanDisagreementStatus": {
+      "type": "string",
+      "enum": [
+        "needs_review",
+        "classified",
+        "routed"
+      ]
+    },
+    "AIHumanDisagreementTaxonomy": {
+      "type": "string",
+      "enum": [
+        "ai_scoring_error",
+        "human_scoring_error",
+        "ocr_error",
+        "parser_error",
+        "rubric_ambiguity",
+        "reference_answer_issue",
+        "question_issue",
+        "insufficient_evidence",
+        "acceptable_variation"
+      ]
+    },
+    "AIHumanDisagreementDifferenceType": {
+      "type": "string",
+      "enum": [
+        "score",
+        "criterion",
+        "evidence",
+        "score_and_criterion",
+        "score_and_evidence",
+        "combined"
+      ]
+    },
+    "AIHumanEvidenceSummary": {
+      "type": "object",
+      "required": [
+        "ai_evidence_count",
+        "ai_matched_criterion_count",
+        "human_criterion_count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIHumanDisagreement": {
+      "type": "object",
+      "required": [
+        "id",
+        "exam_id",
+        "question_id",
+        "submission_id",
+        "answer_segment_id",
+        "ai_candidate_id",
+        "human_grade_id",
+        "ai_candidate_score",
+        "human_score",
+        "max_score",
+        "delta",
+        "absolute_delta",
+        "difference_type",
+        "severity",
+        "risk_tier",
+        "trigger_rules",
+        "evidence_summary",
+        "status",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ClassifyAIHumanDisagreementRequest": {
+      "type": "object",
+      "required": [
+        "taxonomy",
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RouteAIHumanDisagreementRequest": {
+      "type": "object",
+      "required": [
+        "review_task_id",
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIHumanDisagreementResponse": {
+      "type": "object",
+      "required": [
+        "disagreement"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIHumanDisagreementListResponse": {
+      "type": "object",
+      "required": [
+        "disagreements"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIHumanDisagreementDatasetEntry": {
+      "type": "object",
+      "required": [
+        "lineage_ref",
+        "question_id",
+        "risk_tier",
+        "ai_candidate_score",
+        "human_score",
+        "max_score",
+        "delta",
+        "severity",
+        "difference_type",
+        "taxonomy",
+        "trigger_rules"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AIHumanDisagreementDatasetResponse": {
+      "type": "object",
+      "required": [
+        "dataset",
+        "anonymized"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseSource": {
+      "type": "string",
+      "enum": [
+        "initial",
+        "regrade",
+        "appeal",
+        "rollback",
+        "migration"
+      ]
+    },
+    "ScoreReleaseStatus": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "published"
+      ]
+    },
+    "ScoreReleaseAppealWindow": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseVisibilityPolicy": {
+      "type": "object",
+      "required": [
+        "show_question_scores",
+        "show_feedback",
+        "show_rubric_summary"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseGateIssue": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "blocking",
+        "count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseGate": {
+      "type": "object",
+      "required": [
+        "version",
+        "passed",
+        "blocking",
+        "warnings",
+        "counts",
+        "generated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseStudentExplanation": {
+      "type": "object",
+      "required": [],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseQuestionFact": {
+      "type": "object",
+      "required": [
+        "question_id",
+        "question_no",
+        "final_grade_id",
+        "score",
+        "max_score",
+        "source_type",
+        "explanation"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreRelease": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "version",
+        "source",
+        "reason",
+        "status",
+        "visibility_policy",
+        "appeal_window",
+        "gate_snapshot",
+        "created_by",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseItem": {
+      "type": "object",
+      "required": [
+        "release_id",
+        "submission_id",
+        "total_score",
+        "max_score",
+        "status",
+        "snapshot_hash"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseQuestion": {
+      "type": "object",
+      "required": [
+        "release_id",
+        "submission_id",
+        "question_id",
+        "question_no",
+        "final_grade_id",
+        "score",
+        "max_score",
+        "source_type",
+        "explanation"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseDetail": {
+      "type": "object",
+      "required": [
+        "release",
+        "items",
+        "questions"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/ScoreReleaseItem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ScoreReleaseDiffItem": {
+      "type": "object",
+      "required": [
+        "submission_id",
+        "old_total",
+        "new_total"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseDiffQuestion": {
+      "type": "object",
+      "required": [
+        "submission_id",
+        "question_id",
+        "old_score",
+        "new_score"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseDiff": {
+      "type": "object",
+      "required": [
+        "base_release_id",
+        "release_id",
+        "affected_count",
+        "items",
+        "questions"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/ScoreReleaseDiffItem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "CreateScoreReleaseRequest": {
+      "type": "object",
+      "required": [
+        "reason",
+        "idempotency_key"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateScoreReleaseRollbackRequest": {
+      "type": "object",
+      "required": [
+        "source_release_id",
+        "reason",
+        "idempotency_key"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseResponse": {
+      "type": "object",
+      "required": [
+        "score_release"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseListResponse": {
+      "type": "object",
+      "required": [
+        "score_releases"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseGateResponse": {
+      "type": "object",
+      "required": [
+        "release_gate"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoreReleaseDiffResponse": {
+      "type": "object",
+      "required": [
+        "diff"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "StudentPublishedResult": {
+      "type": "object",
+      "required": [
+        "exam_id",
+        "release_id",
+        "release_version",
+        "total_score",
+        "max_score",
+        "questions",
+        "appeal_window"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "StudentPublishedQuestion": {
+      "type": "object",
+      "required": [
+        "question_id",
+        "question_no",
+        "score",
+        "max_score"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "StudentScoreAppealWindow": {
+      "type": "object",
+      "required": [
+        "open"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "StudentPublishedResultResponse": {
+      "type": "object",
+      "required": [
+        "result"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "StudentPublishedQuestionResponse": {
+      "type": "object",
+      "required": [
+        "question"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeScoreBand": {
+      "type": "object",
+      "required": [],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeSelector": {
+      "type": "object",
+      "required": [],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeScoreBandCount": {
+      "type": "object",
+      "required": [
+        "score",
+        "count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradePotentialDelta": {
+      "type": "object",
+      "required": [
+        "min",
+        "max"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradePreview": {
+      "type": "object",
+      "required": [
+        "exam_id",
+        "question_id",
+        "source_release_id",
+        "source_release_version",
+        "affected_count",
+        "old_score_bands",
+        "possible_delta"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeJob": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "question_id",
+        "source_release_id",
+        "reason_code",
+        "reason_text",
+        "strategy",
+        "selector",
+        "severity_delta",
+        "status",
+        "affected_count",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "job_id",
+        "submission_id",
+        "old_final_grade_id",
+        "old_score",
+        "max_score",
+        "status",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeWorkItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "job_id",
+        "status",
+        "max_score",
+        "revision",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeGraderQuestion": {
+      "type": "object",
+      "required": [
+        "id",
+        "question_no",
+        "question_type",
+        "score"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeGraderAnswer": {
+      "type": "object",
+      "required": [
+        "segment_status",
+        "segment_image_url"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeGraderContext": {
+      "type": "object",
+      "required": [
+        "item",
+        "expected_revision",
+        "question",
+        "frozen_rubric",
+        "answer"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeGraderContextResponse": {
+      "type": "object",
+      "required": [
+        "regrade_context"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeEvent": {
+      "type": "object",
+      "required": [
+        "id",
+        "job_id",
+        "type",
+        "created_at"
+      ],
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RegradeHistogram": {
+      "type": "object",
+      "required": [
+        "delta",
+        "count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeSevereChange": {
+      "type": "object",
+      "required": [
+        "submission_id",
+        "old_score",
+        "new_score",
+        "delta"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeReleaseChange": {
+      "type": "object",
+      "required": [
+        "submission_id",
+        "old_final_grade_id",
+        "source_score",
+        "regraded_score",
+        "max_score"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeReleasePlan": {
+      "type": "object",
+      "required": [
+        "job_id",
+        "exam_id",
+        "question_id",
+        "source_release_id",
+        "affected_count",
+        "resolved_items"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeSummary": {
+      "type": "object",
+      "required": [
+        "job",
+        "items",
+        "events",
+        "diff_histogram",
+        "severe_changes"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/RegradeItem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "CreateRegradePreviewRequest": {
+      "type": "object",
+      "required": [
+        "source_release_id",
+        "selector"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateRegradeJobRequest": {
+      "type": "object",
+      "required": [
+        "source_release_id",
+        "reason_code",
+        "reason_text",
+        "strategy",
+        "selector",
+        "idempotency_key"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RecordRegradeCandidateRequest": {
+      "type": "object",
+      "required": [
+        "score",
+        "rubric_selections",
+        "expected_revision",
+        "require_manual_review"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeRubricSelection": {
+      "type": "object",
+      "required": [
+        "point_id",
+        "score"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewRegradeItemRequest": {
+      "type": "object",
+      "required": [
+        "decision",
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateRegradeScoreReleaseRequest": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradePreviewResponse": {
+      "type": "object",
+      "required": [
+        "preview"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeSummaryResponse": {
+      "type": "object",
+      "required": [
+        "regrade"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeJobResponse": {
+      "type": "object",
+      "required": [
+        "regrade_job"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeJobListResponse": {
+      "type": "object",
+      "required": [
+        "regrade_jobs"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeItemResponse": {
+      "type": "object",
+      "required": [
+        "regrade_item"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeWorkItemResponse": {
+      "type": "object",
+      "required": [
+        "regrade_item"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RegradeWorkItemListResponse": {
+      "type": "object",
+      "required": [
+        "regrade_items"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReleaseGatePolicy": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "version",
+        "status",
+        "require_warning_acknowledgement",
+        "waivable_warning_codes",
+        "created_by",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReleaseGateEvaluation": {
+      "type": "object",
+      "required": [
+        "policy",
+        "base_gate",
+        "passed",
+        "pending_warning_codes",
+        "applied_waiver_ids",
+        "generated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReleaseGateEvidence": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "phase",
+        "evaluation",
+        "hash",
+        "created_by",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReleaseGateWaiver": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "evidence_id",
+        "issue_code",
+        "reason",
+        "status",
+        "requested_by",
+        "requested_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateReleaseGatePolicyRequest": {
+      "type": "object",
+      "required": [
+        "version",
+        "require_warning_acknowledgement",
+        "waivable_warning_codes"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PreviewReleaseGateRequest": {
+      "type": "object",
+      "required": [
+        "release_id"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RequestReleaseGateWaiverRequest": {
+      "type": "object",
+      "required": [
+        "evidence_id",
+        "issue_code",
+        "reason"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "DecideReleaseGateWaiverRequest": {
+      "type": "object",
+      "required": [
+        "approve",
+        "reason"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReleaseGatePolicyResponse": {
+      "type": "object",
+      "required": [
+        "release_gate_policy"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReleaseGateEvidenceResponse": {
+      "type": "object",
+      "required": [
+        "release_gate_evidence"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReleaseGateWaiverResponse": {
+      "type": "object",
+      "required": [
+        "release_gate_waiver"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "StudentPublishedExam": {
+      "type": "object",
+      "required": [
+        "exam_id",
+        "name",
+        "subject",
+        "release_version",
+        "published_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "StudentPublishedExamListResponse": {
+      "type": "object",
+      "required": [
+        "exams"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PublishedQuestionAppeal": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "submission_id",
+        "source_release_id",
+        "source_release_version",
+        "question_id",
+        "question_no",
+        "source_score",
+        "source_max_score",
+        "reason_code",
+        "reason",
+        "status",
+        "created_at",
+        "updated_at",
+        "revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "StudentPublishedQuestionAppeal": {
+      "type": "object",
+      "required": [
+        "id",
+        "exam_id",
+        "source_release_id",
+        "source_release_version",
+        "question_id",
+        "question_no",
+        "source_score",
+        "source_max_score",
+        "reason_code",
+        "reason",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PublishedQuestionAppealEvent": {
+      "type": "object",
+      "required": [
+        "id",
+        "appeal_id",
+        "type",
+        "created_at"
+      ],
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CreatePublishedQuestionAppealRequest": {
+      "type": "object",
+      "required": [
+        "source_release_id",
+        "question_id",
+        "reason_code",
+        "reason"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "StartQuestionAppealReviewRequest": {
+      "type": "object",
+      "required": [
+        "assigned_to",
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "DecideQuestionAppealRequest": {
+      "type": "object",
+      "required": [
+        "decision",
+        "public_response",
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ResolveQuestionAppealRequest": {
+      "type": "object",
+      "required": [
+        "new_release_id",
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PublishedQuestionAppealResponse": {
+      "type": "object",
+      "required": [
+        "appeal"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "StudentPublishedQuestionAppealResponse": {
+      "type": "object",
+      "required": [
+        "appeal"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PublishedQuestionAppealListResponse": {
+      "type": "object",
+      "required": [
+        "appeals"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "StudentPublishedQuestionAppealListResponse": {
+      "type": "object",
+      "required": [
+        "appeals"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PublishedQuestionAppealEventsResponse": {
+      "type": "object",
+      "required": [
+        "events"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "QuestionAppealReleaseVersion": {
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "source",
+        "status",
+        "reason"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PublishedQuestionAppealContext": {
+      "type": "object",
+      "required": [
+        "appeal",
+        "source_type",
+        "release_history",
+        "answer_image_ready"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PublishedQuestionAppealContextResponse": {
+      "type": "object",
+      "required": [
+        "context"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CaptureUploadInitRequest": {
+      "type": "object",
+      "required": [
+        "sha256",
+        "size",
+        "mime",
+        "exam",
+        "batch",
+        "idempotency_key"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CaptureUploadCompleteRequest": {
+      "type": "object",
+      "required": [],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CaptureUploadSession": {
+      "type": "object",
+      "required": [
+        "remote_upload_id",
+        "exam",
+        "batch",
+        "mime",
+        "sha256",
+        "size",
+        "chunk_size",
+        "confirmed_offset",
+        "status",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CaptureUploadInitResponse": {
+      "type": "object",
+      "required": [
+        "remote_upload_id",
+        "chunk_size",
+        "confirmed_offset",
+        "already_exists",
+        "status"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CaptureUploadChunkResponse": {
+      "type": "object",
+      "required": [
+        "remote_upload_id",
+        "confirmed_offset",
+        "status"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkTimeRange": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GraderQualityWindow": {
+      "type": "object",
+      "required": [
+        "id",
+        "exam_id",
+        "question_id",
+        "grader_id",
+        "window_size",
+        "window_start",
+        "window_end",
+        "sample_count",
+        "mean_error",
+        "mae",
+        "exact_agreement",
+        "severe_rate",
+        "middle_score_sample_count",
+        "status",
+        "computed_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GraderQualityWindowListResponse": {
+      "type": "object",
+      "required": [
+        "windows"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "RecomputeGraderDriftRequest": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingQualityIncident": {
+      "type": "object",
+      "required": [
+        "id",
+        "exam_id",
+        "question_id",
+        "grader_id",
+        "source_window_id",
+        "type",
+        "severity",
+        "metric_snapshot",
+        "affected_range",
+        "status",
+        "created_at"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "grader_bias_high",
+            "grader_bias_low",
+            "high_inconsistency",
+            "severe_seed_failure",
+            "rubric_disagreement_spike",
+            "suspicious_speed"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RecomputeGraderDriftResponse": {
+      "type": "object",
+      "required": [
+        "windows",
+        "created_incidents"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingQualityIncidentListResponse": {
+      "type": "object",
+      "required": [
+        "incidents"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "GradingQualityIncidentResponse": {
+      "type": "object",
+      "required": [
+        "incident"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkScoreBand": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkSelector": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkPolicy": {
+      "type": "object",
+      "required": [
+        "disposition"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkPreviewRequest": {
+      "type": "object",
+      "required": [
+        "selector"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateBackmarkBatchRequest": {
+      "type": "object",
+      "required": [
+        "source_incident_id",
+        "selector",
+        "policy",
+        "reassigned_to"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkBand": {
+      "type": "object",
+      "required": [
+        "score",
+        "count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkPreview": {
+      "type": "object",
+      "required": [
+        "affected_count",
+        "score_bands",
+        "time_range"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkPreviewResponse": {
+      "type": "object",
+      "required": [
+        "preview"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkBatch": {
+      "type": "object",
+      "required": [
+        "id",
+        "exam_id",
+        "question_id",
+        "source_incident_id",
+        "selector",
+        "policy",
+        "affected_count",
+        "status",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "batch_id",
+        "review_task_id",
+        "original_grade_id",
+        "original_reviewer_id",
+        "reassigned_to",
+        "original_score",
+        "max_score",
+        "status",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkHistogram": {
+      "type": "object",
+      "required": [
+        "delta",
+        "count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkSummary": {
+      "type": "object",
+      "required": [
+        "batch",
+        "items",
+        "diff_histogram"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/BackmarkItem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "BackmarkSummaryResponse": {
+      "type": "object",
+      "required": [
+        "backmark"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkRegradeInput": {
+      "type": "object",
+      "required": [
+        "source_release_id",
+        "assignee_id"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkBatchListResponse": {
+      "type": "object",
+      "required": [
+        "backmark_batches"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkGraderItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "status",
+        "max_score",
+        "revision",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkGraderItemResponse": {
+      "type": "object",
+      "required": [
+        "backmark_item"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkGraderItemListResponse": {
+      "type": "object",
+      "required": [
+        "backmark_items"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkQuestion": {
+      "type": "object",
+      "required": [
+        "id",
+        "question_no",
+        "question_type",
+        "score"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkAnswer": {
+      "type": "object",
+      "required": [
+        "segment_status",
+        "segment_image_url"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkGraderContext": {
+      "type": "object",
+      "required": [
+        "item",
+        "expected_revision",
+        "question",
+        "frozen_rubric",
+        "answer"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkGraderContextResponse": {
+      "type": "object",
+      "required": [
+        "backmark_context"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkRubricSelection": {
+      "type": "object",
+      "required": [
+        "point_id",
+        "score"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "SubmitBackmarkItemRequest": {
+      "type": "object",
+      "required": [
+        "score",
+        "rubric_selections",
+        "expected_revision"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "BackmarkGrade": {
+      "type": "object",
+      "required": [
+        "id",
+        "backmark_item_id",
+        "reviewer_id",
+        "score",
+        "max_score",
+        "rubric_selections",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "SubmitBackmarkItemResponse": {
+      "type": "object",
+      "required": [
+        "backmark_item",
+        "backmark_grade"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ProcessingStage": {
+      "type": "string",
+      "enum": [
+        "RECEIVED",
+        "VALIDATED",
+        "QUALITY_CHECKED",
+        "REGISTERED",
+        "IDENTIFIED",
+        "PARSED",
+        "SEGMENTED",
+        "READY"
+      ]
+    },
+    "ProcessingIssueCode": {
+      "type": "string",
+      "enum": [
+        "BLOCKED_MISSING_IDENTITY",
+        "BLOCKED_MISSING_PAGE",
+        "BLOCKED_BAD_ALIGNMENT",
+        "BLOCKED_LOW_IMAGE_QUALITY",
+        "OCR_LOW_CONFIDENCE",
+        "MATH_PARSE_FAILED",
+        "CHEMISTRY_PARSE_FAILED",
+        "TABLE_PARSE_FAILED",
+        "DIAGRAM_PARSE_FAILED",
+        "SEGMENTATION_FAILED"
+      ]
+    },
+    "ProcessingExceptionSeverity": {
+      "type": "string",
+      "enum": [
+        "P0",
+        "P1",
+        "P2",
+        "P3"
+      ]
+    },
+    "ProcessingExceptionStatus": {
+      "type": "string",
+      "enum": [
+        "open",
+        "assigned",
+        "resolved"
+      ]
+    },
+    "ProcessingStageCount": {
+      "type": "object",
+      "required": [
+        "stage",
+        "count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ProcessingIssueCount": {
+      "type": "object",
+      "required": [
+        "code",
+        "count"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ProcessingSummary": {
+      "type": "object",
+      "required": [
+        "exam_id",
+        "total_pages",
+        "ready_pages",
+        "blocked_pages",
+        "pending_pages",
+        "by_stage",
+        "issues",
+        "generated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ProcessingSummaryResponse": {
+      "type": "object",
+      "required": [
+        "summary"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ProcessingException": {
+      "type": "object",
+      "required": [
+        "id",
+        "exam_id",
+        "page_id",
+        "source_type",
+        "source_id",
+        "code",
+        "severity",
+        "blocking",
+        "status",
+        "details",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ProcessingExceptionListResponse": {
+      "type": "object",
+      "required": [
+        "exceptions",
+        "has_more"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "AssignProcessingExceptionRequest": {
+      "type": "object",
+      "required": [
+        "assignee_id"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ResolveProcessingExceptionRequest": {
+      "type": "object",
+      "required": [
+        "resolution"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ProcessingExceptionResponse": {
+      "type": "object",
+      "required": [
+        "exception"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ProcessingWorkerAttempt": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "task_id",
+        "attempt_no",
+        "worker_service",
+        "worker_instance_id",
+        "status",
+        "started_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ProcessingWorkerTask": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "task_type",
+        "queue_name",
+        "source_type",
+        "source_id",
+        "status",
+        "priority",
+        "payload",
+        "payload_schema_version",
+        "idempotency_key",
+        "max_attempts",
+        "attempt_count",
+        "retry_backoff_seconds",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamSessionBlueprintSectionRequest": {
+      "type": "object",
+      "required": [
+        "title",
+        "question_type",
+        "question_count",
+        "score_per_question"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamSessionSubjectRequest": {
+      "type": "object",
+      "required": [
+        "subject",
+        "total_score",
+        "duration_minutes",
+        "sections"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreateExamSessionRequest": {
+      "type": "object",
+      "required": [
+        "school_id",
+        "grade_id",
+        "name",
+        "exam_type",
+        "grading_mode",
+        "publish_policy",
+        "subjects",
+        "command_id"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamSessionChild": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "school_id",
+        "name",
+        "subject",
+        "exam_type",
+        "total_score",
+        "status",
+        "grading_mode",
+        "appeal_enabled",
+        "publish_policy",
+        "created_by",
+        "class_ids",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamSession": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "school_id",
+        "grade_id",
+        "name",
+        "exam_type",
+        "status",
+        "grading_mode",
+        "appeal_enabled",
+        "publish_policy",
+        "created_by",
+        "revision",
+        "exams",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamSessionResponse": {
+      "type": "object",
+      "required": [
+        "exam_session"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamSessionCommand": {
+      "type": "object",
+      "required": [
+        "command_id",
+        "status"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ExamSessionCommandResponse": {
+      "type": "object",
+      "required": [
+        "command"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportRole": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "question",
+        "answer",
+        "solution",
+        "rubric",
+        "mixed",
+        "unknown"
+      ]
+    },
+    "CreatePaperImportSource": {
+      "type": "object",
+      "required": [
+        "file_asset_id",
+        "document_index"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReplacePaperImportSource": {
+      "type": "object",
+      "required": [
+        "id",
+        "document_index",
+        "role_hint"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "CreatePaperImportRequest": {
+      "type": "object",
+      "required": [
+        "subject"
+      ],
+      "properties": {},
+      "anyOf": [
+        {
+          "required": [
+            "sources"
+          ]
+        },
+        {
+          "required": [
+            "paper_file_asset_id"
+          ]
+        },
+        {
+          "required": [
+            "answer_file_asset_id"
+          ]
+        }
+      ],
+      "additionalProperties": false
+    },
+    "AddPaperImportSourcesRequest": {
+      "type": "object",
+      "required": [
+        "sources",
+        "expected_generation"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReplacePaperImportSourcesRequest": {
+      "type": "object",
+      "required": [
+        "sources",
+        "expected_generation"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportSourceRef": {
+      "type": "object",
+      "required": [
+        "source_id",
+        "file_asset_id",
+        "document_index"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportSource": {
+      "type": "object",
+      "required": [
+        "id",
+        "file_asset_id",
+        "document_index",
+        "role_hint",
+        "detected_role",
+        "role_confidence",
+        "processing_status",
+        "created_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportQuestionCandidate": {
+      "type": "object",
+      "required": [
+        "candidate_id",
+        "options",
+        "knowledge_point_hints",
+        "confidence",
+        "source_refs",
+        "issues"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportAnswerCandidate": {
+      "type": "object",
+      "required": [
+        "candidate_id",
+        "equivalent_answers",
+        "confidence",
+        "source_refs",
+        "issues"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportSolutionStep": {
+      "type": "object",
+      "required": [
+        "step_no",
+        "content"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportSolutionCandidate": {
+      "type": "object",
+      "required": [
+        "candidate_id",
+        "raw_text",
+        "steps",
+        "confidence",
+        "source_refs",
+        "issues"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportRubricEvidenceRequirement": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "all_of",
+            "any_of",
+            "at_least",
+            "valid_transformation",
+            "final_result",
+            "concept",
+            "unit",
+            "domain"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PaperImportRubricCandidatePoint": {
+      "type": "object",
+      "required": [
+        "id",
+        "description"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean",
+          "nullable": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "PaperImportRubricCandidate": {
+      "type": "object",
+      "required": [
+        "candidate_id",
+        "points",
+        "deductions",
+        "examples",
+        "confidence",
+        "source_refs",
+        "issues"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportIssue": {
+      "type": "object",
+      "required": [
+        "code",
+        "severity",
+        "certainty",
+        "message",
+        "source_refs"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportAnswerKeyInput": {
+      "type": "object",
+      "required": [
+        "standard_answer",
+        "equivalent_answers",
+        "tolerance"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportRubricPoint": {
+      "type": "object",
+      "required": [
+        "id",
+        "description",
+        "score",
+        "required"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PaperImportRubricInput": {
+      "type": "object",
+      "required": [
+        "status",
+        "max_score",
+        "points",
+        "deductions",
+        "examples"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportSolutionInput": {
+      "type": "object",
+      "required": [
+        "raw_text",
+        "steps",
+        "source_refs"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportDraftQuestion": {
+      "type": "object",
+      "required": [
+        "source_refs",
+        "question_no",
+        "question_type",
+        "score",
+        "stem",
+        "knowledge_points",
+        "confidence",
+        "issues"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ReviewPaperImportRequest": {
+      "type": "object",
+      "required": [
+        "expected_generation",
+        "questions"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportJob": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "exam_paper_id",
+        "paper_file_asset_id",
+        "answer_file_asset_id",
+        "status",
+        "generation",
+        "run_id",
+        "source_revision",
+        "subject",
+        "sources",
+        "question_candidates",
+        "answer_candidates",
+        "solution_candidates",
+        "rubric_candidates",
+        "structured_issues",
+        "questions",
+        "issues",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportResponse": {
+      "type": "object",
+      "required": [
+        "import"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportListResponse": {
+      "type": "object",
+      "required": [
+        "imports"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ProcessingRetryResponse": {
+      "type": "object",
+      "required": [
+        "task"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ScoringRun": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "idempotency_key",
+        "status",
+        "started_by",
+        "created_at",
+        "updated_at",
+        "total_count",
+        "queued_count",
+        "auto_confirmed_count",
+        "human_confirmed_count",
+        "review_count",
+        "failed_count"
+      ],
+      "properties": {}
+    },
+    "StartScoringRunRequest": {
+      "type": "object",
+      "required": [
+        "idempotency_key"
+      ],
+      "properties": {}
+    },
+    "ScoringRunResponse": {
+      "type": "object",
+      "required": [
+        "scoring_run"
+      ],
+      "properties": {}
+    },
+    "ScoringCommandRecovery": {
+      "type": "object",
+      "required": [
+        "command_id",
+        "status"
+      ],
+      "properties": {}
+    },
+    "SubjectiveGradingBatch": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "idempotency_key",
+        "status",
+        "created_by",
+        "created_at",
+        "updated_at",
+        "segment_ids",
+        "total_count",
+        "queued_count",
+        "processing_count",
+        "succeeded_count",
+        "failed_count"
+      ],
+      "properties": {}
+    },
+    "SubjectiveBatchResponse": {
+      "type": "object",
+      "required": [
+        "batch"
+      ],
+      "properties": {}
+    },
+    "SubjectiveBatchCreateRequest": {
+      "type": "object",
+      "required": [
+        "idempotency_key",
+        "segment_ids"
+      ],
+      "properties": {}
+    },
+    "SubjectiveBatchCommandRecovery": {
+      "type": "object",
+      "required": [
+        "command_id",
+        "status"
+      ],
+      "properties": {}
+    },
+    "SubjectiveEnqueueCommandRecovery": {
+      "type": "object",
+      "required": [
+        "command_id",
+        "batch_id",
+        "status",
+        "run_request_ids"
+      ],
+      "properties": {}
+    },
+    "ReviewCommandSubmitResult": {
+      "type": "object",
+      "required": [
+        "task"
+      ],
+      "properties": {}
+    },
+    "ReviewCommandReviewTask": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "question_id",
+        "question_no",
+        "answer_segment_id",
+        "submission_id",
+        "anonymous_code",
+        "source",
+        "status",
+        "priority",
+        "grade_round",
+        "revision",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {}
+    },
+    "ReviewCommandHumanGrade": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "review_task_id",
+        "answer_segment_id",
+        "reviewer_id",
+        "score",
+        "max_score",
+        "rubric_selections",
+        "grade_round",
+        "created_at"
+      ],
+      "properties": {}
+    },
+    "ReviewCommandRubricSelection": {
+      "type": "object",
+      "required": [
+        "point_id",
+        "score"
+      ],
+      "properties": {}
+    },
+    "ReviewCommandDoubleMarkSession": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "question_id",
+        "question_no",
+        "answer_segment_id",
+        "submission_id",
+        "anonymous_code",
+        "first_review_task_id",
+        "second_review_task_id",
+        "first_reviewer_id",
+        "second_reviewer_id",
+        "threshold",
+        "resolution_strategy",
+        "status",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {}
+    },
+    "ReviewCommandFinalGrade": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "question_id",
+        "question_no",
+        "answer_segment_id",
+        "submission_id",
+        "anonymous_code",
+        "score",
+        "max_score",
+        "source",
+        "locked",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {}
+    },
+    "ReviewCommandArbitrationTask": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "double_mark_session_id",
+        "exam_id",
+        "question_id",
+        "question_no",
+        "answer_segment_id",
+        "submission_id",
+        "anonymous_code",
+        "first_reviewer_id",
+        "second_reviewer_id",
+        "first_score",
+        "second_score",
+        "score_difference",
+        "difference_reason",
+        "status",
+        "allow_same_arbitrator",
+        "context",
+        "revision",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {}
+    },
+    "ReviewCommandReviewContext": {
+      "type": "object",
+      "required": [],
+      "properties": {}
+    },
+    "ReviewCommandSubmitGradeInput": {
+      "type": "object",
+      "required": [
+        "score",
+        "rubric_selections",
+        "comments",
+        "private_note",
+        "student_feedback",
+        "reason",
+        "expected_revision"
+      ],
+      "properties": {}
+    },
+    "ReviewCommandArbitrationSubmitResult": {
+      "type": "object",
+      "required": [
+        "arbitration_task",
+        "final_grade"
+      ],
+      "properties": {}
+    },
+    "ReviewCommandSubmitArbitrationInput": {
+      "type": "object",
+      "required": [
+        "final_score",
+        "reason",
+        "student_feedback",
+        "expected_revision"
+      ],
+      "properties": {}
+    },
+    "ScoreCommandSubmissionGrade": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "submission_id",
+        "anonymous_code",
+        "total_score",
+        "max_score",
+        "status",
+        "locked",
+        "revision",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/ScoreCommandFinalGrade"
+          }
+        }
+      }
+    },
+    "ScoreCommandFinalGrade": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id",
+        "exam_id",
+        "question_id",
+        "question_no",
+        "answer_segment_id",
+        "submission_id",
+        "anonymous_code",
+        "score",
+        "max_score",
+        "source",
+        "status",
+        "locked",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {}
+    },
+    "ScoreCommandConfirmInput": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {}
+    },
+    "ScoreCommandPublishResult": {
+      "type": "object",
+      "required": [
+        "status",
+        "submission_grades",
+        "quality",
+        "published_at"
+      ],
+      "properties": {}
+    },
+    "ScoreCommandQualityReport": {
+      "type": "object",
+      "required": [
+        "passed",
+        "issues"
+      ],
+      "properties": {}
+    },
+    "ScoreCommandQualityIssue": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "blocking",
+        "count"
+      ],
+      "properties": {}
+    },
+    "ScoreCommandPublishInput": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {}
+    },
+    "BusinessCommandReceipt": {
+      "type": "object",
+      "required": [
+        "command_id",
+        "status"
+      ],
+      "properties": {}
     }
   }
 }

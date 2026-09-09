@@ -39,6 +39,9 @@ func (s *PostgresStore) CreateBatch(ctx context.Context, tenantID, examID, actor
 	if tenantID == "" || examID == "" || actorID == "" || validateCreateBatch(&input) != nil {
 		return Batch{}, ErrInvalidInput
 	}
+	if input.IdempotencyKey != "" {
+		return s.createBatchCommand(ctx, tenantID, examID, actorID, input)
+	}
 	row := s.db.QueryRowContext(ctx, `
 INSERT INTO capture_batch (tenant_id, exam_id, name, source_type, operator_id, scanner_device, idempotency_key)
 VALUES ($1, $2::uuid, $3, $4, $5::uuid, NULLIF($6, ''), NULLIF($7, ''))

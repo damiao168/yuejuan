@@ -1,3 +1,4 @@
+import { executeBusinessCommand } from "./businessCommand";
 import { EduGradeApi } from "@edugrade/sdk";
 import type {
   ReviewTask as GeneratedReviewTask,
@@ -236,18 +237,7 @@ export interface ReviewTaskFilter {
   cursor?: string;
 }
 
-export interface ScoringRun {
-  id: string;
-  exam_id: string;
-  status: string;
-  total_count: number;
-  queued_count: number;
-  auto_confirmed_count: number;
-  human_confirmed_count: number;
-  review_count: number;
-  failed_count: number;
-  started_at?: string;
-}
+export type ScoringRun = import("@edugrade/sdk").ScoringRun;
 
 export interface ScoringQuestionSummary {
   question_id: string;
@@ -466,10 +456,11 @@ export async function releaseReviewTask(taskId: string) {
 }
 
 export async function submitHumanGrade(taskId: string, payload: SubmitHumanGradePayload) {
-  return apiClient.request<SubmitHumanGradeResult>(`/api/v1/review-tasks/${encodeURIComponent(taskId)}/submit`, {
+  return executeBusinessCommand("review.submit", taskId, payload, (commandId, original) => apiClient.request<SubmitHumanGradeResult>(`/api/v1/review-tasks/${encodeURIComponent(taskId)}/submit`, {
     method: "POST",
-    body: JSON.stringify(payload)
-  });
+    headers: { "Idempotency-Key": commandId },
+    body: JSON.stringify(original)
+  }), result => result as SubmitHumanGradeResult);
 }
 
 export async function returnReviewTask(taskId: string, reason: string, expectedRevision: number) {
@@ -506,10 +497,11 @@ export async function assignArbitrationTask(id: string, payload: AssignArbitrati
 }
 
 export async function submitArbitration(id: string, payload: SubmitArbitrationPayload) {
-  return apiClient.request<SubmitArbitrationResult>(`/api/v1/arbitration-tasks/${encodeURIComponent(id)}/submit`, {
+  return executeBusinessCommand("review.arbitrate", id, payload, (commandId, original) => apiClient.request<SubmitArbitrationResult>(`/api/v1/arbitration-tasks/${encodeURIComponent(id)}/submit`, {
     method: "POST",
-    body: JSON.stringify(payload)
-  });
+    headers: { "Idempotency-Key": commandId },
+    body: JSON.stringify(original)
+  }), result => result as { arbitration_task: ArbitrationTask; final_grade: FinalGrade });
 }
 
 export async function recordSegmentAnswer(segmentId: string, payload: SegmentAnswerPayload) {
@@ -549,9 +541,14 @@ export async function verifyEvidence(gradeId: string) {
   });
 }
 
+export async function recoverScoringCommand(examId: string, commandId: string) {
+  return apiClient.request<import("@edugrade/sdk").ScoringCommandRecovery>(`/api/v1/exams/${encodeURIComponent(examId)}/scoring-runs/commands/${encodeURIComponent(commandId)}`);
+}
+
 export async function startScoringRun(examId: string, idempotencyKey: string) {
   return apiClient.request<{ scoring_run: ScoringRun }>(`/api/v1/exams/${encodeURIComponent(examId)}/scoring-runs`, {
     method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
     body: JSON.stringify({ idempotency_key: idempotencyKey })
   });
 }

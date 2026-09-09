@@ -28,21 +28,31 @@ func (s *PostgresStore) QueuePaperImportOCR(ctx context.Context, tenantID string
 		})
 	}
 	sourceRevision := paperImportSourceConfigurationHash(job.Sources)
-	payload, _ := json.Marshal(map[string]any{"paper_import_id": job.ID, "exam_id": job.ExamID, "source_revision": sourceRevision, "documents": documents})
-	// UpdatedAt is the durable run revision. Replacing the same sources to retry
-	// a failed import must enqueue a fresh task, while duplicate dispatch inside
-	// one run remains idempotent.
-	idempotencyKey := "paper-import-decode:" + job.ID + ":" + contentHash(payload) + ":" + job.UpdatedAt.UTC().Format("20060102T150405.000000000Z") + ":v3"
+	payload, _ := json.Marshal(map[string]any{"paper_import_id": job.ID, "exam_id": job.ExamID, "run_id": job.RunID, "generation": job.Generation, "source_revision": sourceRevision, "documents": documents})
+	idempotencyKey := fmt.Sprintf("paper-import:%s:g:%d:decode:%s", job.ID, job.Generation, contentHash(payload))
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	runID, generation, currentRevision, runErr := currentPaperImportRunInTx(ctx, tx, tenantID, job.ID)
+	if runErr != nil {
+		return runErr
+	}
+	if generation != job.Generation || runID != job.RunID || currentRevision != sourceRevision {
+		return ErrConflict
+	}
+	if err = validatePaperImportDispatchLease(ctx, tx, tenantID, job); err != nil {
+		return err
+	}
+	if err = lockPaperImportTasksInTx(ctx, tx, tenantID, job.ID); err != nil {
+		return err
+	}
 	var taskID string
-	if err = tx.QueryRowContext(ctx, `INSERT INTO agent_worker_task(tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)
-VALUES($1,'layout','page-processing','paper_import_job',$2::uuid,55,$3,'paper-import-decode-v2',$4,$4,3,10,$5::uuid)
+	if err = tx.QueryRowContext(ctx, `INSERT INTO agent_worker_task(tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by,paper_import_run_id,paper_import_generation,task_protocol_version)
+VALUES($1,'layout','page-processing','paper_import_job',$2::uuid,55,$3,'paper-import-decode-v3',$4,$4,3,10,$5::uuid,$6::uuid,$7,2)
 ON CONFLICT(tenant_id,task_type,idempotency_key) DO UPDATE SET updated_at=agent_worker_task.updated_at
-RETURNING id::text`, tenantID, job.ID, payload, idempotencyKey, actorID).Scan(&taskID); err != nil {
+RETURNING id::text`, tenantID, job.ID, payload, idempotencyKey, actorID, runID, generation).Scan(&taskID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `
@@ -59,6 +69,9 @@ UPDATE agent_worker_task
 SET status='cancelled',cancelled_at=now(),completed_at=now(),updated_at=now(),revision=revision+1
 WHERE tenant_id=$1 AND source_type='paper_import_job' AND source_id=$2::uuid
   AND id<>$3::uuid AND status IN ('queued','leased','running')`, tenantID, job.ID, taskID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_run SET dispatch_status='queued',dispatch_lease_owner=NULL,dispatch_lease_expires_at=NULL,initial_task_id=COALESCE(initial_task_id,$4::uuid),updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND generation=$3 AND status='processing'`, tenantID, runID, generation, taskID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -109,8 +122,19 @@ func queuePaperImportParseInTx(ctx context.Context, tx *sql.Tx, tenantID string,
 	if err != nil {
 		return err
 	}
-	if current.Status != "processing" || paperImportSourceConfigurationHash(current.Sources) != paperImportSourceConfigurationHash(job.Sources) {
+	runID, generation, persistedRevision, err := currentPaperImportRunInTx(ctx, tx, tenantID, job.ID)
+	if err != nil {
+		return err
+	}
+	sourceRevision := paperImportSourceConfigurationHash(current.Sources)
+	if current.Status != "processing" || sourceRevision != paperImportSourceConfigurationHash(job.Sources) || persistedRevision != sourceRevision || (job.Generation > 0 && job.Generation != generation) {
 		return ErrConflict
+	}
+	if err = validatePaperImportDispatchLease(ctx, tx, tenantID, job); err != nil {
+		return err
+	}
+	if err = lockPaperImportTasksInTx(ctx, tx, tenantID, job.ID); err != nil {
+		return err
 	}
 	sources := make(map[string]PaperImportSource, len(current.Sources))
 	for _, source := range current.Sources {
@@ -137,19 +161,18 @@ func queuePaperImportParseInTx(ctx context.Context, tx *sql.Tx, tenantID string,
 	}
 	serializedInput, _ := json.Marshal(input)
 	inputHash := contentHash(serializedInput)
-	sourceRevision := paperImportSourceConfigurationHash(current.Sources)
 	var inputID string
 	err = tx.QueryRowContext(ctx, `
 INSERT INTO paper_import_parse_input
-  (tenant_id,paper_import_id,source_revision,input_hash,documents,extra_issues,created_by)
-VALUES ($1,$2::uuid,$3,$4,$5,$6,$7::uuid)
-ON CONFLICT (tenant_id,paper_import_id,source_revision,input_hash)
+  (tenant_id,paper_import_id,run_id,generation,source_revision,input_hash,documents,extra_issues,created_by,protocol_version)
+VALUES ($1,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9::uuid,2)
+ON CONFLICT (tenant_id,run_id,input_hash)
 DO UPDATE SET input_hash=EXCLUDED.input_hash
-RETURNING id::text`, tenantID, job.ID, sourceRevision, inputHash, documents, issues, actorID).Scan(&inputID)
+RETURNING id::text`, tenantID, job.ID, runID, generation, sourceRevision, inputHash, documents, issues, actorID).Scan(&inputID)
 	if err != nil {
 		return err
 	}
-	key := "paper-import-parse:" + job.ID + ":" + sourceRevision + ":" + inputHash + ":v1"
+	key := fmt.Sprintf("paper-import:%s:g:%d:parse:%s", job.ID, generation, inputHash)
 	task, err := workerruntime.CreateTaskInTx(ctx, tx, tenantID, actorID, workerruntime.CreateTaskInput{
 		TaskType: "paper_parse", QueueName: "paper-parse", SourceType: "paper_import_parse", SourceID: inputID,
 		Priority: 55, PayloadSchemaVersion: "paper-import-parse-v1", IdempotencyKey: key, DedupeKey: key,
@@ -157,6 +180,12 @@ RETURNING id::text`, tenantID, job.ID, sourceRevision, inputHash, documents, iss
 		MaxAttempts: 3, RetryBackoffSeconds: 15,
 	})
 	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE agent_worker_task SET paper_import_run_id=$3::uuid,paper_import_generation=$4::bigint,task_protocol_version=2,payload_schema_version='paper-import-parse-v2',payload=payload || jsonb_build_object('run_id',$3::text,'generation',$4::bigint) WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, task.ID, runID, generation); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_run SET dispatch_status='queued',dispatch_lease_owner=NULL,dispatch_lease_expires_at=NULL,initial_task_id=COALESCE(initial_task_id,$4::uuid),updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND generation=$3 AND status='processing'`, tenantID, runID, generation, task.ID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `
@@ -191,8 +220,15 @@ func (s *PostgresStore) CompletePaperImportDecode(ctx context.Context, tenantID,
 		return err
 	}
 	defer tx.Rollback()
+	runID, generation, sourceRevision, err := currentPaperImportRunInTx(ctx, tx, tenantID, importID)
+	if err != nil {
+		return err
+	}
+	if err = validatePaperImportStageBinding(ctx, tx, tenantID, input.TaskID, runID, generation, "layout", "paper_import_job", importID); err != nil {
+		return err
+	}
 	result := mapFromJSON(input)
-	if _, err = workerruntime.CompleteTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.CompleteInput{LeaseToken: input.LeaseToken, ResultSchemaVersion: "paper-import-decode-result-v2", Result: result, DurationMS: input.DurationMS}); err != nil {
+	if _, err = workerruntime.CompleteTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.CompleteInput{LeaseToken: input.LeaseToken, ResultSchemaVersion: "paper-import-decode-result-v3", Result: result, DurationMS: input.DurationMS}); err != nil {
 		return err
 	}
 	var examID, actorID string
@@ -209,10 +245,11 @@ func (s *PostgresStore) CompletePaperImportDecode(ctx context.Context, tenantID,
 		}
 		pages = append(pages, map[string]any{"source_id": page.SourceID, "document_index": page.DocumentIndex, "page_no": page.PageNo, "file_asset_id": page.FileAssetID, "download_url": "/api/v1/files/" + page.FileAssetID + "/download", "sha256": page.SHA256})
 	}
-	payload, _ := json.Marshal(map[string]any{"paper_import_id": importID, "exam_id": examID, "engine": "paddleocr", "engine_version": "pp-ocrv5", "pages": pages})
-	_, err = tx.ExecContext(ctx, `INSERT INTO agent_worker_task(tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by)
-VALUES($1,'ocr','ocr','paper_import_job',$2::uuid,55,$3,'paper-import-ocr-v2',$4,$4,3,10,$5::uuid)
-ON CONFLICT(tenant_id,task_type,idempotency_key) DO NOTHING`, tenantID, importID, payload, "paper-import-ocr:"+importID+":"+input.TaskID+":v2", actorID)
+	payload, _ := json.Marshal(map[string]any{"paper_import_id": importID, "exam_id": examID, "run_id": runID, "generation": generation, "source_revision": sourceRevision, "engine": "paddleocr", "engine_version": "pp-ocrv5", "pages": pages})
+	key := fmt.Sprintf("paper-import:%s:g:%d:ocr:%s", importID, generation, contentHash(payload))
+	_, err = tx.ExecContext(ctx, `INSERT INTO agent_worker_task(tenant_id,task_type,queue_name,source_type,source_id,priority,payload,payload_schema_version,idempotency_key,dedupe_key,max_attempts,retry_backoff_seconds,created_by,paper_import_run_id,paper_import_generation,task_protocol_version)
+VALUES($1,'ocr','ocr','paper_import_job',$2::uuid,55,$3,'paper-import-ocr-v3',$4,$4,3,10,$5::uuid,$6::uuid,$7,2)
+ON CONFLICT(tenant_id,task_type,idempotency_key) DO NOTHING`, tenantID, importID, payload, key, actorID, runID, generation)
 	if err != nil {
 		return err
 	}
@@ -231,7 +268,14 @@ func (s *PostgresStore) CompletePaperImportOCR(ctx context.Context, tenantID, im
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = workerruntime.CompleteTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.CompleteInput{LeaseToken: input.LeaseToken, ResultSchemaVersion: "paper-import-ocr-result-v2", Result: mapFromJSON(input), DurationMS: input.DurationMS}); err != nil {
+	runID, generation, _, err := currentPaperImportRunInTx(ctx, tx, tenantID, importID)
+	if err != nil {
+		return err
+	}
+	if err = validatePaperImportStageBinding(ctx, tx, tenantID, input.TaskID, runID, generation, "ocr", "paper_import_job", importID); err != nil {
+		return err
+	}
+	if _, err = workerruntime.CompleteTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.CompleteInput{LeaseToken: input.LeaseToken, ResultSchemaVersion: "paper-import-ocr-result-v3", Result: mapFromJSON(input), DurationMS: input.DurationMS}); err != nil {
 		return err
 	}
 	var status, actorID string
@@ -291,6 +335,30 @@ func (s *PostgresStore) LoadPaperImportParseInput(ctx context.Context, tenantID,
 	return importID, input, nil
 }
 
+func (s *PostgresStore) LoadPaperImportParseRunInput(ctx context.Context, tenantID, inputID string) (PaperImportRunBinding, error) {
+	var binding PaperImportRunBinding
+	var documents, issues []byte
+	err := s.db.QueryRowContext(ctx, `SELECT paper_import_id::text,run_id::text,generation,source_revision,input_hash,documents,extra_issues
+FROM paper_import_parse_input WHERE tenant_id=$1 AND id=$2::uuid AND protocol_version=2`, tenantID, inputID).Scan(
+		&binding.ImportID, &binding.RunID, &binding.Generation, &binding.SourceRevision, &binding.InputHash, &documents, &issues,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PaperImportRunBinding{}, ErrNotFound
+	}
+	if err != nil {
+		return PaperImportRunBinding{}, err
+	}
+	binding.InputID = inputID
+	if json.Unmarshal(documents, &binding.Input.Documents) != nil || json.Unmarshal(issues, &binding.Input.ExtraIssues) != nil || len(binding.Input.Documents) == 0 {
+		return PaperImportRunBinding{}, ErrInvalidInput
+	}
+	serialized, err := json.Marshal(binding.Input)
+	if err != nil || contentHash(serialized) != binding.InputHash {
+		return PaperImportRunBinding{}, ErrConflict
+	}
+	return binding, nil
+}
+
 func (s *PostgresStore) FailPaperImportRuntime(ctx context.Context, tenantID, importID string, input PaperImportRuntimeFailure) error {
 	if input.TaskID == "" || input.LeaseToken == "" || input.ErrorCode == "" {
 		return ErrInvalidInput
@@ -300,14 +368,35 @@ func (s *PostgresStore) FailPaperImportRuntime(ctx context.Context, tenantID, im
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = workerruntime.FailTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: input.Retryable, ErrorCode: input.ErrorCode, ErrorDetail: input.ErrorDetail, DurationMS: input.DurationMS}); err != nil {
+	runID, generation, _, err := currentPaperImportRunInTx(ctx, tx, tenantID, importID)
+	if err != nil {
 		return err
 	}
-	issues, _ := json.Marshal([]string{"扫描文档文字识别失败：" + paperImportRuntimeErrorMessage(input.ErrorCode)})
-	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='failed',error_code='paper_ocr_failed',issues=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND status='processing' AND deleted_at IS NULL`, tenantID, importID, issues); err != nil {
+	if err = validatePaperImportTaskBinding(ctx, tx, tenantID, input.TaskID, runID, generation); err != nil {
+		return err
+	}
+	task, err := workerruntime.FailTaskInTx(ctx, tx, tenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: input.Retryable, ErrorCode: input.ErrorCode, ErrorDetail: input.ErrorDetail, DurationMS: input.DurationMS})
+	if err != nil {
+		return err
+	}
+	if task.Status == workerruntime.StatusQueued {
+		return tx.Commit()
+	}
+	jobErrorCode := "paper_ocr_failed"
+	issuePrefix := "扫描文档文字识别失败："
+	if input.ErrorCode == "paper_parse_failed" {
+		jobErrorCode = "ai_parse_failed"
+		issuePrefix = "AI 解析服务暂不可用："
+	}
+	issues, _ := json.Marshal([]string{issuePrefix + paperImportRuntimeErrorMessage(input.ErrorCode)})
+	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_job SET status='failed',error_code=$3,issues=$4,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND status='processing' AND deleted_at IS NULL`, tenantID, importID, jobErrorCode, issues); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_source SET processing_status='failed',updated_at=now() WHERE tenant_id=$1 AND paper_import_id=$2::uuid AND deleted_at IS NULL`, tenantID, importID); err != nil {
+		return err
+	}
+	detail, _ := json.Marshal(input.ErrorDetail)
+	if _, err = tx.ExecContext(ctx, `UPDATE paper_import_run SET status='failed',error_code=$4,error_detail=$5,completed_at=now(),updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid AND generation=$3 AND status='processing'`, tenantID, runID, generation, input.ErrorCode, detail); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -321,6 +410,8 @@ func paperImportRuntimeErrorMessage(code string) string {
 		return "图片文字识别失败"
 	case "paper_ocr_unavailable":
 		return "文字识别服务暂不可用"
+	case "paper_parse_failed":
+		return "结构化解析失败，请稍后重试"
 	case "source_download_forbidden":
 		return "源文件访问被拒绝，请重新提交资料或联系管理员"
 	case "source_not_found":

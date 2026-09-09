@@ -83,18 +83,18 @@ func (s *PostgresStore) CreateBatch(ctx context.Context, tenantID string, actorI
 		return GradingBatch{}, err
 	}
 	row := s.db.QueryRowContext(ctx, `
-INSERT INTO subjective_grading_batch (tenant_id, idempotency_key, status, segment_ids, total_count, created_by)
-VALUES ($1::uuid, $2, 'planned', $3::jsonb, $4, $5::uuid)
+INSERT INTO subjective_grading_batch (tenant_id, idempotency_key, status, segment_ids, total_count, created_by,command_request_hash)
+VALUES ($1::uuid, $2, 'planned', $3::jsonb, $4, $5::uuid,$6)
 ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET updated_at = subjective_grading_batch.updated_at
 RETURNING id::text, tenant_id::text, idempotency_key, status, segment_ids,
   total_count, queued_count, processing_count, succeeded_count, failed_count,
   created_by::text, created_at, updated_at
-`, tenantID, input.IdempotencyKey, raw, len(segments), actorID)
+`, tenantID, input.IdempotencyKey, raw, len(segments), actorID, batchRequestHash(segments))
 	batch, err := scanBatch(row)
 	if err != nil {
 		return GradingBatch{}, err
 	}
-	if !sameStringSlice(batch.SegmentIDs, segments) {
+	if batch.CreatedBy != actorID || !sameStringSlice(batch.SegmentIDs, segments) {
 		return GradingBatch{}, ErrIdempotencyConflict
 	}
 	return batch, nil

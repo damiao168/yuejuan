@@ -11,15 +11,16 @@ import (
 )
 
 type MemoryStore struct {
-	mu                sync.RWMutex
-	sessionMu         sync.Mutex
-	next              int
-	items             map[string]Exam
-	sessionsByCommand map[string]ExamSession
+	mu                 sync.RWMutex
+	sessionMu          sync.Mutex
+	next               int
+	items              map[string]Exam
+	sessionsByCommand  map[string]ExamSession
+	sessionCommandHash map[string]string
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{next: 1, items: map[string]Exam{}, sessionsByCommand: map[string]ExamSession{}}
+	return &MemoryStore{next: 1, items: map[string]Exam{}, sessionsByCommand: map[string]ExamSession{}, sessionCommandHash: map[string]string{}}
 }
 
 func (s *MemoryStore) CreateExam(_ context.Context, scope auth.AccessScope, createdBy string, input CreateInput) (Exam, error) {

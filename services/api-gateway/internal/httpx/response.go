@@ -7,6 +7,12 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/logger"
 )
 
+const (
+	ErrorCodeHeader        = "X-EduGrade-Error-Code"
+	OperationOutcomeHeader = "X-EduGrade-Operation-Outcome"
+	CommandIDHeader        = "X-EduGrade-Command-ID"
+)
+
 type ErrorBody struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -25,6 +31,7 @@ func JSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func Error(w http.ResponseWriter, r *http.Request, status int, code string, message string) {
+	w.Header().Set(ErrorCodeHeader, code)
 	JSON(w, status, ErrorResponse{
 		RequestID: logger.RequestID(r.Context()),
 		TraceID:   logger.TraceID(r.Context()),

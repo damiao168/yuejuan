@@ -1,38 +1,22 @@
 import { ApiClientError, apiClientErrorFromResponse, type DesktopApiClient } from "./client";
+import { IncrementalSha256 } from "../lib/incrementalSha256";
+import type { CaptureUploadInitRequest, CaptureUploadInitResponse as GeneratedCaptureUploadInitResponse, CaptureUploadSession, CaptureUploadRecoveryResponse } from "@edugrade/sdk";
 
-export interface CaptureUploadInitInput {
-  sha256: string;
-  size: number;
-  mime: string;
-  exam: string;
-  batch: string;
-  idempotency_key: string;
-  filename?: string;
-}
+export type CaptureUploadInitInput = CaptureUploadInitRequest;
 
-export interface CaptureUploadInitResponse {
-  remote_upload_id: string;
-  chunk_size: number;
-  confirmed_offset: number;
-  already_exists: boolean;
-  status: "uploading" | "finalizing" | "completed" | "failed";
-  file_asset_id?: string;
-  capture_file_id?: string;
-  error_code?: string;
-}
+export type CaptureUploadInitResponse = GeneratedCaptureUploadInitResponse;
 
-export interface CaptureUploadCompleteResponse {
-  remote_upload_id: string;
-  confirmed_offset: number;
-  status: "uploading" | "finalizing" | "completed" | "failed";
-  file_asset_id?: string;
-  capture_file_id?: string;
-  error_code?: string;
-}
+export type CaptureUploadCompleteResponse = Pick<CaptureUploadSession,
+  "remote_upload_id" | "confirmed_offset" | "status" | "file_asset_id" | "capture_file_id" | "error_code">;
 
-export async function sha256ForFile(file: Blob) {
-  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+export async function sha256ForFile(file: Blob, chunkSize = 4 * 1024 * 1024) {
+  if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) throw new Error("SHA-256 chunk size must be a positive safe integer");
+  const digest = new IncrementalSha256();
+  for (let offset = 0; offset < file.size; offset += chunkSize) {
+    const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
+    digest.update(new Uint8Array(await chunk.arrayBuffer()));
+  }
+  return digest.hex();
 }
 
 export function initCaptureUpload(client: DesktopApiClient, input: CaptureUploadInitInput) {
@@ -78,6 +62,11 @@ export function completeCaptureUpload(client: DesktopApiClient, uploadId: string
 
 export interface ResumeCaptureUploadInput extends Omit<CaptureUploadInitInput, "sha256" | "size" | "mime" | "filename"> {
   file: File | CaptureUploadSource;
+  remoteUploadId?: string;
+}
+
+export function recoverCaptureUpload(client: DesktopApiClient, uploadId: string) {
+  return client.request<CaptureUploadRecoveryResponse>(`/api/v1/capture/uploads/${encodeURIComponent(uploadId)}`);
 }
 
 export interface CaptureUploadProgress {
@@ -103,7 +92,16 @@ export async function resumeCaptureUpload(
   onProgress: (progress: CaptureUploadProgress) => Promise<void> | void
 ) {
   const sha256 = "sha256" in input.file ? input.file.sha256 : await sha256ForFile(input.file);
-  const initialized = await initCaptureUpload(client, {
+  let recovered: CaptureUploadInitResponse | undefined;
+  if (input.remoteUploadId) {
+    const result = await recoverCaptureUpload(client, input.remoteUploadId);
+    const upload = result.upload;
+    if (result.command_id !== input.idempotency_key || upload.exam !== input.exam || upload.batch !== input.batch || upload.sha256 !== sha256 || upload.size !== input.file.size) {
+      throw new ApiClientError(409, "capture_upload_conflict", "saved upload identity does not match the local original");
+    }
+    recovered = { ...upload, already_exists: true };
+  }
+  const initialized = recovered ?? await initCaptureUpload(client, {
     sha256,
     size: input.file.size,
     mime: input.file.type || inferCaptureMime(input.file.name),
@@ -150,10 +148,7 @@ export async function resumeCaptureUpload(
 }
 
 async function sha256ForBytes(bytes: Uint8Array) {
-  const material = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(material).set(bytes);
-  const digest = await crypto.subtle.digest("SHA-256", material);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return new IncrementalSha256().update(bytes).hex();
 }
 
 function inferCaptureMime(name: string) {

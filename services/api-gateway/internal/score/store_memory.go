@@ -3,6 +3,7 @@ package score
 import (
 	"bytes"
 	"context"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"encoding/csv"
 	"fmt"
 	"sort"
@@ -60,6 +61,7 @@ type RosterSubmissionSeed struct {
 }
 
 type MemoryStore struct {
+	receipts          commandreceipt.Memory
 	mu                sync.RWMutex
 	next              int
 	segments          map[string]SegmentSeed
@@ -319,9 +321,13 @@ func (s *MemoryStore) SetAttendance(_ context.Context, _ string, examID string, 
 	return s.rosterReportLocked(examID), nil
 }
 
-func (s *MemoryStore) ConfirmGrades(_ context.Context, tenantID string, examID string, actorID string, _ ConfirmInput) ([]SubmissionGrade, error) {
+func (s *MemoryStore) ConfirmGrades(ctx context.Context, tenantID string, examID string, actorID string, input ConfirmInput) ([]SubmissionGrade, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var replay []SubmissionGrade
+	if found, err := s.receipts.Load(ctx, tenantID, actorID, "score.confirm", examID, input, &replay); err != nil || found {
+		return replay, err
+	}
 	quality := s.qualityLocked(examID, false)
 	if !quality.Passed {
 		return nil, ErrQualityGateFailed
@@ -356,12 +362,20 @@ func (s *MemoryStore) ConfirmGrades(_ context.Context, tenantID string, examID s
 		grade.TenantID = tenantID
 		s.finals[id] = grade
 	}
-	return s.listSubmissionGradesLocked(examID, true), nil
+	result := s.listSubmissionGradesLocked(examID, true)
+	if err := s.receipts.Save(ctx, tenantID, actorID, "score.confirm", examID, input, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
-func (s *MemoryStore) PublishGrades(_ context.Context, tenantID string, examID string, actorID string, _ PublishInput) (PublishResult, error) {
+func (s *MemoryStore) PublishGrades(ctx context.Context, tenantID string, examID string, actorID string, input PublishInput) (PublishResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var replay PublishResult
+	if found, err := s.receipts.Load(ctx, tenantID, actorID, "score.publish", examID, input, &replay); err != nil || found {
+		return replay, err
+	}
 	for _, grade := range s.submissions {
 		if grade.ExamID == examID && grade.Locked {
 			return PublishResult{}, ErrInvalidTransition
@@ -399,12 +413,17 @@ func (s *MemoryStore) PublishGrades(_ context.Context, tenantID string, examID s
 		s.finals[id] = grade
 	}
 	s.examStatuses[examID] = "published"
-	return PublishResult{
+	result := PublishResult{
 		Status:           "published",
 		SubmissionGrades: s.listSubmissionGradesLocked(examID, true),
 		Quality:          QualityReport{Passed: true},
 		PublishedAt:      now,
-	}, nil
+	}
+
+	if err := s.receipts.Save(ctx, tenantID, actorID, "score.publish", examID, input, result); err != nil {
+		return PublishResult{}, err
+	}
+	return result, nil
 }
 
 func (s *MemoryStore) GetStudentGrade(_ context.Context, tenantID string, studentID string, examID string) (SubmissionGrade, error) {

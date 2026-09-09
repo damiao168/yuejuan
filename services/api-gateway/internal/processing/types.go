@@ -224,6 +224,7 @@ type Store interface {
 // background projector. RequestedVersion prevents a concurrent source change
 // from being acknowledged by an older refresh.
 type ProjectionRefresh struct {
+	claimID          string
 	TenantID         string
 	ExamID           string
 	RequestedVersion int64
@@ -232,7 +233,6 @@ type ProjectionRefresh struct {
 
 type ProjectionStore interface {
 	ClaimProjection(context.Context, string, time.Duration) (ProjectionRefresh, bool, error)
-	RefreshExam(context.Context, string, string) error
-	CompleteProjection(context.Context, string, ProjectionRefresh) error
+	ApplyProjection(context.Context, string, ProjectionRefresh) error
 	FailProjection(context.Context, string, ProjectionRefresh, string, time.Duration) error
 }

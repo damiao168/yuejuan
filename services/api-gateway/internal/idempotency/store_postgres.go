@@ -17,7 +17,18 @@ func (s *PostgresStore) Begin(ctx context.Context, input BeginInput) (Record, bo
 		return Record{}, false, err
 	}
 	defer tx.Rollback()
-	_, _ = tx.ExecContext(ctx, `DELETE FROM idempotency_record WHERE expires_at < now() AND tenant_id=$1`, input.TenantID)
+	// TTL expires completed HTTP response caches only. A processing reservation
+	// is the durable request fingerprint needed to resume an interrupted
+	// command; deleting it would allow a different payload to take its place.
+	_, _ = tx.ExecContext(ctx, `DELETE FROM idempotency_record WHERE expires_at < now() AND tenant_id=$1 AND state='completed'`, input.TenantID)
+	if !input.AllowTakeover {
+		// Legacy protected routes without a durable business recovery contract
+		// retain their previous TTL behavior. Do not turn them into permanent
+		// processing records merely because closed commands need a fingerprint.
+		_, _ = tx.ExecContext(ctx, `DELETE FROM idempotency_record
+WHERE tenant_id=$1 AND actor_id=$2 AND method=$3 AND route=$4 AND idempotency_key=$5
+  AND state='processing' AND expires_at<now()`, input.TenantID, input.ActorID, input.Method, input.Route, input.Key)
+	}
 	var inserted bool
 	err = tx.QueryRowContext(ctx, `
 WITH inserted AS (

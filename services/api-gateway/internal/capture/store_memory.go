@@ -378,10 +378,14 @@ func (s *MemoryStore) CreateBatch(_ context.Context, tenantID, examID, actorID s
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := tenantID + ":" + examID + ":" + input.IdempotencyKey
+	key := tenantID + ":" + actorID + ":" + input.IdempotencyKey
 	if input.IdempotencyKey != "" {
 		if id, ok := s.batchKeys[key]; ok {
-			return s.batches[id], nil
+			batch := s.batches[id]
+			if batchCommandHash(examID, input) != batchCommandHash(batch.ExamID, CreateBatchInput{Name: batch.Name, SourceType: batch.SourceType, ScannerDevice: batch.ScannerDevice}) {
+				return Batch{}, ErrConflict
+			}
+			return batch, nil
 		}
 	}
 	now := time.Now().UTC()
@@ -391,6 +395,21 @@ func (s *MemoryStore) CreateBatch(_ context.Context, tenantID, examID, actorID s
 		s.batchKeys[key] = item.ID
 	}
 	return item, nil
+}
+
+func (s *MemoryStore) RecoverBatchCommand(_ context.Context, tenantID, examID, actorID, commandID string) (BatchCommandRecovery, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := BatchCommandRecovery{CommandID: commandID, Status: "not_accepted"}
+	if id, ok := s.batchKeys[tenantID+":"+actorID+":"+commandID]; ok {
+		batch := s.batches[id]
+		if batch.ExamID != examID {
+			return result, ErrConflict
+		}
+		result.Batch = &batch
+		result.Status = "succeeded"
+	}
+	return result, nil
 }
 
 func (s *MemoryStore) ListBatches(_ context.Context, tenantID, examID string, filter BatchListFilter) ([]Batch, error) {

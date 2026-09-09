@@ -13,11 +13,18 @@ func (s *MemoryStore) CreateExamSession(ctx context.Context, scope auth.AccessSc
 		return ExamSession{}, ErrScopeForbidden
 	}
 	commandKey := ""
+	requestHash, hashErr := examSessionCommandHash(input)
+	if hashErr != nil {
+		return ExamSession{}, ErrInvalidInput
+	}
 	if input.CommandID != "" {
 		commandKey = scope.TenantID + "\x00" + createdBy + "\x00" + input.CommandID
 		s.sessionMu.Lock()
 		defer s.sessionMu.Unlock()
 		if existing, ok := s.sessionsByCommand[commandKey]; ok {
+			if s.sessionCommandHash[commandKey] != requestHash {
+				return ExamSession{}, ErrCommandConflict
+			}
 			return cloneExamSession(existing), nil
 		}
 	}
@@ -60,8 +67,24 @@ func (s *MemoryStore) CreateExamSession(ctx context.Context, scope auth.AccessSc
 	}
 	if commandKey != "" {
 		s.sessionsByCommand[commandKey] = cloneExamSession(session)
+		s.sessionCommandHash[commandKey] = requestHash
 	}
 	return session, nil
+}
+
+func (s *MemoryStore) RecoverExamSessionCommand(_ context.Context, scope auth.AccessScope, createdBy, commandID string) (ExamSessionCommandResult, error) {
+	key := scope.TenantID + "\x00" + createdBy + "\x00" + commandID
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	session, ok := s.sessionsByCommand[key]
+	if !ok {
+		return ExamSessionCommandResult{CommandID: commandID, Status: "not_accepted"}, nil
+	}
+	if !scopeAllowsRequestedGrade(scope, session.GradeID) || (!scope.TenantWide && len(scope.SchoolIDs) > 0 && !scope.AllowsSchool(session.SchoolID)) {
+		return ExamSessionCommandResult{}, ErrScopeForbidden
+	}
+	cloned := cloneExamSession(session)
+	return ExamSessionCommandResult{CommandID: commandID, Status: "succeeded", Session: &cloned}, nil
 }
 
 func cloneExamSession(input ExamSession) ExamSession {

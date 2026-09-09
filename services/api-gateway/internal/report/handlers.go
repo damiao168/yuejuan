@@ -1,6 +1,7 @@
 package report
 
 import (
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"errors"
 	"net/http"
 
@@ -86,6 +87,7 @@ func (h *Handler) GradingQuality(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(commandreceipt.WithID(r.Context(), r.Header.Get("Idempotency-Key")))
 	user := mustUser(r)
 	result, err := h.store.Export(r.Context(), user.TenantID, r.PathValue("examId"), user.ID)
 	if err != nil {
@@ -104,6 +106,10 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, commandreceipt.ErrConflict) {
+		httpx.Error(w, r, http.StatusConflict, "command_request_conflict", "command ID is associated with a different request")
+		return
+	}
 	switch {
 	case errors.Is(err, ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, "report_resource_not_found", "report resource not found")

@@ -65,7 +65,7 @@ func (s *MemoryStore) CreatePaperImport(_ context.Context, tenantID, examID, use
 		return PaperImportJob{}, ErrInvalidInput
 	}
 	now := time.Now().UTC()
-	job := PaperImportJob{ID: s.id("paper-import"), TenantID: tenantID, ExamID: examID, ExamPaperID: input.ExamPaperID, PaperFileAssetID: input.PaperFileAssetID, AnswerFileAssetID: input.AnswerFileAssetID, Status: "processing", Subject: input.Subject, Questions: []PaperImportDraftQuestion{}, Issues: []string{}, QuestionCandidates: []QuestionCandidate{}, AnswerCandidates: []AnswerCandidate{}, SolutionCandidates: []SolutionCandidate{}, RubricCandidates: []RubricCandidate{}, StructuredIssues: []PaperImportIssue{}, CreatedBy: userID, CreatedAt: now, UpdatedAt: now}
+	job := PaperImportJob{ID: s.id("paper-import"), TenantID: tenantID, ExamID: examID, ExamPaperID: input.ExamPaperID, PaperFileAssetID: input.PaperFileAssetID, AnswerFileAssetID: input.AnswerFileAssetID, Status: "processing", Generation: 1, RunID: s.id("paper-import-run"), Subject: input.Subject, Questions: []PaperImportDraftQuestion{}, Issues: []string{}, QuestionCandidates: []QuestionCandidate{}, AnswerCandidates: []AnswerCandidate{}, SolutionCandidates: []SolutionCandidate{}, RubricCandidates: []RubricCandidate{}, StructuredIssues: []PaperImportIssue{}, CreatedBy: userID, CreatedAt: now, UpdatedAt: now}
 	seenAssets, seenIndexes := map[string]bool{}, map[int]bool{}
 	for _, source := range sources {
 		if source.FileAssetID == "" || source.DocumentIndex < 0 || seenAssets[source.FileAssetID] || seenIndexes[source.DocumentIndex] || !validPaperImportRole(source.RoleHint, true) {
@@ -74,6 +74,7 @@ func (s *MemoryStore) CreatePaperImport(_ context.Context, tenantID, examID, use
 		job.Sources = append(job.Sources, PaperImportSource{ID: s.id("paper-import-source"), FileAssetID: source.FileAssetID, DocumentIndex: source.DocumentIndex, RoleHint: source.RoleHint, DetectedRole: "unknown", ProcessingStatus: "pending", CreatedAt: now})
 		seenAssets[source.FileAssetID], seenIndexes[source.DocumentIndex] = true, true
 	}
+	job.SourceRevision = paperImportSourceConfigurationHash(job.Sources)
 	s.imports[job.ID] = job
 	return job, nil
 }
@@ -86,6 +87,12 @@ func (s *MemoryStore) AddPaperImportSources(_ context.Context, tenantID, id, _ s
 		return PaperImportJob{}, ErrNotFound
 	}
 	if job.Status == "applied" {
+		return PaperImportJob{}, ErrConflict
+	}
+	if input.ExpectedGeneration <= 0 {
+		return PaperImportJob{}, ErrInvalidInput
+	}
+	if input.ExpectedGeneration != job.Generation {
 		return PaperImportJob{}, ErrConflict
 	}
 	seen := map[string]bool{}
@@ -103,6 +110,10 @@ func (s *MemoryStore) AddPaperImportSources(_ context.Context, tenantID, id, _ s
 		seen[source.FileAssetID], indexes[source.DocumentIndex] = true, true
 	}
 	job.Status, job.ErrorCode, job.Issues, job.UpdatedAt = "processing", "", []string{}, now
+	job.Generation++
+	job.RunID = s.id("paper-import-run")
+	job.SourceRevision = paperImportSourceConfigurationHash(job.Sources)
+	job.ResultGeneration = 0
 	job.StructuredIssues = []PaperImportIssue{}
 	s.imports[id] = job
 	return job, nil
@@ -116,6 +127,12 @@ func (s *MemoryStore) ReplacePaperImportSources(_ context.Context, tenantID, id,
 		return PaperImportJob{}, ErrNotFound
 	}
 	if job.Status == "applied" {
+		return PaperImportJob{}, ErrConflict
+	}
+	if input.ExpectedGeneration <= 0 {
+		return PaperImportJob{}, ErrInvalidInput
+	}
+	if input.ExpectedGeneration != job.Generation {
 		return PaperImportJob{}, ErrConflict
 	}
 	current := map[string]PaperImportSource{}
@@ -152,6 +169,10 @@ func (s *MemoryStore) ReplacePaperImportSources(_ context.Context, tenantID, id,
 		job.Issues = []string{}
 	}
 	job.UpdatedAt = now
+	job.Generation++
+	job.RunID = s.id("paper-import-run")
+	job.SourceRevision = paperImportSourceConfigurationHash(job.Sources)
+	job.ResultGeneration = 0
 	s.imports[id] = job
 	return job, nil
 }
@@ -196,7 +217,7 @@ func (s *MemoryStore) SavePaperImportReview(_ context.Context, tenantID, id, _ s
 	if !ok || job.TenantID != tenantID {
 		return PaperImportJob{}, ErrNotFound
 	}
-	if job.Status != "review_required" {
+	if job.Status != "review_required" || job.Generation != input.ExpectedGeneration {
 		return PaperImportJob{}, ErrConflict
 	}
 	for i := range input.Questions {
@@ -243,6 +264,17 @@ func (s *MemoryStore) FailPaperImport(_ context.Context, tenantID, id, code stri
 }
 
 func (s *MemoryStore) CancelPaperImport(_ context.Context, tenantID, id string) (PaperImportJob, error) {
+	return s.cancelPaperImportGeneration(tenantID, id, 0)
+}
+
+func (s *MemoryStore) CancelPaperImportGeneration(_ context.Context, tenantID, id string, expectedGeneration int64) (PaperImportJob, error) {
+	if expectedGeneration <= 0 {
+		return PaperImportJob{}, ErrInvalidInput
+	}
+	return s.cancelPaperImportGeneration(tenantID, id, expectedGeneration)
+}
+
+func (s *MemoryStore) cancelPaperImportGeneration(tenantID, id string, expectedGeneration int64) (PaperImportJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job, ok := s.imports[id]
@@ -250,6 +282,9 @@ func (s *MemoryStore) CancelPaperImport(_ context.Context, tenantID, id string) 
 		return PaperImportJob{}, ErrNotFound
 	}
 	if job.Status != "processing" {
+		return PaperImportJob{}, ErrConflict
+	}
+	if expectedGeneration > 0 && job.Generation != expectedGeneration {
 		return PaperImportJob{}, ErrConflict
 	}
 	job.Status = "cancelled"

@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { DesktopApiClient } from "./client";
-import { resumeCaptureUpload } from "./captureUploads";
+import { resumeCaptureUpload, sha256ForFile } from "./captureUploads";
 
 function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -16,6 +17,54 @@ function scanFile(bytes: number[]) {
 }
 
 describe("resumable capture upload", () => {
+  it("recovers a completed durable upload without init or byte transfer", async () => {
+    const file = scanFile([1,2,3]);
+    const sha256 = await sha256ForFile(file);
+    const fetchMock = vi.fn().mockResolvedValue(response({ command_id: "stable-command", status: "succeeded", upload: {
+      remote_upload_id: "saved-upload", exam: "exam", batch: "batch", sha256, size: file.size,
+      mime: file.type, chunk_size: 4, confirmed_offset: file.size, status: "completed",
+      file_asset_id: "asset", capture_file_id: "capture", created_at: "2026-09-08T00:00:00Z"
+    }}));
+    vi.stubGlobal("fetch",fetchMock);
+    const completed = await resumeCaptureUpload(new DesktopApiClient({baseUrl:"https://grading.example.edu"}), {
+      file, exam:"exam", batch:"batch", idempotency_key:"stable-command", remoteUploadId:"saved-upload"
+    },()=>{});
+    expect(completed.capture_file_id).toBe("capture");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://grading.example.edu/api/v1/capture/uploads/saved-upload");
+  });
+
+  it("rejects a recovered checkpoint belonging to another immutable input", async () => {
+    vi.stubGlobal("fetch",vi.fn().mockResolvedValue(response({command_id:"other-command",status:"processing",upload:{}})));
+    await expect(resumeCaptureUpload(new DesktopApiClient({baseUrl:"https://grading.example.edu"}), {
+      file:scanFile([1]),exam:"exam",batch:"batch",idempotency_key:"stable-command",remoteUploadId:"saved-upload"
+    },()=>{})).rejects.toMatchObject({code:"capture_upload_conflict"});
+  });
+  it("hashes large files incrementally without reading the whole Blob", async () => {
+    const bytes = new Uint8Array(9 * 1024 * 1024 + 17);
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = (index * 31 + 7) & 0xff;
+    const source = new Blob([bytes]);
+    let largestSlice = 0;
+    let sliceCount = 0;
+    const tracked = {
+      size: source.size,
+      type: source.type,
+      slice(start = 0, end = source.size) {
+        largestSlice = Math.max(largestSlice, end - start);
+        sliceCount += 1;
+        return source.slice(start, end);
+      },
+      arrayBuffer() {
+        throw new Error("whole-file arrayBuffer must not be used");
+      }
+    } as unknown as Blob;
+
+    const digest = await sha256ForFile(tracked, 1024 * 1024);
+    expect(digest).toBe(createHash("sha256").update(bytes).digest("hex"));
+    expect(largestSlice).toBeLessThanOrEqual(1024 * 1024);
+    expect(sliceCount).toBe(10);
+  });
+
   it("starts from the server-confirmed offset after an interrupted upload", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(response({

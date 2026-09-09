@@ -256,6 +256,16 @@ func (h *Handler) DiscardOMRCalibration(w http.ResponseWriter, r *http.Request) 
 	httpx.JSON(w, http.StatusOK, map[string]any{"calibration": decorateOMRCalibrationDetail(detail)})
 }
 
+func (h *Handler) RecoverScoringCommand(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	result, err := h.scoringStore().RecoverScoringCommand(r.Context(), user.TenantID, r.PathValue("examId"), user.ID, r.PathValue("commandId"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) StartScoringRun(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	var input StartScoringRunInput
@@ -272,7 +282,7 @@ func (h *Handler) StartScoringRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runSummary, summaryErr := h.scoringStore().GetScoringSummary(r.Context(), user.TenantID, run.ExamID)
-	if summaryErr == nil && runSummary.Run != nil {
+	if summaryErr == nil && runSummary.Run != nil && runSummary.Run.ID == run.ID {
 		run = *runSummary.Run
 	}
 	h.auditAction(r, "grading.scoring_run_started", "scoring_run", run.ID, "start exam scoring orchestration")
@@ -566,6 +576,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_grading_input", "grading input is invalid")
 	case errors.Is(err, ErrInvalidTransition):
 		httpx.Error(w, r, http.StatusConflict, "invalid_scoring_run_transition", "scoring run operation is not allowed in its current state")
+	case errors.Is(err, ErrCommandConflict):
+		httpx.Error(w, r, http.StatusConflict, "scoring_command_conflict", "command ID is already associated with another request")
 	case errors.Is(err, ErrForbidden):
 		httpx.Error(w, r, http.StatusForbidden, "grading_action_forbidden", "grading action is not permitted for this user")
 	case errors.Is(err, ErrAnswerMissing):

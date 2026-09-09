@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"fmt"
 	"math"
 	"sort"
@@ -11,6 +12,7 @@ import (
 )
 
 type MemoryStore struct {
+	receipts      commandreceipt.Memory
 	mu            sync.RWMutex
 	next          int
 	contexts      map[string]Context
@@ -221,9 +223,13 @@ type memoryTaskClaim struct {
 	ExpiresAt time.Time
 }
 
-func (s *MemoryStore) SubmitGrade(_ context.Context, tenantID string, id string, reviewerID string, input SubmitGradeInput) (SubmitResult, error) {
+func (s *MemoryStore) SubmitGrade(requestCtx context.Context, tenantID string, id string, reviewerID string, input SubmitGradeInput) (SubmitResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var replay SubmitResult
+	if found, err := s.receipts.Load(requestCtx, tenantID, reviewerID, "review.submit", id, input, &replay); err != nil || found {
+		return replay, err
+	}
 	task, ok := s.tasks[key(tenantID, id)]
 	if !ok {
 		return SubmitResult{}, ErrNotFound
@@ -274,13 +280,17 @@ func (s *MemoryStore) SubmitGrade(_ context.Context, tenantID string, id string,
 	if refreshed, ok := s.tasks[key(tenantID, id)]; ok {
 		task = refreshed
 	}
-	return SubmitResult{
+	result := SubmitResult{
 		Task:              cloneTask(task),
 		Grade:             cloneGrade(grade),
 		DoubleMarkSession: cloneSessionPtr(session),
 		FinalGrade:        cloneFinalGradePtr(finalGrade),
 		ArbitrationTask:   cloneArbitrationPtr(arbitrationTask),
-	}, nil
+	}
+	if err := s.receipts.Save(requestCtx, tenantID, reviewerID, "review.submit", id, input, result); err != nil {
+		return SubmitResult{}, err
+	}
+	return result, nil
 }
 
 func (s *MemoryStore) ReturnTask(_ context.Context, tenantID string, id string, actorID string, input ReturnTaskInput) (ReviewTask, error) {
@@ -607,7 +617,7 @@ func (s *MemoryStore) AssignArbitrationTask(_ context.Context, tenantID string, 
 	return cloneArbitration(task), nil
 }
 
-func (s *MemoryStore) SubmitArbitration(_ context.Context, tenantID string, id string, arbitratorID string, input SubmitArbitrationInput) (ArbitrationTask, FinalGrade, error) {
+func (s *MemoryStore) SubmitArbitration(requestCtx context.Context, tenantID string, id string, arbitratorID string, input SubmitArbitrationInput) (ArbitrationTask, FinalGrade, error) {
 	input.Reason = strings.TrimSpace(input.Reason)
 	input.StudentFeedback = strings.TrimSpace(input.StudentFeedback)
 	if input.Reason == "" || input.ExpectedRevision <= 0 {
@@ -615,6 +625,10 @@ func (s *MemoryStore) SubmitArbitration(_ context.Context, tenantID string, id s
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var replay ArbitrationSubmitResult
+	if found, err := s.receipts.Load(requestCtx, tenantID, arbitratorID, "review.arbitrate", id, input, &replay); err != nil || found {
+		return replay.Task, replay.Grade, err
+	}
 	task, ok := s.arbitrations[key(tenantID, id)]
 	if !ok {
 		return ArbitrationTask{}, FinalGrade{}, ErrNotFound
@@ -658,6 +672,9 @@ func (s *MemoryStore) SubmitArbitration(_ context.Context, tenantID string, id s
 	session.UpdatedAt = now
 	s.sessions[key(tenantID, session.ID)] = session
 	s.completeSessionReviewTasksLocked(tenantID, session, now)
+	if err := s.receipts.Save(requestCtx, tenantID, arbitratorID, "review.arbitrate", id, input, ArbitrationSubmitResult{Task: task, Grade: finalGrade}); err != nil {
+		return ArbitrationTask{}, FinalGrade{}, err
+	}
 	return cloneArbitration(task), cloneFinalGrade(finalGrade), nil
 }
 

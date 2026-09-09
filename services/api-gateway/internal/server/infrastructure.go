@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/auth"
@@ -200,9 +201,18 @@ func (i *Infrastructure) startPaperParseExecutor(executor *paper.ParseTaskExecut
 	go func() {
 		defer close(parseDone)
 		executor.Run(parseContext, func(err error) {
-			i.Logger.Error(context.Background(), "durable paper parse failed", map[string]any{
-				"event": "paper_parse_failed", "error": err.Error(),
-			})
+			fields := map[string]any{"event": "paper_parse_failed", "error": err.Error(), "error_code": "paper_parse_failed"}
+			var executionErr *paper.ParseExecutionError
+			if errors.As(err, &executionErr) {
+				fields["import_id"] = executionErr.ImportID
+				fields["run_id"] = executionErr.RunID
+				fields["generation"] = executionErr.Generation
+				fields["task_id"] = executionErr.TaskID
+				fields["attempt"] = executionErr.Attempt
+				fields["error_code"] = executionErr.ErrorCode
+				fields["lease_validation"] = executionErr.LeaseValidation
+			}
+			i.Logger.Error(context.Background(), "durable paper parse failed", fields)
 		})
 	}()
 	i.cleanup = append(i.cleanup, func() error {

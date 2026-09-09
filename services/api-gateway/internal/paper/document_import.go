@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/files"
+	"github.com/google/uuid"
 )
 
 const maxDocumentTextBytes = 700_000
@@ -70,6 +71,11 @@ type documentParseResponse struct {
 	Issues             []PaperImportIssue            `json:"issues"`
 }
 
+// PaperImportParseResult is the immutable parser output accepted by the
+// transactional publisher. Keeping this type exported lets integration tests
+// and alternate parser adapters exercise the exact command boundary.
+type PaperImportParseResult = documentParseResponse
+
 // The parser input is persisted before execution so it must have one stable
 // wire representation shared by the request builder and the task executor.
 type normalizedImportDocument = PaperImportParseDocument
@@ -82,25 +88,43 @@ func NewDocumentImportService(store Store, fileStore files.Store, objects files.
 }
 
 func (s *DocumentImportService) Start(ctx context.Context, tenantID, examID, userID string, input CreatePaperImportInput) (PaperImportJob, error) {
+	if input.CommandID == "" {
+		input.CommandID = uuid.NewString()
+	}
 	job, err := s.store.CreatePaperImport(ctx, tenantID, examID, userID, input)
 	if err != nil {
 		return PaperImportJob{}, err
 	}
-	return s.processSources(ctx, tenantID, userID, job)
+	return s.processAcceptedSources(ctx, tenantID, userID, job)
 }
 
 func (s *DocumentImportService) AddSources(ctx context.Context, tenantID, userID, importID string, input AddPaperImportSourcesInput) (PaperImportJob, error) {
+	if input.CommandID == "" {
+		input.CommandID = uuid.NewString()
+	}
 	job, err := s.store.AddPaperImportSources(ctx, tenantID, importID, userID, input)
 	if err != nil {
 		return PaperImportJob{}, err
 	}
-	return s.processSources(ctx, tenantID, userID, job)
+	return s.processAcceptedSources(ctx, tenantID, userID, job)
 }
 
 func (s *DocumentImportService) ReplaceSources(ctx context.Context, tenantID, userID, importID string, input ReplacePaperImportSourcesInput) (PaperImportJob, error) {
+	if input.CommandID == "" {
+		input.CommandID = uuid.NewString()
+	}
 	job, err := s.store.ReplacePaperImportSources(ctx, tenantID, importID, userID, input)
 	if err != nil {
 		return PaperImportJob{}, err
+	}
+	return s.processAcceptedSources(ctx, tenantID, userID, job)
+}
+
+func (s *DocumentImportService) processAcceptedSources(ctx context.Context, tenantID, userID string, job PaperImportJob) (PaperImportJob, error) {
+	if _, durable := s.store.(paperImportDispatchStore); durable {
+		// Creation and its dispatch intent have already committed atomically.
+		// Only the durable executor performs I/O; command replay never reschedules.
+		return job, nil
 	}
 	return s.processSources(ctx, tenantID, userID, job)
 }
@@ -115,7 +139,13 @@ func (s *DocumentImportService) processSources(ctx context.Context, tenantID, us
 			continue
 		}
 		if !errors.Is(textErr, errDocumentOCRRequired) {
-			failed, _ := s.store.FailPaperImport(ctx, tenantID, job.ID, "source_text_unavailable", []string{textErr.Error()})
+			if _, durable := s.store.(paperImportDispatchStore); durable {
+				return PaperImportJob{}, textErr
+			}
+			failed, failErr := s.store.FailPaperImport(ctx, tenantID, job.ID, "source_text_unavailable", []string{textErr.Error()})
+			if failErr != nil {
+				return PaperImportJob{}, failErr
+			}
 			return failed, nil
 		}
 		asset, getErr := s.files.Get(ctx, tenantID, source.FileAssetID)
@@ -127,7 +157,10 @@ func (s *DocumentImportService) processSources(ctx context.Context, tenantID, us
 	if len(ocrAssets) > 0 {
 		runtime, ok := s.store.(PaperImportRuntime)
 		if !ok {
-			failed, _ := s.store.FailPaperImport(ctx, tenantID, job.ID, "paper_ocr_unavailable", []string{"扫描版 PDF 需要 OCR Worker，但当前存储未配置任务运行时"})
+			failed, failErr := s.store.FailPaperImport(ctx, tenantID, job.ID, "paper_ocr_unavailable", []string{"扫描版 PDF 需要 OCR Worker，但当前存储未配置任务运行时"})
+			if failErr != nil {
+				return PaperImportJob{}, failErr
+			}
 			return failed, nil
 		}
 		if err := runtime.QueuePaperImportOCR(ctx, tenantID, job, userID, ocrAssets); err != nil {
@@ -274,7 +307,10 @@ func (s *DocumentImportService) ExecuteParse(ctx context.Context, tenantID, impo
 		return PaperImportJob{}, err
 	}
 	if job.Status == "review_required" {
-		return job, nil
+		if job.ResultGeneration == job.Generation && job.Generation > 0 {
+			return job, nil
+		}
+		return PaperImportJob{}, ErrConflict
 	}
 	if job.Status != "processing" {
 		return PaperImportJob{}, ErrConflict
@@ -288,6 +324,25 @@ func (s *DocumentImportService) ExecuteParse(ctx context.Context, tenantID, impo
 	parsed.Issues = append(parsed.Issues, input.ExtraIssues...)
 	parsed.Issues = appendNoExamContentIssue(parsed, input.Documents)
 	return s.store.CompletePaperImportCandidates(ctx, tenantID, job.ID, parsed.Documents, parsed.QuestionCandidates, parsed.AnswerCandidates, parsed.SolutionCandidates, parsed.RubricCandidates, parsed.Issues)
+}
+
+func (s *DocumentImportService) computeParseRun(ctx context.Context, tenantID string, binding PaperImportRunBinding) (documentParseResponse, error) {
+	job, err := s.store.GetPaperImport(ctx, tenantID, binding.ImportID)
+	if err != nil {
+		return documentParseResponse{}, err
+	}
+	if job.Status != "processing" || job.Generation != binding.Generation || job.RunID != binding.RunID || job.SourceRevision != binding.SourceRevision {
+		return documentParseResponse{}, ErrConflict
+	}
+	parseContext, release := s.beginParse(ctx, tenantID, job.ID)
+	defer release()
+	parsed, err := s.parseForTenant(parseContext, tenantID, job.ID, job.Subject, binding.Input.Documents)
+	if err != nil {
+		return documentParseResponse{}, err
+	}
+	parsed.Issues = append(parsed.Issues, binding.Input.ExtraIssues...)
+	parsed.Issues = appendNoExamContentIssue(parsed, binding.Input.Documents)
+	return parsed, nil
 }
 
 func sortPaperImportOCRBlocks(blocks []PaperImportOCRBlock) {

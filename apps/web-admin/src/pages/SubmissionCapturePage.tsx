@@ -30,21 +30,17 @@ import {
 import { ApiClientError, getSafeUserText, getUserErrorMessage } from "../api/client";
 import { downloadFileBlob, uploadFile, uploadFileWithProgress } from "../api/files";
 import { listExams, type Exam } from "../api/exams";
-import { listStudents, type Student } from "../api/org";
+import type { Student } from "../api/org";
 import {
   addSubmissionPage,
   createOcrTask,
   createSubmission,
   generateAnswerSegments,
   getSubmission,
-  listAnswerSegments,
   listOcrTasks,
-  listSubmissionPages,
-  listSubmissions,
   replaceSubmissionPage,
   runQualityCheck,
   updateSubmissionStatus,
-  type AnswerSegment,
   type OcrTask,
   type QualityIssue,
   type Submission,
@@ -58,19 +54,16 @@ import { StatusTag } from "../components/StatusTag";
 import { DataTableShell, FilterBar, PageHeader } from "@edugrade/ui";
 import type { StatusTone } from "../types";
 import { hashQueryParam } from "../router/query";
+import { ExclusiveCommandGate, LatestRequestGate, runCaptureCommand } from "../features/capture/captureWorkflow";
+import {
+  buildSubmissionView,
+  loadCapturePage,
+  loadNextCapturePage,
+  type SubmissionView
+} from "../features/capture/captureQueries";
 
 type UploadRequest = Parameters<NonNullable<UploadProps["customRequest"]>>[0];
 type QualityFilter = "all" | "blurry" | "missing_page" | "duplicate_page" | "ocr_failed" | "needs_manual_handling";
-
-interface SubmissionView {
-  submission: Submission;
-  pages: SubmissionPage[];
-  ocrTasks: OcrTask[];
-  ocrNextCursor: string;
-  ocrHasMore: boolean;
-  segments: AnswerSegment[];
-  detailError?: string;
-}
 
 interface UploadQueueItem {
   id: string;
@@ -286,30 +279,6 @@ function issueTone(code: string): StatusTone {
   return "neutral";
 }
 
-async function buildSubmissionView(submission: Submission): Promise<SubmissionView> {
-  const [pagesResult, ocrResult, segmentResult] = await Promise.allSettled([
-    listSubmissionPages(submission.id),
-    listOcrTasks(submission.id, { limit: 20 }),
-    listAnswerSegments(submission.id)
-  ]);
-  const errors = [pagesResult, ocrResult, segmentResult]
-    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-    .map((result) => formatError(result.reason));
-  return {
-    submission,
-    pages: pagesResult.status === "fulfilled" ? pagesResult.value.pages : submission.pages ?? [],
-    ocrTasks: ocrResult.status === "fulfilled" ? ocrResult.value.tasks : [],
-    ocrNextCursor: ocrResult.status === "fulfilled" ? ocrResult.value.next_cursor : "",
-    ocrHasMore: ocrResult.status === "fulfilled" && ocrResult.value.has_more,
-    segments: segmentResult.status === "fulfilled" ? segmentResult.value.segments : [],
-    detailError: errors.length > 0 ? errors.join("；") : undefined
-  };
-}
-
-function compactSubmissionView(submission: Submission): SubmissionView {
-  return { submission, pages: submission.pages ?? [], ocrTasks: [], ocrNextCursor: "", ocrHasMore: false, segments: [] };
-}
-
 export function SubmissionCapturePage({
   canManage,
   canReadStudentNames,
@@ -344,8 +313,9 @@ export function SubmissionCapturePage({
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [ocrDrawer, setOcrDrawer] = useState<{ row: SubmissionView; tasks: OcrTask[]; loading: boolean; loadingMore?: boolean; error?: string } | null>(null);
-  const captureRequestRef = useRef(0);
-  const previewRequestRef = useRef(0);
+  const captureRequestRef = useRef(new LatestRequestGate());
+  const previewRequestRef = useRef(new LatestRequestGate());
+  const commandGateRef = useRef(new ExclusiveCommandGate());
 
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
   const studentById = useMemo(() => new Map(students.map((student) => [student.id, student])), [students]);
@@ -369,7 +339,7 @@ export function SubmissionCapturePage({
 
   const loadCaptureData = useCallback(
     async (examId: string) => {
-      const requestId = ++captureRequestRef.current;
+      const requestId = captureRequestRef.current.begin();
       if (!examId) {
         setRows([]);
         setNextSubmissionCursor("");
@@ -381,28 +351,20 @@ export function SubmissionCapturePage({
       setCaptureError(null);
       setStudentLookupError(null);
       try {
-        const submissionResult = await listSubmissions(examId, { limit: 50 });
-        const studentIDs = Array.from(new Set(submissionResult.submissions.map((item) => item.student_id).filter((id): id is string => Boolean(id))));
-        const studentResult = await Promise.allSettled([
-          canReadStudentNames && studentIDs.length > 0 ? listStudents({ ids: studentIDs, limit: 200 }) : Promise.resolve({ students: [] })
-        ]).then(([result]) => result);
-        if (requestId !== captureRequestRef.current) return;
-        if (studentResult.status === "fulfilled") {
-          setStudents(studentResult.value.students);
-        } else {
-          setStudents([]);
-          setStudentLookupError(formatError(studentResult.reason));
-        }
-        setRows(submissionResult.submissions.map(compactSubmissionView));
-        setNextSubmissionCursor(submissionResult.next_cursor ?? "");
-        setHasMoreSubmissions(Boolean(submissionResult.has_more));
+        const result = await loadCapturePage(examId, canReadStudentNames);
+        if (!captureRequestRef.current.isCurrent(requestId)) return;
+        setStudents(result.students);
+        setStudentLookupError(result.studentLookupError ? formatError(result.studentLookupError) : null);
+        setRows(result.rows);
+        setNextSubmissionCursor(result.nextCursor);
+        setHasMoreSubmissions(result.hasMore);
       } catch (currentError) {
-        if (requestId !== captureRequestRef.current) return;
+        if (!captureRequestRef.current.isCurrent(requestId)) return;
         setCaptureError(formatError(currentError));
         setNextSubmissionCursor("");
         setHasMoreSubmissions(false);
       } finally {
-        if (requestId === captureRequestRef.current) setCaptureLoading(false);
+        if (captureRequestRef.current.isCurrent(requestId)) setCaptureLoading(false);
       }
     },
     [canReadStudentNames]
@@ -410,34 +372,27 @@ export function SubmissionCapturePage({
 
   const loadMoreSubmissions = useCallback(async () => {
     if (!selectedExamId || !hasMoreSubmissions || !nextSubmissionCursor || loadingMore) return;
-    const requestId = ++captureRequestRef.current;
+    const requestId = captureRequestRef.current.begin();
     setLoadingMore(true);
     try {
-      const result = await listSubmissions(selectedExamId, { limit: 50, cursor: nextSubmissionCursor });
-      if (requestId !== captureRequestRef.current) return;
-      if (canReadStudentNames) {
-        const studentIDs = Array.from(new Set(result.submissions.map((item) => item.student_id).filter((id): id is string => Boolean(id))));
-        if (studentIDs.length > 0) {
-          const studentResult = await listStudents({ ids: studentIDs, limit: 200 });
-          if (requestId !== captureRequestRef.current) return;
-          setStudents((current) => {
-            const byID = new Map(current.map((item) => [item.id, item]));
-            studentResult.students.forEach((item) => byID.set(item.id, item));
-            return Array.from(byID.values());
-          });
-        }
-      }
-      setRows((current) => {
-        const byID = new Map(current.map((item) => [item.submission.id, item]));
-        result.submissions.forEach((submission) => byID.set(submission.id, compactSubmissionView(submission)));
+      const result = await loadNextCapturePage(selectedExamId, nextSubmissionCursor, canReadStudentNames);
+      if (!captureRequestRef.current.isCurrent(requestId)) return;
+      setStudents((current) => {
+        const byID = new Map(current.map((item) => [item.id, item]));
+        result.students.forEach((item) => byID.set(item.id, item));
         return Array.from(byID.values());
       });
-      setNextSubmissionCursor(result.next_cursor ?? "");
-      setHasMoreSubmissions(Boolean(result.has_more));
+      setRows((current) => {
+        const byID = new Map(current.map((item) => [item.submission.id, item]));
+        result.rows.forEach((row) => byID.set(row.submission.id, row));
+        return Array.from(byID.values());
+      });
+      setNextSubmissionCursor(result.nextCursor);
+      setHasMoreSubmissions(result.hasMore);
     } catch (currentError) {
-      if (requestId === captureRequestRef.current) message.error(formatError(currentError));
+      if (captureRequestRef.current.isCurrent(requestId)) message.error(formatError(currentError));
     } finally {
-      if (requestId === captureRequestRef.current) setLoadingMore(false);
+      if (captureRequestRef.current.isCurrent(requestId)) setLoadingMore(false);
     }
   }, [canReadStudentNames, hasMoreSubmissions, loadingMore, message, nextSubmissionCursor, selectedExamId]);
 
@@ -463,7 +418,7 @@ export function SubmissionCapturePage({
 
   const refreshSingle = async (submissionId: string) => {
     const detail = await getSubmission(submissionId);
-    const view = await buildSubmissionView(detail.submission);
+    const view = await buildSubmissionView(detail.submission, formatError);
     setRows((current) => current.map((item) => (item.submission.id === submissionId ? view : item)));
     setPageDrawer((current) => (current?.submission.id === submissionId ? view : current));
     setOcrDrawer((current) => (current?.row.submission.id === submissionId ? { ...current, row: view } : current));
@@ -591,35 +546,35 @@ export function SubmissionCapturePage({
     return studentById.get(submission.student_id)?.name ?? "已关联（姓名未加载）";
   };
 
-  const runAction = async (key: string, action: () => Promise<void>, successText: string) => {
-    setActioning(key);
+  const runAction = async (key: string, action: () => Promise<void>, successText: string, reload?: () => Promise<void>) => {
     try {
-      await action();
-      message.success(successText);
+      const result = await runCaptureCommand({
+        key, gate: commandGateRef.current, command: action, reload,
+        onStart: () => setActioning(key), onSettled: () => setActioning((current) => current === key ? null : current)
+      });
+      if (result === "completed") message.success(successText);
     } catch (currentError) {
       message.error(formatError(currentError));
-    } finally {
-      setActioning(null);
     }
   };
 
   const openPages = async (row: SubmissionView) => {
-    previewRequestRef.current += 1;
+    previewRequestRef.current.invalidate();
     setPageDrawer(row);
     setPreview(null);
     if (row.pages.length === 0 && row.submission.actual_page_count > 0) {
-      const detailed = await buildSubmissionView(row.submission);
+      const detailed = await buildSubmissionView(row.submission, formatError);
       setRows((current) => current.map((item) => item.submission.id === detailed.submission.id ? detailed : item));
       setPageDrawer(detailed);
     }
   };
 
   const previewPage = async (page: SubmissionPage) => {
-    const requestId = ++previewRequestRef.current;
+    const requestId = previewRequestRef.current.begin();
     setPreviewLoading(true);
     try {
       const file = await downloadFileBlob(page.file_asset_id);
-      if (requestId !== previewRequestRef.current) return;
+      if (!previewRequestRef.current.isCurrent(requestId)) return;
       setPreview((current) => {
         if (current?.url) {
           URL.revokeObjectURL(current.url);
@@ -627,9 +582,9 @@ export function SubmissionCapturePage({
         return { url: URL.createObjectURL(file.blob), contentType: file.contentType, filename: file.filename };
       });
     } catch (currentError) {
-      if (requestId === previewRequestRef.current) message.error(formatError(currentError));
+      if (previewRequestRef.current.isCurrent(requestId)) message.error(formatError(currentError));
     } finally {
-      if (requestId === previewRequestRef.current) setPreviewLoading(false);
+      if (previewRequestRef.current.isCurrent(requestId)) setPreviewLoading(false);
     }
   };
 
@@ -649,16 +604,16 @@ export function SubmissionCapturePage({
           submission_id: pageDrawer.submission.id
         });
         await replaceSubmissionPage(pageDrawer.submission.id, page.page_no, upload.file.id);
-        await refreshSingle(pageDrawer.submission.id);
       },
-      "页面已替换，系统将重新检查图片质量"
+      "页面已替换，系统将重新检查图片质量",
+      () => refreshSingle(pageDrawer.submission.id)
     );
   };
 
   const openOcrDrawer = async (row: SubmissionView) => {
     setOcrDrawer({ row, tasks: [], loading: true });
     try {
-      const detailed = row.ocrTasks.length > 0 ? row : await buildSubmissionView(row.submission);
+      const detailed = row.ocrTasks.length > 0 ? row : await buildSubmissionView(row.submission, formatError);
       setRows((current) => current.map((item) => item.submission.id === detailed.submission.id ? detailed : item));
       setOcrDrawer({ row: detailed, tasks: detailed.ocrTasks, loading: false });
     } catch (currentError) {
@@ -760,26 +715,22 @@ export function SubmissionCapturePage({
           if (qualityPending) {
             return runAction(`quality-${id}`, async () => {
               await runQualityCheck(id);
-              await refreshSingle(id);
-            }, "图片质量检查完成");
+            }, "图片质量检查完成", () => refreshSingle(id));
           }
           if (needsReady) {
             return runAction(`ready-${id}`, async () => {
               await updateSubmissionStatus(id, "ready_for_ocr", row.submission.revision);
-              await refreshSingle(id);
-            }, "答题卡已转入待识别，可点击『开始识别』继续");
+            }, "答题卡已转入待识别，可点击『开始识别』继续", () => refreshSingle(id));
           }
           if (needsOcr) {
             return runAction(`ocr-${id}`, async () => {
               await createOcrTask(id);
-              await refreshSingle(id);
-            }, "文字识别已开始");
+            }, "文字识别已开始", () => refreshSingle(id));
           }
           if (needsSegments) {
             return runAction(`segment-${id}`, async () => {
               await generateAnswerSegments(id);
-              await refreshSingle(id);
-            }, "题目区域已生成");
+            }, "题目区域已生成", () => refreshSingle(id));
           }
           void openPages(row);
           return Promise.resolve();
@@ -1029,7 +980,7 @@ export function SubmissionCapturePage({
       )}
 
       <Drawer title="答题卡页面" open={Boolean(pageDrawer)} width={860} onClose={() => {
-        previewRequestRef.current += 1;
+        previewRequestRef.current.invalidate();
         setPreviewLoading(false);
         setPageDrawer(null);
         setPreview(null);

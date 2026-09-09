@@ -265,16 +265,16 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 		t.Fatalf("restore review task assignment: %v", err)
 	}
 	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", graderToken, `{"expected_revision":2,"score":6,"rubric_selections":[{"point_id":"p1","score":6}],"comments":"over max"}`, http.StatusBadRequest)
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/review-tasks/"+reviewTaskID+"/submit", graderToken, `{"expected_revision":2,"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"story041 synthetic human grade","reason":"manual review after mock AI"}`, http.StatusCreated)
+	e2eBusinessCommandReplay(t, router, "/api/v1/review-tasks/"+reviewTaskID+"/submit", graderToken, `{"expected_revision":2,"score":4,"rubric_selections":[{"point_id":"p1","score":4}],"comments":"story041 synthetic human grade","reason":"manual review after mock AI"}`, "review", http.StatusCreated)
 
 	finalized := e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/finalize", adminToken, `{}`, http.StatusCreated)
 	if finalized["status"] != "pending_confirmation" || e2eFloat(t, finalized, "created_finals") != 1 {
 		t.Fatalf("PostgreSQL finalize should create one final grade: %#v", finalized)
 	}
 	e2eExpectStatus(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/publish", adminToken, `{"reason":"before confirmation"}`, http.StatusConflict)
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/confirm-grades", adminToken, `{"reason":"story041 synthetic confirmation"}`, http.StatusOK)
+	e2eBusinessCommandReplay(t, router, "/api/v1/exams/"+examID+"/confirm-grades", adminToken, `{"reason":"story041 synthetic confirmation"}`, "score", http.StatusOK)
 	e2ePostJSON(t, router, http.MethodPut, "/api/v1/exams/"+examID+"/roster/"+otherStudentID+"/attendance", adminToken, `{"status":"absent","reason":"synthetic student intentionally has no answer sheet"}`, http.StatusOK)
-	e2ePostJSON(t, router, http.MethodPost, "/api/v1/exams/"+examID+"/publish", adminToken, `{"reason":"story041 synthetic publish"}`, http.StatusOK)
+	e2eBusinessCommandReplay(t, router, "/api/v1/exams/"+examID+"/publish", adminToken, `{"reason":"story041 synthetic publish"}`, "score", http.StatusOK)
 	publishedExam := e2eGetJSON(t, router, "/api/v1/exams/"+examID, adminToken, http.StatusOK)["exam"].(map[string]any)
 	if publishedExam["status"] != "published" {
 		t.Fatalf("publishing grades must advance the exam to published: %#v", publishedExam)
@@ -299,6 +299,7 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	audits := e2eGetJSON(t, router, "/api/v1/audit-logs?limit=200", adminToken, http.StatusOK)["audit_logs"].([]any)
 	e2eAssertAuditActions(t, audits, []string{"score.roster_attendance_updated", "score.published", "appeal.assigned", "appeal.teacher_recommendation_submitted", "appeal.reviewed", "review.human_grade_submitted"})
+	e2eArbitrationAndExportCommands(t, db, demoTenantID, examID, segmentID, graderID, e2eLookupUserID(t, db, "demo", "school_admin"), e2eLookupUserID(t, db, "demo", "tenant_admin"))
 }
 
 func e2eProjectProcessingUntilCurrent(t *testing.T, db *sql.DB, store *processing.PostgresStore, tenantID, examID string) {
@@ -523,7 +524,15 @@ func e2ePostgresRouter(db *sql.DB) http.Handler {
 	if err != nil {
 		panic(fmt.Sprintf("build production PostgreSQL application stores: %v", err))
 	}
-	return NewRouterWithApplicationStores(cfg, logger.New(io.Discard, "error"), nil, objectStore, stores)
+	modules, err := NewTransactionalApplicationModules(ApplicationDependencies{
+		Config: cfg, ObjectStore: objectStore, DB: db,
+	}, stores)
+	if err != nil {
+		panic(fmt.Sprintf("build production PostgreSQL application modules: %v", err))
+	}
+	return NewRouterComplete(RouterDependencies{
+		Config: cfg, Logger: logger.New(io.Discard, "error"), Modules: modules,
+	})
 }
 
 func e2eBarcodeKeyring() capture.BarcodeKeyring {
@@ -578,6 +587,10 @@ func e2eOpenPostgresTestDB(t *testing.T, dsn string) *sql.DB {
 }
 
 func e2eApplyPostgresMigrations(t *testing.T, db *sql.DB) {
+	e2eApplyPostgresMigrationsThrough(t, db, "")
+}
+
+func e2eApplyPostgresMigrationsThrough(t *testing.T, db *sql.DB, lastMigration string) {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join("..", "..", "migrations", "*.sql"))
 	if err != nil {
@@ -587,7 +600,10 @@ func e2eApplyPostgresMigrations(t *testing.T, db *sql.DB) {
 		t.Fatal("no migrations found for PostgreSQL E2E")
 	}
 	sort.Strings(files)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// This provisions the entire historical schema (123+ migrations), not one
+	// query. Keep setup bounded without conflating disk contention with a
+	// business-operation performance regression.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if _, err := db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS edugrade_e2e_applied_migration (
@@ -598,6 +614,9 @@ CREATE TABLE IF NOT EXISTS edugrade_e2e_applied_migration (
 	}
 	for _, file := range files {
 		name := filepath.Base(file)
+		if lastMigration != "" && name > lastMigration {
+			continue
+		}
 		var applied bool
 		err := db.QueryRowContext(ctx, `SELECT true FROM edugrade_e2e_applied_migration WHERE name=$1`, name).Scan(&applied)
 		if err == nil {

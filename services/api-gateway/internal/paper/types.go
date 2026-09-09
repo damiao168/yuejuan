@@ -181,6 +181,7 @@ type PaperImportIssue struct {
 }
 
 type PaperImportJob struct {
+	dispatchLeaseOwner string
 	ID                 string                     `json:"id"`
 	TenantID           string                     `json:"tenant_id"`
 	ExamID             string                     `json:"exam_id"`
@@ -188,6 +189,10 @@ type PaperImportJob struct {
 	PaperFileAssetID   string                     `json:"paper_file_asset_id"`
 	AnswerFileAssetID  string                     `json:"answer_file_asset_id"`
 	Status             string                     `json:"status"`
+	Generation         int64                      `json:"generation"`
+	RunID              string                     `json:"run_id"`
+	SourceRevision     string                     `json:"source_revision"`
+	ResultGeneration   int64                      `json:"result_generation,omitempty"`
 	Subject            string                     `json:"subject"`
 	Sources            []PaperImportSource        `json:"sources"`
 	QuestionCandidates []QuestionCandidate        `json:"question_candidates"`
@@ -210,6 +215,7 @@ type CreatePaperImportInput struct {
 	AnswerFileAssetID string                         `json:"answer_file_asset_id"`
 	Subject           string                         `json:"subject"`
 	Sources           []CreatePaperImportSourceInput `json:"sources"`
+	CommandID         string                         `json:"command_id,omitempty"`
 }
 
 type CreatePaperImportSourceInput struct {
@@ -219,11 +225,15 @@ type CreatePaperImportSourceInput struct {
 }
 
 type AddPaperImportSourcesInput struct {
-	Sources []CreatePaperImportSourceInput `json:"sources"`
+	Sources            []CreatePaperImportSourceInput `json:"sources"`
+	CommandID          string                         `json:"command_id,omitempty"`
+	ExpectedGeneration int64                          `json:"expected_generation,omitempty"`
 }
 
 type ReplacePaperImportSourcesInput struct {
-	Sources []ReplacePaperImportSourceInput `json:"sources"`
+	Sources            []ReplacePaperImportSourceInput `json:"sources"`
+	CommandID          string                          `json:"command_id,omitempty"`
+	ExpectedGeneration int64                           `json:"expected_generation,omitempty"`
 }
 
 type ReplacePaperImportSourceInput struct {
@@ -233,7 +243,8 @@ type ReplacePaperImportSourceInput struct {
 }
 
 type ReviewPaperImportInput struct {
-	Questions []PaperImportDraftQuestion `json:"questions"`
+	ExpectedGeneration int64                      `json:"expected_generation"`
+	Questions          []PaperImportDraftQuestion `json:"questions"`
 }
 
 type PaperImportOCRAsset struct {
@@ -291,6 +302,21 @@ type PaperImportParseDocument struct {
 type PaperImportParseRequest struct {
 	Documents   []PaperImportParseDocument `json:"documents"`
 	ExtraIssues []PaperImportIssue         `json:"extra_issues"`
+}
+
+type PaperImportRunBinding struct {
+	ImportID       string
+	RunID          string
+	Generation     int64
+	SourceRevision string
+	InputID        string
+	InputHash      string
+	Input          PaperImportParseRequest
+}
+
+type PaperImportPendingDispatch struct {
+	Job   PaperImportJob
+	Owner string
 }
 
 type PaperImportRuntimeFailure struct {

@@ -16,6 +16,7 @@ var (
 	ErrRevisionConflict  = errors.New("exam revision conflict")
 	ErrScopeForbidden    = errors.New("exam access scope forbidden")
 	ErrCandidatesFrozen  = errors.New("exam candidates are frozen")
+	ErrCommandConflict   = errors.New("exam session command was reused with different input")
 )
 
 type Exam struct {
@@ -92,6 +93,18 @@ type CreateSessionInput struct {
 
 type SessionStore interface {
 	CreateExamSession(ctx context.Context, scope auth.AccessScope, createdBy string, input CreateSessionInput) (ExamSession, error)
+}
+
+type ExamSessionCommandResult struct {
+	CommandID  string       `json:"command_id"`
+	Status     string       `json:"status"`
+	HTTPStatus int          `json:"http_status,omitempty"`
+	ErrorCode  string       `json:"error_code,omitempty"`
+	Session    *ExamSession `json:"exam_session,omitempty"`
+}
+
+type SessionCommandStore interface {
+	RecoverExamSessionCommand(ctx context.Context, scope auth.AccessScope, createdBy, commandID string) (ExamSessionCommandResult, error)
 }
 
 type CreateInput struct {

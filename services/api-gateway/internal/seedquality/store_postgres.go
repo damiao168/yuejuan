@@ -3,6 +3,7 @@ package seedquality
 import (
 	"context"
 	"database/sql"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -175,6 +176,10 @@ func (s *PostgresStore) CompleteTask(ctx context.Context, tenantID, taskID, grad
 		return Task{}, Observation{}, err
 	}
 	defer tx.Rollback()
+	var replay commandResult
+	if found, err := commandreceipt.Load(ctx, tx, tenantID, graderID, "review.submit", taskID, input, &replay); err != nil || found {
+		return Task{ID: replay.Task.ID, Status: replay.Task.Status, Revision: replay.Task.Revision}, Observation{}, err
+	}
 	task, err := scanTask(tx.QueryRowContext(ctx, seedTaskSelect+` WHERE tenant_id=$1::uuid AND id=$2::uuid FOR UPDATE`, tenantID, taskID))
 	if err != nil {
 		return Task{}, Observation{}, err
@@ -212,6 +217,9 @@ SET status='completed',revision=revision+1,updated_at=$4
 WHERE tenant_id=$1::uuid AND id=$2::uuid AND grader_id=$3::uuid
 RETURNING `+seedTaskColumns, tenantID, taskID, graderID, observation.ObservedAt))
 	if err != nil {
+		return Task{}, Observation{}, err
+	}
+	if err := commandreceipt.Save(ctx, tx, tenantID, graderID, "review.submit", taskID, input, seedCommandResult(task)); err != nil {
 		return Task{}, Observation{}, err
 	}
 	if err := tx.Commit(); err != nil {

@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"errors"
 )
 
@@ -181,6 +182,7 @@ type ExportResult struct {
 }
 
 type Store interface {
+	RecoverCommand(context.Context, string, string, string) (commandreceipt.Receipt, error)
 	StudentReport(ctx context.Context, tenantID string, examID string, studentID string) (StudentReport, error)
 	Overview(ctx context.Context, tenantID string, examID string) (OverviewReport, error)
 	ClassReports(ctx context.Context, tenantID string, examID string) ([]ClassReport, error)

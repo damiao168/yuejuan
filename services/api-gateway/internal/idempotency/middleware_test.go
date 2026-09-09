@@ -60,3 +60,67 @@ func TestMemoryStoreAllowsOnlyExplicitStaleTakeover(t *testing.T) {
 		t.Fatalf("explicit stale reservation should be recoverable: execute=%v err=%v", execute, err)
 	}
 }
+
+func TestExpiredProcessingReservationRetainsOriginalFingerprint(t *testing.T) {
+	store := NewMemoryStore()
+	input := BeginInput{
+		TenantID: "tenant-1", ActorID: "actor-1", Method: http.MethodPost, Route: "/api/v1/exams/{examId}/publish",
+		Key: "stable-command", RequestHash: "original-hash", ExpiresAt: time.Now().UTC().Add(-time.Hour),
+	}
+	if _, execute, err := store.Begin(context.Background(), input); err != nil || !execute {
+		t.Fatalf("initial begin: execute=%v err=%v", execute, err)
+	}
+	changed := input
+	changed.RequestHash = "changed-hash"
+	changed.ExpiresAt = time.Now().UTC().Add(time.Hour)
+	changed.AllowTakeover = true
+	changed.StaleBefore = time.Now().UTC().Add(time.Minute)
+	if _, _, err := store.Begin(context.Background(), changed); !errors.Is(err, ErrKeyConflict) {
+		t.Fatalf("expired processing fingerprint was discarded: %v", err)
+	}
+	input.ExpiresAt = changed.ExpiresAt
+	input.AllowTakeover = true
+	input.StaleBefore = changed.StaleBefore
+	if _, execute, err := store.Begin(context.Background(), input); err != nil || !execute {
+		t.Fatalf("original frozen request could not take over: execute=%v err=%v", execute, err)
+	}
+}
+
+func TestExpiredNonRecoverableReservationKeepsLegacyTTLBehavior(t *testing.T) {
+	store := NewMemoryStore()
+	input := BeginInput{
+		TenantID: "tenant-1", ActorID: "actor-1", Method: http.MethodPost, Route: "/api/v1/files",
+		Key: "legacy-command", RequestHash: "original", ExpiresAt: time.Now().UTC().Add(-time.Hour),
+	}
+	if _, execute, err := store.Begin(context.Background(), input); err != nil || !execute {
+		t.Fatalf("initial legacy begin: execute=%v err=%v", execute, err)
+	}
+	input.RequestHash = "replacement"
+	input.ExpiresAt = time.Now().UTC().Add(time.Hour)
+	if _, execute, err := store.Begin(context.Background(), input); err != nil || !execute {
+		t.Fatalf("expired non-recoverable reservation did not retain TTL behavior: execute=%v err=%v", execute, err)
+	}
+}
+
+func TestRecoverableRoutesAreExactClosedBusinessCommands(t *testing.T) {
+	want := []string{
+		"POST /api/v1/exam-sessions",
+		"POST /api/v1/exams/{examId}/capture-batches",
+		"POST /api/v1/exams/{examId}/scoring-runs",
+		"POST /api/v1/subjective-grading-batches",
+		"POST /api/v1/subjective-grading-batches/{batchId}/enqueue",
+		"POST /api/v1/review-tasks/{id}/submit",
+		"POST /api/v1/arbitration-tasks/{id}/submit",
+		"POST /api/v1/exams/{examId}/confirm-grades",
+		"POST /api/v1/exams/{examId}/publish",
+		"POST /api/v1/exams/{examId}/reports/export",
+	}
+	if len(recoverableRoutes) != len(want) {
+		t.Fatalf("recoverable route allowlist changed without an explicit closed-command review: got=%d want=%d", len(recoverableRoutes), len(want))
+	}
+	for _, route := range want {
+		if !recoverableRoutes[route] {
+			t.Fatalf("closed business command missing from stale takeover allowlist: %s", route)
+		}
+	}
+}

@@ -75,9 +75,85 @@ JOIN question_row q ON q.exam_id=e.id
 	if err != nil {
 		t.Fatalf("create paper import: %v", err)
 	}
-	invalid := postgresPaperImportDraft("1", "essay", 10)
-	if _, err := store.CompletePaperImport(ctx, tenantID, job.ID, []paper.PaperImportDraftQuestion{invalid}, nil); err != nil {
-		t.Fatalf("preview invalid candidate: %v", err)
+	runtimeStore := workerruntime.NewPostgresStore(db)
+	parseDocuments := make([]paper.PaperImportParseDocument, 0, len(job.Sources))
+	for _, source := range job.Sources {
+		parseDocuments = append(parseDocuments, paper.PaperImportParseDocument{SourceID: source.ID, FileAssetID: source.FileAssetID, DocumentIndex: source.DocumentIndex, RoleHint: source.RoleHint, Content: "1. imported"})
+	}
+	parseInput := paper.PaperImportParseRequest{Documents: parseDocuments}
+	if err = store.QueuePaperImportParse(ctx, tenantID, job, userID, parseInput); err != nil {
+		t.Fatalf("queue versioned apply-gate parse: %v", err)
+	}
+	claimedParse, err := runtimeStore.Claim(ctx, tenantID, workerruntime.ClaimInput{QueueName: "paper-parse", WorkerService: "apply-gate-test", WorkerInstanceID: "apply-gate-test", Limit: 1, LeaseSeconds: 300})
+	if err != nil || len(claimedParse) != 1 {
+		t.Fatalf("claim versioned apply-gate parse: %#v err=%v", claimedParse, err)
+	}
+	binding, err := store.LoadPaperImportParseRunInput(ctx, tenantID, claimedParse[0].SourceID)
+	if err != nil {
+		t.Fatalf("load versioned apply-gate input: %v", err)
+	}
+	invalidScore := 10.0
+	t.Run("MIG immutable parser input and accepted source snapshot", func(t *testing.T) {
+		if _, err := db.ExecContext(ctx, `UPDATE paper_import_parse_input SET documents='[]'::jsonb WHERE id=$1::uuid`, binding.InputID); err == nil {
+			t.Fatal("persisted stage input was mutable")
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE paper_import_run SET source_snapshot='[]'::jsonb WHERE id=$1::uuid`, job.RunID); err == nil {
+			t.Fatal("accepted material snapshot was mutable")
+		}
+		loaded, err := store.LoadPaperImportParseRunInput(ctx, tenantID, binding.InputID)
+		if err != nil || loaded.InputHash != binding.InputHash || len(loaded.Input.Documents) != len(binding.Input.Documents) {
+			t.Fatalf("immutable input changed: %#v %v", loaded, err)
+		}
+	})
+	t.Run("IMP missing active attempt rolls back task completion", func(t *testing.T) {
+		if _, err := db.ExecContext(ctx, `UPDATE agent_worker_task_attempt SET status='failed',completed_at=now() WHERE task_id=$1::uuid AND attempt_no=1`, claimedParse[0].ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CompletePaperImportParseTask(ctx, tenantID, claimedParse[0].ID, claimedParse[0].LeaseToken, binding, paper.PaperImportParseResult{}, 1); !errors.Is(err, paper.ErrConflict) {
+			t.Fatalf("missing active attempt accepted: %v", err)
+		}
+		var taskStatus, jobStatus string
+		if err := db.QueryRowContext(ctx, `SELECT t.status,j.status FROM agent_worker_task t JOIN paper_import_job j ON j.id=$2::uuid WHERE t.id=$1::uuid`, claimedParse[0].ID, job.ID).Scan(&taskStatus, &jobStatus); err != nil {
+			t.Fatal(err)
+		}
+		if taskStatus != "leased" || jobStatus != "processing" {
+			t.Fatalf("partial commit: %s %s", taskStatus, jobStatus)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE agent_worker_task_attempt SET status='leased',completed_at=NULL WHERE task_id=$1::uuid AND attempt_no=1`, claimedParse[0].ID); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("IMP binding rejects wrong stage and input without completing the task", func(t *testing.T) {
+		for _, mutation := range []struct{ name, update string }{
+			{"wrong stage", `UPDATE agent_worker_task SET task_type='ocr' WHERE id=$1::uuid`},
+			{"wrong input", `UPDATE agent_worker_task SET source_id=gen_random_uuid() WHERE id=$1::uuid`},
+		} {
+			t.Run(mutation.name, func(t *testing.T) {
+				if _, err := db.ExecContext(ctx, mutation.update, claimedParse[0].ID); err != nil {
+					t.Fatal(err)
+				}
+				_, err := store.CompletePaperImportParseTask(ctx, tenantID, claimedParse[0].ID, claimedParse[0].LeaseToken, binding, paper.PaperImportParseResult{}, 1)
+				if !errors.Is(err, paper.ErrConflict) {
+					t.Fatalf("mismatched stage/input published: %v", err)
+				}
+				var taskStatus, jobStatus string
+				var candidates int
+				if err := db.QueryRowContext(ctx, `SELECT t.status,j.status,jsonb_array_length(j.question_candidates) FROM agent_worker_task t JOIN paper_import_job j ON j.id=$2::uuid AND j.tenant_id=t.tenant_id WHERE t.id=$1::uuid`, claimedParse[0].ID, job.ID).Scan(&taskStatus, &jobStatus, &candidates); err != nil {
+					t.Fatal(err)
+				}
+				if taskStatus != "leased" || jobStatus != "processing" || candidates != 0 {
+					t.Fatalf("rejected result changed facts: %s %s %d", taskStatus, jobStatus, candidates)
+				}
+				if _, err := db.ExecContext(ctx, `UPDATE agent_worker_task SET task_type='paper_parse',source_id=$2::uuid WHERE id=$1::uuid`, claimedParse[0].ID, binding.InputID); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	})
+	if _, err = store.CompletePaperImportParseTask(ctx, tenantID, claimedParse[0].ID, claimedParse[0].LeaseToken, binding, paper.PaperImportParseResult{
+		QuestionCandidates: []paper.QuestionCandidate{{CandidateID: "invalid-q1", QuestionNoRaw: "1", QuestionType: "essay", Stem: "Imported 1", Score: &invalidScore, Confidence: .99}},
+	}, 1); err != nil {
+		t.Fatalf("publish versioned invalid candidate: %v", err)
 	}
 	if _, err := store.ApplyPaperImport(ctx, tenantID, job.ID, userID); !errors.Is(err, paper.ErrInvalidInput) {
 		t.Fatalf("PostgreSQL apply gate accepted invalid reconciliation: %v", err)
@@ -89,11 +165,16 @@ JOIN question_row q ON q.exam_id=e.id
 
 	valid := postgresPaperImportDraft("1.", "short_answer", 10)
 	valid.Solution = &paper.SolutionInput{RawText: "先列式，再计算", Steps: []paper.SolutionStep{{StepNo: 1, Content: "列式"}}}
-	if _, err := store.CompletePaperImport(ctx, tenantID, job.ID, []paper.PaperImportDraftQuestion{valid}, nil); err != nil {
+	valid.HumanConfirmedFields = []string{"question_no", "question_type", "score", "stem", "answer", "solution", "rubric"}
+	if _, err := store.SavePaperImportReview(ctx, tenantID, job.ID, userID, paper.ReviewPaperImportInput{ExpectedGeneration: job.Generation, Questions: []paper.PaperImportDraftQuestion{valid}}); err != nil {
 		t.Fatalf("preview corrected candidate: %v", err)
 	}
 	if _, err := store.ApplyPaperImport(ctx, tenantID, job.ID, userID); err != nil {
 		t.Fatalf("corrected PostgreSQL import did not apply: %v", err)
+	}
+	var appliedRunStatus string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM paper_import_run WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, job.RunID).Scan(&appliedRunStatus); err != nil || appliedRunStatus != "applied" {
+		t.Fatalf("applying import did not complete the owning run: status=%q err=%v", appliedRunStatus, err)
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COALESCE(stem,'') FROM question WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, questionID).Scan(&stem); err != nil || stem != "Imported 1." {
 		t.Fatalf("corrected PostgreSQL import was not persisted: stem=%q err=%v", stem, err)
@@ -110,10 +191,10 @@ JOIN question_row q ON q.exam_id=e.id
 	if err != nil {
 		t.Fatalf("create source reorder fixture: %v", err)
 	}
-	if _, err = store.CompletePaperImportCandidates(ctx, tenantID, reorderJob.ID, nil, nil, []paper.AnswerCandidate{{CandidateID: "a1", QuestionNoHint: "1", StandardAnswer: "42"}}, nil, nil, nil); err != nil {
-		t.Fatalf("complete source reorder fixture: %v", err)
+	if _, err = store.FailPaperImport(ctx, tenantID, reorderJob.ID, "source_fixture_failed", []string{"fixture"}); err != nil {
+		t.Fatalf("fail source reorder fixture through the versioned run: %v", err)
 	}
-	reordered, err := store.ReplacePaperImportSources(ctx, tenantID, reorderJob.ID, userID, paper.ReplacePaperImportSourcesInput{Sources: []paper.ReplacePaperImportSourceInput{
+	reordered, err := store.ReplacePaperImportSources(ctx, tenantID, reorderJob.ID, userID, paper.ReplacePaperImportSourcesInput{ExpectedGeneration: reorderJob.Generation, Sources: []paper.ReplacePaperImportSourceInput{
 		{ID: reorderJob.Sources[1].ID, DocumentIndex: 0, RoleHint: "answer"},
 		{ID: reorderJob.Sources[0].ID, DocumentIndex: 1, RoleHint: "question"},
 	}})
@@ -135,13 +216,18 @@ JOIN question_row q ON q.exam_id=e.id
 		if createErr != nil {
 			t.Fatalf("create parse recovery fixture: %v", createErr)
 		}
-		runtimeStore := workerruntime.NewPostgresStore(db)
 		ocrTask, createErr := runtimeStore.CreateTask(ctx, tenantID, userID, workerruntime.CreateTaskInput{
 			TaskType: "ocr", QueueName: "ocr", SourceType: "paper_import_job", SourceID: parseJob.ID,
 			IdempotencyKey: "paper-parse-recovery-ocr:" + parseJob.ID, PayloadSchemaVersion: "test-v1",
 		})
 		if createErr != nil {
 			t.Fatalf("create OCR runtime fixture: %v", createErr)
+		}
+		if _, bindErr := db.ExecContext(ctx, `UPDATE agent_worker_task SET paper_import_run_id=$3::uuid,paper_import_generation=$4,task_protocol_version=2 WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, ocrTask.ID, parseJob.RunID, parseJob.Generation); bindErr != nil {
+			t.Fatalf("bind OCR runtime fixture to import run: %v", bindErr)
+		}
+		if _, bindErr := db.ExecContext(ctx, `UPDATE paper_import_run SET dispatch_status='queued',initial_task_id=$2::uuid WHERE tenant_id=$1::uuid AND id=$3::uuid`, tenantID, ocrTask.ID, parseJob.RunID); bindErr != nil {
+			t.Fatalf("mark import dispatch queued: %v", bindErr)
 		}
 		claimed, claimErr := runtimeStore.Claim(ctx, tenantID, workerruntime.ClaimInput{
 			QueueName: "ocr", WorkerService: "ocr-worker", WorkerInstanceID: "recovery-test", Limit: 1, LeaseSeconds: 300,
@@ -178,6 +264,9 @@ JOIN question_row q ON q.exam_id=e.id
 			_, _ = w.Write([]byte(`{"documents":[],"question_candidates":[{"candidate_id":"q-recovered","question_no_raw":"1","question_type":"short_answer","stem":"What is 6 x 7?","score":1,"confidence":0.99}],"answer_candidates":[],"solution_candidates":[],"rubric_candidates":[],"issues":[]}`))
 		}))
 		defer parser.Close()
+		if _, updateErr := db.ExecContext(ctx, `UPDATE paper_import_run SET dispatch_status='not_required' WHERE tenant_id=$1::uuid AND dispatch_status='pending'`, tenantID); updateErr != nil {
+			t.Fatalf("close direct-store dispatch fixtures: %v", updateErr)
+		}
 		// Constructing a new service/executor models the gateway process restarting
 		// after the OCR callback committed and before parsing began.
 		restartedService := paper.NewDocumentImportService(store, nil, nil, parser.URL, strings.Repeat("t", 32), time.Minute)
@@ -185,17 +274,125 @@ JOIN question_row q ON q.exam_id=e.id
 		if executorErr != nil {
 			t.Fatalf("create restarted parse executor: %v", executorErr)
 		}
+		var parseTaskID string
+		if queryErr := db.QueryRowContext(ctx, `SELECT task.id::text FROM agent_worker_task task JOIN paper_import_parse_input input ON input.tenant_id=task.tenant_id AND input.id=task.source_id WHERE task.tenant_id=$1::uuid AND input.paper_import_id=$2::uuid AND task.task_type='paper_parse'`, tenantID, parseJob.ID).Scan(&parseTaskID); queryErr != nil {
+			t.Fatalf("load parse task: %v", queryErr)
+		}
+		if _, triggerErr := db.ExecContext(ctx, `CREATE FUNCTION fail_test_paper_parse_publish() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.status='processing' AND NEW.status='review_required' THEN RAISE EXCEPTION 'injected parse publish failure'; END IF; RETURN NEW; END $$`); triggerErr != nil {
+			t.Fatalf("install parse commit failure injection: %v", triggerErr)
+		}
+		if _, triggerErr := db.ExecContext(ctx, `CREATE TRIGGER fail_test_paper_parse_publish BEFORE UPDATE ON paper_import_job FOR EACH ROW EXECUTE FUNCTION fail_test_paper_parse_publish()`); triggerErr != nil {
+			t.Fatalf("install parse commit failure trigger: %v", triggerErr)
+		}
 		worked, runErr := executor.RunOnce(ctx)
+		if runErr == nil || !worked {
+			t.Fatalf("injected parse commit must fail after doing work: worked=%v err=%v", worked, runErr)
+		}
+		var taskStatus, jobStatus string
+		var candidateCount int
+		if queryErr := db.QueryRowContext(ctx, `SELECT task.status,job.status,jsonb_array_length(job.question_candidates) FROM agent_worker_task task CROSS JOIN paper_import_job job WHERE task.tenant_id=$1::uuid AND task.id=$2::uuid AND job.tenant_id=$1::uuid AND job.id=$3::uuid`, tenantID, parseTaskID, parseJob.ID).Scan(&taskStatus, &jobStatus, &candidateCount); queryErr != nil {
+			t.Fatalf("inspect rolled back parse commit: %v", queryErr)
+		}
+		if taskStatus != "running" || jobStatus != "processing" || candidateCount != 0 {
+			t.Fatalf("parse commit was partially published: task=%s job=%s candidates=%d", taskStatus, jobStatus, candidateCount)
+		}
+		if _, dropErr := db.ExecContext(ctx, `DROP TRIGGER fail_test_paper_parse_publish ON paper_import_job`); dropErr != nil {
+			t.Fatalf("remove parse commit failure injection: %v", dropErr)
+		}
+		if _, dropErr := db.ExecContext(ctx, `DROP FUNCTION fail_test_paper_parse_publish()`); dropErr != nil {
+			t.Fatalf("remove parse commit failure function: %v", dropErr)
+		}
+		if _, expireErr := db.ExecContext(ctx, `UPDATE agent_worker_task SET lease_expires_at=now()-interval '1 second' WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, parseTaskID); expireErr != nil {
+			t.Fatalf("expire failed parse attempt: %v", expireErr)
+		}
+		worked, runErr = executor.RunOnce(ctx)
 		if runErr != nil || !worked {
-			t.Fatalf("resume durable parse task: worked=%v err=%v", worked, runErr)
+			t.Fatalf("resume durable parse task after rollback: worked=%v err=%v", worked, runErr)
 		}
 		recovered, getErr := store.GetPaperImport(ctx, tenantID, parseJob.ID)
 		if getErr != nil || recovered.Status != "review_required" || len(recovered.QuestionCandidates) != 1 || recovered.QuestionCandidates[0].CandidateID != "q-recovered" {
 			t.Fatalf("recovered parse did not persist one candidate: %#v err=%v", recovered, getErr)
 		}
+		var replayLeaseToken, replayInputID, replayRunID, replayRevision, replayInputHash string
+		var replayGeneration int64
+		if queryErr := db.QueryRowContext(ctx, `SELECT task.lease_token,input.id::text,input.run_id::text,input.generation,input.source_revision,input.input_hash
+FROM agent_worker_task task JOIN paper_import_parse_input input ON input.tenant_id=task.tenant_id AND input.id=task.source_id
+WHERE task.tenant_id=$1::uuid AND task.id=$2::uuid`, tenantID, parseTaskID).Scan(&replayLeaseToken, &replayInputID, &replayRunID, &replayGeneration, &replayRevision, &replayInputHash); queryErr != nil {
+			t.Fatalf("load parse result receipt: %v", queryErr)
+		}
+		score := 1.0
+		parseResult := paper.PaperImportParseResult{
+			Documents:          []paper.PaperImportDetectedDocument{},
+			QuestionCandidates: []paper.QuestionCandidate{{CandidateID: "q-recovered", QuestionNoRaw: "1", QuestionType: "short_answer", Stem: "What is 6 x 7?", Score: &score, Confidence: .99}},
+			AnswerCandidates:   []paper.AnswerCandidate{}, SolutionCandidates: []paper.SolutionCandidate{}, RubricCandidates: []paper.RubricCandidate{}, Issues: []paper.PaperImportIssue{},
+		}
+		binding := paper.PaperImportRunBinding{ImportID: parseJob.ID, RunID: replayRunID, Generation: replayGeneration, SourceRevision: replayRevision, InputID: replayInputID, InputHash: replayInputHash}
+		if replayedResult, replayErr := store.CompletePaperImportParseTask(ctx, tenantID, parseTaskID, replayLeaseToken, binding, parseResult, 1); replayErr != nil || replayedResult.ResultGeneration != parseJob.Generation || len(replayedResult.QuestionCandidates) != 1 {
+			t.Fatalf("identical parse callback did not replay original receipt: %#v err=%v", replayedResult, replayErr)
+		}
+		changedResult := parseResult
+		changedResult.QuestionCandidates = append([]paper.QuestionCandidate{}, parseResult.QuestionCandidates...)
+		changedResult.QuestionCandidates[0].Stem = "changed result must conflict"
+		if _, replayErr := store.CompletePaperImportParseTask(ctx, tenantID, parseTaskID, replayLeaseToken, binding, changedResult, 1); !errors.Is(replayErr, paper.ErrConflict) {
+			t.Fatalf("changed parse callback replay error=%v", replayErr)
+		}
 		worked, runErr = executor.RunOnce(ctx)
 		if runErr != nil || worked {
 			t.Fatalf("completed parse task must not be claimed twice: worked=%v err=%v", worked, runErr)
+		}
+		// A human save and an explicit new parse generation share the same job
+		// lock and expected_generation boundary. If the save wins, its confirmed
+		// field is retained into the new run; if the rerun wins, the stale save is
+		// rejected instead of overwriting generation 2.
+		humanDrafts := append([]paper.PaperImportDraftQuestion{}, recovered.Questions...)
+		humanDrafts[0].Stem = "Human-confirmed concurrent stem"
+		humanDrafts[0].HumanConfirmedFields = append(humanDrafts[0].HumanConfirmedFields, "stem")
+		startRace := make(chan struct{})
+		type importResult struct {
+			job paper.PaperImportJob
+			err error
+		}
+		reviewResult := make(chan importResult, 1)
+		replaceResult := make(chan importResult, 1)
+		go func() {
+			<-startRace
+			job, saveErr := store.SavePaperImportReview(ctx, tenantID, parseJob.ID, userID, paper.ReviewPaperImportInput{ExpectedGeneration: recovered.Generation, Questions: humanDrafts})
+			reviewResult <- importResult{job: job, err: saveErr}
+		}()
+		go func() {
+			<-startRace
+			job, replaceErr := store.ReplacePaperImportSources(ctx, tenantID, parseJob.ID, userID, paper.ReplacePaperImportSourcesInput{
+				CommandID: "historical-result-replay", ExpectedGeneration: recovered.Generation,
+				Sources: []paper.ReplacePaperImportSourceInput{{ID: recovered.Sources[0].ID, DocumentIndex: 0, RoleHint: "question"}},
+			})
+			replaceResult <- importResult{job: job, err: replaceErr}
+		}()
+		close(startRace)
+		reviewOutcome, replaceOutcome := <-reviewResult, <-replaceResult
+		newRun, replaceErr := replaceOutcome.job, replaceOutcome.err
+		if replaceErr != nil || newRun.Generation != recovered.Generation+1 {
+			t.Fatalf("create successor run for historical replay: %#v err=%v", newRun, replaceErr)
+		}
+		if reviewOutcome.err != nil && !errors.Is(reviewOutcome.err, paper.ErrConflict) {
+			t.Fatalf("concurrent human review returned invalid outcome: %v", reviewOutcome.err)
+		}
+		if reviewOutcome.err == nil {
+			if len(newRun.Questions) != 1 || newRun.Questions[0].Stem != "Human-confirmed concurrent stem" {
+				t.Fatalf("accepted human confirmation was lost by concurrent rerun: %#v", newRun.Questions)
+			}
+		} else if reviewOutcome.job.ID != "" {
+			t.Fatalf("rejected stale review returned a misleading result: %#v", reviewOutcome.job)
+		}
+		if currentAfterReplay, replayErr := store.CompletePaperImportParseTask(ctx, tenantID, parseTaskID, replayLeaseToken, binding, parseResult, 1); replayErr != nil || currentAfterReplay.Generation != newRun.Generation || currentAfterReplay.Status != "processing" {
+			t.Fatalf("historical exact result was not acknowledged without rewriting current run: %#v err=%v", currentAfterReplay, replayErr)
+		}
+		if _, replayErr := store.CompletePaperImportParseTask(ctx, tenantID, parseTaskID, replayLeaseToken, binding, changedResult, 1); !errors.Is(replayErr, paper.ErrConflict) {
+			t.Fatalf("changed historical parse callback replay error=%v", replayErr)
+		}
+		wrongHistoricalInput := binding
+		wrongHistoricalInput.InputHash = "wrong-historical-input-hash"
+		if _, replayErr := store.CompletePaperImportParseTask(ctx, tenantID, parseTaskID, replayLeaseToken, wrongHistoricalInput, parseResult, 1); !errors.Is(replayErr, paper.ErrConflict) {
+			t.Fatalf("historical replay accepted mismatched input hash: %v", replayErr)
 		}
 	})
 }

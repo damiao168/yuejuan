@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -269,12 +270,16 @@ SET status = EXCLUDED.status,
 	return s.ListRoster(ctx, tenantID, examID)
 }
 
-func (s *PostgresStore) ConfirmGrades(ctx context.Context, tenantID string, examID string, actorID string, _ ConfirmInput) ([]SubmissionGrade, error) {
+func (s *PostgresStore) ConfirmGrades(ctx context.Context, tenantID string, examID string, actorID string, input ConfirmInput) ([]SubmissionGrade, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var replay []SubmissionGrade
+	if found, err := commandreceipt.Load(ctx, tx, tenantID, actorID, "score.confirm", examID, input, &replay); err != nil || found {
+		return replay, err
+	}
 	if err := lockExamTx(ctx, tx, tenantID, examID); err != nil {
 		return nil, err
 	}
@@ -315,18 +320,25 @@ WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL AND locked = 
 	if err != nil {
 		return nil, err
 	}
+	if err := commandreceipt.Save(ctx, tx, tenantID, actorID, "score.confirm", examID, input, grades); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return grades, nil
 }
 
-func (s *PostgresStore) PublishGrades(ctx context.Context, tenantID string, examID string, actorID string, _ PublishInput) (PublishResult, error) {
+func (s *PostgresStore) PublishGrades(ctx context.Context, tenantID string, examID string, actorID string, input PublishInput) (PublishResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return PublishResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var replay PublishResult
+	if found, err := commandreceipt.Load(ctx, tx, tenantID, actorID, "score.publish", examID, input, &replay); err != nil || found {
+		return replay, err
+	}
 	if err := lockExamTx(ctx, tx, tenantID, examID); err != nil {
 		return PublishResult{}, err
 	}
@@ -364,15 +376,20 @@ WHERE tenant_id = $1 AND exam_id::text = $2 AND deleted_at IS NULL
 	if err != nil {
 		return PublishResult{}, err
 	}
-	if err := tx.Commit(); err != nil {
-		return PublishResult{}, err
-	}
-	return PublishResult{
+	result := PublishResult{
 		Status:           "published",
 		SubmissionGrades: grades,
 		Quality:          QualityReport{Passed: true},
 		PublishedAt:      now,
-	}, nil
+	}
+
+	if err := commandreceipt.Save(ctx, tx, tenantID, actorID, "score.publish", examID, input, result); err != nil {
+		return PublishResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PublishResult{}, err
+	}
+	return result, nil
 }
 
 func (s *PostgresStore) GetStudentGrade(ctx context.Context, tenantID string, studentID string, examID string) (SubmissionGrade, error) {

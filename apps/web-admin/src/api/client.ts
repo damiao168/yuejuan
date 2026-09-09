@@ -21,8 +21,9 @@ export class ApiClientError extends Error {
   traceId?: string;
   fieldErrors?: Record<string, string[]>;
   conflictRevision?: number;
+  retryAfterSeconds?: number;
 
-  constructor(status: number, code: string, message: string, context: Pick<ApiErrorPayload, "request_id" | "trace_id" | "field_errors" | "conflict_revision"> = {}) {
+  constructor(status: number, code: string, message: string, context: Pick<ApiErrorPayload, "request_id" | "trace_id" | "field_errors" | "conflict_revision"> = {}, retryAfterSeconds?: number) {
     super(message);
     this.name = "ApiClientError";
     this.status = status;
@@ -31,6 +32,7 @@ export class ApiClientError extends Error {
     this.traceId = context.trace_id;
     this.fieldErrors = context.field_errors;
     this.conflictRevision = context.conflict_revision;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -101,14 +103,22 @@ export class ApiClient {
   }
 
   private async toError(response: Response): Promise<ApiClientError> {
+    const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get("Retry-After"));
     try {
       const payload = (await response.json()) as ApiErrorPayload;
       const code = payload.error?.code ?? payload.code ?? "request_failed";
-    return new ApiClientError(response.status, code, getApiErrorMessage(code, response.status), payload);
+    return new ApiClientError(response.status, code, getApiErrorMessage(code, response.status), payload, retryAfterSeconds);
     } catch {
-      return new ApiClientError(response.status, "request_failed", getApiErrorMessage("request_failed", response.status));
+      return new ApiClientError(response.status, "request_failed", getApiErrorMessage("request_failed", response.status), {}, retryAfterSeconds);
     }
   }
+}
+
+export function parseRetryAfterSeconds(value: string | null, now = Date.now()): number | undefined {
+  if (!value) return undefined;
+  const numeric = Number(value);
+  const seconds = Number.isFinite(numeric) ? numeric : Math.ceil((Date.parse(value) - now) / 1000);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
 }
 
 function addIdempotencyHeader(path: string, method: string | undefined, headers: Headers) {

@@ -384,9 +384,21 @@ func TestSubjectiveBatchEnqueueReportsPartialSuccessAndCanRetry(t *testing.T) {
 	}
 
 	runtime.failedSegmentID = ""
+	beforePlan, planErr := store.GetEnqueuePlan(context.Background(), tenantID, userID, created.Batch.ID)
+	if planErr != nil || beforePlan.Completed {
+		t.Fatalf("partial plan: %+v %v", beforePlan, planErr)
+	}
+	changed := subjectiveContext("short_answer", 8, "changed answer", nil)
+	changed.AnswerVersion = "changed-after-partial-enqueue"
+	changed.Rubric.Version = "changed-rubric"
+	store.AddContext(tenantID, "segment-2", changed)
 	retried := enqueue()
 	if retried.Code != http.StatusOK || !strings.Contains(retried.Body.String(), `"failed_count":0`) || !strings.Contains(retried.Body.String(), `"queued_count":2`) {
 		t.Fatalf("safe retry must complete the missing task without duplication: %d %s", retried.Code, retried.Body.String())
+	}
+	afterPlan, planErr := store.GetEnqueuePlan(context.Background(), tenantID, userID, created.Batch.ID)
+	if planErr != nil || !afterPlan.Completed || afterPlan.Runs[1] != beforePlan.Runs[1] || store.bulkLoads != 2 {
+		t.Fatalf("retry changed the frozen plan: %+v %v loads=%d", afterPlan, planErr, store.bulkLoads)
 	}
 }
 

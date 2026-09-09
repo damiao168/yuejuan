@@ -162,6 +162,11 @@ func TestRegisteredDirectIDRoutesDeclareResourceBoundaryOrExplicitTenantScope(t 
 	routePattern := regexp.MustCompile(`"(?:GET|POST|PUT|PATCH|DELETE) (/api/v1/[^" ]*\{[^"}]+\}[^" ]*)"`)
 	tenantScopedPrefixes := []string{
 		"/api/v1/auth/sessions/", "/api/v1/users/", "/api/v1/tenants/",
+		"/api/v1/exam-sessions/commands/",
+		// Command recovery resources are not target-resource IDs. Their stores
+		// require the authenticated tenant and actor together with command ID.
+		"/api/v1/subjective-grading-batch-commands/", "/api/v1/review-commands/",
+		"/api/v1/score-commands/", "/api/v1/report-commands/",
 		"/api/v1/review/comment-templates/", "/api/v1/model-", "/api/v1/grading-evaluations/",
 		"/api/v1/ai-eligibility/", "/api/v1/platform/model-api-configs/",
 	}

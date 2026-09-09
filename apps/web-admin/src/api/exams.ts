@@ -104,6 +104,18 @@ export async function createExamSession(payload: ExamSessionPayload, commandId: 
   });
 }
 
+export interface ExamSessionCommandResult {
+  command_id: string;
+  status: "not_accepted" | "processing" | "succeeded" | "rejected" | "unknown";
+  http_status?: number;
+  error_code?: string;
+  exam_session?: ExamSession;
+}
+
+export async function recoverExamSessionCommand(commandId: string) {
+  return apiClient.request<{ command: ExamSessionCommandResult }>(`/api/v1/exam-sessions/commands/${encodeURIComponent(commandId)}`);
+}
+
 export async function updateExam(id: string, payload: Partial<ExamPayload> & { expected_revision: number }) {
   return apiClient.request<{ exam: Exam }>(`/api/v1/exams/${encodeURIComponent(id)}`, {
     method: "PATCH",

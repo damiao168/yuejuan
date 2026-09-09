@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"database/sql"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -185,6 +186,10 @@ func (s *PostgresStore) SubmitGrade(ctx context.Context, tenantID string, id str
 		return SubmitResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var replay SubmitResult
+	if found, err := commandreceipt.Load(ctx, tx, tenantID, reviewerID, "review.submit", id, input, &replay); err != nil || found {
+		return replay, err
+	}
 	task, err := scanTask(tx.QueryRowContext(ctx, `
 	SELECT `+reviewTaskColumns+`
 FROM review_task
@@ -284,17 +289,22 @@ FROM review_task rt WHERE rt.tenant_id=$1::uuid AND rt.id=$2::uuid AND rt.scorin
 	if refreshed, refreshErr := s.getTaskTx(ctx, tx, tenantID, id); refreshErr == nil {
 		task = refreshed
 	}
-	if err := tx.Commit(); err != nil {
-		return SubmitResult{}, err
-	}
-	return SubmitResult{
+	result := SubmitResult{
 		Task:              task,
 		Grade:             grade,
 		QuestionGradeID:   questionGradeID,
 		DoubleMarkSession: session,
 		FinalGrade:        finalGrade,
 		ArbitrationTask:   arbitrationTask,
-	}, nil
+	}
+
+	if err := commandreceipt.Save(ctx, tx, tenantID, reviewerID, "review.submit", id, input, result); err != nil {
+		return SubmitResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SubmitResult{}, err
+	}
+	return result, nil
 }
 
 func (s *PostgresStore) ReturnTask(ctx context.Context, tenantID string, id string, actorID string, input ReturnTaskInput) (ReviewTask, error) {

@@ -1,0 +1,75 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { executeBusinessCommand, setBusinessCommandScope } from "./businessCommand";
+import { apiClient } from "./client";
+
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+function setup() {
+  const values = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (k: string) => values.get(k) ?? null, setItem: (k: string, v: string) => values.set(k, v), removeItem: (k: string) => values.delete(k) });
+  setBusinessCommandScope("tenant", "actor");
+  return values;
+}
+it("coalesces double click and preserves revision/payload across uncertain outcome and reload", async () => {
+  const values = setup();
+  const send = vi.fn(async (_id: string, _input: unknown) => { throw new Error("503"); });
+  const recover = (x: unknown) => x;
+  const first = executeBusinessCommand("review.submit", "task", { score: 4, expected_revision: 2 }, send, recover);
+  const duplicate = executeBusinessCommand("review.submit", "task", { score: 3, expected_revision: 3 }, send, recover);
+  expect(duplicate).toBe(first);
+  await expect(first).rejects.toThrow("503");
+  const stored = JSON.parse([...values.values()][0]);
+  vi.spyOn(apiClient, "request").mockResolvedValue({ command_id: stored.id, status: "not_accepted" });
+  await expect(executeBusinessCommand("review.submit", "task", { score: 1, expected_revision: 9 }, send, recover)).rejects.toThrow("503");
+  expect(send.mock.calls).toEqual([[stored.id, { score: 4, expected_revision: 2 }], [stored.id, { score: 4, expected_revision: 2 }]]);
+});
+it("recovers committed result without submitting and permits a distinct next operation", async () => {
+  const values = setup();
+  values.set("business-command:tenant:actor:score.publish:exam", JSON.stringify({ id: "old", payload: { reason: "original" } }));
+  vi.spyOn(apiClient, "request").mockResolvedValue({ command_id: "old", status: "succeeded", result: { status: "published" } });
+  const send = vi.fn(async () => ({ status: "published" }));
+  const recover = (x: unknown) => x as { status: string };
+  expect(await executeBusinessCommand("score.publish", "exam", { reason: "edited" }, send, recover)).toEqual({ status: "published" });
+  expect(send).not.toHaveBeenCalled();
+  expect(values.size).toBe(0);
+  await executeBusinessCommand("score.publish", "exam", { reason: "new" }, send, recover);
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
+it("does not resend a live processing or unknown command", async () => {
+  const values = setup();
+  const key = "business-command:tenant:actor:score.publish:exam";
+  values.set(key, JSON.stringify({ id: "pending", payload: { reason: "original" } }));
+  const request = vi.spyOn(apiClient, "request");
+  request.mockResolvedValueOnce({ command_id: "pending", status: "processing" });
+  const send = vi.fn();
+  await expect(executeBusinessCommand("score.publish", "exam", { reason: "edited" }, send, value => value)).rejects.toMatchObject({ code: "operation_in_progress" });
+  expect(send).not.toHaveBeenCalled();
+  expect(values.has(key)).toBe(true);
+
+  request.mockResolvedValueOnce({ command_id: "pending", status: "unknown", error_code: "business_receipt_missing" });
+  await expect(executeBusinessCommand("score.publish", "exam", { reason: "edited" }, send, value => value)).rejects.toMatchObject({ code: "business_receipt_missing" });
+  expect(send).not.toHaveBeenCalled();
+  expect(values.has(key)).toBe(true);
+});
+
+it("resumes a stale reservation with the frozen command identity and payload", async () => {
+  const values = setup();
+  const key = "business-command:tenant:actor:score.publish:exam";
+  values.set(key, JSON.stringify({ id: "stale-command", payload: { reason: "original" } }));
+  vi.spyOn(apiClient, "request").mockResolvedValue({ command_id: "stale-command", status: "takeover_ready" });
+  const send = vi.fn(async () => ({ status: "published" }));
+  await executeBusinessCommand("score.publish", "exam", { reason: "edited" }, send, value => value as { status: string });
+  expect(send).toHaveBeenCalledWith("stale-command", { reason: "original" });
+  expect(values.has(key)).toBe(false);
+});
+
+it("clears a definitively rejected command so corrected input can use a new identity", async () => {
+  const values = setup();
+  const key = "business-command:tenant:actor:score.publish:exam";
+  values.set(key, JSON.stringify({ id: "rejected", payload: { reason: "invalid" } }));
+  vi.spyOn(apiClient, "request").mockResolvedValue({ command_id: "rejected", status: "rejected", http_status: 422, error_code: "publish_input_rejected" });
+  const send = vi.fn();
+  await expect(executeBusinessCommand("score.publish", "exam", { reason: "corrected" }, send, value => value)).rejects.toMatchObject({ code: "publish_input_rejected" });
+  expect(send).not.toHaveBeenCalled();
+  expect(values.has(key)).toBe(false);
+});

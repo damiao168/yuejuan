@@ -66,11 +66,12 @@ export interface GradingWorkbenchProps {
   canVerifyEvidence: boolean;
   canReturn: boolean;
   currentUserId: string;
+  currentTenantId: string;
   initialExamId?: string;
   personalScope?: boolean;
 }
 
-export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage, canGrade, canVerifyEvidence, canReturn, currentUserId, initialExamId = "", personalScope = false }: GradingWorkbenchProps) {
+export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage, canGrade, canVerifyEvidence, canReturn, currentUserId, currentTenantId, initialExamId = "", personalScope = false }: GradingWorkbenchProps) {
   const { message } = App.useApp();
   const hasSession = true;
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("active");
@@ -283,7 +284,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     }
   }, [canManageTasks, canWork, currentUserId, initialExamId, personalScope, queueScope]);
 
-  const examScoring = useExamScoring({ initialExamId, canGrade, onTasksChanged: loadTasks });
+  const examScoring = useExamScoring({ initialExamId, currentUserId, currentTenantId, canGrade, onTasksChanged: loadTasks });
 
   const loadMoreTasks = useCallback(async () => {
     if (!hasMoreTasks || !nextTaskCursor || loadingMoreTasks) return;

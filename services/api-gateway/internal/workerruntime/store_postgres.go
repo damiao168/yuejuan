@@ -155,6 +155,9 @@ WHERE ($5 OR tenant_id = $1)
     OR (status IN ('leased', 'running') AND lease_expires_at < $4)
   )
   AND attempt_count >= max_attempts
+  -- Import exhaustion must finish its business run in job/run -> task order.
+  -- The import reconciler owns this case, including process-death recovery.
+  AND paper_import_run_id IS NULL
 ORDER BY priority ASC, created_at ASC, id ASC
 LIMIT $3
 FOR UPDATE SKIP LOCKED
@@ -413,13 +416,19 @@ RETURNING `+taskColumns, tenantID, taskID, result, input.ResultSchemaVersion, ha
 	if err != nil {
 		return Task{}, err
 	}
-	_, err = tx.ExecContext(ctx, `
+	attemptResult, err := tx.ExecContext(ctx, `
 UPDATE agent_worker_task_attempt
 SET status = 'succeeded', duration_ms = $4, completed_at = $5, error_code = NULL, error_detail = '{}'
-WHERE tenant_id = $1 AND task_id = $2::uuid AND attempt_no = $3
+WHERE tenant_id = $1 AND task_id = $2::uuid AND attempt_no = $3 AND completed_at IS NULL
 `, tenantID, taskID, task.AttemptCount, input.DurationMS, dbNow)
 	if err != nil {
 		return Task{}, err
+	}
+	if rows, rowsErr := attemptResult.RowsAffected(); rowsErr != nil || rows != 1 {
+		if rowsErr != nil {
+			return Task{}, rowsErr
+		}
+		return Task{}, ErrConflict
 	}
 	return task, nil
 }
@@ -483,13 +492,19 @@ RETURNING `+taskColumns, tenantID, taskID, status, notBefore, input.ErrorCode, d
 	if err != nil {
 		return Task{}, err
 	}
-	_, err = tx.ExecContext(ctx, `
+	attemptResult, err := tx.ExecContext(ctx, `
 UPDATE agent_worker_task_attempt
 SET status = 'failed', duration_ms = $4, error_code = $5, error_detail = $6, completed_at = $7
-WHERE tenant_id = $1 AND task_id = $2::uuid AND attempt_no = $3
+WHERE tenant_id = $1 AND task_id = $2::uuid AND attempt_no = $3 AND completed_at IS NULL
 `, tenantID, taskID, task.AttemptCount, input.DurationMS, input.ErrorCode, detail, dbNow)
 	if err != nil {
 		return Task{}, err
+	}
+	if rows, rowsErr := attemptResult.RowsAffected(); rowsErr != nil || rows != 1 {
+		if rowsErr != nil {
+			return Task{}, rowsErr
+		}
+		return Task{}, ErrConflict
 	}
 	return task, nil
 }

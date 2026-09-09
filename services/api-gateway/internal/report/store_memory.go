@@ -2,11 +2,13 @@ package report
 
 import (
 	"context"
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"fmt"
 	"sync"
 )
 
 type MemoryStore struct {
+	receipts                 commandreceipt.Memory
 	mu                       sync.RWMutex
 	next                     int
 	data                     dataset
@@ -157,6 +159,10 @@ func (s *MemoryStore) GradingQuality(_ context.Context, _ string, examID string)
 func (s *MemoryStore) Export(ctx context.Context, tenantID string, examID string, actorID string) (ExportResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var replay ExportResult
+	if found, err := s.receipts.Load(ctx, tenantID, actorID, "report.export", examID, nil, &replay); err != nil || found {
+		return replay, err
+	}
 	data := s.copyDataset(examID)
 	overview := buildOverview(data)
 	classes := buildClassReports(data)
@@ -165,6 +171,9 @@ func (s *MemoryStore) Export(ctx context.Context, tenantID string, examID string
 	result := buildExportCSV(tenantID, examID, actorID, overview, classes, questions, quality)
 	result.ReportID = s.id("report")
 	s.exports = append(s.exports, result)
+	if err := s.receipts.Save(ctx, tenantID, actorID, "report.export", examID, nil, result); err != nil {
+		return ExportResult{}, err
+	}
 	return result, nil
 }
 

@@ -257,6 +257,19 @@ func (h *Handler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
+	recovered, recoveryErr := h.store.RecoverBatchCommand(r.Context(), user.TenantID, user.ID, input.IdempotencyKey)
+	if recoveryErr != nil {
+		writeStoreError(w, r, recoveryErr)
+		return
+	}
+	if recovered.Batch != nil {
+		if !sameStringSlice(recovered.Batch.SegmentIDs, segments) {
+			writeStoreError(w, r, ErrIdempotencyConflict)
+			return
+		}
+		httpx.JSON(w, http.StatusCreated, map[string]any{"batch": recovered.Batch})
+		return
+	}
 	contexts, err := loadBatchContexts(r.Context(), h.store, user.TenantID, segments)
 	if err != nil {
 		writeStoreError(w, r, err)
@@ -275,6 +288,16 @@ func (h *Handler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	h.auditAction(r, "subjective.batch_created", "subjective_grading_batch", batch.ID, "create subjective grading batch")
 	httpx.JSON(w, http.StatusCreated, map[string]any{"batch": batch})
+}
+
+func (h *Handler) RecoverBatchCommand(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	result, err := h.store.RecoverBatchCommand(r.Context(), user.TenantID, user.ID, r.PathValue("commandId"))
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) GetBatch(w http.ResponseWriter, r *http.Request) {
@@ -308,30 +331,43 @@ func (h *Handler) EnqueueBatch(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	policy := NormalizePolicy(ModelPolicy{})
-	if governed, ok := h.adapter.(GovernedPolicyProvider); ok {
-		policy = governed.Policy()
+	plan, err := h.store.GetEnqueuePlan(r.Context(), user.TenantID, user.ID, batch.ID)
+	if errors.Is(err, ErrNotFound) {
+		policy := NormalizePolicy(ModelPolicy{})
+		if governed, ok := h.adapter.(GovernedPolicyProvider); ok {
+			policy = governed.Policy()
+		}
+		if err := ValidatePolicy(policy); err != nil {
+			writeStoreError(w, r, err)
+			return
+		}
+		contexts, loadErr := loadBatchContexts(r.Context(), h.store, user.TenantID, batch.SegmentIDs)
+		if loadErr != nil {
+			writeStoreError(w, r, loadErr)
+			return
+		}
+		plan = BatchEnqueuePlan{CommandID: "enqueue:" + batch.ID, BatchID: batch.ID, Runs: make([]CreateRunInput, 0, len(contexts))}
+		for _, ctx := range contexts {
+			requestID, idErr := stableRequestID(user.TenantID, ctx, policy, batch.IdempotencyKey+":"+ctx.SegmentID)
+			if idErr != nil {
+				writeStoreError(w, r, idErr)
+				return
+			}
+			plan.Runs = append(plan.Runs, CreateRunInput{AnswerSegmentID: ctx.SegmentID, BatchID: batch.ID, AnswerVersion: ctx.AnswerVersion, QuestionID: ctx.Question.ID, RubricVersion: ctx.Rubric.Version, ModelVersion: policy.ModelVersion, PromptVersion: policy.PromptVersion, MinConfidence: policy.MinConfidence, RequestID: requestID})
+		}
+		plan, err = h.store.SaveEnqueuePlan(r.Context(), user.TenantID, user.ID, plan)
 	}
-	if err := ValidatePolicy(policy); err != nil {
-		writeStoreError(w, r, err)
-		return
-	}
-	contexts, err := loadBatchContexts(r.Context(), h.store, user.TenantID, batch.SegmentIDs)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
 	}
-	tasks := make([]workerruntime.Task, 0, len(batch.SegmentIDs))
+	tasks := make([]workerruntime.Task, 0, len(plan.Runs))
 	failures := make([]BatchEnqueueFailure, 0)
 	queued, processing, succeeded, failed := 0, 0, 0, 0
-	for _, ctx := range contexts {
-		segmentID := ctx.SegmentID
-		requestID, idErr := stableRequestID(user.TenantID, ctx, policy, batch.IdempotencyKey+":"+segmentID)
-		if idErr != nil {
-			failures = append(failures, BatchEnqueueFailure{SegmentID: segmentID, Code: "request_identity_failed"})
-			continue
-		}
-		run, runErr := h.store.GetOrCreateRun(r.Context(), user.TenantID, user.ID, CreateRunInput{AnswerSegmentID: ctx.SegmentID, BatchID: batch.ID, AnswerVersion: ctx.AnswerVersion, QuestionID: ctx.Question.ID, RubricVersion: ctx.Rubric.Version, ModelVersion: policy.ModelVersion, PromptVersion: policy.PromptVersion, MinConfidence: policy.MinConfidence, RequestID: requestID})
+	for _, input := range plan.Runs {
+		segmentID := input.AnswerSegmentID
+		requestID := input.RequestID
+		run, runErr := h.store.GetOrCreateRun(r.Context(), user.TenantID, user.ID, input)
 		if runErr != nil {
 			failures = append(failures, BatchEnqueueFailure{SegmentID: segmentID, Code: "run_creation_failed"})
 			continue
@@ -344,7 +380,7 @@ func (h *Handler) EnqueueBatch(w http.ResponseWriter, r *http.Request) {
 			failed++
 			continue
 		}
-		task, taskErr := h.runtime.CreateTask(r.Context(), user.TenantID, user.ID, workerruntime.CreateTaskInput{TaskType: "ai_grade", QueueName: "subjective-grading", SourceType: "subjective_grading_run", SourceID: run.ID, Priority: 100, Payload: map[string]any{"run_id": run.ID, "answer_segment_id": ctx.SegmentID, "answer_version": ctx.AnswerVersion, "question_id": ctx.Question.ID, "rubric_version": ctx.Rubric.Version, "model_version": policy.ModelVersion, "prompt_version": policy.PromptVersion}, PayloadSchemaVersion: "subjective-grade-v1", IdempotencyKey: requestID, DedupeKey: "subjective:" + batch.ID + ":" + ctx.SegmentID, MaxAttempts: 3, RetryBackoffSeconds: 30})
+		task, taskErr := h.runtime.CreateTask(r.Context(), user.TenantID, user.ID, workerruntime.CreateTaskInput{TaskType: "ai_grade", QueueName: "subjective-grading", SourceType: "subjective_grading_run", SourceID: run.ID, Priority: 100, Payload: map[string]any{"run_id": run.ID, "answer_segment_id": input.AnswerSegmentID, "answer_version": input.AnswerVersion, "question_id": input.QuestionID, "rubric_version": input.RubricVersion, "model_version": input.ModelVersion, "prompt_version": input.PromptVersion}, PayloadSchemaVersion: "subjective-grade-v1", IdempotencyKey: requestID, DedupeKey: "subjective:" + batch.ID + ":" + input.AnswerSegmentID, MaxAttempts: 3, RetryBackoffSeconds: 30})
 		if taskErr != nil {
 			failures = append(failures, BatchEnqueueFailure{SegmentID: segmentID, Code: "task_creation_failed"})
 			continue
@@ -373,6 +409,12 @@ func (h *Handler) EnqueueBatch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
+	}
+	if len(failures) == 0 {
+		if err := h.store.CompleteEnqueuePlan(r.Context(), user.TenantID, user.ID, batch.ID); err != nil {
+			writeStoreError(w, r, err)
+			return
+		}
 	}
 	result := BatchEnqueueResult{
 		RequestedCount: len(batch.SegmentIDs),
@@ -782,4 +824,26 @@ func (h *Handler) auditAction(r *http.Request, action string, targetType string,
 		UserAgent:  r.UserAgent(),
 		RequestID:  logger.RequestID(r.Context()),
 	})
+}
+
+func (h *Handler) RecoverEnqueueCommand(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	batchID := r.PathValue("batchId")
+	plan, err := h.store.GetEnqueuePlan(r.Context(), user.TenantID, user.ID, batchID)
+	status := "processing"
+	ids := []string{}
+	if errors.Is(err, ErrNotFound) {
+		status = "not_accepted"
+	} else if err != nil {
+		writeStoreError(w, r, err)
+		return
+	} else {
+		if plan.Completed {
+			status = "succeeded"
+		}
+		for _, input := range plan.Runs {
+			ids = append(ids, input.RequestID)
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"command_id": "enqueue:" + batchID, "batch_id": batchID, "status": status, "run_request_ids": ids})
 }

@@ -1,6 +1,7 @@
 package score
 
 import (
+	"edugrade-enterprise/services/api-gateway/internal/commandreceipt"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -152,6 +153,7 @@ func (h *Handler) SetAttendance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ConfirmGrades(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(commandreceipt.WithID(r.Context(), r.Header.Get("Idempotency-Key")))
 	user := mustUser(r)
 	var input ConfirmInput
 	if !decodeJSON(w, r, &input) {
@@ -167,6 +169,7 @@ func (h *Handler) ConfirmGrades(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) PublishGrades(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(commandreceipt.WithID(r.Context(), r.Header.Get("Idempotency-Key")))
 	user := mustUser(r)
 	var input PublishInput
 	if !decodeJSON(w, r, &input) {
@@ -230,6 +233,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 }
 
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, commandreceipt.ErrConflict) {
+		httpx.Error(w, r, http.StatusConflict, "command_request_conflict", "command ID is associated with a different request")
+		return
+	}
 	switch {
 	case errors.Is(err, ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, "score_resource_not_found", "score resource not found")

@@ -129,7 +129,11 @@ export interface RegistrationCorrectionContext { registration_run_id: string; ca
 export interface RegistrationCorrection { id: string; capture_page_id: string; base_registration_run_id: string; applied_registration_run_id?: string; source_page_revision: number; template_id: string; template_content_hash: string; page_no: number; source_points: NormalizedPoint[]; template_points: NormalizedPoint[]; advanced_anchor_mode: boolean; status: "draft" | "queued" | "preview_ready" | "failed" | "expired" | "superseded" | "applied" | "undone"; revision: number; attempt_count: number; preview_registered_file_asset_id?: string; coverage?: number; reprojection_error?: number; validation_report: Record<string, unknown>; error_code?: string; }
 
 export async function createCaptureBatch(examId: string, payload: { name: string; source_type: CaptureBatch["source_type"]; scanner_device?: string; idempotency_key: string }) {
-  return apiClient.request<{ batch: CaptureBatch }>(`/api/v1/exams/${encodeURIComponent(examId)}/capture-batches`, { method: "POST", body: JSON.stringify(payload) });
+  return apiClient.request<{ batch: CaptureBatch }>(`/api/v1/exams/${encodeURIComponent(examId)}/capture-batches`, { method: "POST", headers: { "Idempotency-Key": payload.idempotency_key }, body: JSON.stringify(payload) });
+}
+
+export function recoverCaptureBatchCommand(examId: string, commandId: string) {
+  return apiClient.request<{ command: { command_id: string; status: "not_accepted" | "succeeded"; batch?: CaptureBatch } }>(`/api/v1/exams/${encodeURIComponent(examId)}/capture-batches/commands/${encodeURIComponent(commandId)}`);
 }
 
 export async function listCaptureBatches(examId: string, filter: { limit?: number; cursor?: string } = {}) {

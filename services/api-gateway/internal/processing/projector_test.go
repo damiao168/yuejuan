@@ -23,17 +23,15 @@ func (s *projectorStoreStub) ClaimProjection(_ context.Context, owner string, _ 
 	return s.refresh, s.claim, nil
 }
 
-func (s *projectorStoreStub) RefreshExam(_ context.Context, tenantID, examID string) error {
-	if tenantID != s.refresh.TenantID || examID != s.refresh.ExamID {
+func (s *projectorStoreStub) ApplyProjection(_ context.Context, owner string, refresh ProjectionRefresh) error {
+	if refresh.TenantID != s.refresh.TenantID || refresh.ExamID != s.refresh.ExamID {
 		return errors.New("projector refreshed a different exam")
 	}
+	if s.refreshErr == nil {
+		s.completed = refresh == s.refresh
+		s.completedOwner = owner
+	}
 	return s.refreshErr
-}
-
-func (s *projectorStoreStub) CompleteProjection(_ context.Context, owner string, refresh ProjectionRefresh) error {
-	s.completed = refresh == s.refresh
-	s.completedOwner = owner
-	return nil
 }
 
 func (s *projectorStoreStub) FailProjection(_ context.Context, owner string, refresh ProjectionRefresh, _ string, delay time.Duration) error {

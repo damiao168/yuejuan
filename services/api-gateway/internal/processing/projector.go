@@ -47,11 +47,11 @@ func (p *Projector) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil || !ok {
 		return false, err
 	}
-	if err = p.store.RefreshExam(ctx, refresh.TenantID, refresh.ExamID); err != nil {
+	if err = p.store.ApplyProjection(ctx, p.options.Owner, refresh); err != nil {
 		markErr := p.store.FailProjection(ctx, p.options.Owner, refresh, err.Error(), p.backoff(refresh.AttemptCount))
 		return true, errors.Join(err, markErr)
 	}
-	return true, p.store.CompleteProjection(ctx, p.options.Owner, refresh)
+	return true, nil
 }
 
 func (p *Projector) Run(ctx context.Context, onError func(error)) {

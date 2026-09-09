@@ -66,6 +66,7 @@ import {
   persistDurableScanQueueItem,
   spoolScanAsset
 } from "./lib/durableStore";
+import { transitionScanQueueItem, updateScanQueueItem } from "./lib/scanQueueWorkflow";
 import {
   dependencyLabel,
   dependencyTone,
@@ -708,35 +709,19 @@ function App() {
         return;
       }
       if (!token) {
-        updateQueue((current) =>
-          current.map((candidate) =>
-            candidate.id === id ? { ...candidate, status: "failed", detail: "未登录，无法通过后端鉴权上传", updatedAt: new Date().toISOString() } : candidate
-          )
-        );
+        updateQueue((current) => updateScanQueueItem(current, id, { status: "failed", detail: "未登录，无法通过后端鉴权上传" }));
         return;
       }
       if (!isOnline) {
-        updateQueue((current) =>
-          current.map((candidate) =>
-            candidate.id === id ? { ...candidate, status: "pending", detail: "当前离线，等待联网后继续上传", updatedAt: new Date().toISOString() } : candidate
-          )
-        );
+        updateQueue((current) => updateScanQueueItem(current, id, { status: "pending", detail: "当前离线，等待联网后继续上传" }));
         return;
       }
       if (!item.examId || !item.captureBatchId || !item.idempotencyKey) {
-        updateQueue((current) =>
-          current.map((candidate) =>
-            candidate.id === id ? { ...candidate, status: "failed", detail: "缺少考试、采集批次或幂等键，不能启动可恢复上传", updatedAt: new Date().toISOString() } : candidate
-          )
-        );
+        updateQueue((current) => updateScanQueueItem(current, id, { status: "failed", detail: "缺少考试、采集批次或幂等键，不能启动可恢复上传" }));
         return;
       }
       if (item.qualityChecks?.some((check) => check.status === "failed")) {
-        updateQueue((current) =>
-          current.map((candidate) =>
-            candidate.id === id ? { ...candidate, status: "failed", detail: "本地质量检查未通过，未上传", updatedAt: new Date().toISOString() } : candidate
-          )
-        );
+        updateQueue((current) => updateScanQueueItem(current, id, { status: "failed", detail: "本地质量检查未通过，未上传" }));
         return;
       }
       let file = fileBufferRef.current.get(id);
@@ -746,33 +731,22 @@ function App() {
           fileBufferRef.current.set(id, file);
         } catch (error) {
           const message = getUserErrorMessage(error, "本地加密扫描原件无法恢复");
-          updateQueue((current) => current.map((candidate) => candidate.id === id ? { ...candidate, status: "failed", detail: message, updatedAt: new Date().toISOString() } : candidate));
+          updateQueue((current) => updateScanQueueItem(current, id, { status: "failed", detail: message }));
           await logEvent("error", "durable spool recovery failed", message);
           return;
         }
       }
       if (!file) {
-        updateQueue((current) =>
-          current.map((candidate) =>
-            candidate.id === id
-              ? {
-                  ...candidate,
-                  status: "failed",
-                  requiresReselect: true,
-                  detail: "本地队列已恢复，但文件句柄不可用；请重新选择同名文件后重试",
-                  updatedAt: new Date().toISOString()
-                }
-              : candidate
-          )
-        );
+        updateQueue((current) => updateScanQueueItem(current, id, {
+          status: "failed", requiresReselect: true,
+          detail: "本地队列已恢复，但文件句柄不可用；请重新选择同名文件后重试"
+        }));
         return;
       }
       uploadInFlightRef.current.add(id);
-      updateQueue((current) =>
-        current.map((candidate) =>
-          candidate.id === id ? { ...candidate, status: "uploading", progress: Math.max(candidate.progress, 1), detail: "正在上传到后端文件 API", updatedAt: new Date().toISOString() } : candidate
-        )
-      );
+      updateQueue((current) => updateScanQueueItem(current, id, {
+        status: "uploading", progress: Math.max(item.progress, 1), detail: "正在上传到后端文件 API"
+      }));
       try {
         const completed = await resumeCaptureUpload(
           client,
@@ -780,6 +754,7 @@ function App() {
             file,
             exam: item.examId,
             batch: item.captureBatchId,
+            remoteUploadId: item.remoteUploadId,
             idempotency_key: item.idempotencyKey
           },
           async (progress) => {
@@ -787,17 +762,15 @@ function App() {
             if (!currentItem) {
               throw new Error("本地耐久队列记录已丢失，已停止继续上传");
             }
-            const nextItem: SyncQueueItem = {
-              ...currentItem,
+            const nextItem: SyncQueueItem = transitionScanQueueItem(currentItem, {
               status: progress.status === "completed" ? "succeeded" : "uploading",
               progress: progress.totalBytes ? Math.round((progress.confirmedOffset / progress.totalBytes) * 100) : 0,
               confirmedOffset: progress.confirmedOffset,
               remoteUploadId: progress.remoteUploadId,
               fileAssetId: progress.fileAssetId ?? currentItem.fileAssetId,
               serverStatus: progress.captureFileId ? `采集文件 ${progress.captureFileId}` : `上传会话 ${progress.remoteUploadId}`,
-              detail: progress.status === "completed" ? "服务端已确认采集文件" : `已确认 ${progress.confirmedOffset} / ${progress.totalBytes} 字节`,
-              updatedAt: new Date().toISOString()
-            };
+              detail: progress.status === "completed" ? "服务端已确认采集文件" : `已确认 ${progress.confirmedOffset} / ${progress.totalBytes} 字节`
+            });
             updateQueue((current) => current.map((candidate) => candidate.id === id ? nextItem : candidate));
             if (hasDurableDesktopStore()) {
               const persisted = durablePersistenceRef.current
@@ -809,47 +782,25 @@ function App() {
           }
         );
         if (completed.status !== "completed") {
-          updateQueue((current) => current.map((candidate) => candidate.id === id ? {
-            ...candidate,
+          updateQueue((current) => updateScanQueueItem(current, id, {
             status: "pending",
-            detail: `服务端状态为${genericStatusLabel(completed.status)}，将在下次同步继续确认`,
-            updatedAt: new Date().toISOString()
-          } : candidate));
+            detail: `服务端状态为${genericStatusLabel(completed.status)}，将在下次同步继续确认`
+          }));
           return;
         }
-        updateQueue((current) =>
-          current.map((candidate) =>
-            candidate.id === id
-              ? {
-                  ...candidate,
-                  status: "succeeded",
-                  progress: 100,
-                  fileAssetId: completed.file_asset_id ?? candidate.fileAssetId,
-                  remoteUploadId: completed.remote_upload_id,
-                  confirmedOffset: completed.confirmed_offset,
-                  serverStatus: completed.capture_file_id ? `采集文件 ${completed.capture_file_id}` : `上传会话 ${completed.remote_upload_id} 已确认`,
-                  detail: "服务端已确认采集文件；本地加密原件按保留策略继续保存",
-                  updatedAt: new Date().toISOString()
-                }
-              : candidate
-          )
-        );
+        updateQueue((current) => updateScanQueueItem(current, id, {
+          status: "succeeded", progress: 100,
+          fileAssetId: completed.file_asset_id ?? queueRef.current.find((candidate) => candidate.id === id)?.fileAssetId,
+          remoteUploadId: completed.remote_upload_id,
+          confirmedOffset: completed.confirmed_offset,
+          serverStatus: completed.capture_file_id ? `采集文件 ${completed.capture_file_id}` : `上传会话 ${completed.remote_upload_id} 已确认`,
+          detail: "服务端已确认采集文件；本地加密原件按保留策略继续保存"
+        }));
         fileBufferRef.current.delete(id);
         await logEvent("info", "scan queue item uploaded", `${item.fileName ?? item.title} -> ${completed.capture_file_id ?? completed.remote_upload_id}`);
       } catch (error) {
         const message = getUserErrorMessage(error, "上传失败");
-        updateQueue((current) =>
-          current.map((candidate) =>
-            candidate.id === id
-              ? {
-                  ...candidate,
-                  status: "failed",
-                  detail: message,
-                  updatedAt: new Date().toISOString()
-                }
-              : candidate
-          )
-        );
+        updateQueue((current) => updateScanQueueItem(current, id, { status: "failed", detail: message }));
         await logEvent("error", "scan queue item failed", `${item.fileName ?? item.title}: ${message}`);
       } finally {
         uploadInFlightRef.current.delete(id);

@@ -45,14 +45,14 @@ describe("paper import materials", () => {
   });
 
   it("summarizes partial imports and blocks apply without questions", () => {
-    const base = { id: "i", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "", status: "review_required" as const, subject: "math", sources: [], question_candidates: [], answer_candidates: [{ candidate_id: "a1", equivalent_answers: [], confidence: 1, source_refs: [], issues: [] }], solution_candidates: [], rubric_candidates: [], structured_issues: [], questions: [], issues: [], created_at: "2026-08-30T00:00:00Z" };
+    const base = { id: "i", generation: 1, run_id: "r1", source_revision: "s1", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "", status: "review_required" as const, subject: "math", sources: [], question_candidates: [], answer_candidates: [{ candidate_id: "a1", equivalent_answers: [], confidence: 1, source_refs: [], issues: [] }], solution_candidates: [], rubric_candidates: [], structured_issues: [], questions: [], issues: [], created_at: "2026-08-30T00:00:00Z" };
     expect(paperImportSummary(base).answers).toBe(1);
     expect(hasBlockingImportIssues(base)).toBe(true);
   });
 
   it("reports stable processing stages from source state", () => {
     const source = (processing_status: PaperImportSource["processing_status"]): PaperImportSource => ({ id: "s", document_index: 0, file_asset_id: "f", role_hint: "auto", detected_role: "unknown", role_confidence: 0, processing_status });
-    const base = { id: "i", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "", status: "processing" as const, subject: "math", question_candidates: [], answer_candidates: [], solution_candidates: [], rubric_candidates: [], structured_issues: [], questions: [], issues: [], created_at: "2026-08-30T00:00:00Z" };
+    const base = { id: "i", generation: 1, run_id: "r1", source_revision: "s1", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "", status: "processing" as const, subject: "math", question_candidates: [], answer_candidates: [], solution_candidates: [], rubric_candidates: [], structured_issues: [], questions: [], issues: [], created_at: "2026-08-30T00:00:00Z" };
 
     expect(paperImportProgress({ ...base, sources: [source("pending")] })).toMatchObject({ percent: 30, label: "页面预处理" });
     expect(paperImportProgress({ ...base, sources: [source("processing")] })).toMatchObject({ percent: 60, label: "文字识别" });
@@ -61,7 +61,7 @@ describe("paper import materials", () => {
 
   it("reports unrelated uploads as a completed but blocked recognition result", () => {
     const job = {
-      id: "i", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "",
+      id: "i", generation: 1, run_id: "r1", source_revision: "s1", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "",
       status: "review_required" as const, subject: "math", sources: [], question_candidates: [],
       answer_candidates: [], solution_candidates: [], rubric_candidates: [], questions: [], issues: [],
       structured_issues: [{ code: "NO_EXAM_CONTENT_DETECTED", severity: "error" as const, certainty: "confirmed" as const, message: "未识别到考试内容", resolution_hint: "重新上传", source_refs: [] }],
@@ -75,7 +75,7 @@ describe("paper import materials", () => {
 
   it("distinguishes a manually stopped import from a recognition failure", () => {
     const job = {
-      id: "i", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "",
+      id: "i", generation: 1, run_id: "r1", source_revision: "s1", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "",
       status: "cancelled" as const, subject: "math", sources: [], question_candidates: [], answer_candidates: [],
       solution_candidates: [], rubric_candidates: [], structured_issues: [], questions: [], issues: ["识别任务已手动停止"],
       error_code: "paper_import_cancelled", created_at: "2026-08-30T00:00:00Z"

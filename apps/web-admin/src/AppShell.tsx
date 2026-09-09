@@ -1,3 +1,5 @@
+import { PendingBusinessCommands } from "./components/PendingBusinessCommands";
+import { setBusinessCommandScope } from "./api/businessCommand";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
@@ -64,6 +66,7 @@ export function AppShell() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [user, setUser] = useState<SessionUser | null>(null);
+  setBusinessCommandScope(user?.tenant ?? "", user?.id ?? "");
   const [authLoading, setAuthLoading] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | undefined>();
@@ -208,11 +211,11 @@ export function AppShell() {
       case "settings":
         return <ExamReadinessPage examId={examId} canManage={hasEveryPermission(user, ["exam:manage"])} onNavigate={navigate} onExamChanged={refreshWorkspace} />;
       case "capture":
-        return <CaptureBatchPage examId={examId} canManage={hasEveryPermission(user, ["capture:manage", "file:manage"])} />;
+        return <CaptureBatchPage key={`${user.tenant}:${user.id}:${examId}`} user={user} examId={examId} canManage={hasEveryPermission(user, ["capture:manage", "file:manage"])} />;
       case "processing":
         return <SubmissionCapturePage canManage={hasEveryPermission(user, ["submission:manage", "file:manage", "ocr:manage", "segment:manage"])} canReadStudentNames={hasEveryPermission(user, ["org:manage"])} initialExamId={examId} />;
       case "grading":
-        return <GradingWorkbenchPage canWork={hasEveryPermission(user, ["review:work"])} canManageTasks={experience === "admin" && hasEveryPermission(user, ["review:manage"])} canViewOriginalImage={experience === "admin"} canGrade={experience === "admin" && hasEveryPermission(user, ["grading:manage"])} canVerifyEvidence={experience === "admin" && hasEveryPermission(user, ["evidence:manage"])} canReturn={hasEveryPermission(user, ["review:work"])} currentUserId={user.id} initialExamId={examId} personalScope={experience === "teacher"} />;
+        return <GradingWorkbenchPage canWork={hasEveryPermission(user, ["review:work"])} canManageTasks={experience === "admin" && hasEveryPermission(user, ["review:manage"])} canViewOriginalImage={experience === "admin"} canGrade={experience === "admin" && hasEveryPermission(user, ["grading:manage"])} canVerifyEvidence={experience === "admin" && hasEveryPermission(user, ["evidence:manage"])} canReturn={hasEveryPermission(user, ["review:work"])} currentUserId={user.id} currentTenantId={user.tenant} initialExamId={examId} personalScope={experience === "teacher"} />;
       case "quality":
         return <QualityDashboardPage examId={examId} canManage={experience === "admin" && hasEveryPermission(user, ["review:manage"])} />;
       case "scores":
@@ -278,7 +281,7 @@ export function AppShell() {
           canGrade={false}
           canVerifyEvidence={false}
           canReturn={hasEveryPermission(user, ["review:work"])}
-          currentUserId={user.id}
+          currentUserId={user.id} currentTenantId={user.tenant}
           personalScope
         />
       )
@@ -327,7 +330,7 @@ export function AppShell() {
     ) : route.path === "/account/sessions" ? (
       <SessionManagementPage onLoggedOut={logout} />
     ) : route.path === "/grading/subjective-batches" ? (
-      <SubjectiveGradingBatchPage />
+      <SubjectiveGradingBatchPage key={`${user.tenant}:${user.id}`} scopeKey={`${user.tenant}:${user.id}`} />
     ) : (
       <ModulePage route={route} experience={navigationExperience} onNavigate={navigate} />
     );
@@ -344,6 +347,7 @@ export function AppShell() {
         onLogout={logout}
         immersive={experience === "teacher" && (route.path === "/grading" || examWorkspace?.section === "grading")}
       >
+        <PendingBusinessCommands key={`${user.tenant}:${user.id}`} tenant={user.tenant} actor={user.id} />
         <ErrorBoundary resetKey={`${navigationExperience}:${canonicalPath}`}>
           <Suspense fallback={<LoadingState label="正在加载页面" />}>{content}</Suspense>
         </ErrorBoundary>

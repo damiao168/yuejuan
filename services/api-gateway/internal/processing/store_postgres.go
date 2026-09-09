@@ -30,6 +30,12 @@ func (s *PostgresStore) RefreshExam(ctx context.Context, tenantID, examID string
 	if _, err = tx.ExecContext(ctx, refreshStateSQL, tenantID, examID); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, closeInvalidPageExceptionsSQL, tenantID, examID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, deleteInvalidPageStatesSQL, tenantID, examID); err != nil {
+		return err
+	}
 	// An exception is keyed by the concrete source which can be retried. If a
 	// registration/image-quality retry creates a new run, the stale exception
 	// is closed below and a new one names the new source run.
@@ -42,12 +48,61 @@ func (s *PostgresStore) RefreshExam(ctx context.Context, tenantID, examID string
 	return tx.Commit()
 }
 
+// ApplyProjection publishes one claimed source version and acknowledges that
+// exact version in the same transaction. If the lease expired, every state and
+// exception write is rolled back. A newer request that arrives concurrently is
+// left pending because requested_version is never copied into projected_version.
+func (s *PostgresStore) ApplyProjection(ctx context.Context, owner string, refresh ProjectionRefresh) error {
+	if strings.TrimSpace(owner) == "" || refresh.TenantID == "" || refresh.ExamID == "" || refresh.RequestedVersion <= 0 {
+		return ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var leasedVersion int64
+	if err = tx.QueryRowContext(ctx, `SELECT requested_version FROM processing_projection_cursor
+WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND lease_owner=$3 AND lease_expires_at>clock_timestamp()
+FOR UPDATE`, refresh.TenantID, refresh.ExamID, owner+":"+refresh.claimID).Scan(&leasedVersion); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrProjectionLeaseLost
+		}
+		return err
+	}
+	if leasedVersion < refresh.RequestedVersion {
+		return ErrProjectionLeaseLost
+	}
+	for _, statement := range []string{refreshStateSQL, closeInvalidPageExceptionsSQL, deleteInvalidPageStatesSQL, upsertExceptionsSQL, closeStaleExceptionsSQL} {
+		if _, err = tx.ExecContext(ctx, statement, refresh.TenantID, refresh.ExamID); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE processing_projection_cursor
+SET projected_version=GREATEST(projected_version,$4),projected_at=now(),available_at=now(),
+    lease_owner=NULL,lease_expires_at=NULL,attempt_count=0,last_error=NULL
+WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND lease_owner=$3 AND lease_expires_at>clock_timestamp()`,
+		refresh.TenantID, refresh.ExamID, owner+":"+refresh.claimID, refresh.RequestedVersion)
+	if err != nil {
+		return err
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		return ErrProjectionLeaseLost
+	}
+	return tx.Commit()
+}
+
 func (s *PostgresStore) Summary(ctx context.Context, tenantID, examID string) (Summary, error) {
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(examID) == "" {
 		return Summary{}, ErrInvalidInput
 	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return Summary{}, err
+	}
+	defer tx.Rollback()
 	result := Summary{ExamID: examID, ByStage: []StageCount{}, Issues: []IssueCount{}}
-	if err := s.db.QueryRowContext(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 SELECT COUNT(*),
        COUNT(*) FILTER (WHERE current_stage='READY'),
        COUNT(*) FILTER (WHERE blocking),
@@ -59,7 +114,7 @@ WHERE tenant_id=$1::uuid AND exam_id=$2::uuid
 `, tenantID, examID).Scan(&result.TotalPages, &result.ReadyPages, &result.BlockedPages, &result.PendingPages, &result.GeneratedAt); err != nil {
 		return Summary{}, err
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := tx.QueryContext(ctx, `
 SELECT current_stage, COUNT(*)
 FROM submission_page_processing_state
 WHERE tenant_id=$1::uuid AND exam_id=$2::uuid
@@ -79,7 +134,7 @@ GROUP BY current_stage ORDER BY current_stage
 	if err := rows.Close(); err != nil {
 		return Summary{}, err
 	}
-	rows, err = s.db.QueryContext(ctx, `
+	rows, err = tx.QueryContext(ctx, `
 SELECT issue_code, COUNT(*)
 FROM submission_page_processing_state
 WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND issue_code IS NOT NULL
@@ -96,7 +151,16 @@ GROUP BY issue_code ORDER BY issue_code
 		}
 		result.Issues = append(result.Issues, item)
 	}
-	return result, rows.Err()
+	if err = rows.Err(); err != nil {
+		return Summary{}, err
+	}
+	if err = rows.Close(); err != nil {
+		return Summary{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Summary{}, err
+	}
+	return result, nil
 }
 
 func (s *PostgresStore) ListExceptions(ctx context.Context, tenantID string, filter ExceptionFilter) (ListResult, error) {
@@ -115,7 +179,7 @@ SELECT e.id::text,e.exam_id::text,e.page_id::text,e.source_type,e.source_id::tex
        COALESCE(e.assigned_to::text,''),e.details_json,e.created_at,e.updated_at,e.resolved_at,COALESCE(e.resolution,''),
        COALESCE(e.details_json->>'retry_source_type',''),COALESCE(e.details_json->>'retry_source_id','')
 FROM operational_exception e
-JOIN submission_page_processing_state ps ON ps.tenant_id=e.tenant_id AND ps.page_id=e.page_id
+JOIN submission_page_processing_state ps ON ps.tenant_id=e.tenant_id AND ps.page_id=e.page_id AND ps.exam_id=e.exam_id
 JOIN exam x ON x.tenant_id=e.tenant_id AND x.id=e.exam_id AND x.deleted_at IS NULL
 WHERE e.tenant_id=$1::uuid
   AND ($2='' OR e.exam_id::text=$2)
@@ -324,6 +388,7 @@ WITH facts AS (
          existing.issue_code AS prior_issue,existing.parser_quality_json AS prior_parser_quality,
          GREATEST(p.updated_at,sub.updated_at,COALESCE(cp.updated_at,'-infinity'::timestamptz),COALESCE(q.updated_at,'-infinity'::timestamptz),COALESCE(r.updated_at,'-infinity'::timestamptz),COALESCE(o.updated_at,'-infinity'::timestamptz),COALESCE(seg.updated_at,'-infinity'::timestamptz),COALESCE(existing.source_observed_at,'-infinity'::timestamptz)) AS observed_at
   FROM submission_page p
+  JOIN processing_active_submission_page active ON active.tenant_id=p.tenant_id AND active.page_id=p.id
   JOIN submission sub ON sub.tenant_id=p.tenant_id AND sub.id=p.submission_id AND sub.deleted_at IS NULL
   LEFT JOIN LATERAL (
     SELECT id,status,updated_at FROM capture_page
@@ -422,6 +487,25 @@ ON CONFLICT (tenant_id,page_id) DO UPDATE SET
   issue_code=EXCLUDED.issue_code,retryable=EXCLUDED.retryable,retry_source_type=EXCLUDED.retry_source_type,retry_source_id=EXCLUDED.retry_source_id,
   parser_quality_json=EXCLUDED.parser_quality_json,source_observed_at=EXCLUDED.source_observed_at,updated_at=EXCLUDED.updated_at`
 
+const closeInvalidPageExceptionsSQL = `
+UPDATE operational_exception e
+SET status='resolved',resolved_at=COALESCE(e.resolved_at,now()),
+    resolution=CASE
+      WHEN EXISTS(SELECT 1 FROM processing_active_submission_page active WHERE active.tenant_id=e.tenant_id AND active.page_id=e.page_id) THEN 'source_reassigned'
+      ELSE 'source_deleted'
+    END,
+    updated_at=now()
+WHERE e.tenant_id=$1::uuid AND e.exam_id=$2::uuid AND e.status IN ('open','assigned')
+  AND NOT EXISTS(SELECT 1 FROM processing_active_submission_page active WHERE active.tenant_id=e.tenant_id AND active.page_id=e.page_id AND active.exam_id=e.exam_id)`
+
+const deleteInvalidPageStatesSQL = `
+DELETE FROM submission_page_processing_state ps
+WHERE ps.tenant_id=$1::uuid AND ps.exam_id=$2::uuid
+  AND NOT EXISTS (
+    SELECT 1 FROM processing_active_submission_page active
+    WHERE active.tenant_id=ps.tenant_id AND active.page_id=ps.page_id AND active.exam_id=$2::uuid
+  )`
+
 const upsertExceptionsSQL = `
 INSERT INTO operational_exception (tenant_id,exam_id,source_type,source_id,page_id,code,severity,blocking,status,details_json,created_at,updated_at)
 SELECT ps.tenant_id,ps.exam_id,
@@ -433,16 +517,16 @@ SELECT ps.tenant_id,ps.exam_id,
        ps.source_observed_at,ps.source_observed_at
 FROM submission_page_processing_state ps
 WHERE ps.tenant_id=$1::uuid AND ps.exam_id=$2::uuid AND ps.issue_code IS NOT NULL
-ON CONFLICT (tenant_id,source_type,source_id,code) DO UPDATE SET
+ON CONFLICT (tenant_id,exam_id,source_type,source_id,code) DO UPDATE SET
   severity=EXCLUDED.severity,blocking=EXCLUDED.blocking,
   status=CASE
     WHEN operational_exception.status='assigned' THEN 'assigned'
-    WHEN operational_exception.status='resolved' AND operational_exception.details_json=EXCLUDED.details_json THEN 'resolved'
+    WHEN operational_exception.status='resolved' AND COALESCE(operational_exception.resolution,'') NOT IN ('source_deleted','source_reassigned','source_replaced','source_recovered') AND (operational_exception.details_json-'source_observed_at')=(EXCLUDED.details_json-'source_observed_at') THEN 'resolved'
     ELSE 'open'
   END,
   details_json=EXCLUDED.details_json,updated_at=EXCLUDED.updated_at,
-  resolved_at=CASE WHEN operational_exception.status='resolved' AND operational_exception.details_json=EXCLUDED.details_json THEN operational_exception.resolved_at ELSE NULL END,
-  resolution=CASE WHEN operational_exception.status='resolved' AND operational_exception.details_json=EXCLUDED.details_json THEN operational_exception.resolution ELSE NULL END`
+  resolved_at=CASE WHEN operational_exception.status='resolved' AND COALESCE(operational_exception.resolution,'') NOT IN ('source_deleted','source_reassigned','source_replaced','source_recovered') AND (operational_exception.details_json-'source_observed_at')=(EXCLUDED.details_json-'source_observed_at') THEN operational_exception.resolved_at ELSE NULL END,
+  resolution=CASE WHEN operational_exception.status='resolved' AND COALESCE(operational_exception.resolution,'') NOT IN ('source_deleted','source_reassigned','source_replaced','source_recovered') AND (operational_exception.details_json-'source_observed_at')=(EXCLUDED.details_json-'source_observed_at') THEN operational_exception.resolution ELSE NULL END`
 
 const closeStaleExceptionsSQL = `
 UPDATE operational_exception e
@@ -450,7 +534,7 @@ SET status='resolved',resolved_at=COALESCE(resolved_at,now()),resolution=COALESC
 WHERE e.tenant_id=$1::uuid AND e.exam_id=$2::uuid AND e.status IN ('open','assigned')
   AND NOT EXISTS (
     SELECT 1 FROM submission_page_processing_state ps
-    WHERE ps.tenant_id=e.tenant_id AND ps.page_id=e.page_id AND ps.issue_code=e.code
+    WHERE ps.tenant_id=e.tenant_id AND ps.exam_id=e.exam_id AND ps.page_id=e.page_id AND ps.issue_code=e.code
       AND COALESCE(ps.retry_source_type,'submission_page')=e.source_type
       AND COALESCE(ps.retry_source_id,ps.page_id)=e.source_id
   )`
