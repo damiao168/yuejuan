@@ -159,10 +159,9 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	pageID := e2eString(t, pageResp, "id")
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/submissions/"+submissionID+"/quality-check", adminToken, `{}`, http.StatusOK)
 	if _, err := submission.NewPostgresStore(db).ApplyPageQualityResult(context.Background(), demoTenantID, submission.ApplyPageQualityInput{
-		SubmissionID:          submissionID,
-		PageID:                pageID,
-		NormalizedFileAssetID: answerFileID,
-		QualityStatus:         "passed",
+		SubmissionID:  submissionID,
+		PageID:        pageID,
+		QualityStatus: "passed",
 	}); err != nil {
 		t.Fatalf("apply synthetic page image quality result: %v", err)
 	}
