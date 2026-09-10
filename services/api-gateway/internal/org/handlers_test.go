@@ -112,6 +112,91 @@ func TestCSVImportReportsRowErrors(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"created":1`) || !strings.Contains(rec.Body.String(), `"errors"`) {
 		t.Fatalf("expected created count and errors: %s", rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), "不能为空") || !strings.Contains(rec.Body.String(), "列不完整") {
+		t.Fatalf("import errors should be actionable Chinese messages: %s", rec.Body.String())
+	}
+}
+
+func TestOrganizationDuplicateCodesReturnSpecificConflicts(t *testing.T) {
+	t.Run("school code", func(t *testing.T) {
+		authStore := authStoreWithPermissions(t, []string{"org:manage"})
+		router := testRouter(authStore, org.NewMemoryStore())
+		token := login(t, router)
+		payload := `{"name":"第一中学","code":"school-001"}`
+		for attempt, expectedStatus := range []int{http.StatusCreated, http.StatusConflict} {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/schools", bytes.NewBufferString(payload))
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != expectedStatus {
+				t.Fatalf("attempt %d expected %d, got %d: %s", attempt+1, expectedStatus, rec.Code, rec.Body.String())
+			}
+			if expectedStatus == http.StatusConflict && !strings.Contains(rec.Body.String(), "school_code_conflict") {
+				t.Fatalf("duplicate school code should return explicit conflict code: %s", rec.Body.String())
+			}
+		}
+	})
+
+	t.Run("class code", func(t *testing.T) {
+		authStore := authStoreWithPermissions(t, []string{"org:manage"})
+		orgStore := org.NewMemoryStore()
+		school, err := orgStore.CreateSchool(context.Background(), "tenant-org", org.School{Name: "第一中学", Code: "school-001"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		grade, err := orgStore.CreateGrade(context.Background(), "tenant-org", org.Grade{SchoolID: school.ID, Name: "高一年级"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		router := testRouter(authStore, orgStore)
+		token := login(t, router)
+		payload := `{"school_id":"` + school.ID + `","grade_id":"` + grade.ID + `","name":"高一（1）班","code":"G10-01"}`
+		for attempt, expectedStatus := range []int{http.StatusCreated, http.StatusConflict} {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/classes", bytes.NewBufferString(payload))
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != expectedStatus {
+				t.Fatalf("attempt %d expected %d, got %d: %s", attempt+1, expectedStatus, rec.Code, rec.Body.String())
+			}
+			if expectedStatus == http.StatusConflict && !strings.Contains(rec.Body.String(), "class_code_conflict") {
+				t.Fatalf("duplicate class code should return explicit conflict code: %s", rec.Body.String())
+			}
+		}
+	})
+}
+
+func TestCreateStudentReturnsConflictForDuplicateStudentNumber(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"org:manage"})
+	orgStore := org.NewMemoryStore()
+	school, err := orgStore.CreateSchool(context.Background(), "tenant-org", org.School{Name: "第一中学", Code: "school-001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grade, err := orgStore.CreateGrade(context.Background(), "tenant-org", org.Grade{SchoolID: school.ID, Name: "高一年级"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	class, err := orgStore.CreateClass(context.Background(), "tenant-org", org.Class{SchoolID: school.ID, GradeID: grade.ID, Name: "高一（1）班"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := testRouter(authStore, orgStore)
+	token := login(t, router)
+	payload := `{"school_id":"` + school.ID + `","class_id":"` + class.ID + `","student_no":"1","name":"测试学生"}`
+
+	for attempt, expectedStatus := range []int{http.StatusCreated, http.StatusConflict} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/students", bytes.NewBufferString(payload))
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != expectedStatus {
+			t.Fatalf("attempt %d expected %d, got %d: %s", attempt+1, expectedStatus, rec.Code, rec.Body.String())
+		}
+		if expectedStatus == http.StatusConflict && !strings.Contains(rec.Body.String(), "student_no_conflict") {
+			t.Fatalf("duplicate student number should return explicit conflict code: %s", rec.Body.String())
+		}
+	}
 }
 
 func TestOrganizationPermissionDenied(t *testing.T) {

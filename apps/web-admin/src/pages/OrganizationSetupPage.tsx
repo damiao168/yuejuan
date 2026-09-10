@@ -310,7 +310,7 @@ export function OrganizationSetupPage({ onNavigate }: { onNavigate: (path: strin
                 </Space>
               </>
             ) : data.students.length ? <Alert type="success" showIcon message={`已导入 ${data.students.length} 名学生，可继续或追加导入。`} /> : null}
-            {importErrors.length ? <Alert type="warning" showIcon message={`${importErrors.length} 行未导入`} description={<Button type="link" onClick={() => downloadCSV("导入错误行.csv", importErrors.map((item) => ({ row: item.row, error: "该行未能导入，请检查必填字段和数据格式" })))}>下载错误行</Button>} /> : null}
+            {importErrors.length ? <Alert type="warning" showIcon message={`${importErrors.length} 行未导入：${importErrors[0]?.message ?? "请检查名单内容"}`} description={<Button type="link" onClick={() => downloadCSV("导入错误行.csv", importErrors.map((item) => ({ row: item.row, error: item.message })))}>下载错误行</Button>} /> : null}
             {data.students.length ? <Button className="step-next" onClick={() => setStep(4)}>继续 <ArrowRight size={16} /></Button> : null}
           </div>
         );

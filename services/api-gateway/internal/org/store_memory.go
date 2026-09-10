@@ -89,6 +89,11 @@ func (s *MemoryStore) UpdateTenantStatus(_ context.Context, id string, status st
 func (s *MemoryStore) CreateSchool(_ context.Context, tenantID string, input School) (School, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, current := range s.schools {
+		if current.TenantID == tenantID && current.Code == input.Code {
+			return School{}, ErrSchoolCodeConflict
+		}
+	}
 	input.ID = s.id("school")
 	input.TenantID = tenantID
 	if input.Status == "" {
@@ -178,6 +183,11 @@ func (s *MemoryStore) ListGrades(_ context.Context, tenantID string, schoolID st
 func (s *MemoryStore) CreateClass(_ context.Context, tenantID string, input Class) (Class, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, current := range s.classes {
+		if current.TenantID == tenantID && current.GradeID == input.GradeID && current.Code == input.Code {
+			return Class{}, ErrClassCodeConflict
+		}
+	}
 	input.ID = s.id("class")
 	input.TenantID = tenantID
 	if input.Status == "" {
@@ -202,6 +212,11 @@ func (s *MemoryStore) ListClasses(_ context.Context, tenantID string, gradeID st
 func (s *MemoryStore) CreateStudent(_ context.Context, tenantID string, input Student) (Student, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, current := range s.students {
+		if current.TenantID == tenantID && current.SchoolID == input.SchoolID && current.StudentNo == input.StudentNo {
+			return Student{}, ErrStudentNoConflict
+		}
+	}
 	if input.ID == "" {
 		input.ID = s.id("student")
 	}

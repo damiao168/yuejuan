@@ -14,7 +14,11 @@ function response(body: unknown, status: number, statusText = "") {
 describe("user-facing API errors", () => {
   it.each([
     ["exam_not_collecting", "当前考试尚未进入答卷采集阶段，请先完成考试准备并开始采集。"],
-    ["capture_duplicate_file", "该文件已加入当前批次，无需重复导入。"]
+    ["capture_duplicate_file", "该文件已加入当前批次，无需重复导入。"],
+    ["student_no_conflict", "该学号已存在，请更换学号。"],
+    ["class_code_conflict", "该年级中已存在相同的班级代码，请更换代码。"],
+    ["username_exists", "该登录账号已被使用，请更换账号。"],
+    ["invalid_role_binding", "所选角色与学校或班级不匹配，请重新选择。"]
   ])("maps %s to Chinese", (code, expected) => {
     expect(getUserErrorMessage(new ApiClientError(409, code, "English backend message"))).toBe(expected);
   });

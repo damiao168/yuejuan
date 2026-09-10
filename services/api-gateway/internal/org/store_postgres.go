@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type PostgresStore struct {
@@ -166,6 +168,9 @@ func (s *PostgresStore) CreateSchool(ctx context.Context, tenantID string, input
 	var out School
 	var stages []byte
 	if err := row.Scan(&out.ID, &out.TenantID, &out.Name, &out.Code, &stages, &out.Status); err != nil {
+		if postgresConstraint(err, "23505", "school_tenant_id_code_key") {
+			return School{}, ErrSchoolCodeConflict
+		}
 		return School{}, err
 	}
 	_ = json.Unmarshal(stages, &out.EducationStages)
@@ -317,6 +322,9 @@ RETURNING id::text,tenant_id::text,school_id::text,grade_id::text,academic_year_
 		if errors.Is(err, sql.ErrNoRows) {
 			return Class{}, ErrInvalidParent
 		}
+		if postgresConstraint(err, "23505", "school_class_tenant_id_grade_id_code_key") {
+			return Class{}, ErrClassCodeConflict
+		}
 		return Class{}, err
 	}
 	return out, nil
@@ -378,9 +386,17 @@ FROM inserted CROSS JOIN parent_class CROSS JOIN enrollment
 		if errors.Is(err, sql.ErrNoRows) {
 			return Student{}, ErrInvalidParent
 		}
+		if postgresConstraint(err, "23505", "student_tenant_id_school_id_student_no_key") {
+			return Student{}, ErrStudentNoConflict
+		}
 		return Student{}, err
 	}
 	return out, nil
+}
+
+func postgresConstraint(err error, code string, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == code && pgErr.ConstraintName == constraint
 }
 
 func (s *PostgresStore) ListStudents(ctx context.Context, tenantID string, filter StudentListFilter) ([]Student, error) {

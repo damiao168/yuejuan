@@ -62,6 +62,7 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	school := e2ePostJSON(t, router, http.MethodPost, "/api/v1/schools", adminToken, `{"name":"Story 041 Synthetic School","code":"story041-`+suffix+`"}`, http.StatusCreated)["school"].(map[string]any)
 	schoolID := e2eString(t, school, "id")
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/schools", adminToken, `{"name":"Duplicate School","code":"story041-`+suffix+`"}`, http.StatusConflict)
 	e2eBindPostgresSchoolAdmin(t, db, "school_admin", schoolID)
 	schoolAdminToken := e2eLoginWithTenant(t, router, "demo", "school_admin", "ChangeMe123!")
 	evaluationKey := "pipeline-" + strings.ReplaceAll(suffix, ".", "-")
@@ -82,11 +83,13 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	class := e2ePostJSON(t, router, http.MethodPost, "/api/v1/classes", adminToken, `{"school_id":"`+schoolID+`","grade_id":"`+gradeID+`","name":"Story 041 Class","code":"story041-`+suffix+`"}`, http.StatusCreated)["class"].(map[string]any)
 	classID := e2eString(t, class, "id")
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/classes", adminToken, `{"school_id":"`+schoolID+`","grade_id":"`+gradeID+`","name":"Duplicate Class","code":"story041-`+suffix+`"}`, http.StatusConflict)
 	if err := org.NewPostgresStore(db).BindTeacherClass(context.Background(), demoTenantID, teacherID, classID); err != nil {
 		t.Fatalf("bind appeal reviewer to synthetic class: %v", err)
 	}
 	student := e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, `{"school_id":"`+schoolID+`","class_id":"`+classID+`","student_no":"SYN-`+suffix+`","name":"Story 041 Synthetic Student"}`, http.StatusCreated)["student"].(map[string]any)
 	studentID := e2eString(t, student, "id")
+	e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, `{"school_id":"`+schoolID+`","class_id":"`+classID+`","student_no":"SYN-`+suffix+`","name":"Duplicate Student"}`, http.StatusConflict)
 	otherStudent := e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, `{"school_id":"`+schoolID+`","class_id":"`+classID+`","student_no":"SYN-OTHER-`+suffix+`","name":"Story 041 Other Synthetic Student"}`, http.StatusCreated)["student"].(map[string]any)
 	otherStudentID := e2eString(t, otherStudent, "id")
 	otherUsername := "story041_other_" + strings.ReplaceAll(suffix, ".", "_")

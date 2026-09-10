@@ -154,7 +154,7 @@ func (h *Handler) CreateSchool(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.store.CreateSchool(r.Context(), user.TenantID, input)
 	if err != nil {
-		httpx.Error(w, r, http.StatusInternalServerError, "school_create_failed", "failed to create school")
+		writeStoreError(w, r, err, "school_create_failed", "failed to create school")
 		return
 	}
 	h.auditAction(r, "org.school_created", "school", out.ID, "create school")
@@ -457,21 +457,28 @@ func (h *Handler) ImportStudentsCSV(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if len(row) < 4 {
-			result.Errors = append(result.Errors, CSVImportError{Row: i + 1, Message: "expected student_no,name,school_id,class_id"})
+			result.Errors = append(result.Errors, CSVImportError{Row: i + 1, Message: "列不完整，请使用学生导入模板重新填写"})
 			continue
 		}
 		student := Student{StudentNo: strings.TrimSpace(row[0]), Name: strings.TrimSpace(row[1]), SchoolID: strings.TrimSpace(row[2]), ClassID: strings.TrimSpace(row[3])}
 		if student.StudentNo == "" || student.Name == "" || student.SchoolID == "" || student.ClassID == "" {
-			result.Errors = append(result.Errors, CSVImportError{Row: i + 1, Message: "student_no, name, school_id and class_id are required"})
+			result.Errors = append(result.Errors, CSVImportError{Row: i + 1, Message: "学号、姓名、学校和班级不能为空"})
 			continue
 		}
 		scope, _ := auth.AccessScopeFromContext(r.Context())
 		if !allowsSchool(scope, student.SchoolID) || !h.allowsResource(r, scope, "school_class", student.ClassID) {
-			result.Errors = append(result.Errors, CSVImportError{Row: i + 1, Message: "organization scope forbidden"})
+			result.Errors = append(result.Errors, CSVImportError{Row: i + 1, Message: "所选学校或班级不在你的管理范围内"})
 			continue
 		}
 		if _, err := h.store.CreateStudent(r.Context(), user.TenantID, student); err != nil {
-			result.Errors = append(result.Errors, CSVImportError{Row: i + 1, Message: err.Error()})
+			message := "该行暂时无法导入，请稍后重试"
+			switch {
+			case errors.Is(err, ErrStudentNoConflict):
+				message = "该学号已存在"
+			case errors.Is(err, ErrInvalidParent):
+				message = "所选学校或班级不存在，请重新选择"
+			}
+			result.Errors = append(result.Errors, CSVImportError{Row: i + 1, Message: message})
 			continue
 		}
 		result.Created++
@@ -514,8 +521,31 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 }
 
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error, code string, message string) {
+	if errors.Is(err, ErrSchoolCodeConflict) {
+		httpx.Error(w, r, http.StatusConflict, "school_code_conflict", "school code already exists")
+		return
+	}
+	if errors.Is(err, ErrClassCodeConflict) {
+		httpx.Error(w, r, http.StatusConflict, "class_code_conflict", "class code already exists in this grade")
+		return
+	}
+	if errors.Is(err, ErrStudentNoConflict) {
+		httpx.Error(w, r, http.StatusConflict, "student_no_conflict", "student number already exists in this school")
+		return
+	}
 	if errors.Is(err, ErrInvalidParent) {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_parent_scope", "parent resource does not belong to tenant")
+		switch code {
+		case "grade_create_failed":
+			httpx.Error(w, r, http.StatusBadRequest, "grade_school_invalid", "selected school is unavailable")
+		case "class_create_failed":
+			httpx.Error(w, r, http.StatusBadRequest, "class_grade_invalid", "selected grade does not belong to this school")
+		case "student_create_failed":
+			httpx.Error(w, r, http.StatusBadRequest, "student_class_invalid", "selected class does not belong to this school")
+		case "student_transfer_failed":
+			httpx.Error(w, r, http.StatusBadRequest, "student_transfer_target_invalid", "student or target class is unavailable")
+		default:
+			httpx.Error(w, r, http.StatusBadRequest, "invalid_parent_scope", "selected organization is unavailable")
+		}
 		return
 	}
 	httpx.Error(w, r, http.StatusInternalServerError, code, message)

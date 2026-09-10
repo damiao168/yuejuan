@@ -170,7 +170,7 @@ export function StudentManagementPage() {
     try {
       const result = await importStudentsCSV(csv);
       if (result.result.errors.length) {
-        message.warning(`已导入 ${result.result.created} 名，${result.result.errors.length} 行失败`);
+        message.warning(`已导入 ${result.result.created} 名，${result.result.errors.length} 行未导入：${result.result.errors[0]?.message ?? "请检查名单内容"}`);
       } else {
         message.success(`已导入 ${result.result.created} 名学生`);
         setImportOpen(false);

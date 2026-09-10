@@ -8,6 +8,9 @@ import (
 var (
 	ErrInvalidParent         = errors.New("organization parent does not belong to tenant")
 	ErrInvalidTeacherBinding = errors.New("target user is not an active teacher in the class tenant")
+	ErrSchoolCodeConflict    = errors.New("school code already exists")
+	ErrClassCodeConflict     = errors.New("class code already exists in this grade")
+	ErrStudentNoConflict     = errors.New("student number already exists in this school")
 )
 
 type Tenant struct {
