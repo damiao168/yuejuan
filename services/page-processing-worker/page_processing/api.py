@@ -4,7 +4,7 @@ import json
 import math
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib import error, request
@@ -121,6 +121,12 @@ class Client:
     def fail_registration(self, run_id: str, payload: dict[str, Any]) -> None:
         self._json("POST", f"/api/v1/internal/page-registration-runs/{run_id}/fail", payload)
 
+    def complete_template_match(self, run_id: str, payload: dict[str, Any]) -> None:
+        self._json("POST", f"/api/v1/internal/page-template-match-runs/{run_id}/result", payload)
+
+    def fail_template_match(self, run_id: str, payload: dict[str, Any]) -> None:
+        self._json("POST", f"/api/v1/internal/page-template-match-runs/{run_id}/fail", payload)
+
     def complete_correction(self, correction_id: str, payload: dict[str, Any]) -> None:
         self._json("POST", f"/api/v1/internal/page-registration-corrections/{correction_id}/result", payload)
 
@@ -206,8 +212,8 @@ def _retry_after_seconds(headers: Any) -> float | None:
     except (TypeError, ValueError, OverflowError):
         return None
     if retry_at.tzinfo is None:
-        retry_at = retry_at.replace(tzinfo=timezone.utc)
-    return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+        retry_at = retry_at.replace(tzinfo=UTC)
+    return max(0.0, (retry_at - datetime.now(UTC)).total_seconds())
 
 
 def _trusted_service_url(base_url: str, path_or_url: str) -> str:

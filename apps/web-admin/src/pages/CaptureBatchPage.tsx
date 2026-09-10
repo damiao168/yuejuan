@@ -91,6 +91,7 @@ const statusLabels: Record<string, string> = {
   deleted: "已删除",
   quality_rejected: "质量不合格",
   normalized: "质量已通过",
+  page_matching: "正在匹配模板",
 };
 
 const errorLabels: Record<string, string> = {
@@ -121,7 +122,7 @@ function statusTone(
     status === "quality_rejected"
   )
     return "warning";
-  if (status === "processing" || status === "queued" || status === "uploading")
+  if (status === "processing" || status === "queued" || status === "uploading" || status === "page_matching")
     return "processing";
   return "neutral";
 }
@@ -652,7 +653,9 @@ export function CaptureBatchPage({
     try {
       const result = await processSubmissionPages(submissionId);
       await loadDetail(detail!.batch.id);
-      message.success(`已开始处理 ${result.runs.length} 页（版面对齐与题目切分）`);
+      message.success(result.runs.length > 0
+        ? `已开始处理 ${result.runs.length} 页（版面对齐与题目切分）`
+        : "已开始识别首张答卷模板");
     } catch (currentError) {
       message.error(formatError(currentError));
     } finally {
@@ -877,6 +880,25 @@ export function CaptureBatchPage({
           {statusLabels[item.status] ?? "未知状态"}
         </StatusTag>
       ),
+    },
+    {
+      title: "模板判断",
+      width: 220,
+      render: (_, item) => {
+        if (item.status === "page_matching") return "正在比较已锁定模板…";
+        const candidates = item.match_candidates ?? [];
+        if (!candidates.length) return "-";
+        const top = candidates[0];
+        const name = String(top.template_name || "候选模板");
+        const version = Number(top.version_no || 0);
+        const score = Math.round(Number(top.score || 0) * 100);
+        const detailText = candidates.slice(0, 3).map((candidate) => {
+          const candidateName = String(candidate.template_name || candidate.template_id || "候选模板");
+          const candidateVersion = Number(candidate.version_no || 0);
+          return `${candidateName}${candidateVersion ? ` v${candidateVersion}` : ""} · ${Math.round(Number(candidate.score || 0) * 100)}%`;
+        }).join("；");
+        return <Tooltip title={detailText}><span>{item.status === "needs_review" ? "需确认：" : "已识别："}{name}{version ? ` v${version}` : ""} · {score}%</span></Tooltip>;
+      },
     },
     {
       title: "操作",

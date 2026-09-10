@@ -68,6 +68,20 @@ export interface AnswerSheetTemplate {
   updated_at: string;
 }
 
+export interface ExamTemplateBinding {
+  id: string;
+  tenant_id: string;
+  exam_id: string;
+  template_id: string;
+  template_content_hash: string;
+  mode: "bound_auto" | "locked_with_guard";
+  source: "automatic" | "manual";
+  revision: number;
+  bound_by: string;
+  bound_at: string;
+  updated_at: string;
+}
+
 export type OMRCalibrationStatus = "draft" | "approved" | "revoked" | "discarded";
 
 export interface OMRCalibrationSummary {
@@ -202,6 +216,24 @@ export async function lockAnswerSheetTemplate(templateId: string) {
 
 export async function cloneAnswerSheetTemplate(templateId: string) {
   return apiClient.request<{ template: AnswerSheetTemplate }>(`/api/v1/answer-sheet-templates/${encodeURIComponent(templateId)}/clone`, { method: "POST" });
+}
+
+export async function getExamTemplateBinding(examId: string) {
+  return apiClient.request<{ binding: ExamTemplateBinding | null }>(`/api/v1/exams/${encodeURIComponent(examId)}/answer-sheet-template-binding`);
+}
+
+export async function bindExamTemplate(examId: string, templateId: string, expectedRevision: number, mode: "locked_with_guard" = "locked_with_guard") {
+  return apiClient.request<{ binding: ExamTemplateBinding }>(`/api/v1/exams/${encodeURIComponent(examId)}/answer-sheet-template-binding`, {
+    method: "PUT",
+    body: JSON.stringify({ template_id: templateId, mode, expected_revision: expectedRevision })
+  });
+}
+
+export async function unbindExamTemplate(examId: string, expectedRevision: number, reason: string) {
+  return apiClient.request<{ binding: ExamTemplateBinding }>(`/api/v1/exams/${encodeURIComponent(examId)}/answer-sheet-template-binding`, {
+    method: "DELETE",
+    body: JSON.stringify({ expected_revision: expectedRevision, reason })
+  });
 }
 
 export async function listOMRCalibrations(templateId: string) {

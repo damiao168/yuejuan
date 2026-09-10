@@ -17,6 +17,22 @@ type templateLayout struct {
 	} `json:"pages"`
 }
 
+type registrationFallbackTemplate struct {
+	ID          string
+	ContentHash string
+	Name        string
+	VersionNo   int
+	AssetID     string
+	ContentType string
+	Layout      templateLayout
+}
+
+type registrationPageRow struct {
+	id, submissionPageID, assetID, hash string
+	templateID, templateHash            string
+	pageNo, revision                    int
+}
+
 func (s *PostgresStore) QueueSubmissionPages(ctx context.Context, tenantID, submissionID, actorID string) ([]RegistrationRun, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -44,26 +60,57 @@ func QueueSubmissionPagesInTx(ctx context.Context, tx *sql.Tx, tenantID, submiss
 	if err = ensureBatchWritableTx(ctx, tx, tenantID, batchID); err != nil {
 		return nil, err
 	}
+	var boundTemplateID, boundTemplateHash, boundRoutingMode string
+	bindingExists := true
+	bindingErr := tx.QueryRowContext(ctx, `SELECT template_id::text,template_content_hash,mode FROM exam_answer_sheet_template_binding WHERE tenant_id=$1::uuid AND exam_id=$2::uuid FOR SHARE`, tenantID, examID).Scan(&boundTemplateID, &boundTemplateHash, &boundRoutingMode)
+	if errors.Is(bindingErr, sql.ErrNoRows) {
+		bindingExists = false
+	} else if bindingErr != nil {
+		return nil, bindingErr
+	}
+	if !bindingExists {
+		var pendingTemplateReview bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(
+SELECT 1
+FROM capture_page cp
+JOIN LATERAL (
+  SELECT processing_status,decision
+  FROM page_template_match_run pm
+  WHERE pm.tenant_id=cp.tenant_id AND pm.capture_page_id=cp.id
+    AND pm.source_page_revision=cp.revision AND pm.deleted_at IS NULL
+  ORDER BY pm.created_at DESC LIMIT 1
+) latest ON true
+WHERE cp.tenant_id=$1::uuid AND cp.submission_id=$2::uuid AND cp.status='needs_review'
+  AND (latest.processing_status='terminal_error' OR latest.decision IN ('ambiguous','unknown','conflict'))
+)`, tenantID, submissionID).Scan(&pendingTemplateReview); err != nil {
+			return nil, err
+		}
+		if pendingTemplateReview {
+			return nil, ErrInvalidTransition
+		}
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT cp.id::text,cp.submission_page_id::text,sp.normalized_file_asset_id::text,cp.assigned_page_no,cp.revision,fa.hash_sha256,
 	COALESCE(sheet.template_id::text,cp.barcode_template_id::text,''),COALESCE(sheet.template_content_hash,'')
 	FROM capture_page cp
 	JOIN submission_page sp ON sp.tenant_id=cp.tenant_id AND sp.id=cp.submission_page_id
 	JOIN file_asset fa ON fa.tenant_id=sp.tenant_id AND fa.id=sp.normalized_file_asset_id
 	LEFT JOIN answer_sheet_print_sheet sheet ON sheet.tenant_id=cp.tenant_id AND sheet.id=cp.sheet_serial
-	WHERE cp.tenant_id=$1 AND cp.submission_id=$2::uuid AND cp.status='normalized'
+	WHERE cp.tenant_id=$1 AND cp.submission_id=$2::uuid
+	  AND (cp.status='normalized' OR ($3::boolean AND cp.status='needs_review' AND EXISTS(
+	    SELECT 1 FROM page_template_match_run pm
+	    WHERE pm.tenant_id=cp.tenant_id AND pm.capture_page_id=cp.id
+	      AND pm.source_page_revision=cp.revision AND pm.deleted_at IS NULL
+	      AND (pm.processing_status='terminal_error' OR pm.decision IN ('ambiguous','unknown','conflict'))
+	      AND pm.id=(SELECT latest.id FROM page_template_match_run latest WHERE latest.tenant_id=cp.tenant_id AND latest.capture_page_id=cp.id AND latest.deleted_at IS NULL ORDER BY latest.created_at DESC LIMIT 1)
+	  )))
 	  AND sp.quality_status='passed' AND sp.normalized_file_asset_id IS NOT NULL
-	  AND cp.deleted_at IS NULL ORDER BY cp.sequence_no FOR UPDATE OF cp`, tenantID, submissionID)
+	  AND cp.deleted_at IS NULL ORDER BY cp.sequence_no FOR UPDATE OF cp`, tenantID, submissionID, bindingExists)
 	if err != nil {
 		return nil, err
 	}
-	type pageRow struct {
-		id, submissionPageID, assetID, hash string
-		templateID, templateHash            string
-		pageNo, revision                    int
-	}
-	pages := []pageRow{}
+	pages := []registrationPageRow{}
 	for rows.Next() {
-		var p pageRow
+		var p registrationPageRow
 		if err = rows.Scan(&p.id, &p.submissionPageID, &p.assetID, &p.pageNo, &p.revision, &p.hash, &p.templateID, &p.templateHash); err != nil {
 			rows.Close()
 			return nil, err
@@ -96,21 +143,69 @@ func QueueSubmissionPagesInTx(ctx context.Context, tx *sql.Tx, tenantID, submiss
 		}
 	}
 	var templateAssetID, templateContentType string
+	routingMode := "barcode"
 	var layoutRaw []byte
 	if controlled {
 		err = tx.QueryRowContext(ctx, `SELECT ast.id::text,ast.content_hash,ast.layout,ep.file_asset_id::text,fa.content_type
 FROM answer_sheet_template ast JOIN exam_paper ep ON ep.tenant_id=ast.tenant_id AND ep.id=ast.exam_paper_id JOIN file_asset fa ON fa.tenant_id=ep.tenant_id AND fa.id=ep.file_asset_id
 WHERE ast.tenant_id=$1 AND ast.exam_id=$2::uuid AND ast.id=$3::uuid AND ast.content_hash=$4 AND ast.status='locked' AND ast.deleted_at IS NULL`, tenantID, examID, templateID, templateHash).Scan(&templateID, &templateHash, &layoutRaw, &templateAssetID, &templateContentType)
 	} else {
-		err = tx.QueryRowContext(ctx, `WITH locked AS (SELECT ast.* FROM answer_sheet_template ast WHERE ast.tenant_id=$1 AND ast.exam_id=$2::uuid AND ast.status='locked' AND ast.deleted_at IS NULL)
+		if bindingExists {
+			routingMode = boundRoutingMode
+			err = tx.QueryRowContext(ctx, `SELECT ast.id::text,ast.content_hash,ast.layout,ep.file_asset_id::text,fa.content_type
+FROM answer_sheet_template ast JOIN exam_paper ep ON ep.tenant_id=ast.tenant_id AND ep.id=ast.exam_paper_id JOIN file_asset fa ON fa.tenant_id=ep.tenant_id AND fa.id=ep.file_asset_id
+WHERE ast.tenant_id=$1 AND ast.exam_id=$2::uuid AND ast.id=$3::uuid AND ast.content_hash=$4 AND ast.status='locked' AND ast.deleted_at IS NULL`, tenantID, examID, boundTemplateID, boundTemplateHash).Scan(&templateID, &templateHash, &layoutRaw, &templateAssetID, &templateContentType)
+		} else {
+			routingMode = "single_template"
+			err = tx.QueryRowContext(ctx, `WITH locked AS (SELECT ast.* FROM answer_sheet_template ast WHERE ast.tenant_id=$1 AND ast.exam_id=$2::uuid AND ast.status='locked' AND ast.deleted_at IS NULL)
 SELECT ast.id::text,ast.content_hash,ast.layout,ep.file_asset_id::text,fa.content_type FROM locked ast JOIN exam_paper ep ON ep.tenant_id=ast.tenant_id AND ep.id=ast.exam_paper_id JOIN file_asset fa ON fa.tenant_id=ep.tenant_id AND fa.id=ep.file_asset_id WHERE (SELECT COUNT(*) FROM locked)=1`, tenantID, examID).Scan(&templateID, &templateHash, &layoutRaw, &templateAssetID, &templateContentType)
+		}
 	}
 	if err != nil {
+		if !controlled && routingMode == "single_template" && errors.Is(err, sql.ErrNoRows) {
+			if _, matchErr := queueTemplateMatchRun(ctx, tx, tenantID, examID, actorID, pages[0]); matchErr != nil {
+				return nil, matchErr
+			}
+			if err = aggregateBatchTx(ctx, tx, tenantID, batchID); err != nil {
+				return nil, err
+			}
+			return []RegistrationRun{}, nil
+		}
 		return nil, mapNotFound(err)
 	}
 	var layout templateLayout
 	if json.Unmarshal(layoutRaw, &layout) != nil || len(layout.Pages) == 0 {
 		return nil, ErrInvalidInput
+	}
+	fallbackTemplates := []registrationFallbackTemplate{}
+	if routingMode == "bound_auto" || routingMode == "locked_with_guard" {
+		fallbackRows, fallbackErr := tx.QueryContext(ctx, `SELECT ast.id::text,ast.content_hash,ast.name,ast.version_no,ast.layout,ep.file_asset_id::text,fa.content_type
+FROM answer_sheet_template ast
+JOIN exam_paper ep ON ep.tenant_id=ast.tenant_id AND ep.id=ast.exam_paper_id
+JOIN file_asset fa ON fa.tenant_id=ep.tenant_id AND fa.id=ep.file_asset_id
+WHERE ast.tenant_id=$1::uuid AND ast.exam_id=$2::uuid AND ast.status='locked' AND ast.id<>$3::uuid AND ast.deleted_at IS NULL
+ORDER BY ast.version_no DESC LIMIT 7`, tenantID, examID, templateID)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		for fallbackRows.Next() {
+			var candidate registrationFallbackTemplate
+			var candidateLayout []byte
+			if fallbackErr = fallbackRows.Scan(&candidate.ID, &candidate.ContentHash, &candidate.Name, &candidate.VersionNo, &candidateLayout, &candidate.AssetID, &candidate.ContentType); fallbackErr != nil {
+				fallbackRows.Close()
+				return nil, fallbackErr
+			}
+			if json.Unmarshal(candidateLayout, &candidate.Layout) == nil && len(candidate.Layout.Pages) > 0 {
+				fallbackTemplates = append(fallbackTemplates, candidate)
+			}
+		}
+		if fallbackErr = fallbackRows.Err(); fallbackErr != nil {
+			fallbackRows.Close()
+			return nil, fallbackErr
+		}
+		if fallbackErr = fallbackRows.Close(); fallbackErr != nil {
+			return nil, fallbackErr
+		}
 	}
 	out := []RegistrationRun{}
 	for _, page := range pages {
@@ -139,16 +234,33 @@ SELECT ast.id::text,ast.content_hash,ast.layout,ep.file_asset_id::text,fa.conten
 			return nil, findErr
 		}
 		var runID string
-		err = tx.QueryRowContext(ctx, `INSERT INTO page_registration_run (tenant_id,capture_page_id,submission_page_id,source_file_asset_id,source_sha256,template_id,template_content_hash,page_no,processing_status,profile_version,started_at)
-VALUES ($1,$2::uuid,$3::uuid,$4::uuid,$5,$6::uuid,$7,$8,'processing','opencv-orb-akaze-v1',now()) RETURNING id::text`, tenantID, page.id, page.submissionPageID, page.assetID, page.hash, templateID, templateHash, page.pageNo).Scan(&runID)
+		err = tx.QueryRowContext(ctx, `INSERT INTO page_registration_run (tenant_id,capture_page_id,submission_page_id,source_file_asset_id,source_sha256,template_id,template_content_hash,page_no,routing_mode,processing_status,profile_version,started_at)
+VALUES ($1,$2::uuid,$3::uuid,$4::uuid,$5,$6::uuid,$7,$8,$9,'processing','opencv-orb-akaze-v1',now()) RETURNING id::text`, tenantID, page.id, page.submissionPageID, page.assetID, page.hash, templateID, templateHash, page.pageNo, routingMode).Scan(&runID)
 		if err != nil {
 			return nil, err
+		}
+		fallbackPayload := []map[string]any{}
+		for _, candidate := range fallbackTemplates {
+			for _, candidatePage := range candidate.Layout.Pages {
+				if candidatePage.PageNo != page.pageNo {
+					continue
+				}
+				fallbackPayload = append(fallbackPayload, map[string]any{
+					"template_id": candidate.ID, "template_content_hash": candidate.ContentHash,
+					"template_name": candidate.Name, "version_no": candidate.VersionNo,
+					"template_download_url": "/api/v1/files/" + candidate.AssetID + "/download", "template_content_type": candidate.ContentType,
+					"template_page_index": candidatePage.PageNo, "question_regions": candidatePage.QuestionRegions,
+				})
+				break
+			}
 		}
 		payload, _ := json.Marshal(map[string]any{
 			"registration_run_id": runID, "capture_page_id": page.id, "exam_id": examID,
 			"source_file_asset_id": page.assetID, "source_download_url": "/api/v1/files/" + page.assetID + "/download", "source_content_type": "image/png",
 			"template_id": templateID, "template_content_hash": templateHash, "template_file_asset_id": templateAssetID, "template_download_url": "/api/v1/files/" + templateAssetID + "/download", "template_content_type": templateContentType,
 			"page_no": page.pageNo, "template_page_index": page.pageNo, "template_width": templatePage.Width, "template_height": templatePage.Height, "question_regions": templatePage.QuestionRegions, "render_dpi": 300,
+			"routing_mode":       routingMode,
+			"fallback_templates": fallbackPayload,
 		})
 		key := "page-registration:" + page.id + ":" + templateHash + ":r" + strconv.Itoa(page.revision)
 		var taskID string
@@ -248,7 +360,8 @@ ON CONFLICT (tenant_id,submission_id,question_id) DO UPDATE SET submission_page_
 	}
 	sourceMatrix, _ := json.Marshal(input.SourceToTemplate)
 	inverseMatrix, _ := json.Marshal(input.TemplateToSource)
-	row := tx.QueryRowContext(ctx, `UPDATE page_registration_run SET processing_status='completed',match_status=$3,confidence=$4,method=$5,source_to_template_matrix=$6,template_to_source_matrix=$7,feature_count=$8,match_count=$9,inlier_count=$10,inlier_ratio=$11,reprojection_error=$12,registered_file_asset_id=$13::uuid,result_version=$14,duration_ms=$15,completed_at=now(),error_code=NULL,error_detail='{}',updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid RETURNING `+registrationColumns, tenantID, runID, matchStatus, input.Confidence, input.Method, sourceMatrix, inverseMatrix, input.FeatureCount, input.MatchCount, input.InlierCount, input.InlierRatio, input.ReprojectionError, input.RegisteredFileAssetID, input.ResultVersion, input.DurationMS)
+	guardReport, _ := json.Marshal(input.GuardReport)
+	row := tx.QueryRowContext(ctx, `UPDATE page_registration_run SET processing_status='completed',match_status=$3,confidence=$4,method=$5,source_to_template_matrix=$6,template_to_source_matrix=$7,feature_count=$8,match_count=$9,inlier_count=$10,inlier_ratio=$11,reprojection_error=$12,registered_file_asset_id=$13::uuid,result_version=$14,duration_ms=$15,guard_report=$16::jsonb,completed_at=now(),error_code=NULL,error_detail='{}',updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid RETURNING `+registrationColumns, tenantID, runID, matchStatus, input.Confidence, input.Method, sourceMatrix, inverseMatrix, input.FeatureCount, input.MatchCount, input.InlierCount, input.InlierRatio, input.ReprojectionError, input.RegisteredFileAssetID, input.ResultVersion, input.DurationMS, guardReport)
 	out, err := scanRegistrationRun(row)
 	if err != nil {
 		return RegistrationRun{}, err
@@ -300,12 +413,13 @@ func (s *PostgresStore) ApplyRegistrationFailure(ctx context.Context, tenantID, 
 	return out, tx.Commit()
 }
 
-const registrationColumns = `id::text,capture_page_id::text,submission_page_id::text,source_file_asset_id::text,template_id::text,template_content_hash,page_no,processing_status,COALESCE(match_status,''),COALESCE(confidence,0),COALESCE(method,''),profile_version,source_to_template_matrix,template_to_source_matrix,feature_count,match_count,inlier_count,COALESCE(inlier_ratio,0),COALESCE(reprojection_error,0),COALESCE(registered_file_asset_id::text,''),COALESCE(runtime_task_id::text,''),COALESCE(error_code,''),created_at`
+const registrationColumns = `id::text,capture_page_id::text,submission_page_id::text,source_file_asset_id::text,template_id::text,template_content_hash,routing_mode,guard_report,page_no,processing_status,COALESCE(match_status,''),COALESCE(confidence,0),COALESCE(method,''),profile_version,source_to_template_matrix,template_to_source_matrix,feature_count,match_count,inlier_count,COALESCE(inlier_ratio,0),COALESCE(reprojection_error,0),COALESCE(registered_file_asset_id::text,''),COALESCE(runtime_task_id::text,''),COALESCE(error_code,''),created_at`
 
 func scanRegistrationRun(row scanner) (RegistrationRun, error) {
 	var item RegistrationRun
 	var source, inverse []byte
-	err := row.Scan(&item.ID, &item.CapturePageID, &item.SubmissionPageID, &item.SourceFileAssetID, &item.TemplateID, &item.TemplateContentHash, &item.PageNo, &item.ProcessingStatus, &item.MatchStatus, &item.Confidence, &item.Method, &item.ProfileVersion, &source, &inverse, &item.FeatureCount, &item.MatchCount, &item.InlierCount, &item.InlierRatio, &item.ReprojectionError, &item.RegisteredFileAssetID, &item.RuntimeTaskID, &item.ErrorCode, &item.CreatedAt)
+	var guard []byte
+	err := row.Scan(&item.ID, &item.CapturePageID, &item.SubmissionPageID, &item.SourceFileAssetID, &item.TemplateID, &item.TemplateContentHash, &item.RoutingMode, &guard, &item.PageNo, &item.ProcessingStatus, &item.MatchStatus, &item.Confidence, &item.Method, &item.ProfileVersion, &source, &inverse, &item.FeatureCount, &item.MatchCount, &item.InlierCount, &item.InlierRatio, &item.ReprojectionError, &item.RegisteredFileAssetID, &item.RuntimeTaskID, &item.ErrorCode, &item.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return RegistrationRun{}, ErrNotFound
@@ -314,6 +428,10 @@ func scanRegistrationRun(row scanner) (RegistrationRun, error) {
 	}
 	_ = json.Unmarshal(source, &item.SourceToTemplate)
 	_ = json.Unmarshal(inverse, &item.TemplateToSource)
+	_ = json.Unmarshal(guard, &item.GuardReport)
+	if item.GuardReport == nil {
+		item.GuardReport = map[string]any{}
+	}
 	if item.SourceToTemplate == nil {
 		item.SourceToTemplate = []any{}
 	}

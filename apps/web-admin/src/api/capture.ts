@@ -50,6 +50,7 @@ export interface CapturePage {
   status: string;
   revision: number;
   page_identity: Record<string, unknown>;
+  match_candidates: Array<Record<string, unknown>>;
 }
 
 export interface CaptureBatchDetail {

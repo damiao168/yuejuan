@@ -403,6 +403,8 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, "rubric_locked", "locked rubric cannot be modified")
 	case errors.Is(err, ErrTemplateLocked):
 		httpx.Error(w, r, http.StatusConflict, "template_locked", "locked template cannot be modified; clone a new version")
+	case errors.Is(err, ErrTemplateNotLocked):
+		httpx.Error(w, r, http.StatusConflict, "template_not_locked", "template must be locked before it can be used for an exam")
 	case errors.Is(err, ErrExamFrozen):
 		httpx.Error(w, r, http.StatusConflict, "exam_frozen", "exam paper configuration is frozen after readiness confirmation")
 	case errors.Is(err, ErrConflict):

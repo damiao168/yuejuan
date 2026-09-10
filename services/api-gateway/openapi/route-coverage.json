@@ -4,9 +4,9 @@
   "exception_ledger": "contracts/openapi/registered-route-exceptions.json",
   "policy": "Every registered route is covered by OpenAPI or an exact, reviewed exception-ledger entry; generation never invents approvals.",
   "counts": {
-    "registered": 425,
+    "registered": 430,
     "openapi": 163,
-    "registered_gaps": 262
+    "registered_gaps": 267
   },
   "routes": [
     {
@@ -1177,6 +1177,45 @@
       "reason": "Legacy command surface predates the OpenAPI migration; this exact list is a temporary reviewed exception."
     },
     {
+      "method": "DELETE",
+      "path": "/api/v1/exams/{examId}/answer-sheet-template-binding",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "interface_category": "public-feature",
+      "contract_carrier": "Go handler tests and TypeScript API consumer types",
+      "exception_scope": "Only the exact answer-sheet template binding endpoints introduced for the first-page routing workflow.",
+      "exception_policy": "answer-sheet-template-routing-v1",
+      "owner": "capture-platform",
+      "review_after": "2026-12-31",
+      "reason": "The routing workflow extends the existing handwritten answer-sheet API surface while its public OpenAPI migration is scheduled as a bounded follow-up."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exams/{examId}/answer-sheet-template-binding",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "interface_category": "public-feature",
+      "contract_carrier": "Go handler tests and TypeScript API consumer types",
+      "exception_scope": "Only the exact answer-sheet template binding endpoints introduced for the first-page routing workflow.",
+      "exception_policy": "answer-sheet-template-routing-v1",
+      "owner": "capture-platform",
+      "review_after": "2026-12-31",
+      "reason": "The routing workflow extends the existing handwritten answer-sheet API surface while its public OpenAPI migration is scheduled as a bounded follow-up."
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/exams/{examId}/answer-sheet-template-binding",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "interface_category": "public-feature",
+      "contract_carrier": "Go handler tests and TypeScript API consumer types",
+      "exception_scope": "Only the exact answer-sheet template binding endpoints introduced for the first-page routing workflow.",
+      "exception_policy": "answer-sheet-template-routing-v1",
+      "owner": "capture-platform",
+      "review_after": "2026-12-31",
+      "reason": "The routing workflow extends the existing handwritten answer-sheet API surface while its public OpenAPI migration is scheduled as a bounded follow-up."
+    },
+    {
       "method": "GET",
       "path": "/api/v1/exams/{examId}/answer-sheet-templates",
       "source": "services/api-gateway/internal/server/server.go",
@@ -2277,6 +2316,32 @@
     {
       "method": "POST",
       "path": "/api/v1/internal/page-registration-runs/{runId}/result",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "interface_category": "internal-worker",
+      "contract_carrier": "versioned worker runtime payloads and Go integration tests",
+      "exception_scope": "Only the exact service-to-service endpoints listed below; no browser/client use.",
+      "exception_policy": "internal-worker-protocol-v1",
+      "owner": "api-platform",
+      "review_after": "2026-12-31",
+      "reason": "Internal worker transport is versioned and tested independently from the public SDK."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/page-template-match-runs/{runId}/fail",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "interface_category": "internal-worker",
+      "contract_carrier": "versioned worker runtime payloads and Go integration tests",
+      "exception_scope": "Only the exact service-to-service endpoints listed below; no browser/client use.",
+      "exception_policy": "internal-worker-protocol-v1",
+      "owner": "api-platform",
+      "review_after": "2026-12-31",
+      "reason": "Internal worker transport is versioned and tested independently from the public SDK."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/page-template-match-runs/{runId}/result",
       "source": "services/api-gateway/internal/server/server.go",
       "coverage": "registered-gap",
       "interface_category": "internal-worker",

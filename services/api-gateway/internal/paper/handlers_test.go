@@ -70,6 +70,69 @@ func TestCreatePaperFromUploadedFileAssetID(t *testing.T) {
 	}
 }
 
+func TestExamTemplateBindingUsesExistingLockedTemplateEndpoint(t *testing.T) {
+	authStore := authStoreWithPermissions(t, []string{"exam:manage"})
+	store := paper.NewMemoryStore()
+	router := testRouter(authStore, store)
+	token := login(t, router)
+	paperVersion := createPaper(t, router, token, "exam-1")
+	question := createQuestion(t, router, token, "exam-1", 10)
+	payload, _ := json.Marshal(map[string]any{
+		"exam_paper_id": paperVersion.ID, "name": "本场模板", "page_count": 1,
+		"layout": map[string]any{"pages": []any{map[string]any{
+			"page_no": 1, "width": 1000, "height": 1400, "registration_marks": []any{}, "identity_regions": []any{},
+			"question_regions": []any{map[string]any{"id": "q1", "question_id": question.ID, "label": "Q1", "x": .1, "y": .1, "width": .8, "height": .2}},
+		}}},
+	})
+	createReq := authedRequest(http.MethodPost, "/api/v1/exams/exam-1/answer-sheet-templates", bytes.NewBuffer(payload), token)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create template: %d %s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		Template paper.AnswerSheetTemplate `json:"template"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	lockReq := authedRequest(http.MethodPost, "/api/v1/answer-sheet-templates/"+created.Template.ID+"/lock", nil, token)
+	lockRec := httptest.NewRecorder()
+	router.ServeHTTP(lockRec, lockReq)
+	if lockRec.Code != http.StatusOK {
+		t.Fatalf("lock template: %d %s", lockRec.Code, lockRec.Body.String())
+	}
+
+	bindReq := authedRequest(http.MethodPut, "/api/v1/exams/exam-1/answer-sheet-template-binding", bytes.NewBufferString(`{"template_id":"`+created.Template.ID+`","mode":"locked_with_guard","expected_revision":0}`), token)
+	bindRec := httptest.NewRecorder()
+	router.ServeHTTP(bindRec, bindReq)
+	if bindRec.Code != http.StatusOK {
+		t.Fatalf("bind template: %d %s", bindRec.Code, bindRec.Body.String())
+	}
+	var bound struct {
+		Binding paper.ExamTemplateBinding `json:"binding"`
+	}
+	if err := json.Unmarshal(bindRec.Body.Bytes(), &bound); err != nil {
+		t.Fatal(err)
+	}
+	if bound.Binding.TemplateID != created.Template.ID || bound.Binding.Mode != "locked_with_guard" {
+		t.Fatalf("unexpected binding: %#v", bound.Binding)
+	}
+
+	unbindReq := authedRequest(http.MethodDelete, "/api/v1/exams/exam-1/answer-sheet-template-binding", bytes.NewBufferString(`{"expected_revision":1,"reason":"测试解除"}`), token)
+	unbindRec := httptest.NewRecorder()
+	router.ServeHTTP(unbindRec, unbindReq)
+	if unbindRec.Code != http.StatusOK {
+		t.Fatalf("unbind template: %d %s", unbindRec.Code, unbindRec.Body.String())
+	}
+	getReq := authedRequest(http.MethodGet, "/api/v1/exams/exam-1/answer-sheet-template-binding", nil, token)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK || !strings.Contains(getRec.Body.String(), `"binding":null`) {
+		t.Fatalf("expected unbound response, got %d %s", getRec.Code, getRec.Body.String())
+	}
+}
+
 func TestInvalidQuestionTypeRejected(t *testing.T) {
 	router := testRouter(authStoreWithPermissions(t, []string{"exam:manage"}), paper.NewMemoryStore())
 	token := login(t, router)

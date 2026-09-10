@@ -11,17 +11,18 @@ import (
 )
 
 type MemoryStore struct {
-	mu            sync.RWMutex
-	batches       map[string]Batch
-	batchKeys     map[string]string
-	files         map[string]File
-	pages         map[string]Page
-	registrations map[string]RegistrationRun
-	identities    map[string]MatchingSubmission
+	mu              sync.RWMutex
+	batches         map[string]Batch
+	batchKeys       map[string]string
+	files           map[string]File
+	pages           map[string]Page
+	registrations   map[string]RegistrationRun
+	templateMatches map[string]TemplateMatchRun
+	identities      map[string]MatchingSubmission
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{batches: map[string]Batch{}, batchKeys: map[string]string{}, files: map[string]File{}, pages: map[string]Page{}, registrations: map[string]RegistrationRun{}, identities: map[string]MatchingSubmission{}}
+	return &MemoryStore{batches: map[string]Batch{}, batchKeys: map[string]string{}, files: map[string]File{}, pages: map[string]Page{}, registrations: map[string]RegistrationRun{}, templateMatches: map[string]TemplateMatchRun{}, identities: map[string]MatchingSubmission{}}
 }
 
 func (s *MemoryStore) IssueTemplateBarcodes(context.Context, string, string) (IssuedTemplateBarcodes, error) {
@@ -340,6 +341,50 @@ func (s *MemoryStore) ListRegistrationRuns(_ context.Context, tenantID, submissi
 	return out, nil
 }
 
+func (s *MemoryStore) GetTemplateMatchRun(_ context.Context, tenantID, runID string) (TemplateMatchRun, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.templateMatches[runID]
+	if !ok {
+		return TemplateMatchRun{}, ErrNotFound
+	}
+	return item, nil
+}
+
+func (s *MemoryStore) ApplyTemplateMatchResult(_ context.Context, tenantID, runID string, input TemplateMatchResultInput) (TemplateMatchRun, []RegistrationRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.templateMatches[runID]
+	if !ok {
+		return TemplateMatchRun{}, nil, ErrNotFound
+	}
+	item.ProcessingStatus = "completed"
+	item.Decision = input.Decision
+	item.SelectedTemplateID = input.SelectedTemplateID
+	item.SelectedTemplateContentHash = input.SelectedTemplateContentHash
+	item.Score = input.Score
+	item.Margin = input.Margin
+	item.Candidates = input.Candidates
+	s.templateMatches[runID] = item
+	return item, []RegistrationRun{}, nil
+}
+
+func (s *MemoryStore) ApplyTemplateMatchFailure(_ context.Context, tenantID, runID, errorCode string, _ map[string]any, retryable bool) (TemplateMatchRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.templateMatches[runID]
+	if !ok {
+		return TemplateMatchRun{}, ErrNotFound
+	}
+	item.ProcessingStatus = "terminal_error"
+	if retryable {
+		item.ProcessingStatus = "retryable_error"
+	}
+	item.ErrorCode = errorCode
+	s.templateMatches[runID] = item
+	return item, nil
+}
+
 func (s *MemoryStore) ApplyRegistrationResult(_ context.Context, tenantID, runID string, input RegistrationResultInput) (RegistrationRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -351,6 +396,7 @@ func (s *MemoryStore) ApplyRegistrationResult(_ context.Context, tenantID, runID
 	item.MatchStatus = "matched"
 	item.Confidence = input.Confidence
 	item.Method = input.Method
+	item.GuardReport = input.GuardReport
 	item.RegisteredFileAssetID = input.RegisteredFileAssetID
 	s.registrations[runID] = item
 	return item, nil

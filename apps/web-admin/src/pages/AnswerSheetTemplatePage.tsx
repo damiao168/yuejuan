@@ -6,19 +6,23 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { ApiClientError, getUserErrorMessage } from "../api/client";
 import {
 	approveOMRCalibration,
+	bindExamTemplate,
   cloneAnswerSheetTemplate,
 	createOMRCalibration,
   createAnswerSheetTemplate,
 	discardOMRCalibration,
 	downloadOMRCalibrationCaseImage,
+	getExamTemplateBinding,
 	getOMRCalibration,
 	labelOMRCalibrationCase,
   listAnswerSheetTemplates,
 	listOMRCalibrations,
   lockAnswerSheetTemplate,
 	revokeOMRCalibration,
+	unbindExamTemplate,
   updateAnswerSheetTemplate,
   type AnswerSheetTemplate,
+	type ExamTemplateBinding,
   type LayoutRegion,
 	type OMRCalibrationCase,
 	type OMRCalibrationDetail,
@@ -155,6 +159,8 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
   const [papers, setPapers] = useState<PaperVersion[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [templates, setTemplates] = useState<AnswerSheetTemplate[]>([]);
+	const [examBinding, setExamBinding] = useState<ExamTemplateBinding | null>(null);
+	const [bindingBusy, setBindingBusy] = useState(false);
   const [selectedPaperId, setSelectedPaperId] = useState("");
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [selectedQuestionId, setSelectedQuestionId] = useState("");
@@ -262,11 +268,12 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
     setLoading(true);
     setError(undefined);
     try {
-      const [paperResponse, questionResponse, templateResponse] = await Promise.all([listPapers(examId), listQuestions(examId), listAnswerSheetTemplates(examId)]);
+      const [paperResponse, questionResponse, templateResponse, bindingResponse] = await Promise.all([listPapers(examId), listQuestions(examId), listAnswerSheetTemplates(examId), getExamTemplateBinding(examId)]);
       if (requestId !== dataRequestRef.current) return;
       setPapers(paperResponse.papers);
       setQuestions(questionResponse.questions);
       setTemplates(templateResponse.templates);
+		setExamBinding(bindingResponse.binding);
       const latest = templateResponse.templates[0];
       setSelectedPaperId((current) =>
         paperResponse.papers.some((paper) => paper.id === current)
@@ -276,7 +283,7 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
       setSelectedTemplateId((current) =>
         templateResponse.templates.some((template) => template.id === current)
           ? current
-          : latest?.id || ""
+          : bindingResponse.binding?.template_id || latest?.id || ""
       );
       setSelectedQuestionId((current) =>
         questionResponse.questions.some((question) => question.id === current)
@@ -741,6 +748,51 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
     } catch (cloneError) { message.error(formatError(cloneError)); } finally { setSaving(false); }
   }
 
+	function bindTemplateForExam() {
+		if (!selectedTemplate || selectedTemplate.status !== "locked") return;
+		modal.confirm({
+			title: "将模板用于本场考试",
+			content: `后续无条码答卷将优先使用 v${selectedTemplate.version_no}，并在每页处理前进行版式一致性检查。`,
+			okText: "确认使用",
+			cancelText: "取消",
+			onOk: async () => {
+				setBindingBusy(true);
+				try {
+					const response = await bindExamTemplate(examId, selectedTemplate.id, examBinding?.revision ?? 0);
+					setExamBinding(response.binding);
+					message.success("已将该模板锁定为本场考试模板");
+				} catch (error) {
+					message.error(getUserErrorMessage(error, "考试模板绑定失败，请刷新后重试"));
+				} finally {
+					setBindingBusy(false);
+				}
+			}
+		});
+	}
+
+	function releaseExamBinding() {
+		if (!examBinding) return;
+		modal.confirm({
+			title: "解除本场考试模板",
+			content: "解除后，无条码答卷需要重新进行模板判断。已经完成的页面仍保留实际使用的模板版本和校验码。",
+			okText: "确认解除",
+			okButtonProps: { danger: true },
+			cancelText: "取消",
+			onOk: async () => {
+				setBindingBusy(true);
+				try {
+					await unbindExamTemplate(examId, examBinding.revision, "管理员解除本场考试模板绑定");
+					setExamBinding(null);
+					message.success("已解除本场考试模板");
+				} catch (error) {
+					message.error(getUserErrorMessage(error, "解除失败，请刷新后重试"));
+				} finally {
+					setBindingBusy(false);
+				}
+			}
+		});
+	}
+
 	function openPrintModal() {
 		setSelectedPrintClassIds(printClasses.map((item) => item.id));
 		setPrintModalOpen(true);
@@ -817,6 +869,7 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
           <Button icon={<RefreshCw size={16} />} onClick={() => void loadData()}>刷新</Button>
           {!selectedTemplate ? <Button type="primary" icon={<Plus size={16} />} loading={saving} onClick={() => void createDraft()}>新建模板</Button> : null}
           {selectedTemplate?.status === "locked" ? <Button icon={<Copy size={16} />} loading={saving} onClick={() => void cloneTemplate()}>克隆新版本</Button> : null}
+			{canManage && selectedTemplate?.status === "locked" && (examBinding?.template_id !== selectedTemplate.id || examBinding.mode === "bound_auto") ? <Button loading={bindingBusy} onClick={bindTemplateForExam}>{examBinding?.template_id === selectedTemplate.id ? "确认本场模板" : "用于本场考试"}</Button> : null}
           {selectedTemplate?.status === "draft" ? <><Button icon={<WandSparkles size={16} />} loading={suggestingRegions} onClick={() => void suggestQuestionRegions()}>自动识别区域</Button><Button icon={<Save size={16} />} loading={saving} onClick={() => void saveDraft()}>保存</Button><Button type="primary" icon={<LockKeyhole size={16} />} disabled={!questions.length} onClick={confirmLock}>锁定模板</Button></> : null}
         </Space>
       </section>
@@ -845,6 +898,14 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
           <aside className="template-inspector">
             <div className="template-pane-head"><strong>模板属性</strong>{selectedTemplate.status === "locked" ? <StatusTag tone="success">已锁定</StatusTag> : <StatusTag tone="processing">草稿</StatusTag>}</div>
             <label><span>模板名称</span><Input value={name} disabled={readonly} onChange={(event) => setName(event.target.value)} /></label>
+			<section className="template-option-editor">
+				<div className="template-pane-head"><strong>本场考试模板</strong>{examBinding ? <StatusTag tone={examBinding.mode === "bound_auto" ? "warning" : "success"}>{examBinding.mode === "bound_auto" ? "自动识别待确认" : "已绑定"}</StatusTag> : <StatusTag tone="neutral">未绑定</StatusTag>}</div>
+				{examBinding ? <>
+					<p>{examBinding.template_id === selectedTemplate.id ? examBinding.mode === "bound_auto" ? `首张答卷自动识别为 v${selectedTemplate.version_no}，请核对后点击“确认本场模板”。` : `当前版本 v${selectedTemplate.version_no} 已用于本场考试；后续页面会先做一致性检查。` : `本场考试已绑定其他模板版本，请在上方版本列表中切换查看。`}</p>
+					<span title={examBinding.template_content_hash}>模板校验码：{examBinding.template_content_hash.slice(0, 16)}</span>
+					{canManage ? <Button danger block loading={bindingBusy} onClick={releaseExamBinding}>解除本场绑定</Button> : null}
+				</> : <p>锁定一个模板版本后，可将其用于本场考试。模板绑定与模板版本锁定相互独立。</p>}
+			</section>
             <div className="template-help"><MousePointer2 size={18} /><p>选择左侧题目，在页面空白处拖拽创建区域。拖动区域可移动，右下角控制点可调整大小。</p></div>
             {selectedRegionId ? <Button danger icon={<Trash2 size={16} />} disabled={readonly} onClick={() => removeRegion(selectedRegionId)}>删除所选区域</Button> : null}
             {selectedRegion && ["single_choice", "multiple_choice", "true_false"].includes(selectedQuestion?.question_type ?? "") ? <section className="template-option-editor">

@@ -12,6 +12,23 @@ class RegistrationError(RuntimeError):
     pass
 
 
+class TemplateRoutingError(RegistrationError):
+    def __init__(self, code: str, detail: dict) -> None:
+        super().__init__(code)
+        self.detail = detail
+
+
+@dataclass(frozen=True)
+class TemplateGuardEvidence:
+    passed: bool
+    orientation_match: bool
+    aspect_ratio_delta: float
+    perceptual_hash_score: float
+    layout_score: float
+    score: float
+    profile_version: str = "static-layout-guard-v1"
+
+
 @dataclass(frozen=True)
 class RegistrationEvidence:
     method: str
@@ -32,6 +49,185 @@ class RegistrationOutput:
     width: int
     height: int
     evidence: RegistrationEvidence
+
+
+@dataclass(frozen=True)
+class TemplateMatchCandidate:
+    template_id: str
+    template_content_hash: str
+    data: bytes
+    content_type: str
+    page_index: int
+    question_regions: list[dict]
+    template_name: str = ""
+    version_no: int = 0
+
+
+@dataclass(frozen=True)
+class TemplateMatchOutcome:
+    decision: str
+    selected_template_id: str | None
+    selected_template_content_hash: str | None
+    score: float
+    margin: float
+    candidates: list[dict]
+    registration: RegistrationOutput | None
+
+
+def match_template_candidates(
+    source: bytes,
+    source_content_type: str,
+    candidates: list[TemplateMatchCandidate],
+    *,
+    render_dpi: int = 300,
+    minimum_score: float = 0.70,
+    minimum_margin: float = 0.06,
+) -> TemplateMatchOutcome:
+    """Rank a small candidate set with coarse structure and geometric proof."""
+    ranked: list[tuple[float, TemplateMatchCandidate, RegistrationOutput, TemplateGuardEvidence]] = []
+    evidence_rows: list[dict] = []
+    for candidate in candidates:
+        guard = inspect_template_guard(
+            source,
+            source_content_type,
+            candidate.data,
+            candidate.content_type,
+            question_regions=candidate.question_regions,
+            render_dpi=render_dpi,
+            template_page_index=candidate.page_index,
+        )
+        try:
+            registration = register_page(
+                source,
+                source_content_type,
+                candidate.data,
+                candidate.content_type,
+                render_dpi=render_dpi,
+                template_page_index=candidate.page_index,
+            )
+        except RegistrationError as exc:
+            evidence_rows.append({
+                "template_id": candidate.template_id,
+                "template_content_hash": candidate.template_content_hash,
+                "template_name": candidate.template_name,
+                "version_no": candidate.version_no,
+                "score": round(0.30 * guard.score, 6),
+                "guard_score": round(guard.score, 6),
+                "geometric_score": 0.0,
+                "geometry_passed": False,
+                "error_code": str(exc),
+            })
+            continue
+        score = float(np.clip(0.30 * guard.score + 0.70 * registration.evidence.confidence, 0.0, 1.0))
+        ranked.append((score, candidate, registration, guard))
+        evidence_rows.append({
+            "template_id": candidate.template_id,
+            "template_content_hash": candidate.template_content_hash,
+            "template_name": candidate.template_name,
+            "version_no": candidate.version_no,
+            "score": round(score, 6),
+            "guard_score": round(guard.score, 6),
+            "geometric_score": round(registration.evidence.confidence, 6),
+            "geometry_passed": True,
+            "inlier_ratio": round(registration.evidence.inlier_ratio, 6),
+            "reprojection_error": round(registration.evidence.reprojection_error, 6),
+        })
+    evidence_rows.sort(key=lambda item: float(item["score"]), reverse=True)
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    if not ranked:
+        return TemplateMatchOutcome("unknown", None, None, 0.0, 0.0, evidence_rows, None)
+    top_score, top_candidate, top_registration, _ = ranked[0]
+    margin = top_score - ranked[1][0] if len(ranked) > 1 else top_score
+    if top_score < minimum_score:
+        decision = "unknown"
+    elif len(ranked) > 1 and margin < minimum_margin:
+        decision = "ambiguous"
+    else:
+        decision = "matched"
+    return TemplateMatchOutcome(
+        decision=decision,
+        selected_template_id=top_candidate.template_id if decision == "matched" else None,
+        selected_template_content_hash=top_candidate.template_content_hash if decision == "matched" else None,
+        score=top_score,
+        margin=margin,
+        candidates=evidence_rows,
+        registration=top_registration if decision == "matched" else None,
+    )
+
+
+def inspect_template_guard(
+    source: bytes,
+    source_content_type: str,
+    template: bytes,
+    template_content_type: str,
+    *,
+    question_regions: list[dict] | None = None,
+    render_dpi: int = 300,
+    template_page_index: int = 1,
+) -> TemplateGuardEvidence:
+    """Cheaply reject a page that clearly does not share the bound layout.
+
+    The guard is intentionally not a replacement for registration. It ignores
+    configured answer regions and compares only coarse static structure before
+    the existing ORB/AKAZE geometric verification runs.
+    """
+    source_image = _decode_first(source, source_content_type, render_dpi)
+    template_image = _decode_page(template, template_content_type, render_dpi, template_page_index)
+    source_height, source_width = source_image.shape[:2]
+    template_height, template_width = template_image.shape[:2]
+    source_landscape = source_width > source_height
+    template_landscape = template_width > template_height
+    orientation_match = source_landscape == template_landscape
+    source_aspect = source_width / max(source_height, 1)
+    template_aspect = template_width / max(template_height, 1)
+    aspect_ratio_delta = abs(source_aspect / max(template_aspect, 1e-9) - 1.0)
+
+    size = 96
+    source_gray = cv2.resize(cv2.cvtColor(source_image, cv2.COLOR_RGB2GRAY), (size, size), interpolation=cv2.INTER_AREA)
+    template_gray = cv2.resize(cv2.cvtColor(template_image, cv2.COLOR_RGB2GRAY), (size, size), interpolation=cv2.INTER_AREA)
+    static_mask = np.ones((size, size), dtype=bool)
+    for region in question_regions or []:
+        try:
+            left = max(0, int((float(region["x"]) - 0.01) * size))
+            top = max(0, int((float(region["y"]) - 0.01) * size))
+            right = min(size, int((float(region["x"]) + float(region["width"]) + 0.01) * size))
+            bottom = min(size, int((float(region["y"]) + float(region["height"]) + 0.01) * size))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if right > left and bottom > top:
+            static_mask[top:bottom, left:right] = False
+
+    source_static = source_gray.copy()
+    template_static = template_gray.copy()
+    source_static[~static_mask] = 255
+    template_static[~static_mask] = 255
+    source_hash = _perceptual_hash(source_static)
+    template_hash = _perceptual_hash(template_static)
+    perceptual_hash_score = 1.0 - float(np.count_nonzero(source_hash != template_hash)) / float(source_hash.size)
+
+    source_edges = cv2.Canny(cv2.GaussianBlur(source_static, (3, 3), 0), 60, 160) > 0
+    template_edges = cv2.Canny(cv2.GaussianBlur(template_static, (3, 3), 0), 60, 160) > 0
+    source_edges &= static_mask
+    template_edges &= static_mask
+    edge_total = int(source_edges.sum() + template_edges.sum())
+    layout_score = 1.0 if edge_total == 0 else float(2 * np.logical_and(source_edges, template_edges).sum() / edge_total)
+    score = float(np.clip(0.7 * perceptual_hash_score + 0.3 * layout_score, 0.0, 1.0))
+    passed = bool(orientation_match and aspect_ratio_delta <= 0.10 and score >= 0.68)
+    return TemplateGuardEvidence(
+        passed=passed,
+        orientation_match=orientation_match,
+        aspect_ratio_delta=aspect_ratio_delta,
+        perceptual_hash_score=perceptual_hash_score,
+        layout_score=layout_score,
+        score=score,
+    )
+
+
+def _perceptual_hash(gray: np.ndarray) -> np.ndarray:
+    resized = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
+    low_frequency = cv2.dct(resized)[:8, :8]
+    values = low_frequency.flatten()[1:]
+    return values >= np.median(values)
 
 
 def register_page(

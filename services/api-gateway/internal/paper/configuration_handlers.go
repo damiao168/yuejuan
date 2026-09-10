@@ -79,6 +79,50 @@ func (h *Handler) CloneTemplate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"template": item})
 }
 
+func (h *Handler) GetExamTemplateBinding(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	item, err := h.store.GetExamTemplateBinding(r.Context(), user.TenantID, r.PathValue("examId"))
+	if errors.Is(err, ErrNotFound) {
+		writeJSON(w, http.StatusOK, map[string]any{"binding": nil})
+		return
+	}
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"binding": item})
+}
+
+func (h *Handler) BindExamTemplate(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input BindExamTemplateInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	item, err := h.store.BindExamTemplate(r.Context(), user.TenantID, r.PathValue("examId"), user.ID, input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "exam.answer_sheet_template_bound", "exam", item.ExamID, "bind immutable answer sheet template version")
+	writeJSON(w, http.StatusOK, map[string]any{"binding": item})
+}
+
+func (h *Handler) UnbindExamTemplate(w http.ResponseWriter, r *http.Request) {
+	user := mustUser(r)
+	var input UnbindExamTemplateInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	item, err := h.store.UnbindExamTemplate(r.Context(), user.TenantID, r.PathValue("examId"), input)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "exam.answer_sheet_template_unbound", "exam", item.ExamID, input.Reason)
+	writeJSON(w, http.StatusOK, map[string]any{"binding": item})
+}
+
 func (h *Handler) GetReadiness(w http.ResponseWriter, r *http.Request) {
 	user := mustUser(r)
 	result, err := h.store.Readiness(r.Context(), user.TenantID, r.PathValue("examId"))

@@ -7,14 +7,15 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("paper resource not found")
-	ErrInvalidInput   = errors.New("invalid paper input")
-	ErrRubricMismatch = errors.New("rubric score does not equal question score")
-	ErrRubricLocked   = errors.New("locked rubric cannot be modified")
-	ErrTemplateLocked = errors.New("locked template cannot be modified")
-	ErrConflict       = errors.New("configuration revision conflict")
-	ErrNotReady       = errors.New("exam configuration is not ready")
-	ErrExamFrozen     = errors.New("exam paper configuration is frozen")
+	ErrNotFound          = errors.New("paper resource not found")
+	ErrInvalidInput      = errors.New("invalid paper input")
+	ErrRubricMismatch    = errors.New("rubric score does not equal question score")
+	ErrRubricLocked      = errors.New("locked rubric cannot be modified")
+	ErrTemplateLocked    = errors.New("locked template cannot be modified")
+	ErrTemplateNotLocked = errors.New("template must be locked before binding")
+	ErrConflict          = errors.New("configuration revision conflict")
+	ErrNotReady          = errors.New("exam configuration is not ready")
+	ErrExamFrozen        = errors.New("exam paper configuration is frozen")
 )
 
 type FileAssetInput struct {
@@ -512,6 +513,35 @@ type AnswerSheetTemplate struct {
 	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
+// ExamTemplateBinding records which immutable answer-sheet template version
+// may be used to route pages for one exam. It deliberately does not overload
+// AnswerSheetTemplate.Status: template locking and exam routing are separate
+// lifecycle decisions.
+type ExamTemplateBinding struct {
+	ID                  string    `json:"id"`
+	TenantID            string    `json:"tenant_id"`
+	ExamID              string    `json:"exam_id"`
+	TemplateID          string    `json:"template_id"`
+	TemplateContentHash string    `json:"template_content_hash"`
+	Mode                string    `json:"mode"`
+	Source              string    `json:"source"`
+	Revision            int       `json:"revision"`
+	BoundBy             string    `json:"bound_by"`
+	BoundAt             time.Time `json:"bound_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+type BindExamTemplateInput struct {
+	TemplateID       string `json:"template_id"`
+	Mode             string `json:"mode"`
+	ExpectedRevision int    `json:"expected_revision"`
+}
+
+type UnbindExamTemplateInput struct {
+	ExpectedRevision int    `json:"expected_revision"`
+	Reason           string `json:"reason"`
+}
+
 type CreateTemplateInput struct {
 	ExamPaperID string         `json:"exam_paper_id"`
 	Name        string         `json:"name"`
@@ -569,6 +599,9 @@ type Store interface {
 	UpdateTemplate(ctx context.Context, tenantID string, id string, input UpdateTemplateInput) (AnswerSheetTemplate, error)
 	LockTemplate(ctx context.Context, tenantID string, id string, userID string) (AnswerSheetTemplate, error)
 	CloneTemplate(ctx context.Context, tenantID string, id string, userID string) (AnswerSheetTemplate, error)
+	GetExamTemplateBinding(ctx context.Context, tenantID string, examID string) (ExamTemplateBinding, error)
+	BindExamTemplate(ctx context.Context, tenantID string, examID string, userID string, input BindExamTemplateInput) (ExamTemplateBinding, error)
+	UnbindExamTemplate(ctx context.Context, tenantID string, examID string, input UnbindExamTemplateInput) (ExamTemplateBinding, error)
 	Readiness(ctx context.Context, tenantID string, examID string) (ReadinessResult, error)
 	ConfirmReadiness(ctx context.Context, tenantID string, examID string, userID string) (ReadinessResult, error)
 	StartCollection(ctx context.Context, tenantID string, examID string, userID string) (ReadinessResult, error)

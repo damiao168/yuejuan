@@ -72,3 +72,28 @@ func TestStory050ImageQualityMigrationContainsRequiredSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestExamTemplateRoutingMigrationContainsBindingAndEvidence(t *testing.T) {
+	path := filepath.Join("..", "..", "migrations", "000131_exam_answer_sheet_template_binding.sql")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	text := strings.ToLower(string(raw))
+	for _, want := range []string{
+		"exam_answer_sheet_template_binding",
+		"locked_with_guard",
+		"bound_auto",
+		"template_content_hash",
+		"routing_mode",
+		"guard_report",
+		"page_template_match_run",
+		"source_page_revision",
+		"candidates jsonb",
+		"decision in ('matched', 'ambiguous', 'unknown', 'conflict')",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("template routing migration missing %q", want)
+		}
+	}
+}

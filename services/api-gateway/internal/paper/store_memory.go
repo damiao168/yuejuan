@@ -17,6 +17,7 @@ type MemoryStore struct {
 	questions  map[string]Question
 	rubrics    map[string][]Rubric
 	templates  map[string]AnswerSheetTemplate
+	bindings   map[string]ExamTemplateBinding
 	readiness  map[string]ReadinessResult
 	imports    map[string]PaperImportJob
 	examState  map[string]memoryExamState
@@ -45,6 +46,7 @@ func NewMemoryStore() *MemoryStore {
 		questions:  map[string]Question{},
 		rubrics:    map[string][]Rubric{},
 		templates:  map[string]AnswerSheetTemplate{},
+		bindings:   map[string]ExamTemplateBinding{},
 		readiness:  map[string]ReadinessResult{},
 		imports:    map[string]PaperImportJob{},
 		examState:  map[string]memoryExamState{},

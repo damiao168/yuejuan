@@ -15,7 +15,11 @@ from page_processing.decoder import DecodeError, decode_document
 from page_processing.omr import OMRExtractionError, OMRProfile, extract_marks
 from page_processing.registration import (
     RegistrationError,
+    TemplateMatchCandidate,
+    TemplateRoutingError,
     crop_regions,
+    inspect_template_guard,
+    match_template_candidates,
     register_page,
     register_page_manual,
 )
@@ -44,6 +48,7 @@ class Runner:
         handlers = {
             "layout": self._process_paper_import_decode,
             "capture_file_decode": self._process_capture,
+            "page_template_match": self._process_template_match,
             "page_registration": self._process_registration,
             "page_registration_correction_preview": self._process_correction,
             "omr_extract": self._process_omr,
@@ -147,14 +152,80 @@ class Runner:
         source = self.client.download(str(payload["source_download_url"]))
         template = self.client.download(str(payload["template_download_url"]))
         heartbeat.raise_if_failed()
-        output = register_page(
-            source,
-            str(payload.get("source_content_type") or "image/png"),
-            template,
-            str(payload.get("template_content_type") or ""),
-            render_dpi=int(payload.get("render_dpi") or 300),
-            template_page_index=int(payload.get("template_page_index") or 1),
-        )
+        guard_report = {}
+        output = None
+        if str(payload.get("routing_mode") or "") in {"bound_auto", "locked_with_guard"}:
+            guard = inspect_template_guard(
+                source,
+                str(payload.get("source_content_type") or "image/png"),
+                template,
+                str(payload.get("template_content_type") or ""),
+                question_regions=list(payload.get("question_regions") or []),
+                render_dpi=int(payload.get("render_dpi") or 300),
+                template_page_index=int(payload.get("template_page_index") or 1),
+            )
+            guard_report = {
+                "passed": guard.passed,
+                "orientation_match": guard.orientation_match,
+                "aspect_ratio_delta": guard.aspect_ratio_delta,
+                "perceptual_hash_score": guard.perceptual_hash_score,
+                "layout_score": guard.layout_score,
+                "score": guard.score,
+                "profile_version": guard.profile_version,
+            }
+            if not guard.passed:
+                candidates = [TemplateMatchCandidate(
+                    template_id=str(payload["template_id"]),
+                    template_content_hash=str(payload["template_content_hash"]),
+                    data=template,
+                    content_type=str(payload.get("template_content_type") or ""),
+                    page_index=int(payload.get("template_page_index") or 1),
+                    question_regions=list(payload.get("question_regions") or []),
+                )]
+                for candidate in list(payload.get("fallback_templates") or []):
+                    if not isinstance(candidate, dict):
+                        continue
+                    candidates.append(TemplateMatchCandidate(
+                        template_id=str(candidate.get("template_id") or ""),
+                        template_content_hash=str(candidate.get("template_content_hash") or ""),
+                        data=self.client.download(str(candidate.get("template_download_url") or "")),
+                        content_type=str(candidate.get("template_content_type") or ""),
+                        page_index=int(candidate.get("template_page_index") or 1),
+                        question_regions=list(candidate.get("question_regions") or []),
+                        template_name=str(candidate.get("template_name") or ""),
+                        version_no=int(candidate.get("version_no") or 0),
+                    ))
+                    heartbeat.raise_if_failed()
+                match = match_template_candidates(
+                    source,
+                    str(payload.get("source_content_type") or "image/png"),
+                    candidates,
+                    render_dpi=int(payload.get("render_dpi") or 300),
+                )
+                guard_report["fallback_decision"] = match.decision
+                guard_report["fallback_candidates"] = match.candidates
+                guard_report["fallback_margin"] = match.margin
+                if match.decision != "matched":
+                    code = "ambiguous_template_match" if match.decision == "ambiguous" else "no_template_match"
+                    raise TemplateRoutingError(code, {"guard": guard_report, "candidates": match.candidates})
+                if match.selected_template_id != str(payload["template_id"]) or match.selected_template_content_hash != str(payload["template_content_hash"]):
+                    raise TemplateRoutingError("template_conflict_with_exam_lock", {
+                        "locked_template_id": str(payload["template_id"]),
+                        "matched_template_id": match.selected_template_id,
+                        "score": match.score,
+                        "margin": match.margin,
+                        "candidates": match.candidates,
+                    })
+                output = match.registration
+        if output is None:
+            output = register_page(
+                source,
+                str(payload.get("source_content_type") or "image/png"),
+                template,
+                str(payload.get("template_content_type") or ""),
+                render_dpi=int(payload.get("render_dpi") or 300),
+                template_page_index=int(payload.get("template_page_index") or 1),
+            )
         run_id = str(payload["registration_run_id"])
         registered = self.client.upload_asset(task, "page_registration_output", run_id, "registered.png", output.registered_png)
         segments = []
@@ -172,7 +243,56 @@ class Runner:
             "source_to_template_matrix": evidence.source_to_template, "template_to_source_matrix": evidence.template_to_source,
             "feature_count": evidence.feature_count, "match_count": evidence.match_count, "inlier_count": evidence.inlier_count,
             "inlier_ratio": evidence.inlier_ratio, "reprojection_error": evidence.reprojection_error, "coverage": evidence.coverage,
+            "guard_report": guard_report,
             "segments": segments,
+        })
+
+    def _process_template_match(self, task: dict, heartbeat: _LeaseHeartbeat | _NullHeartbeat = _NULL_HEARTBEAT) -> None:
+        started = time.perf_counter()
+        payload = task.get("payload") or {}
+        source = self.client.download(str(payload["source_download_url"]))
+        heartbeat.raise_if_failed()
+        candidates = []
+        for raw in list(payload.get("candidates") or []):
+            if not isinstance(raw, dict) or not raw.get("template_id") or not raw.get("template_download_url"):
+                raise RegistrationError("template_match_candidate_invalid")
+            candidates.append(TemplateMatchCandidate(
+                template_id=str(raw["template_id"]),
+                template_content_hash=str(raw.get("template_content_hash") or ""),
+                data=self.client.download(str(raw["template_download_url"])),
+                content_type=str(raw.get("template_content_type") or ""),
+                page_index=int(raw.get("template_page_index") or 1),
+                question_regions=list(raw.get("question_regions") or []),
+                template_name=str(raw.get("template_name") or ""),
+                version_no=int(raw.get("version_no") or 0),
+            ))
+            heartbeat.raise_if_failed()
+        outcome = match_template_candidates(
+            source,
+            str(payload.get("source_content_type") or "image/png"),
+            candidates,
+            render_dpi=int(payload.get("render_dpi") or 300),
+        )
+        result_version = "sha256:" + hashlib.sha256(json.dumps({
+            "source": str(payload.get("source_download_url") or ""),
+            "decision": outcome.decision,
+            "selected_template_id": outcome.selected_template_id,
+            "score": outcome.score,
+            "margin": outcome.margin,
+            "candidates": outcome.candidates,
+        }, sort_keys=True).encode()).hexdigest()
+        heartbeat.stop(raise_on_error=False)
+        self.client.complete_template_match(str(payload["template_match_run_id"]), {
+            "task_id": task["id"],
+            "lease_token": task["lease_token"],
+            "result_version": result_version,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "decision": outcome.decision,
+            "selected_template_id": outcome.selected_template_id or "",
+            "selected_template_content_hash": outcome.selected_template_content_hash or "",
+            "score": outcome.score,
+            "margin": outcome.margin,
+            "candidates": outcome.candidates,
         })
 
     def _process_correction(self, task: dict, heartbeat: _LeaseHeartbeat | _NullHeartbeat = _NULL_HEARTBEAT) -> None:
@@ -278,6 +398,9 @@ class Runner:
         known_error = isinstance(exc, (DecodeError, RegistrationError, OMRExtractionError, APIError))
         code = str(exc) if known_error else "page_processing_failed"
         detail = {"error_type": type(exc).__name__, "message": str(exc)[:200]}
+        error_detail = getattr(exc, "detail", None)
+        if isinstance(error_detail, dict):
+            detail.update(error_detail)
         retryable = not isinstance(exc, (DecodeError, RegistrationError, OMRExtractionError))
         if isinstance(exc, APIError):
             # A missing/forbidden source is deterministic. Other API failures,
@@ -288,6 +411,8 @@ class Runner:
             self.client.fail(str(payload["capture_file_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": retryable, "error_code": code, "error_detail": detail, "duration_ms": 0})
         elif task.get("task_type") == "page_registration" and payload.get("registration_run_id"):
             self.client.fail_registration(str(payload["registration_run_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": retryable, "error_code": code, "error_detail": detail, "duration_ms": 0})
+        elif task.get("task_type") == "page_template_match" and payload.get("template_match_run_id"):
+            self.client.fail_template_match(str(payload["template_match_run_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": retryable, "error_code": code, "error_detail": detail, "duration_ms": 0})
         elif task.get("task_type") == "page_registration_correction_preview" and payload.get("correction_id"):
             self.client.fail_correction(str(payload["correction_id"]), {"task_id": task["id"], "lease_token": task["lease_token"], "retryable": retryable, "error_code": code, "error_detail": detail, "duration_ms": 0})
         elif task.get("task_type") == "omr_extract" and payload.get("omr_run_id"):
