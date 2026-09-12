@@ -4,8 +4,6 @@ import time
 import unittest
 from unittest.mock import patch
 
-from PIL import Image
-
 from ocr_worker.api import APIError, AuthenticationError
 from ocr_worker.engine import OCRBlock
 from ocr_worker.runner import (
@@ -14,6 +12,7 @@ from ocr_worker.runner import (
     _decode_region_page,
     _LeaseHeartbeat,
 )
+from PIL import Image
 
 
 class FakeAPI:

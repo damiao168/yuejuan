@@ -1,8 +1,6 @@
 import io
 from types import SimpleNamespace
 
-from PIL import Image, ImageDraw
-
 from ocr_worker.formula_validation import (
     FormulaAction,
     FormulaValidator,
@@ -17,6 +15,7 @@ from ocr_worker.paper_formula import (
     _select_formula,
     _valid_formula,
 )
+from PIL import Image, ImageDraw
 
 
 def result(latex: str, model: str = "PP-FormulaNet_plus-M") -> SimpleNamespace:

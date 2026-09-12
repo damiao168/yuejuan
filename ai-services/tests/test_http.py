@@ -4,10 +4,9 @@ import unittest
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
-from helpers import FakeModel, settings, valid_request
-
 from grading_agent.app import GradingAgentApplication
 from grading_agent.server import GradingAgentHTTPServer
+from helpers import FakeModel, settings, valid_request
 
 
 class HTTPTests(unittest.TestCase):

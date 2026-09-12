@@ -3,7 +3,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
 from ocr_worker.deployment_profile import FORMULA_PROFILE_SCHEMA
 from ocr_worker.formula_calibration import calibrate_formula_runtime
 from ocr_worker.recognition_router import FormulaRecognitionResult
