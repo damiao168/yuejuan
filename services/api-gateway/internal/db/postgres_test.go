@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -56,5 +57,17 @@ func TestOpenPostgresAppliesBoundedPoolAndSessionTimeouts(t *testing.T) {
 func TestPostgresDurationUsesBoundedMillisecondFormat(t *testing.T) {
 	if actual := postgresDuration(1500 * time.Millisecond); actual != "1500ms" {
 		t.Fatalf("unexpected PostgreSQL duration: %s", actual)
+	}
+}
+
+func TestTenantSettingFailsClosedUnlessExplicitlyScoped(t *testing.T) {
+	if setting := tenantSettingFromContext(context.Background()); setting != tenantUnscopedSetting {
+		t.Fatalf("unscoped context setting=%q", setting)
+	}
+	if setting := tenantSettingFromContext(WithTenant(context.Background(), "tenant-1")); setting != "tenant-1" {
+		t.Fatalf("tenant context setting=%q", setting)
+	}
+	if setting := tenantSettingFromContext(WithTenantMaintenance(context.Background())); setting != tenantMaintenanceSetting {
+		t.Fatalf("maintenance context setting=%q", setting)
 	}
 }

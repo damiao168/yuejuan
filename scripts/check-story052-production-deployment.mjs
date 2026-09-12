@@ -6,17 +6,17 @@ const checks = [
   {
     name: 'compose deployment hardening',
     file: 'infra/docker-compose/docker-compose.yml',
-    includes: ['schema_migration', 'checksum mismatch for applied migration', "grep -qi ':18BD' /proc/net/tcp", 'EDUGRADE_MIGRATION_BASELINE_VERSION', 'pg_advisory_lock'],
+    includes: ['schema_migration', 'checksum mismatch for applied migration', "grep -qi ':18BD' /proc/net/tcp", 'EDUGRADE_MIGRATION_BASELINE_VERSION', 'pg_advisory_lock', 'EDUGRADE_POSTGRES_ADMIN_DSN', 'EDUGRADE_POSTGRES_APP_USER', 'GRANT edugrade_tenant_runtime'],
   },
   {
     name: 'local environment and image mirrors',
     file: 'infra/docker-compose/.env.example',
-    includes: ['EDUGRADE_ENV=local', 'EDUGRADE_GO_BUILD_IMAGE=', 'EDUGRADE_NODE_BUILD_IMAGE=', 'EDUGRADE_MIGRATION_BASELINE_VERSION='],
+    includes: ['EDUGRADE_ENV=local', 'EDUGRADE_GO_BUILD_IMAGE=', 'EDUGRADE_NODE_BUILD_IMAGE=', 'EDUGRADE_MIGRATION_BASELINE_VERSION=', 'EDUGRADE_POSTGRES_TENANT_RLS=false', 'EDUGRADE_API_GATEWAY_IMAGE=', 'EDUGRADE_POSTGRES_ADMIN_DSN='],
   },
   {
     name: 'deployment preflight',
     file: 'infra/docker-compose/scripts/preflight.ps1',
-    includes: ['Production preflight rejected unsafe configuration', 'RequireApplicationBaseImages', 'docker compose'],
+    includes: ['Production preflight rejected unsafe configuration', 'RequireApplicationBaseImages', 'docker compose', 'PostgreSQL tenant RLS must be enabled', 'must be pinned to an immutable image digest'],
   },
   {
     name: 'idempotent initialization',
@@ -41,7 +41,7 @@ const checks = [
   {
     name: 'preproduction runbook',
     file: 'docs/deployment/preproduction-runbook.md',
-    includes: ['## 4. 部署预检', '## 10. 备份', '## 11. 隔离恢复验证', '## 13. TLS 与正式环境'],
+    includes: ['## 4. 部署预检', '## 10. 备份', '## 11. 隔离恢复验证', '## 13. TLS 与正式环境', 'EDUGRADE_POSTGRES_APP_USER', 'repository@sha256:<digest>'],
   },
   {
     name: 'story evidence',

@@ -23581,6 +23581,9 @@
           "target_id": {
             "type": "string"
           },
+          "payload": {
+            "description": "Immutable request payload returned only when a stale command reservation is eligible for authenticated takeover."
+          },
           "result": {
             "description": "Immutable operation result: submit/ arbitration/publish response, confirmation grade array, or report CSV envelope."
           }

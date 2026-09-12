@@ -36,6 +36,9 @@ $requiredKeys = @(
   "EDUGRADE_POSTGRES_DB",
   "EDUGRADE_POSTGRES_USER",
   "EDUGRADE_POSTGRES_PASSWORD",
+  "EDUGRADE_POSTGRES_APP_USER",
+  "EDUGRADE_POSTGRES_APP_PASSWORD",
+  "EDUGRADE_POSTGRES_ADMIN_DSN",
   "EDUGRADE_POSTGRES_DSN",
   "EDUGRADE_REDIS_PASSWORD",
   "EDUGRADE_MINIO_ACCESS_KEY",
@@ -69,6 +72,10 @@ if ($productionLike) {
   $problems = @()
   if ($envValues["EDUGRADE_SESSION_COOKIE_SECURE"] -ne "true") { $problems += "secure session cookie is required" }
   if ($envValues["EDUGRADE_POSTGRES_PASSWORD"] -match "change_me|edugrade_dev") { $problems += "PostgreSQL example password must be replaced" }
+  if ($envValues["EDUGRADE_POSTGRES_APP_PASSWORD"] -match "change_me|edugrade_dev" -or $envValues["EDUGRADE_POSTGRES_APP_PASSWORD"].Length -lt 32) { $problems += "PostgreSQL application password must be replaced and contain at least 32 characters" }
+  if ($envValues["EDUGRADE_POSTGRES_APP_USER"] -eq $envValues["EDUGRADE_POSTGRES_USER"]) { $problems += "PostgreSQL migration and application users must be different" }
+  if ($envValues["EDUGRADE_POSTGRES_ADMIN_DSN"] -eq $envValues["EDUGRADE_POSTGRES_DSN"]) { $problems += "PostgreSQL admin and application DSNs must be different" }
+  if ($envValues["EDUGRADE_POSTGRES_ADMIN_DSN"] -match "sslmode=disable|change_me|edugrade_dev") { $problems += "PostgreSQL admin DSN is not production-safe" }
   if ($envValues["EDUGRADE_POSTGRES_DSN"] -match "sslmode=disable|change_me|edugrade_dev") { $problems += "PostgreSQL DSN is not production-safe" }
   if ($envValues["EDUGRADE_REDIS_PASSWORD"] -match "change_me|edugrade_dev") { $problems += "Redis example password must be replaced" }
   if ($envValues["EDUGRADE_MINIO_ACCESS_KEY"] -eq "edugrade" -or $envValues["EDUGRADE_MINIO_SECRET_KEY"] -match "change_me|edugrade_dev") { $problems += "MinIO example credentials must be replaced" }
@@ -79,9 +86,50 @@ if ($productionLike) {
   if ($envValues["EDUGRADE_BARCODE_HMAC_KEYS"] -match "replace_with|change_me") { $problems += "barcode example HMAC key must be replaced" }
   if ($envValues["EDUGRADE_GRAFANA_ADMIN_PASSWORD"] -match "change_me" -or $envValues["EDUGRADE_GRAFANA_ADMIN_PASSWORD"] -eq "admin") { $problems += "Grafana example password must be replaced" }
   if ($envValues.ContainsKey("EDUGRADE_INTERNAL_BIND_HOST") -and $envValues["EDUGRADE_INTERNAL_BIND_HOST"] -eq "0.0.0.0") { $problems += "internal service ports must not bind to 0.0.0.0 in production" }
+  if (-not $envValues.ContainsKey("EDUGRADE_POSTGRES_TENANT_RLS") -or $envValues["EDUGRADE_POSTGRES_TENANT_RLS"] -ne "true") { $problems += "PostgreSQL tenant RLS must be enabled" }
+
+  $immutableImageKeys = @(
+    "EDUGRADE_POSTGRES_IMAGE",
+    "EDUGRADE_REDIS_IMAGE",
+    "EDUGRADE_MINIO_IMAGE",
+    "EDUGRADE_MINIO_MC_IMAGE",
+    "EDUGRADE_QDRANT_IMAGE",
+    "EDUGRADE_API_GATEWAY_IMAGE",
+    "EDUGRADE_WEB_ADMIN_IMAGE",
+    "EDUGRADE_GRADING_AGENT_IMAGE",
+    "EDUGRADE_OCR_WORKER_IMAGE",
+    "EDUGRADE_IMAGE_QUALITY_WORKER_IMAGE",
+    "EDUGRADE_SUBJECTIVE_GRADING_WORKER_IMAGE",
+    "EDUGRADE_MATH_VERIFICATION_WORKER_IMAGE",
+    "EDUGRADE_PAGE_PROCESSING_WORKER_IMAGE",
+    "EDUGRADE_NGINX_IMAGE",
+    "EDUGRADE_PROMETHEUS_IMAGE",
+    "EDUGRADE_GRAFANA_IMAGE",
+    "EDUGRADE_GO_BUILD_IMAGE",
+    "EDUGRADE_API_RUNTIME_IMAGE",
+    "EDUGRADE_NODE_BUILD_IMAGE",
+    "EDUGRADE_WEB_RUNTIME_IMAGE",
+    "EDUGRADE_AI_PYTHON_IMAGE",
+    "EDUGRADE_OCR_PYTHON_IMAGE",
+    "EDUGRADE_QUALITY_PYTHON_IMAGE",
+    "EDUGRADE_SUBJECTIVE_PYTHON_IMAGE",
+    "EDUGRADE_MATH_PYTHON_IMAGE",
+    "EDUGRADE_PAGE_PROCESSING_PYTHON_IMAGE"
+  )
+  foreach ($key in $immutableImageKeys) {
+    if (-not $envValues.ContainsKey($key) -or $envValues[$key] -notmatch "^[^\s@]+@sha256:[0-9a-fA-F]{64}$") {
+      $problems += "$key must be pinned to an immutable image digest"
+    }
+  }
+  if ($envValues.ContainsKey("EDUGRADE_PAPER_FORMULA_WORKER_IMAGE") -and
+      -not [string]::IsNullOrWhiteSpace($envValues["EDUGRADE_PAPER_FORMULA_WORKER_IMAGE"]) -and
+      $envValues["EDUGRADE_PAPER_FORMULA_WORKER_IMAGE"] -notmatch "^[^\s@]+@sha256:[0-9a-fA-F]{64}$") {
+    $problems += "EDUGRADE_PAPER_FORMULA_WORKER_IMAGE must be empty or pinned to an immutable image digest"
+  }
   if ($problems.Count -gt 0) { throw "Production preflight rejected unsafe configuration: $($problems -join '; ')" }
 } elseif (
   $envValues["EDUGRADE_POSTGRES_PASSWORD"] -match "change_me" -or
+  $envValues["EDUGRADE_POSTGRES_APP_PASSWORD"] -match "change_me" -or
   $envValues["EDUGRADE_REDIS_PASSWORD"] -match "change_me" -or
   $envValues["EDUGRADE_MINIO_SECRET_KEY"] -match "change_me"
 ) {
@@ -109,6 +157,8 @@ $baseImages = @(
   $envValues["EDUGRADE_AI_PYTHON_IMAGE"],
   $envValues["EDUGRADE_OCR_PYTHON_IMAGE"],
   $envValues["EDUGRADE_QUALITY_PYTHON_IMAGE"],
+  $envValues["EDUGRADE_SUBJECTIVE_PYTHON_IMAGE"],
+  $envValues["EDUGRADE_MATH_PYTHON_IMAGE"],
   $envValues["EDUGRADE_PAGE_PROCESSING_PYTHON_IMAGE"]
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
 $missingImages = @()

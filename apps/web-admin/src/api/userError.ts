@@ -16,6 +16,8 @@ const apiErrorMessages: Record<string, string> = {
   operation_in_progress: "操作正在处理中，请稍后查看结果。",
   operation_outcome_unknown: "原操作结果暂时无法确认，请保留记录并稍后重试。",
   business_receipt_missing: "操作已收到成功响应，但业务结果记录异常，请联系管理员核对，暂勿重复提交。",
+  business_command_payload_missing: "原操作缺少可恢复输入，请联系管理员核对，暂勿重复提交。",
+  command_not_accepted: "原操作未被服务器接收，请返回业务页面重新提交。",
   ambiguous_command_identity: "同一操作标识关联了多个请求，请联系管理员核对，暂勿重复提交。",
   command_rejected: "原操作已被明确拒绝，请修改后重新提交。",
   csrf_validation_failed: "页面安全状态已失效，请刷新页面后重试。",

@@ -88,6 +88,36 @@ func TestResumableCaptureUploadCompletesOnceAfterRetry(t *testing.T) {
 	}
 }
 
+func TestTIFFUploadCompletesWithDefaultFilePolicy(t *testing.T) {
+	ctx, service, _, fileStore, _, batchID := newTestService(t)
+	payload := append([]byte{'I', 'I', 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00}, []byte("scanner tiff page")...)
+	input := testInitInput(payload, batchID)
+	input.Filename = "page-001.tiff"
+	input.MIME = "image/tiff"
+	input.IdempotencyKey = "a24-upload-tiff"
+
+	initialized, err := service.Init(ctx, testTenant, testActor, input)
+	if err != nil {
+		t.Fatalf("init TIFF: %v", err)
+	}
+	if _, err = service.AppendChunk(ctx, testTenant, initialized.RemoteUploadID, ChunkInput{
+		Offset: 0, SHA256: sha256Hex(payload), Data: payload,
+	}); err != nil {
+		t.Fatalf("append TIFF: %v", err)
+	}
+	completed, err := service.Complete(ctx, testTenant, testActor, initialized.RemoteUploadID, CompleteInput{SHA256: input.SHA256})
+	if err != nil {
+		t.Fatalf("complete TIFF: %v", err)
+	}
+	asset, err := fileStore.Get(ctx, testTenant, completed.FileAssetID)
+	if err != nil {
+		t.Fatalf("get TIFF asset: %v", err)
+	}
+	if asset.Lifecycle != "active" || asset.ContentType != "image/tiff" {
+		t.Fatalf("TIFF asset=%+v, want active image/tiff", asset)
+	}
+}
+
 func TestResumableCaptureUploadRejectsHashMismatchWithoutCaptureFile(t *testing.T) {
 	ctx, service, captures, _, _, batchID := newTestService(t)
 	payload := append([]byte("\x89PNG\r\n\x1a\n"), []byte("different page")...)
@@ -253,7 +283,7 @@ func newTestService(t *testing.T) (context.Context, *Service, *capture.MemorySto
 	}
 	fileStore := files.NewMemoryStore()
 	objects := files.NewMemoryObjectStorage()
-	service := NewService(NewMemoryStore(), captures, fileStore, objects, config.FileConfig{Bucket: "test-files", MaxUploadBytes: 1024 * 1024, AllowedExtensions: []string{".png", ".pdf", ".jpg", ".jpeg", ".tif", ".tiff"}})
+	service := NewService(NewMemoryStore(), captures, fileStore, objects, config.FileConfig{Bucket: "test-files", MaxUploadBytes: 1024 * 1024})
 	return ctx, service, captures, fileStore, objects, batch.ID
 }
 

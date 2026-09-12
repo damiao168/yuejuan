@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, Button, Space } from "antd";
 import { apiClient, getUserErrorMessage } from "../api/client";
-import { recoverBusinessCommand, type PersistedBusinessCommand } from "../api/businessCommand";
+import { loadPersistedBusinessCommand, recoverBusinessCommand } from "../api/businessCommand";
 
 const operations: Record<string, { label: string; path: (id: string) => string }> = {
   "review.submit": { label: "人工评分", path: id => `/api/v1/review-tasks/${id}/submit` },
@@ -36,7 +36,7 @@ export function PendingBusinessCommands({ tenant, actor }: { tenant: string; act
       if (!entry) throw new Error("无法识别待确认操作");
       const raw = localStorage.getItem(key);
       if (!raw) return;
-      const command = JSON.parse(raw) as PersistedBusinessCommand;
+      const { command, fallback } = loadPersistedBusinessCommand(localStorage, key, raw);
       const reject = () => {
         localStorage.removeItem(key);
         setKeys(current => current.filter(item => item !== key));
@@ -52,13 +52,13 @@ export function PendingBusinessCommands({ tenant, actor }: { tenant: string; act
               filename: result.Filename,
               watermark: result.Watermark,
             };
-          }, reject);
+          }, reject, fallback);
         const url = URL.createObjectURL(file.blob);
         const link = document.createElement("a"); link.href = url; link.download = file.filename ?? "report.csv"; link.click();
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       } else await recoverBusinessCommand(operation, command,
         (id, original) => apiClient.request(entry.path(encodeURIComponent(target)), { method: "POST", headers: { "Idempotency-Key": id }, body: JSON.stringify(original) }),
-        () => undefined, reject);
+        () => undefined, reject, fallback);
       localStorage.removeItem(key);
       setKeys(current => current.filter(item => item !== key));
     } catch (cause) { setError(getUserErrorMessage(cause, "确认操作结果失败，请稍后继续")); }

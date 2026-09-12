@@ -3,6 +3,8 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
+	"math"
 	"net"
 	"os"
 	"strconv"
@@ -45,6 +47,7 @@ func (c ServiceConfig) Addr() string {
 
 type PostgresConfig struct {
 	DSN              string
+	TenantRLSEnabled bool
 	MaxOpenConns     int
 	MaxIdleConns     int
 	ConnMaxLifetime  time.Duration
@@ -76,6 +79,8 @@ type ModelSecretConfig struct {
 }
 
 const localModelCredentialMasterKey = "edugrade-local-model-credential-key-change-before-production"
+
+const defaultAllowedFileExtensions = ".pdf,.png,.jpg,.jpeg,.tif,.tiff,.csv,.docx"
 
 type RedisConfig struct {
 	Addr     string
@@ -140,6 +145,7 @@ func Load(envFile string) (Config, error) {
 	}
 
 	environment := getEnv("EDUGRADE_ENV", "development")
+	parser := envParser{strict: isProductionLike(environment)}
 	secretDefaults := map[string]string{
 		"EDUGRADE_POSTGRES_DSN":                "postgres://edugrade:edugrade_dev@127.0.0.1:5432/edugrade?sslmode=disable",
 		"EDUGRADE_REDIS_PASSWORD":              "",
@@ -158,38 +164,33 @@ func Load(envFile string) (Config, error) {
 		}
 		secretValues[key] = value
 	}
-	sessionCookieSecure := defaultSessionCookieSecure(environment)
-	if raw, ok := os.LookupEnv("EDUGRADE_SESSION_COOKIE_SECURE"); ok && strings.TrimSpace(raw) != "" {
-		if parsed, err := strconv.ParseBool(raw); err == nil {
-			sessionCookieSecure = parsed
-		}
-	}
+	sessionCookieSecure := parser.Bool("EDUGRADE_SESSION_COOKIE_SECURE", defaultSessionCookieSecure(environment))
 
 	cfg := Config{
 		Service: ServiceConfig{
 			Name:              getEnv("EDUGRADE_SERVICE_NAME", "api-gateway"),
 			Environment:       environment,
 			Host:              getEnv("EDUGRADE_HTTP_HOST", "127.0.0.1"),
-			Port:              getEnvInt("EDUGRADE_HTTP_PORT", 8080),
+			Port:              parser.Int("EDUGRADE_HTTP_PORT", 8080),
 			LogLevel:          getEnv("EDUGRADE_LOG_LEVEL", "info"),
-			ReadinessTimeout:  getEnvDuration("EDUGRADE_READINESS_TIMEOUT", 2*time.Second),
-			ShutdownTimeout:   getEnvDuration("EDUGRADE_SHUTDOWN_TIMEOUT", 10*time.Second),
-			ReadHeaderTimeout: getEnvDuration("EDUGRADE_HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
-			ReadTimeout:       getEnvDuration("EDUGRADE_HTTP_READ_TIMEOUT", 15*time.Second),
-			WriteTimeout:      getEnvDuration("EDUGRADE_HTTP_WRITE_TIMEOUT", 780*time.Second),
-			IdleTimeout:       getEnvDuration("EDUGRADE_HTTP_IDLE_TIMEOUT", 60*time.Second),
+			ReadinessTimeout:  parser.Duration("EDUGRADE_READINESS_TIMEOUT", 2*time.Second),
+			ShutdownTimeout:   parser.Duration("EDUGRADE_SHUTDOWN_TIMEOUT", 10*time.Second),
+			ReadHeaderTimeout: parser.Duration("EDUGRADE_HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+			ReadTimeout:       parser.Duration("EDUGRADE_HTTP_READ_TIMEOUT", 15*time.Second),
+			WriteTimeout:      parser.Duration("EDUGRADE_HTTP_WRITE_TIMEOUT", 780*time.Second),
+			IdleTimeout:       parser.Duration("EDUGRADE_HTTP_IDLE_TIMEOUT", 60*time.Second),
 		},
 		Auth: AuthConfig{
-			SessionTTL:           getEnvDuration("EDUGRADE_SESSION_TTL", 8*time.Hour),
-			RememberedSessionTTL: getEnvDuration("EDUGRADE_REMEMBERED_SESSION_TTL", 30*24*time.Hour),
-			LoginFailureLimit:    getEnvInt("EDUGRADE_LOGIN_FAILURE_LIMIT", 5),
-			LoginFailureWindow:   getEnvDuration("EDUGRADE_LOGIN_FAILURE_WINDOW", 15*time.Minute),
+			SessionTTL:           parser.Duration("EDUGRADE_SESSION_TTL", 8*time.Hour),
+			RememberedSessionTTL: parser.Duration("EDUGRADE_REMEMBERED_SESSION_TTL", 30*24*time.Hour),
+			LoginFailureLimit:    parser.Int("EDUGRADE_LOGIN_FAILURE_LIMIT", 5),
+			LoginFailureWindow:   parser.Duration("EDUGRADE_LOGIN_FAILURE_WINDOW", 15*time.Minute),
 			SessionCookieName:    getEnv("EDUGRADE_SESSION_COOKIE_NAME", "edugrade_session"),
 			SessionCookieSecure:  sessionCookieSecure,
 		},
 		Security: SecurityConfig{
-			MaxHeaderBytes:      getEnvInt("EDUGRADE_HTTP_MAX_HEADER_BYTES", 1<<20),
-			MaxRequestBodyBytes: int64(getEnvInt("EDUGRADE_MAX_REQUEST_BODY_BYTES", 2*1024*1024)),
+			MaxHeaderBytes:      parser.Int("EDUGRADE_HTTP_MAX_HEADER_BYTES", 1<<20),
+			MaxRequestBodyBytes: int64(parser.Int("EDUGRADE_MAX_REQUEST_BODY_BYTES", 2*1024*1024)),
 			CORSAllowedOrigins:  splitCSV(getEnv("EDUGRADE_CORS_ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5180,http://localhost:5173,http://localhost:5174,http://localhost:5180")),
 			CORSAllowedMethods:  splitCSV(getEnv("EDUGRADE_CORS_ALLOWED_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")),
 			CORSAllowedHeaders:  splitCSV(getEnv("EDUGRADE_CORS_ALLOWED_HEADERS", "Authorization,Content-Type,X-Request-ID,X-Trace-ID,Idempotency-Key,X-EduGrade-CSRF")),
@@ -200,38 +201,39 @@ func Load(envFile string) (Config, error) {
 		},
 		Postgres: PostgresConfig{
 			DSN:              secretValues["EDUGRADE_POSTGRES_DSN"],
-			MaxOpenConns:     getEnvInt("EDUGRADE_POSTGRES_MAX_OPEN_CONNS", 10),
-			MaxIdleConns:     getEnvInt("EDUGRADE_POSTGRES_MAX_IDLE_CONNS", 5),
-			ConnMaxLifetime:  getEnvDuration("EDUGRADE_POSTGRES_CONN_MAX_LIFETIME", 30*time.Minute),
-			ConnMaxIdleTime:  getEnvDuration("EDUGRADE_POSTGRES_CONN_MAX_IDLE_TIME", 5*time.Minute),
-			StatementTimeout: getEnvDuration("EDUGRADE_POSTGRES_STATEMENT_TIMEOUT", 60*time.Second),
-			LockTimeout:      getEnvDuration("EDUGRADE_POSTGRES_LOCK_TIMEOUT", 5*time.Second),
+			TenantRLSEnabled: parser.Bool("EDUGRADE_POSTGRES_TENANT_RLS", isProductionLike(environment)),
+			MaxOpenConns:     parser.Int("EDUGRADE_POSTGRES_MAX_OPEN_CONNS", 10),
+			MaxIdleConns:     parser.Int("EDUGRADE_POSTGRES_MAX_IDLE_CONNS", 5),
+			ConnMaxLifetime:  parser.Duration("EDUGRADE_POSTGRES_CONN_MAX_LIFETIME", 30*time.Minute),
+			ConnMaxIdleTime:  parser.Duration("EDUGRADE_POSTGRES_CONN_MAX_IDLE_TIME", 5*time.Minute),
+			StatementTimeout: parser.Duration("EDUGRADE_POSTGRES_STATEMENT_TIMEOUT", 60*time.Second),
+			LockTimeout:      parser.Duration("EDUGRADE_POSTGRES_LOCK_TIMEOUT", 5*time.Second),
 		},
 		Redis: RedisConfig{
 			Addr:     getEnv("EDUGRADE_REDIS_ADDR", "127.0.0.1:6379"),
 			Password: secretValues["EDUGRADE_REDIS_PASSWORD"],
-			DB:       getEnvInt("EDUGRADE_REDIS_DB", 0),
+			DB:       parser.Int("EDUGRADE_REDIS_DB", 0),
 		},
 		MinIO: MinIOConfig{
 			Endpoint:  getEnv("EDUGRADE_MINIO_ENDPOINT", "127.0.0.1:9000"),
 			AccessKey: secretValues["EDUGRADE_MINIO_ACCESS_KEY"],
 			SecretKey: secretValues["EDUGRADE_MINIO_SECRET_KEY"],
-			UseSSL:    getEnvBool("EDUGRADE_MINIO_USE_SSL", false),
+			UseSSL:    parser.Bool("EDUGRADE_MINIO_USE_SSL", false),
 		},
 		Qdrant: QdrantConfig{
 			URL:    getEnv("EDUGRADE_QDRANT_URL", ""),
 			APIKey: secretValues["EDUGRADE_QDRANT_API_KEY"],
 		},
 		AIService: AIServiceConfig{
-			Enabled:           getEnvBool("EDUGRADE_AI_GRADING_ENABLED", false),
-			AllowMock:         getEnvBool("EDUGRADE_ALLOW_MOCK_AI", false),
+			Enabled:           parser.Bool("EDUGRADE_AI_GRADING_ENABLED", false),
+			AllowMock:         parser.Bool("EDUGRADE_ALLOW_MOCK_AI", false),
 			URL:               getEnv("EDUGRADE_AI_SERVICE_URL", ""),
 			Token:             secretValues["EDUGRADE_AI_SERVICE_TOKEN"],
-			Timeout:           getEnvDuration("EDUGRADE_AI_SERVICE_TIMEOUT", 750*time.Second),
-			MaxRetries:        getEnvInt("EDUGRADE_AI_SERVICE_MAX_RETRIES", 0),
+			Timeout:           parser.Duration("EDUGRADE_AI_SERVICE_TIMEOUT", 750*time.Second),
+			MaxRetries:        parser.Int("EDUGRADE_AI_SERVICE_MAX_RETRIES", 0),
 			ModelVersion:      getEnv("EDUGRADE_AI_MODEL_VERSION", "Qwen/Qwen3-4B-GGUF:Q4_K_M"),
 			PromptVersion:     getEnv("EDUGRADE_AI_PROMPT_VERSION", "subjective-governed-cn-subject-routing-v5"),
-			MinConfidence:     getEnvFloat("EDUGRADE_AI_MIN_CONFIDENCE", 0.8),
+			MinConfidence:     parser.Float("EDUGRADE_AI_MIN_CONFIDENCE", 0.8),
 			ProviderKey:       getEnv("EDUGRADE_AI_PROVIDER_KEY", "local"),
 			DeploymentKey:     getEnv("EDUGRADE_AI_DEPLOYMENT_KEY", "local-qwen3-4b-q4-k-m"),
 			AdapterType:       getEnv("EDUGRADE_AI_ADAPTER_TYPE", "local_llama_cpp"),
@@ -240,21 +242,24 @@ func Load(envFile string) (Config, error) {
 		},
 		Files: FileConfig{
 			Bucket:                    getEnv("EDUGRADE_FILE_BUCKET", "edugrade-files"),
-			MaxUploadBytes:            int64(getEnvInt("EDUGRADE_FILE_MAX_UPLOAD_BYTES", 104857600)),
-			AllowedExtensions:         splitCSV(getEnv("EDUGRADE_FILE_ALLOWED_EXTENSIONS", ".pdf,.png,.jpg,.jpeg,.csv,.docx")),
-			ReconciliationInterval:    getEnvDuration("EDUGRADE_FILE_RECONCILIATION_INTERVAL", 24*time.Hour),
-			ReconciliationStaleAfter:  getEnvDuration("EDUGRADE_FILE_RECONCILIATION_STALE_AFTER", time.Hour),
-			ReconciliationBatchSize:   getEnvInt("EDUGRADE_FILE_RECONCILIATION_BATCH_SIZE", 200),
-			ReconciliationObjectLimit: getEnvInt("EDUGRADE_FILE_RECONCILIATION_OBJECT_LIMIT", 1000),
+			MaxUploadBytes:            int64(parser.Int("EDUGRADE_FILE_MAX_UPLOAD_BYTES", 104857600)),
+			AllowedExtensions:         splitCSV(getEnv("EDUGRADE_FILE_ALLOWED_EXTENSIONS", defaultAllowedFileExtensions)),
+			ReconciliationInterval:    parser.Duration("EDUGRADE_FILE_RECONCILIATION_INTERVAL", 24*time.Hour),
+			ReconciliationStaleAfter:  parser.Duration("EDUGRADE_FILE_RECONCILIATION_STALE_AFTER", time.Hour),
+			ReconciliationBatchSize:   parser.Int("EDUGRADE_FILE_RECONCILIATION_BATCH_SIZE", 200),
+			ReconciliationObjectLimit: parser.Int("EDUGRADE_FILE_RECONCILIATION_OBJECT_LIMIT", 1000),
 		},
 		Observability: ObservabilityConfig{
-			SlowRequestThreshold:      getEnvDuration("EDUGRADE_SLOW_REQUEST_THRESHOLD", 2*time.Second),
-			WorkerHeartbeatStaleAfter: getEnvDuration("EDUGRADE_WORKER_HEARTBEAT_STALE_AFTER", 30*time.Second),
+			SlowRequestThreshold:      parser.Duration("EDUGRADE_SLOW_REQUEST_THRESHOLD", 2*time.Second),
+			WorkerHeartbeatStaleAfter: parser.Duration("EDUGRADE_WORKER_HEARTBEAT_STALE_AFTER", 30*time.Second),
 		},
 		Barcode: BarcodeConfig{
 			ActiveKeyID: getEnv("EDUGRADE_BARCODE_ACTIVE_KEY_ID", "local-v1"),
 			HMACKeys:    parseBarcodeKeys(secretValues["EDUGRADE_BARCODE_HMAC_KEYS"]),
 		},
+	}
+	if err := parser.Err(); err != nil {
+		return Config{}, err
 	}
 	if err := validateProductionConfig(cfg); err != nil {
 		return Config{}, err
@@ -327,6 +332,9 @@ func validateProductionConfig(cfg Config) error {
 	}
 	if strings.Contains(cfg.Postgres.DSN, "edugrade_dev") || strings.Contains(cfg.Postgres.DSN, "sslmode=disable") {
 		problems = append(problems, "EDUGRADE_POSTGRES_DSN must not use development credentials or disabled TLS")
+	}
+	if !cfg.Postgres.TenantRLSEnabled {
+		problems = append(problems, "EDUGRADE_POSTGRES_TENANT_RLS must be true")
 	}
 	if cfg.MinIO.AccessKey == "edugrade" || cfg.MinIO.SecretKey == "edugrade_dev_secret" {
 		problems = append(problems, "MinIO development credentials must be replaced")
@@ -447,52 +455,85 @@ func getEnvOrFile(key, fallback string) (string, error) {
 	return strings.TrimRight(string(content), "\r\n"), nil
 }
 
-func getEnvInt(key string, fallback int) int {
+type envParser struct {
+	strict   bool
+	problems []string
+}
+
+func (p *envParser) raw(key string) (string, bool) {
 	value, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(value), true
+}
+
+func (p *envParser) invalid(key, expected string) {
+	if p.strict {
+		p.problems = append(p.problems, fmt.Sprintf("%s must be a valid %s", key, expected))
+		return
+	}
+	// Do not log raw values: configuration may come from shared secret files.
+	slog.Warn("invalid configuration value; using development default", "key", key, "expected", expected)
+}
+
+func (p *envParser) Int(key string, fallback int) int {
+	value, ok := p.raw(key)
 	if !ok {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
+		p.invalid(key, "integer")
 		return fallback
 	}
 	return parsed
 }
 
-func getEnvBool(key string, fallback bool) bool {
-	value, ok := os.LookupEnv(key)
+func (p *envParser) Bool(key string, fallback bool) bool {
+	value, ok := p.raw(key)
 	if !ok {
 		return fallback
 	}
 	parsed, err := strconv.ParseBool(value)
 	if err != nil {
+		p.invalid(key, "boolean")
 		return fallback
 	}
 	return parsed
 }
 
-func getEnvDuration(key string, fallback time.Duration) time.Duration {
-	value, ok := os.LookupEnv(key)
+func (p *envParser) Duration(key string, fallback time.Duration) time.Duration {
+	value, ok := p.raw(key)
 	if !ok {
 		return fallback
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
+		p.invalid(key, "duration")
 		return fallback
 	}
 	return parsed
 }
 
-func getEnvFloat(key string, fallback float64) float64 {
-	value, ok := os.LookupEnv(key)
+func (p *envParser) Float(key string, fallback float64) float64 {
+	value, ok := p.raw(key)
 	if !ok {
 		return fallback
 	}
 	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil {
+	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		p.invalid(key, "finite number")
 		return fallback
 	}
 	return parsed
+}
+
+func (p *envParser) Err() error {
+	if len(p.problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("invalid production configuration: %s", strings.Join(p.problems, "; "))
 }
 
 func splitCSV(value string) []string {

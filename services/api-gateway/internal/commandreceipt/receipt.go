@@ -36,6 +36,7 @@ type Receipt struct {
 	ErrorCode  string          `json:"error_code,omitempty"`
 	Operation  string          `json:"operation,omitempty"`
 	TargetID   string          `json:"target_id,omitempty"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
 	Result     json.RawMessage `json:"result,omitempty"`
 }
 
@@ -116,7 +117,7 @@ func recoverTransportReceipt(ctx context.Context, db *sql.DB, result Receipt, te
 	if len(allowed) == 0 {
 		return result, nil
 	}
-	rows, err := db.QueryContext(ctx, `SELECT route,state,COALESCE(response_status,0),COALESCE(response_body,''::bytea),updated_at
+	rows, err := db.QueryContext(ctx, `SELECT route,state,COALESCE(request_body,''::bytea),COALESCE(response_status,0),COALESCE(response_body,''::bytea),updated_at
 FROM idempotency_record
 WHERE tenant_id=$1::uuid AND actor_id=$2::uuid AND method='POST' AND idempotency_key=$3
 ORDER BY updated_at DESC`, tenant, actor, result.CommandID)
@@ -125,16 +126,17 @@ ORDER BY updated_at DESC`, tenant, actor, result.CommandID)
 	}
 	defer rows.Close()
 	type transportRecord struct {
-		state      string
-		httpStatus int
-		body       []byte
-		updatedAt  time.Time
+		state       string
+		requestBody []byte
+		httpStatus  int
+		body        []byte
+		updatedAt   time.Time
 	}
 	var matches []transportRecord
 	for rows.Next() {
 		var route string
 		var record transportRecord
-		if err := rows.Scan(&route, &record.state, &record.httpStatus, &record.body, &record.updatedAt); err != nil {
+		if err := rows.Scan(&route, &record.state, &record.requestBody, &record.httpStatus, &record.body, &record.updatedAt); err != nil {
 			return Receipt{}, err
 		}
 		// net/http ServeMux exposes patterns as "POST /path" while older
@@ -159,7 +161,13 @@ ORDER BY updated_at DESC`, tenant, actor, result.CommandID)
 	result.HTTPStatus = record.httpStatus
 	switch {
 	case record.state == "processing" && record.updatedAt.Before(time.Now().UTC().Add(-TransportProcessingTimeout)):
+		if len(record.requestBody) == 0 || !json.Valid(record.requestBody) {
+			result.Status = "unknown"
+			result.ErrorCode = "business_command_payload_missing"
+			break
+		}
 		result.Status = "takeover_ready"
+		result.Payload = append(json.RawMessage(nil), record.requestBody...)
 	case record.state == "processing":
 		result.Status = "processing"
 	case record.state == "completed" && record.httpStatus >= 400:

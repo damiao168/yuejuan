@@ -43,7 +43,7 @@ func main() {
 	if *staleAfter == 0 {
 		*staleAfter = cfg.Files.ReconciliationStaleAfter
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	ctx, cancel := context.WithTimeout(db.WithTenantMaintenance(context.Background()), 2*time.Hour)
 	defer cancel()
 	run, err := files.NewReconciler(database, objects).Run(ctx, files.ReconciliationOptions{
 		Bucket: cfg.Files.Bucket, BatchSize: *batchSize, ObjectScanLimit: *objectLimit,

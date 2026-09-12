@@ -1,6 +1,58 @@
 {
   "openapi": "3.1.0",
   "operations": {
+    "PATCH /api/v1/users/{id}/status": {
+      "operationId": "updateManagedUserStatus",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "schema": {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      "response": {
+        "type": "object",
+        "required": [
+          "user"
+        ],
+        "properties": {}
+      }
+    },
+    "GET /api/v1/submission-pages/{id}/quality-runs": {
+      "operationId": "listSubmissionPageQualityRuns",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "type": "object",
+        "required": [
+          "runs"
+        ],
+        "properties": {}
+      }
+    },
     "GET /api/v1/capture/uploads/{id}": {
       "operationId": "recoverCaptureUpload",
       "parameters": [
@@ -3581,6 +3633,32 @@
           "schema": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": null,
+      "response": {
+        "$ref": "#/components/schemas/PaperImportResponse"
+      }
+    },
+    "POST /api/v1/paper-imports/{id}/retry-parse": {
+      "operationId": "retryPaperImportParse",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "in": "query",
+          "name": "expected_generation",
+          "required": true,
+          "schema": {
+            "type": "integer"
           }
         }
       ],
@@ -8157,6 +8235,16 @@
       "required": [
         "expected_generation",
         "questions"
+      ],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "PaperImportRuntimeProgress": {
+      "type": "object",
+      "required": [
+        "task_type",
+        "task_status",
+        "updated_at"
       ],
       "properties": {},
       "additionalProperties": false

@@ -17,6 +17,8 @@ RBAC 决定“能否执行某类操作”，`AccessScope` 决定“能够访问�
 
 支持的平台、租户、学校、年级、班级、考试、已分配任务和学生本人范围会继续下推到考试、答卷、文件、阅卷、仲裁、成绩和报表查询。范围缺失或关系不匹配时默认拒绝；前端隐藏入口只用于体验，不构成安全边界。
 
+`student`、`submission`、`submission_page`、`answer_segment`、`ocr_result`、`human_grade`、`final_grade`、`appeal` 和 `file_asset` 同时启用并强制 PostgreSQL RLS。API 使用独立的非 superuser、无 `BYPASSRLS` 登录账号，连接包装器按请求上下文设置 tenant；缺少 tenant 的普通上下文默认看不到受保护行。只有显式标记的进程级对账、投影、Outbox 和解析任务可进入跨租户 maintenance scope，迁移账号不进入 API 运行时。
+
 ## 3. Worker 身份、Lease 与 Fencing
 
 - Worker 使用专用服务账号和最小权限，不复用平台管理员身份。
@@ -105,9 +107,9 @@ Compose 与 Nginx 探针使用 `/health/ready`；单纯存活检查使用 `/heal
 
 ## 12. 供应链安全
 
-CI 中第三方 GitHub Actions 固定到提交 SHA；Go、Node、Python 和 Rust 分别执行锁文件/依赖校验与静态检查。CI 为 API、Web、桌面端、Workers 和 AI 服务生成 CycloneDX SBOM，并用 Trivy 阻断存在可修复 High/Critical 漏洞的提交。生产镜像以非 root 用户运行，内部数据面默认只绑定回环或 Compose 网络。
+CI 中第三方 GitHub Actions 固定到提交 SHA；Go、Node、Python 和 Rust 分别执行锁文件/依赖校验与静态检查。普通 CI 为 API、Web、桌面端、Workers 和 AI 服务生成源码级 CycloneDX SBOM，并用 Trivy 阻断存在可修复 High/Critical 漏洞的提交。正式镜像工作流使用 digest 固定的基础镜像构建每个运行时镜像，在推送前执行 Trivy image 扫描并生成镜像级 SBOM，推送后以注册表返回的 digest 做 Sigstore keyless 签名和 SBOM attestation。生产镜像以非 root 用户运行，内部数据面默认只绑定回环或 Compose 网络。
 
-正式发布应记录并按 image digest 部署，Tag 只作为人类可读别名。SBOM、扫描结果和镜像 digest 与发布审批一同留存。
+Compose 的 production-like 预检强制所有运行时镜像和构建基础镜像使用 `@sha256:` 引用；Tag 只作为本地开发或人类可读别名。发布工作流为每个组件保留 SBOM 和 digest 证据，部署审批引用这些 digest。
 
 ## 13. 生产升级
 

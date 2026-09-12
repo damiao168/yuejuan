@@ -87,6 +87,7 @@ func main() {
 }
 
 func runProvisionStory060Users(ctx context.Context, cfg config.Config) error {
+	ctx = db.WithTenantMaintenance(ctx)
 	postgresDB, closePostgres, err := db.OpenPostgres(cfg.Postgres)
 	if err != nil {
 		return err
@@ -96,6 +97,7 @@ func runProvisionStory060Users(ctx context.Context, cfg config.Config) error {
 }
 
 func runBootstrapAdmin(ctx context.Context, cfg config.Config, logg *logger.Logger) error {
+	ctx = db.WithTenantMaintenance(ctx)
 	password := os.Getenv("EDUGRADE_BOOTSTRAP_PASSWORD")
 	if password == "" {
 		return errors.New("EDUGRADE_BOOTSTRAP_PASSWORD is required")

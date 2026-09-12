@@ -36,9 +36,12 @@ EDUGRADE_ENV=local
 production-like 环境必须同时满足：
 
 - `EDUGRADE_SESSION_COOKIE_SECURE=true`
+- `EDUGRADE_POSTGRES_TENANT_RLS=true`
+- API 使用独立的 `EDUGRADE_POSTGRES_APP_USER` 与 `EDUGRADE_POSTGRES_DSN`；迁移专用账号只出现在 `EDUGRADE_POSTGRES_ADMIN_DSN`，两者不得相同；迁移账号必须具备角色管理能力，或由托管数据库管理员预先完成等价授权
 - PostgreSQL 使用非示例凭据，DSN 不得包含 `sslmode=disable`
 - MinIO 使用非示例 access key/secret
 - CORS 不包含 localhost/127.0.0.1
+- `.env.example` 列出的运行时镜像与构建基础镜像全部使用 `repository@sha256:<digest>`，应用镜像 digest 与发布证据一致
 - Web/API 经 TLS 反向代理暴露
 
 API 会再次执行相同安全校验；不安全配置会拒绝启动。
@@ -55,6 +58,7 @@ API 会再次执行相同安全校验；不安全配置会拒绝启动。
 - Compose 所有 profile 可以解析。
 - 必填环境变量存在。
 - production-like 配置满足安全门禁。
+- production-like 的 RLS 开关已启用，所有镜像引用均为不可变 digest。
 - 应用基础镜像是否已缓存。
 
 严格要求本机已有构建基础镜像：

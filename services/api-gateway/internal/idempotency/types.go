@@ -18,6 +18,7 @@ type BeginInput struct {
 	Route         string
 	Key           string
 	RequestHash   string
+	RequestBody   []byte
 	ExpiresAt     time.Time
 	AllowTakeover bool
 	StaleBefore   time.Time
@@ -26,6 +27,7 @@ type BeginInput struct {
 type Record struct {
 	State           string
 	RequestHash     string
+	RequestBody     []byte
 	ResponseStatus  int
 	ResponseHeaders map[string]string
 	ResponseBody    []byte

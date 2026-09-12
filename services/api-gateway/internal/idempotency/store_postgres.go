@@ -32,12 +32,12 @@ WHERE tenant_id=$1 AND actor_id=$2 AND method=$3 AND route=$4 AND idempotency_ke
 	var inserted bool
 	err = tx.QueryRowContext(ctx, `
 WITH inserted AS (
-  INSERT INTO idempotency_record(tenant_id,actor_id,method,route,idempotency_key,request_hash,expires_at)
-  VALUES($1,$2,$3,$4,$5,$6,$7)
+  INSERT INTO idempotency_record(tenant_id,actor_id,method,route,idempotency_key,request_hash,request_body,expires_at)
+  VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,''::bytea),$8)
   ON CONFLICT (tenant_id,actor_id,method,route,idempotency_key) DO NOTHING
   RETURNING true
 )
-SELECT COALESCE((SELECT true FROM inserted), false)`, input.TenantID, input.ActorID, input.Method, input.Route, input.Key, input.RequestHash, input.ExpiresAt).Scan(&inserted)
+SELECT COALESCE((SELECT true FROM inserted), false)`, input.TenantID, input.ActorID, input.Method, input.Route, input.Key, input.RequestHash, input.RequestBody, input.ExpiresAt).Scan(&inserted)
 	if err != nil {
 		return Record{}, false, err
 	}
@@ -50,11 +50,11 @@ SELECT COALESCE((SELECT true FROM inserted), false)`, input.TenantID, input.Acto
 	var record Record
 	var headersRaw []byte
 	err = tx.QueryRowContext(ctx, `
-SELECT state,request_hash,COALESCE(response_status,0),response_headers,COALESCE(response_body,''::bytea),updated_at
+SELECT state,request_hash,COALESCE(request_body,''::bytea),COALESCE(response_status,0),response_headers,COALESCE(response_body,''::bytea),updated_at
 FROM idempotency_record
 WHERE tenant_id=$1 AND actor_id=$2 AND method=$3 AND route=$4 AND idempotency_key=$5
 FOR UPDATE`, input.TenantID, input.ActorID, input.Method, input.Route, input.Key).Scan(
-		&record.State, &record.RequestHash, &record.ResponseStatus, &headersRaw, &record.ResponseBody, &record.UpdatedAt,
+		&record.State, &record.RequestHash, &record.RequestBody, &record.ResponseStatus, &headersRaw, &record.ResponseBody, &record.UpdatedAt,
 	)
 	if err != nil {
 		return Record{}, false, err

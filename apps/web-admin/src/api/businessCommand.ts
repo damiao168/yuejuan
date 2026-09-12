@@ -5,7 +5,32 @@ let scope = "";
 export function setBusinessCommandScope(tenant: string, actor: string) { scope = tenant && actor ? `${tenant}:${actor}` : ""; }
 const active = new Map<string, Promise<unknown>>();
 
-export type PersistedBusinessCommand = { id: string; payload: unknown };
+// Browser persistence is deliberately limited to an opaque command id. The
+// immutable payload lives in the server-side idempotency reservation.
+export type PersistedBusinessCommand = { id: string };
+type RecoveryFallback = { payload: unknown };
+
+export function loadPersistedBusinessCommand(storage: Storage, key: string, raw: string): { command: PersistedBusinessCommand; fallback?: RecoveryFallback } {
+  let parsed: { id?: unknown; payload?: unknown };
+  try {
+    parsed = JSON.parse(raw) as { id?: unknown; payload?: unknown };
+  } catch {
+    storage.removeItem(key);
+    throw new Error("本地待确认操作记录无效");
+  }
+  if (typeof parsed.id !== "string" || !parsed.id) {
+    storage.removeItem(key);
+    throw new Error("本地待确认操作记录无效");
+  }
+  const command = { id: parsed.id };
+  if ("payload" in parsed) {
+    // One-time migration for records written by older clients: keep the old
+    // payload in memory for this recovery attempt, and scrub it from disk now.
+    storage.setItem(key, JSON.stringify(command));
+    return { command, fallback: { payload: parsed.payload } };
+  }
+  return { command };
+}
 
 export function businessCommandRecoveryError(receipt: BusinessCommandReceipt) {
   if (receipt.status === "processing") {
@@ -26,12 +51,22 @@ export async function recoverBusinessCommand<T>(
   send: (id: string, original: unknown) => Promise<T>,
   recover: (result: unknown) => T,
   onRejected?: () => void,
+  fallback?: RecoveryFallback,
 ): Promise<T> {
   const domain = operation.split(".")[0];
   const receipt = await apiClient.request<BusinessCommandReceipt>(`/api/v1/${domain}-commands/${encodeURIComponent(command.id)}`);
   if (receipt.command_id !== command.id) throw new Error("操作恢复结果不匹配");
   if (receipt.status === "succeeded") return recover(receipt.result);
-  if (receipt.status === "not_accepted" || receipt.status === "takeover_ready") return send(command.id, command.payload);
+  if (receipt.status === "not_accepted") {
+    if (fallback) return send(command.id, fallback.payload);
+    onRejected?.();
+    throw new ApiClientError(409, "command_not_accepted", "原操作未被服务器接收，请返回业务页面重新提交");
+  }
+  if (receipt.status === "takeover_ready") {
+    if ("payload" in receipt) return send(command.id, receipt.payload);
+    if (fallback) return send(command.id, fallback.payload);
+    throw new ApiClientError(409, "business_command_payload_missing", "原操作缺少可恢复输入，请联系管理员核对，暂勿重复提交");
+  }
   if (receipt.status === "rejected") onRejected?.();
   throw businessCommandRecoveryError(receipt);
 }
@@ -45,14 +80,15 @@ export function executeBusinessCommand<T>(operation: string, target: string, pay
   if (existing) return existing as Promise<T>;
   const work = (async () => {
     const raw = localStorage.getItem(key);
-    const command = raw ? JSON.parse(raw) as PersistedBusinessCommand : { id: crypto.randomUUID(), payload: structuredClone(payload) };
-    if (!command.id || !("payload" in command)) throw new Error("本地待确认操作记录无效");
+    const loaded = raw ? loadPersistedBusinessCommand(localStorage, key, raw) : undefined;
+    const command = loaded?.command ?? { id: crypto.randomUUID() };
+    const initialPayload = raw ? undefined : { payload: structuredClone(payload) };
     if (!raw) localStorage.setItem(key, JSON.stringify(command));
     try {
       let result: T;
       if (raw) {
-        result = await recoverBusinessCommand(operation, command, send, recover, () => localStorage.removeItem(key));
-      } else result = await send(command.id, command.payload);
+        result = await recoverBusinessCommand(operation, command, send, recover, () => localStorage.removeItem(key), loaded?.fallback);
+      } else result = await send(command.id, initialPayload!.payload);
       try { localStorage.removeItem(key); } catch { /* Keep the accepted receipt recoverable. */ }
       return result;
     } catch (error) {

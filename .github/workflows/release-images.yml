@@ -1,0 +1,188 @@
+name: Release immutable images
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: release-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-scan-sign:
+    name: ${{ matrix.name }} image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api-gateway
+            dockerfile: services/api-gateway/Dockerfile
+            locks: GO_BUILD_IMAGE=EDUGRADE_GO_BUILD_IMAGE API_RUNTIME_IMAGE=EDUGRADE_API_RUNTIME_IMAGE
+          - name: web-admin
+            dockerfile: apps/web-admin/Dockerfile
+            locks: NODE_BUILD_IMAGE=EDUGRADE_NODE_BUILD_IMAGE WEB_RUNTIME_IMAGE=EDUGRADE_WEB_RUNTIME_IMAGE
+          - name: grading-agent
+            dockerfile: ai-services/Dockerfile
+            locks: AI_PYTHON_IMAGE=EDUGRADE_AI_PYTHON_IMAGE
+          - name: ocr-worker
+            dockerfile: services/ocr-worker/Dockerfile
+            locks: OCR_PYTHON_IMAGE=EDUGRADE_OCR_PYTHON_IMAGE
+          - name: image-quality-worker
+            dockerfile: services/image-quality-worker/Dockerfile
+            locks: QUALITY_PYTHON_IMAGE=EDUGRADE_QUALITY_PYTHON_IMAGE
+          - name: subjective-grading-worker
+            dockerfile: services/subjective-grading-worker/Dockerfile
+            locks: SUBJECTIVE_PYTHON_IMAGE=EDUGRADE_SUBJECTIVE_PYTHON_IMAGE
+          - name: math-verification-worker
+            dockerfile: services/math-verification-worker/Dockerfile
+            locks: MATH_PYTHON_IMAGE=EDUGRADE_MATH_PYTHON_IMAGE
+          - name: page-processing-worker
+            dockerfile: services/page-processing-worker/Dockerfile
+            locks: PAGE_PROCESSING_PYTHON_IMAGE=EDUGRADE_PAGE_PROCESSING_PYTHON_IMAGE
+    env:
+      EDUGRADE_GO_BUILD_IMAGE: ${{ vars.EDUGRADE_GO_BUILD_IMAGE }}
+      EDUGRADE_API_RUNTIME_IMAGE: ${{ vars.EDUGRADE_API_RUNTIME_IMAGE }}
+      EDUGRADE_NODE_BUILD_IMAGE: ${{ vars.EDUGRADE_NODE_BUILD_IMAGE }}
+      EDUGRADE_WEB_RUNTIME_IMAGE: ${{ vars.EDUGRADE_WEB_RUNTIME_IMAGE }}
+      EDUGRADE_AI_PYTHON_IMAGE: ${{ vars.EDUGRADE_AI_PYTHON_IMAGE }}
+      EDUGRADE_OCR_PYTHON_IMAGE: ${{ vars.EDUGRADE_OCR_PYTHON_IMAGE }}
+      EDUGRADE_QUALITY_PYTHON_IMAGE: ${{ vars.EDUGRADE_QUALITY_PYTHON_IMAGE }}
+      EDUGRADE_SUBJECTIVE_PYTHON_IMAGE: ${{ vars.EDUGRADE_SUBJECTIVE_PYTHON_IMAGE }}
+      EDUGRADE_MATH_PYTHON_IMAGE: ${{ vars.EDUGRADE_MATH_PYTHON_IMAGE }}
+      EDUGRADE_PAGE_PROCESSING_PYTHON_IMAGE: ${{ vars.EDUGRADE_PAGE_PROCESSING_PYTHON_IMAGE }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Resolve immutable build inputs
+        id: release
+        shell: bash
+        env:
+          IMAGE_COMPONENT: ${{ matrix.name }}
+          LOCKS: ${{ matrix.locks }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image_name="ghcr.io/${owner}/edugrade-${IMAGE_COMPONENT}"
+          image_ref="${image_name}:${GITHUB_SHA}"
+          build_args_file="${RUNNER_TEMP}/build-args-${IMAGE_COMPONENT}.txt"
+          invalid=0
+          {
+            for lock in ${LOCKS}; do
+              arg_name="${lock%%=*}"
+              env_name="${lock#*=}"
+              value="${!env_name:-}"
+              if [[ ! "${value}" =~ ^[^[:space:]@]+@sha256:[0-9a-fA-F]{64}$ ]]; then
+                echo "::error::Repository variable ${env_name} must be an immutable image reference ending in @sha256:<64 hex characters>." >&2
+                invalid=1
+                continue
+              fi
+              printf '%s=%s\n' "${arg_name}" "${value}"
+            done
+            if [[ "${IMAGE_COMPONENT}" == "api-gateway" ]]; then
+              schema_version="$(find services/api-gateway/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -n 1 | cut -d_ -f1)"
+              printf '%s=%s\n' APP_VERSION "${GITHUB_REF_NAME}"
+              printf '%s=%s\n' GIT_SHA "${GITHUB_SHA}"
+              printf '%s=%s\n' RELEASE_ID "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              printf '%s=%s\n' SCHEMA_VERSION "${schema_version}"
+            fi
+          } > "${build_args_file}"
+          if [[ "${invalid}" -ne 0 ]]; then
+            exit 1
+          fi
+          {
+            echo "build_args<<EOF"
+            cat "${build_args_file}"
+            echo "EOF"
+            echo "image_name=${image_name}"
+            echo "image_ref=${image_ref}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Build local release candidate
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          load: true
+          push: false
+          tags: ${{ steps.release.outputs.image_ref }}
+          build-args: ${{ steps.release.outputs.build_args }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - name: Scan the built image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          version: v0.70.0
+          scan-type: image
+          image-ref: ${{ steps.release.outputs.image_ref }}
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Generate image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          image: ${{ steps.release.outputs.image_ref }}
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.name }}.cdx.json
+          upload-artifact: false
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish and resolve registry digest
+        id: publish
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ steps.release.outputs.image_name }}
+          IMAGE_REF: ${{ steps.release.outputs.image_ref }}
+          IMAGE_COMPONENT: ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE_REF}"
+          digest="$(docker buildx imagetools inspect "${IMAGE_REF}" | awk '/^Digest:/ { print $2; exit }')"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Registry did not return a valid sha256 digest for ${IMAGE_REF}."
+            exit 1
+          fi
+          digest_ref="${IMAGE_NAME}@${digest}"
+          printf '%s\n' "${digest_ref}" | tee "image-${IMAGE_COMPONENT}.digest"
+          echo "digest_ref=${digest_ref}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+
+      - name: Sign image and attest its SBOM
+        shell: bash
+        env:
+          DIGEST_REF: ${{ steps.publish.outputs.digest_ref }}
+          SBOM_FILE: sbom-${{ matrix.name }}.cdx.json
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${DIGEST_REF}"
+          cosign attest --yes --type cyclonedx --predicate "${SBOM_FILE}" "${DIGEST_REF}"
+
+      - name: Upload release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: image-evidence-${{ matrix.name }}
+          path: |
+            image-${{ matrix.name }}.digest
+            sbom-${{ matrix.name }}.cdx.json
+          if-no-files-found: error

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +18,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/capture"
 	"edugrade-enterprise/services/api-gateway/internal/config"
+	database "edugrade-enterprise/services/api-gateway/internal/db"
 	"edugrade-enterprise/services/api-gateway/internal/files"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
 	"edugrade-enterprise/services/api-gateway/internal/org"
@@ -89,6 +91,7 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	}
 	student := e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, `{"school_id":"`+schoolID+`","class_id":"`+classID+`","student_no":"SYN-`+suffix+`","name":"Story 041 Synthetic Student"}`, http.StatusCreated)["student"].(map[string]any)
 	studentID := e2eString(t, student, "id")
+	e2eAssertHighRiskTenantRLS(t, db, dsn, demoTenantID, studentID)
 	e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, `{"school_id":"`+schoolID+`","class_id":"`+classID+`","student_no":"SYN-`+suffix+`","name":"Duplicate Student"}`, http.StatusConflict)
 	otherStudent := e2ePostJSON(t, router, http.MethodPost, "/api/v1/students", adminToken, `{"school_id":"`+schoolID+`","class_id":"`+classID+`","student_no":"SYN-OTHER-`+suffix+`","name":"Story 041 Other Synthetic Student"}`, http.StatusCreated)["student"].(map[string]any)
 	otherStudentID := e2eString(t, otherStudent, "id")
@@ -311,6 +314,113 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	audits := e2eGetJSON(t, router, "/api/v1/audit-logs?limit=200", adminToken, http.StatusOK)["audit_logs"].([]any)
 	e2eAssertAuditActions(t, audits, []string{"score.roster_attendance_updated", "score.published", "appeal.assigned", "appeal.teacher_recommendation_submitted", "appeal.reviewed", "review.human_grade_submitted"})
 	e2eArbitrationAndExportCommands(t, db, demoTenantID, examID, segmentID, graderID, e2eLookupUserID(t, db, "demo", "school_admin"), e2eLookupUserID(t, db, "demo", "tenant_admin"))
+}
+
+func e2eAssertHighRiskTenantRLS(t *testing.T, adminDB *sql.DB, dsn, tenantID, studentID string) {
+	t.Helper()
+	var privilegedLogin bool
+	var adminDatabase string
+	var runtimeCanReadStudent bool
+	if err := adminDB.QueryRow(`
+SELECT rolsuper OR rolbypassrls,
+	   current_database(),
+	   has_table_privilege('edugrade_tenant_runtime', 'public.student', 'SELECT')
+FROM pg_roles
+WHERE rolname=SESSION_USER
+`).Scan(&privilegedLogin, &adminDatabase, &runtimeCanReadStudent); err != nil {
+		t.Fatalf("inspect migration database identity: %v", err)
+	}
+	if !runtimeCanReadStudent {
+		t.Fatalf("migration did not grant the tenant RLS runtime role access to public.student in %q", adminDatabase)
+	}
+	if privilegedLogin {
+		unsafeDB, closeUnsafeDB, err := database.OpenPostgres(config.PostgresConfig{
+			DSN: dsn, TenantRLSEnabled: true,
+			MaxOpenConns: 1, MaxIdleConns: 1, StatementTimeout: time.Minute, LockTimeout: 5 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("open privileged RLS database: %v", err)
+		}
+		var sentinel int
+		err = unsafeDB.QueryRowContext(context.Background(), `SELECT 1`).Scan(&sentinel)
+		_ = closeUnsafeDB()
+		if err == nil || !strings.Contains(err.Error(), "non-superuser database login without BYPASSRLS") {
+			t.Fatalf("tenant RLS accepted a privileged database login: sentinel=%d err=%v", sentinel, err)
+		}
+	}
+	roleName := "e2e_rls_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	quotedRole := pgx.Identifier{roleName}.Sanitize()
+	rolePassword := "Rls" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := adminDB.Exec(`CREATE ROLE ` + quotedRole + ` LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD '` + rolePassword + `'`); err != nil {
+		t.Fatalf("create isolated RLS login: %v", err)
+	}
+	if _, err := adminDB.Exec(`GRANT edugrade_tenant_runtime TO ` + quotedRole); err != nil {
+		t.Fatalf("grant isolated RLS runtime role: %v", err)
+	}
+	defer func() {
+		_, _ = adminDB.Exec(`DROP ROLE IF EXISTS ` + quotedRole)
+	}()
+	parsedDSN, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("parse RLS test DSN: %v", err)
+	}
+	parsedDSN.Path = "/" + adminDatabase
+	parsedDSN.User = url.UserPassword(roleName, rolePassword)
+	scopedDB, closeScopedDB, err := database.OpenPostgres(config.PostgresConfig{
+		DSN: parsedDSN.String(), TenantRLSEnabled: true,
+		MaxOpenConns: 1, MaxIdleConns: 1, StatementTimeout: time.Minute, LockTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("open tenant-scoped database: %v", err)
+	}
+	defer closeScopedDB()
+
+	var currentRole, sessionRole, databaseName, searchPath string
+	var hasSchemaUsage bool
+	if err = scopedDB.QueryRowContext(context.Background(), `
+SELECT current_user,
+	   session_user,
+	   current_database(),
+       current_setting('search_path'),
+	   has_schema_privilege(current_user, 'public', 'USAGE')
+`).Scan(&currentRole, &sessionRole, &databaseName, &searchPath, &hasSchemaUsage); err != nil {
+		t.Fatalf("inspect tenant RLS runtime privileges: %v", err)
+	}
+	var protectedTable sql.NullString
+	if err = scopedDB.QueryRowContext(context.Background(), `SELECT to_regclass('public.student')::text`).Scan(&protectedTable); err != nil {
+		t.Fatalf("resolve tenant RLS protected table: %v", err)
+	}
+	if currentRole != "edugrade_tenant_runtime" || !hasSchemaUsage || !protectedTable.Valid {
+		var catalogTable string
+		_ = scopedDB.QueryRowContext(context.Background(), `
+SELECT coalesce(max(n.nspname || '.' || c.relname), '')
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+WHERE n.nspname='public' AND c.relname='student'
+`).Scan(&catalogTable)
+		t.Fatalf("tenant RLS runtime role is not ready: role=%q session_role=%q admin_database=%q database=%q search_path=%q schema_usage=%t protected_table=%q catalog_table=%q", currentRole, sessionRole, adminDatabase, databaseName, searchPath, hasSchemaUsage, protectedTable.String, catalogTable)
+	}
+
+	var count int
+	if err = scopedDB.QueryRowContext(context.Background(), `SELECT count(*) FROM student WHERE id=$1::uuid`, studentID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("unscoped context did not fail closed: role=%q search_path=%q count=%d err=%v", currentRole, searchPath, count, err)
+	}
+	if err = scopedDB.QueryRowContext(database.WithTenant(context.Background(), uuid.NewString()), `SELECT count(*) FROM student WHERE id=$1::uuid`, studentID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("RLS exposed a student to another tenant: count=%d err=%v", count, err)
+	}
+	if err = scopedDB.QueryRowContext(database.WithTenant(context.Background(), tenantID), `SELECT count(*) FROM student WHERE id=$1::uuid`, studentID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("RLS hid a student from its tenant: count=%d err=%v", count, err)
+	}
+	if err = scopedDB.QueryRowContext(database.WithTenantMaintenance(context.Background()), `SELECT count(*) FROM student WHERE id=$1::uuid`, studentID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("explicit maintenance scope could not inspect a protected row: count=%d err=%v", count, err)
+	}
+
+	runtimeRouter := e2ePostgresRouter(scopedDB)
+	runtimeToken := e2eLoginWithTenant(t, runtimeRouter, "demo", "tenant_admin", "ChangeMe123!")
+	runtimeStudents := e2eGetJSON(t, runtimeRouter, "/api/v1/students?ids="+studentID, runtimeToken, http.StatusOK)["students"].([]any)
+	if len(runtimeStudents) != 1 || e2eString(t, runtimeStudents[0].(map[string]any), "id") != studentID {
+		t.Fatalf("authenticated API tenant context did not expose the owning tenant's student: %#v", runtimeStudents)
+	}
 }
 
 func e2eProjectProcessingUntilCurrent(t *testing.T, db *sql.DB, store *processing.PostgresStore, tenantID, examID string) {

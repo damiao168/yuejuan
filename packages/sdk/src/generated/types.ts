@@ -792,7 +792,7 @@ export type ScoreCommandQualityIssue = { "code": string; "message": string; "blo
 
 export type ScoreCommandPublishInput = { "reason": string; };
 
-export type BusinessCommandReceipt = { "command_id": string; "status": "not_accepted" | "processing" | "takeover_ready" | "succeeded" | "rejected" | "unknown"; "http_status"?: number; "error_code"?: string; "operation"?: "review.submit" | "review.arbitrate" | "review.seed-submit" | "score.confirm" | "score.publish" | "report.export"; "target_id"?: string; "result"?: unknown; };
+export type BusinessCommandReceipt = { "command_id": string; "status": "not_accepted" | "processing" | "takeover_ready" | "succeeded" | "rejected" | "unknown"; "http_status"?: number; "error_code"?: string; "operation"?: "review.submit" | "review.arbitrate" | "review.seed-submit" | "score.confirm" | "score.publish" | "report.export"; "target_id"?: string; "payload"?: unknown; "result"?: unknown; };
 
 export interface components {
   schemas: {

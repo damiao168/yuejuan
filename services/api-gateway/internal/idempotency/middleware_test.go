@@ -3,6 +3,7 @@ package idempotency
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,6 +40,35 @@ func TestMiddlewareReplaysAndRejectsChangedRequest(t *testing.T) {
 	}
 	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "idempotency_key_reused_with_different_request") {
 		t.Fatalf("changed request must conflict: %d %s", conflict.Code, conflict.Body.String())
+	}
+}
+
+func TestRecoverableCommandPersistsImmutableRequestBody(t *testing.T) {
+	store := NewMemoryStore()
+	const route = "POST /api/v1/exams/{examId}/publish"
+	const requestBody = `{"reason":"approved","private_note":"teacher only"}`
+	mux := http.NewServeMux()
+	mux.Handle(route, Middleware(store, Options{Enforce: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil || string(body) != requestBody {
+			t.Fatalf("handler received body=%q err=%v", body, err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/exams/exam-1/publish", strings.NewReader(requestBody))
+	req.Header.Set(Header, "publish-command-1")
+	req = req.WithContext(auth.WithUser(context.Background(), auth.User{ID: "actor-1", TenantID: "tenant-1"}))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("publish command status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	key := memoryKey(BeginInput{TenantID: "tenant-1", ActorID: "actor-1", Method: http.MethodPost, Route: route, Key: "publish-command-1"})
+	store.mu.Lock()
+	record := cloneRecord(store.records[key].record)
+	store.mu.Unlock()
+	if string(record.RequestBody) != requestBody {
+		t.Fatalf("persisted request body=%q want=%q", record.RequestBody, requestBody)
 	}
 }
 

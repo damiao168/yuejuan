@@ -3,6 +3,8 @@ package idempotency
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +19,8 @@ import (
 )
 
 const Header = "Idempotency-Key"
+
+const maxPersistedCommandBodyBytes = 2 * 1024 * 1024
 
 var keyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
@@ -107,7 +111,7 @@ func Middleware(store Store, options Options) func(http.Handler) http.Handler {
 				httpx.Error(w, r, http.StatusUnauthorized, "unauthenticated", "authentication required")
 				return
 			}
-			hash, cleanup, err := prepareRequestHash(r, route)
+			hash, requestBody, cleanup, err := prepareRequestHash(r, route, recoverableRoutes[route])
 			if err != nil {
 				httpx.Error(w, r, http.StatusBadRequest, "request_body_invalid", "request body could not be read")
 				return
@@ -116,7 +120,7 @@ func Middleware(store Store, options Options) func(http.Handler) http.Handler {
 			now := time.Now().UTC()
 			input := BeginInput{
 				TenantID: user.TenantID, ActorID: user.ID, Method: r.Method, Route: route, Key: key,
-				RequestHash: hash, ExpiresAt: now.Add(options.TTL), AllowTakeover: recoverableRoutes[route],
+				RequestHash: hash, RequestBody: requestBody, ExpiresAt: now.Add(options.TTL), AllowTakeover: recoverableRoutes[route],
 				StaleBefore: now.Add(-options.ProcessingTimeout),
 			}
 			record, execute, err := store.Begin(r.Context(), input)
@@ -160,10 +164,10 @@ func Middleware(store Store, options Options) func(http.Handler) http.Handler {
 	}
 }
 
-func prepareRequestHash(r *http.Request, route string) (string, func(), error) {
+func prepareRequestHash(r *http.Request, route string, persistBody bool) (string, []byte, func(), error) {
 	temp, err := os.CreateTemp("", "edugrade-idempotency-*")
 	if err != nil {
-		return "", func() {}, err
+		return "", nil, func() {}, err
 	}
 	cleanup := func() { _ = temp.Close(); _ = os.Remove(temp.Name()) }
 	hasher := sha256.New()
@@ -171,15 +175,39 @@ func prepareRequestHash(r *http.Request, route string) (string, func(), error) {
 	if r.Body != nil {
 		if _, err = io.Copy(io.MultiWriter(temp, hasher), r.Body); err != nil {
 			cleanup()
-			return "", func() {}, err
+			return "", nil, func() {}, err
 		}
 	}
 	if _, err = temp.Seek(0, io.SeekStart); err != nil {
 		cleanup()
-		return "", func() {}, err
+		return "", nil, func() {}, err
+	}
+	var requestBody []byte
+	if persistBody {
+		requestBody, err = io.ReadAll(io.LimitReader(temp, maxPersistedCommandBodyBytes+1))
+		if err != nil || len(requestBody) > maxPersistedCommandBodyBytes {
+			cleanup()
+			if err == nil {
+				err = errors.New("recoverable command body exceeds persistence limit")
+			}
+			return "", nil, func() {}, err
+		}
+		// Bodyless commands still need an explicit immutable payload so recovery
+		// never has to infer whether a payload was lost.
+		if len(requestBody) == 0 {
+			requestBody = []byte("null")
+		}
+		if !json.Valid(requestBody) {
+			cleanup()
+			return "", nil, func() {}, errors.New("recoverable command body is not valid JSON")
+		}
+		if _, err = temp.Seek(0, io.SeekStart); err != nil {
+			cleanup()
+			return "", nil, func() {}, err
+		}
 	}
 	r.Body = temp
-	return hex.EncodeToString(hasher.Sum(nil)), cleanup, nil
+	return hex.EncodeToString(hasher.Sum(nil)), requestBody, cleanup, nil
 }
 
 func retryableStatus(status int) bool {

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -39,6 +40,20 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if len(cfg.ModelSecrets.MasterKey) < 32 {
 		t.Fatal("development must have an encryption key for managed model credentials")
 	}
+	for _, extension := range []string{".tif", ".tiff"} {
+		if !containsString(cfg.Files.AllowedExtensions, extension) {
+			t.Fatalf("default file extensions must include %s: %v", extension, cfg.Files.AllowedExtensions)
+		}
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLoadReadsEnvironment(t *testing.T) {
@@ -73,6 +88,42 @@ func TestLoadReadsEnvironment(t *testing.T) {
 		cfg.Postgres.ConnMaxLifetime != 45*time.Minute || cfg.Postgres.ConnMaxIdleTime != 4*time.Minute ||
 		cfg.Postgres.StatementTimeout != 40*time.Second || cfg.Postgres.LockTimeout != 3*time.Second {
 		t.Fatalf("unexpected PostgreSQL capacity configuration: %#v", cfg.Postgres)
+	}
+	if cfg.Postgres.TenantRLSEnabled {
+		t.Fatal("development must not enable tenant RLS connection scoping unless explicitly requested")
+	}
+}
+
+func TestLoadWarnsAndFallsBackForInvalidDevelopmentValues(t *testing.T) {
+	t.Setenv("EDUGRADE_ENV", "development")
+	t.Setenv("EDUGRADE_HTTP_PORT", "eighty-eighty")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("development invalid value should use a warned fallback: %v", err)
+	}
+	if cfg.Service.Port != 8080 {
+		t.Fatalf("development fallback port=%d want 8080", cfg.Service.Port)
+	}
+}
+
+func TestLoadRejectsInvalidTypedValuesInProductionLikeEnvironments(t *testing.T) {
+	for _, test := range []struct {
+		key, value string
+	}{
+		{"EDUGRADE_HTTP_PORT", "eighty-eighty"},
+		{"EDUGRADE_MINIO_USE_SSL", "ture"},
+		{"EDUGRADE_HTTP_READ_TIMEOUT", "soon"},
+		{"EDUGRADE_AI_MIN_CONFIDENCE", "NaN"},
+	} {
+		t.Run(test.key, func(t *testing.T) {
+			t.Setenv("EDUGRADE_ENV", "production")
+			setSecureProductionEnvironment(t)
+			t.Setenv(test.key, test.value)
+			_, err := Load("")
+			if err == nil || !strings.Contains(err.Error(), test.key) {
+				t.Fatalf("invalid %s must fail closed without exposing its value: %v", test.key, err)
+			}
+		})
 	}
 }
 
@@ -259,6 +310,7 @@ func setSecureProductionEnvironment(t *testing.T) {
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "https://grading-agent.internal")
 	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "production-service-token-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_POSTGRES_DSN", "postgres://edugrade:strong-password@db.internal:5432/edugrade?sslmode=require")
+	t.Setenv("EDUGRADE_POSTGRES_TENANT_RLS", "true")
 	t.Setenv("EDUGRADE_MINIO_ACCESS_KEY", "production-access")
 	t.Setenv("EDUGRADE_MINIO_SECRET_KEY", "production-secret")
 	t.Setenv("EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY", "production-model-credential-key-with-at-least-32-characters")

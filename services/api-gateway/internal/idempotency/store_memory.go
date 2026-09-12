@@ -50,7 +50,7 @@ func (s *MemoryStore) Begin(_ context.Context, input BeginInput) (Record, bool, 
 			return cloneRecord(existing.record), false, nil
 		}
 	}
-	record := Record{State: "processing", RequestHash: input.RequestHash}
+	record := Record{State: "processing", RequestHash: input.RequestHash, RequestBody: append([]byte(nil), input.RequestBody...)}
 	now := time.Now().UTC()
 	record.UpdatedAt = now
 	s.records[key] = memoryEntry{record: record, expiresAt: input.ExpiresAt, updatedAt: now}
@@ -65,7 +65,7 @@ func (s *MemoryStore) Complete(_ context.Context, input BeginInput, status int, 
 	if !ok || entry.record.RequestHash != input.RequestHash {
 		return ErrKeyConflict
 	}
-	entry.record = Record{State: "completed", RequestHash: input.RequestHash, ResponseStatus: status, ResponseHeaders: cloneHeaders(headers), ResponseBody: append([]byte(nil), body...)}
+	entry.record = Record{State: "completed", RequestHash: input.RequestHash, RequestBody: append([]byte(nil), entry.record.RequestBody...), ResponseStatus: status, ResponseHeaders: cloneHeaders(headers), ResponseBody: append([]byte(nil), body...)}
 	entry.updatedAt = time.Now().UTC()
 	entry.record.UpdatedAt = entry.updatedAt
 	s.records[key] = entry
@@ -83,6 +83,7 @@ func (s *MemoryStore) Abort(_ context.Context, input BeginInput) error {
 }
 
 func cloneRecord(input Record) Record {
+	input.RequestBody = append([]byte(nil), input.RequestBody...)
 	input.ResponseHeaders = cloneHeaders(input.ResponseHeaders)
 	input.ResponseBody = append([]byte(nil), input.ResponseBody...)
 	return input

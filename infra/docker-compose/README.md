@@ -27,12 +27,16 @@ Copy-Item .env.example .env
 
 ### 从既有部署升级
 
-`.env` 不随仓库更新，升级后需要手工补齐两个新增项，否则 `preflight.ps1` 会直接拒绝启动：
+`.env` 不随仓库更新，升级后需要手工补齐以下新增项，否则 `preflight.ps1` 会直接拒绝启动：
 
 - `EDUGRADE_QDRANT_API_KEY`：**必填**。Qdrant 此前无鉴权，现在容器会读取该值；网关侧用同一个值发送 `api-key` 头，两端必须一致。
 - `EDUGRADE_REDIS_PASSWORD`：不能再留空。Redis 过去在空密码时会静默降级为无鉴权启动，现在会直接拒绝启动。
+- `EDUGRADE_POSTGRES_APP_USER` / `EDUGRADE_POSTGRES_APP_PASSWORD`：API 专用低权限登录账号；不能与迁移账号相同，密码至少 32 字符。
+- `EDUGRADE_POSTGRES_ADMIN_DSN`：仅供 `db-migrate` 使用的迁移账号 DSN。该账号必须能创建/修改角色并授予成员关系（自托管 PostgreSQL 通常需要 `CREATEROLE`）；托管数据库若限制角色管理，需由平台管理员预先创建同等账号与授权。`EDUGRADE_POSTGRES_DSN` 必须改为上述 API 账号的 DSN，不能继续让 API 以 PostgreSQL superuser 或 `BYPASSRLS` 身份连接。
 
 以下新增项都有默认值，不填也能启动：`EDUGRADE_INTERNAL_BIND_HOST`（默认 `127.0.0.1`，数据面端口只监听回环，仅 nginx 对外）、`EDUGRADE_CONTAINER_LOG_MAX_*`、各 `EDUGRADE_*_MEM_LIMIT`、`EDUGRADE_PAGE_PROCESSING_HEARTBEAT_*`。若需要从其他机器直连数据库或 MinIO 控制台，显式设置 `EDUGRADE_INTERNAL_BIND_HOST=0.0.0.0`（生产环境 preflight 会拒绝该值）。
+
+production-like 部署还必须设置 `EDUGRADE_POSTGRES_TENANT_RLS=true`，并把 `.env.example` 中所有运行时镜像和 Dockerfile 基础镜像变量替换为 `registry/repository@sha256:<digest>`。启用 RLS 时，API 建立数据库连接会主动拒绝 `SUPERUSER` 或 `BYPASSRLS` 登录；迁移脚本创建无登录的 `edugrade_tenant_runtime` 权限角色，并把 API 账号加入该角色。本地开发仍可使用 tag；`preflight.ps1` 会在生产环境拒绝 tag、空值和格式不完整的 digest。应用镜像的正式 digest 来自 `Release immutable images` 工作流产物，不能从人类可读 tag 推断。
 
 API 的 PostgreSQL 容量保护默认值为：最大连接 `10`、最大空闲连接 `5`、连接最长生命周期 `30m`、空闲回收 `5m`、单条语句超时 `60s`、锁等待超时 `5s`。可通过 `EDUGRADE_POSTGRES_MAX_*`、`EDUGRADE_POSTGRES_CONN_MAX_*`、`EDUGRADE_POSTGRES_STATEMENT_TIMEOUT` 和 `EDUGRADE_POSTGRES_LOCK_TIMEOUT` 调整；非法范围会使 API 启动失败。调整连接数前必须结合 PostgreSQL `max_connections`、API 副本数和后台工具连接预算，默认值不是容量验收结论。
 

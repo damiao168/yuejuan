@@ -99,7 +99,7 @@ func (i *Infrastructure) startFileReconciliation() {
 	if cfg.Files.ReconciliationInterval <= 0 {
 		return
 	}
-	reconciliationContext, stopReconciliation := context.WithCancel(context.Background())
+	reconciliationContext, stopReconciliation := context.WithCancel(db.WithTenantMaintenance(context.Background()))
 	reconciliationDone := make(chan struct{})
 	go func() {
 		defer close(reconciliationDone)
@@ -145,7 +145,7 @@ func (i *Infrastructure) startOutboxDispatcher() {
 		outbox.NewLogPublisher(i.Logger),
 		outbox.Options{Owner: i.Config.Service.Name + "-" + time.Now().UTC().Format("20060102T150405.000000000")},
 	)
-	dispatchContext, stopDispatch := context.WithCancel(context.Background())
+	dispatchContext, stopDispatch := context.WithCancel(db.WithTenantMaintenance(context.Background()))
 	dispatchDone := make(chan struct{})
 	go func() {
 		defer close(dispatchDone)
@@ -174,7 +174,7 @@ func (i *Infrastructure) startProcessingProjector() {
 			LeaseTTL: 5 * time.Minute,
 		},
 	)
-	projectContext, stopProject := context.WithCancel(context.Background())
+	projectContext, stopProject := context.WithCancel(db.WithTenantMaintenance(context.Background()))
 	projectDone := make(chan struct{})
 	go func() {
 		defer close(projectDone)
@@ -196,7 +196,7 @@ func (i *Infrastructure) startProcessingProjector() {
 }
 
 func (i *Infrastructure) startPaperParseExecutor(executor *paper.ParseTaskExecutor) {
-	parseContext, stopParse := context.WithCancel(context.Background())
+	parseContext, stopParse := context.WithCancel(db.WithTenantMaintenance(context.Background()))
 	parseDone := make(chan struct{})
 	go func() {
 		defer close(parseDone)

@@ -514,9 +514,9 @@ func e2eBusinessCommandRecoveryStates(t *testing.T, db *sql.DB, tenant, actor st
 			responseStatus = status
 		}
 		if _, err := db.Exec(`INSERT INTO idempotency_record
-(tenant_id,actor_id,method,route,idempotency_key,request_hash,state,response_status,response_body,expires_at)
-VALUES($1::uuid,$2::uuid,'POST',$3,$4,$5,$6,$7,$8,now()+interval '1 day')`,
-			tenant, actor, route, command, strings.Repeat("a", 64), state, responseStatus, []byte(body)); err != nil {
+(tenant_id,actor_id,method,route,idempotency_key,request_hash,request_body,state,response_status,response_body,expires_at)
+VALUES($1::uuid,$2::uuid,'POST',$3,$4,$5,$6,$7,$8,$9,now()+interval '1 day')`,
+			tenant, actor, route, command, strings.Repeat("a", 64), []byte(`{"reason":"server-frozen"}`), state, responseStatus, []byte(body)); err != nil {
 			t.Fatalf("seed transport receipt %s: %v", command, err)
 		}
 	}
@@ -534,7 +534,7 @@ VALUES($1::uuid,$2::uuid,'POST',$3,$4,$5,$6,$7,$8,now()+interval '1 day')`,
 		t.Fatal(err)
 	}
 	stale, err := commandreceipt.Recover(context.Background(), db, tenant, actor, staleID, "score.")
-	if err != nil || stale.Status != "takeover_ready" {
+	if err != nil || stale.Status != "takeover_ready" || string(stale.Payload) != `{"reason":"server-frozen"}` {
 		t.Fatalf("stale recovery=%#v err=%v", stale, err)
 	}
 	for name, identity := range map[string][2]string{

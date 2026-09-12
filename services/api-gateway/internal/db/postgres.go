@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,7 +27,22 @@ func OpenPostgres(cfg config.PostgresConfig, observers ...QueryObserver) (*sql.D
 		return nil, nil, err
 	}
 	registeredConfig := stdlib.RegisterConnConfig(connConfig)
-	database, err := sql.Open("pgx", registeredConfig)
+	var database *sql.DB
+	if cfg.TenantRLSEnabled {
+		driverContext, ok := stdlib.GetDefaultDriver().(driver.DriverContext)
+		if !ok {
+			stdlib.UnregisterConnConfig(registeredConfig)
+			return nil, nil, fmt.Errorf("pgx driver does not support connectors")
+		}
+		connector, connectorErr := driverContext.OpenConnector(registeredConfig)
+		if connectorErr != nil {
+			stdlib.UnregisterConnConfig(registeredConfig)
+			return nil, nil, connectorErr
+		}
+		database = sql.OpenDB(tenantConnector{base: connector})
+	} else {
+		database, err = sql.Open("pgx", registeredConfig)
+	}
 	if err != nil {
 		stdlib.UnregisterConnConfig(registeredConfig)
 		return nil, nil, err
@@ -66,6 +83,7 @@ func postgresDuration(value time.Duration) string {
 type queryTraceState struct {
 	startedAt time.Time
 	operation string
+	skip      bool
 }
 
 type queryTraceKey struct{}
@@ -75,6 +93,9 @@ type queryTracer struct {
 }
 
 func (t queryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "set_config('edugrade.tenant_id'") || strings.EqualFold(strings.TrimSpace(data.SQL), "SET ROLE "+tenantRuntimeRole) {
+		return context.WithValue(ctx, queryTraceKey{}, queryTraceState{skip: true})
+	}
 	return context.WithValue(ctx, queryTraceKey{}, queryTraceState{
 		startedAt: time.Now(),
 		operation: sqlOperation(data.SQL),
@@ -84,6 +105,9 @@ func (t queryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.
 func (t queryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
 	state, ok := ctx.Value(queryTraceKey{}).(queryTraceState)
 	if !ok {
+		return
+	}
+	if state.skip {
 		return
 	}
 	duration := time.Since(state.startedAt)
