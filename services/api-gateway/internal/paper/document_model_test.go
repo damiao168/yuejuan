@@ -49,3 +49,31 @@ func TestPaperParserResolvesSchoolModelOnlyForInternalRequest(t *testing.T) {
 		t.Fatal("invalid school configuration must not fall back to global model")
 	}
 }
+
+func TestPaperParserStreamsExactProgressEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept"), "application/x-ndjson") {
+			t.Fatal("streaming parser media type was not requested")
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+		w.Write([]byte("{\"type\":\"progress\",\"progress\":{\"phase\":\"model_request\",\"route\":\"compact_model\",\"completed\":0,\"total\":2}}\n"))
+		w.Write([]byte("{\"type\":\"progress\",\"progress\":{\"phase\":\"model_request\",\"route\":\"compact_model\",\"completed\":1,\"total\":2}}\n"))
+		w.Write([]byte("{\"type\":\"result\",\"result\":{\"documents\":[],\"question_candidates\":[],\"answer_candidates\":[],\"solution_candidates\":[],\"rubric_candidates\":[],\"issues\":[]}}\n"))
+	}))
+	defer server.Close()
+	service := NewDocumentImportService(nil, nil, nil, server.URL, strings.Repeat("t", 32), time.Second)
+	events := make([]map[string]any, 0, 2)
+	result, err := service.parseForTenantWithProgress(context.Background(), "school-a", "request", "math", nil, func(progress map[string]any) error {
+		events = append(events, progress)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1]["completed"] != float64(1) || events[1]["total"] != float64(2) {
+		t.Fatalf("stream progress was not preserved: %#v", events)
+	}
+	if len(result.QuestionCandidates) != 0 {
+		t.Fatalf("unexpected parser result: %#v", result)
+	}
+}

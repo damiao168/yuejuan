@@ -26,7 +26,9 @@ export function AnswerReview({ question, annotations, imageURL }: {
     </section>
     <aside className="answer-inspector">
       <div className="question-result-line"><div><span>本题得分</span><strong>{question.score} / {question.max_score}</strong></div><i style={{ "--score-rate": `${rate}%` } as CSSProperties} /></div>
-      {question.cohort ? <div className="question-comparison"><span>你 {rate}%</span><span>年级 {Math.round(question.cohort.mean_score_rate * 100)}%</span></div> : null}
+      {question.cohort && Number.isFinite(question.cohort.mean_score_rate) ? <div className="question-comparison"><span>我的得分率 {rate}%</span><span>对比群体平均 {Math.round(question.cohort.mean_score_rate * 100)}%</span></div> : null}
+      {question.actual_answer ? <section><h3>我的答案</h3><p>{question.actual_answer}</p></section> : null}
+      {question.correct_answer ? <section><h3>参考答案</h3><p>{question.correct_answer}</p></section> : null}
       {annotations.length > 0 ? <section><h3>教师批注</h3><div className="annotation-notes">{annotations.map((annotation, index) => <button type="button" key={annotation.id} className={activeAnnotation === annotation.id ? "active" : ""} onClick={() => setActiveAnnotation(annotation.id)}><span>{index + 1}</span>{annotation.content || "教师标注"}</button>)}</div></section> : null}
       {question.feedback ? <section><h3>教师反馈</h3><p>{question.feedback}</p></section> : null}
       {question.rubric_summary?.length ? <section><h3>评分要点</h3><ul>{question.rubric_summary.map((item) => <li key={item}>{item}</li>)}</ul></section> : null}

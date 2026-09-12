@@ -192,6 +192,7 @@ import type {
 } from "./types";
 
 export interface operations {
+  "updateManagedUserStatus": { args: { path: { "id": string; }; body: { "status": "active" | "disabled"; }; signal?: AbortSignal; }; response: { "user": { "id": string; "username": string; "display_name": string; "status": "active" | "disabled"; "roles": Array<string>; "school_id"?: string; "created_at"?: string; }; }; };
   "listSubmissionPageQualityRuns": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: { "runs": Array<Record<string, unknown>>; }; };
   "recoverCaptureUpload": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: CaptureUploadRecoveryResponse; };
   "recoverCaptureBatchCommand": { args: { path: { "examId": string; "commandId": string; }; signal?: AbortSignal; }; response: CaptureBatchCommandResponse; };
@@ -350,6 +351,7 @@ export interface operations {
   "replacePaperImportSources": { args: { path: { "id": string; }; headers: { "Idempotency-Key": string; }; body: ReplacePaperImportSourcesRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
   "savePaperImportReview": { args: { path: { "id": string; }; body: ReviewPaperImportRequest; signal?: AbortSignal; }; response: PaperImportResponse; };
   "applyPaperImport": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
+  "retryPaperImportParse": { args: { path: { "id": string; }; query: { "expected_generation": number; }; signal?: AbortSignal; }; response: PaperImportResponse; };
   "cancelPaperImport": { args: { path: { "id": string; }; query: { "expected_generation": number; }; headers: { "Idempotency-Key": string; }; signal?: AbortSignal; }; response: PaperImportResponse; };
   "startScoringRun": { args: { path: { "examId": string; }; headers: { "Idempotency-Key": string; }; body: StartScoringRunRequest; signal?: AbortSignal; }; response: ScoringRunResponse; };
   "recoverScoringCommand": { args: { path: { "examId": string; "commandId": string; }; signal?: AbortSignal; }; response: ScoringCommandRecovery; };
@@ -369,6 +371,11 @@ export interface operations {
 
 export class EduGradeApi {
   constructor(private readonly transport: ApiTransport) {}
+
+  updateManagedUserStatus(args: operations["updateManagedUserStatus"]["args"]): Promise<operations["updateManagedUserStatus"]["response"]> {
+    const requestPath = fillPath("/api/v1/users/{id}/status", args.path);
+    return this.transport.request(requestPath, { method: "PATCH", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
 
   listSubmissionPageQualityRuns(args: operations["listSubmissionPageQualityRuns"]["args"]): Promise<operations["listSubmissionPageQualityRuns"]["response"]> {
     const requestPath = fillPath("/api/v1/submission-pages/{id}/quality-runs", args.path);
@@ -1157,6 +1164,11 @@ export class EduGradeApi {
 
   applyPaperImport(args: operations["applyPaperImport"]["args"]): Promise<operations["applyPaperImport"]["response"]> {
     const requestPath = fillPath("/api/v1/paper-imports/{id}/apply", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal });
+  }
+
+  retryPaperImportParse(args: operations["retryPaperImportParse"]["args"]): Promise<operations["retryPaperImportParse"]["response"]> {
+    const requestPath = appendQuery(fillPath("/api/v1/paper-imports/{id}/retry-parse", args.path), args.query);
     return this.transport.request(requestPath, { method: "POST", signal: args.signal });
   }
 

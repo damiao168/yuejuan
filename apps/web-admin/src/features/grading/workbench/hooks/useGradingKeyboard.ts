@@ -11,6 +11,7 @@ export interface UseGradingKeyboardOptions {
   hasAiSuggestion: boolean;
   maxScore: number;
   rubricPointCount: number;
+  quickSubmit?: boolean;
   onSubmit: () => void;
   onSetScore: (score: number) => void;
   onToggleCriterion: (index: number) => void;
@@ -28,7 +29,13 @@ export function useGradingKeyboard(options: UseGradingKeyboardOptions) {
         key: event.key,
         code: event.code,
         ctrlKey: event.ctrlKey,
-        isInputTarget: isInputTarget(event.target),
+        metaKey: event.metaKey,
+        altKey: event.altKey,
+        isComposing: event.isComposing || event.keyCode === 229,
+        repeat: event.repeat,
+        blocked: Boolean(document.querySelector('.ant-modal-wrap:not([style*="display: none"]), .ant-drawer-open, .ant-popover:not(.ant-popover-hidden)')),
+        quickSubmit: options.quickSubmit,
+        isInputTarget: isInputTarget(event.target) || (event.key === "Enter" && !event.ctrlKey && !event.metaKey && event.target instanceof Element && Boolean(event.target.closest('button, a, [role="button"], [role="checkbox"], [role="combobox"]'))),
         hasTask: options.hasTask,
         canEditDraft: options.canEditDraft,
         canSubmit: options.canSubmit,

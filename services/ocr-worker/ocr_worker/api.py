@@ -84,6 +84,15 @@ class EduGradeClient:
         tasks = response.get("tasks", [])
         return tasks if isinstance(tasks, list) else []
 
+    def claim_paper_formula_tasks(self, worker_instance_id: str, lease_seconds: int) -> list[dict[str, Any]]:
+        self.worker_instance_id = worker_instance_id
+        response = self._request("POST", "/api/v1/internal/worker/tasks/claim", {
+            "queue_name": "paper-formula", "worker_service": "ocr-worker",
+            "worker_instance_id": worker_instance_id, "limit": 1, "lease_seconds": lease_seconds,
+        })
+        tasks = response.get("tasks", [])
+        return tasks if isinstance(tasks, list) else []
+
     def get_math_task_input(self, runtime_task_id: str, tenant_id: str | None = None) -> dict[str, Any]:
         return self._request("GET", f"/api/v1/internal/math-understanding/tasks/{runtime_task_id}/input", tenant_id=tenant_id)
 
@@ -145,6 +154,7 @@ class EduGradeClient:
         lease_seconds: int,
         timeout_seconds: float,
         tenant_id: str | None = None,
+        progress: dict[str, Any] | None = None,
     ) -> None:
         self.current_task = {
             "task_id": runtime_task_id,
@@ -160,6 +170,7 @@ class EduGradeClient:
                 "worker_service": "ocr-worker",
                 "worker_instance_id": worker_instance_id,
                 "state": "running",
+                "progress": progress or {},
                 "lease_seconds": lease_seconds,
             },
             timeout=timeout_seconds,
@@ -208,10 +219,14 @@ class EduGradeClient:
             tenant_id=tenant_id,
         )
 
-    def fail_paper_import(self, import_id: str, runtime_task_id: str, lease_token: str, error_code: str, retryable: bool, tenant_id: str | None = None) -> None:
+    def complete_paper_import_formula(self, import_id: str, payload: dict[str, Any], tenant_id: str | None = None) -> None:
+        self._request("POST", f"/api/v1/internal/paper-imports/{import_id}/formula-result", payload,
+                      timeout=PAPER_IMPORT_COMPLETION_TIMEOUT_SECONDS, tenant_id=tenant_id)
+
+    def fail_paper_import(self, import_id: str, runtime_task_id: str, lease_token: str, error_code: str, retryable: bool, tenant_id: str | None = None, error_detail: dict[str, Any] | None = None, duration_ms: int = 0) -> None:
         self._request("POST", f"/api/v1/internal/paper-imports/{import_id}/failure", {
             "task_id": runtime_task_id, "lease_token": lease_token, "retryable": retryable,
-            "error_code": error_code, "error_detail": {}, "duration_ms": 0,
+            "error_code": error_code, "error_detail": error_detail or {}, "duration_ms": duration_ms,
         }, tenant_id=tenant_id)
 
     def download(self, url: str, tenant_id: str | None = None) -> bytes:

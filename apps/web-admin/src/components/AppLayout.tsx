@@ -7,6 +7,7 @@ import { hasRouteAccess, routeGroups, routePresentation, visibleRoutes } from ".
 import { experienceLabel, type ProductExperience } from "../router/experience";
 import { workspaceLabel } from "../workspaces/registry";
 import { MockBadge } from "./MockBadge";
+import { applyReadingSize, readReadingSize } from "@edugrade/design-tokens";
 
 const { Header, Sider, Content } = Layout;
 const DESKTOP_NAVIGATION_WIDTH = 192;
@@ -36,6 +37,8 @@ export function AppLayout({
   immersive?: boolean;
 }) {
   const screens = Grid.useBreakpoint();
+  const [readingSize, setReadingSize] = useState(readReadingSize);
+  useEffect(() => { applyReadingSize(readingSize); }, [readingSize]);
   const desktopNavigation = Boolean(screens.lg);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [navigationScrollbarVisible, setNavigationScrollbarVisible] = useState(false);
@@ -133,6 +136,7 @@ export function AppLayout({
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
   const accountMenu = {
+    inlineCollapsed: false,
     items: [
       {
         key: "account",
@@ -142,12 +146,18 @@ export function AppLayout({
           : user.username
       },
       { key: "sessions", label: "账户安全" },
+      { key: "reading-size", label: readingSize === "large" ? "✓ 大字阅读 · 切换标准字号" : "大字阅读" },
+      ...availableExperiences.filter((value) => value !== experience).map((value) => ({ key: `experience:${value}`, label: `切换到${workspaceLabel(user, value)}` })),
       { key: "logout", label: "退出登录" }
     ],
     onClick: ({ key }: { key: string }) => {
       setNavigationOpen(false);
       if (key === "logout") {
         onLogout();
+      } else if (key === "reading-size") {
+        setReadingSize((size) => size === "large" ? "standard" : "large");
+      } else if (key.startsWith("experience:")) {
+        onExperienceChange(key.slice(11) as ProductExperience);
       } else if (key === "sessions") {
         onNavigate("/account/sessions");
       }
@@ -232,6 +242,11 @@ export function AppLayout({
       theme={{
         algorithm: theme.defaultAlgorithm,
         token: {
+          fontSize: readingSize === "large" ? 16 : 14,
+          fontSizeSM: readingSize === "large" ? 14 : 13,
+          controlHeight: readingSize === "large" ? 44 : 40,
+          controlHeightSM: 36,
+          lineHeight: 1.6,
           colorPrimary: "#1677ff",
           colorSuccess: "#52c41a",
           colorWarning: "#faad14",
@@ -243,6 +258,7 @@ export function AppLayout({
       }}
     >
       <Layout className={immersive ? "app-frame immersive-frame" : "app-frame"}>
+        <a className="skip-to-workspace" href="#main-workspace" onClick={(event) => { event.preventDefault(); document.getElementById("main-workspace")?.focus(); }}>跳到主要内容</a>
         {!immersive && desktopNavigation ? (
           <Sider width={DESKTOP_NAVIGATION_WIDTH} collapsedWidth={DESKTOP_NAVIGATION_COLLAPSED_WIDTH} collapsed={navigationCollapsed} trigger={null} className="sidebar">
             {navigation}
@@ -284,10 +300,13 @@ export function AppLayout({
           ) : !desktopNavigation ? (
             <Header className="mobile-shellbar">
               <Button className="mobile-nav-button" type="text" icon={<MenuIcon size={20} />} aria-label="打开主导航" onClick={() => setNavigationOpen(true)} />
+              <div className="mobile-page-context"><strong>{currentPresentation.title}</strong><span>{user.school || workspaceLabel(user, experience)}</span></div>
               {currentRoute.mock ? <MockBadge compact={true} /> : null}
             </Header>
           ) : null}
           <Content
+            id="main-workspace"
+            tabIndex={-1}
             className={immersive ? "workspace immersive-workspace" : "workspace"}
             onMouseEnter={showWorkspaceScrollbar}
             onMouseLeave={scheduleWorkspaceScrollbarHide}

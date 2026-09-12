@@ -92,6 +92,28 @@ async function renderReleasedResult(handler: ApiHandler = (call) => resultRoute(
 }
 
 describe("Student Portal released-score boundaries", () => {
+  it("keeps the latest question and appeal target when an older response arrives late", async () => {
+    const second = { ...releasedResult.questions[0], question_id: "question-2", question_no: "2", feedback: "第二题评分依据" };
+    let resolveFirst!: (response: Response) => void;
+    const firstResponse = new Promise<Response>((resolve) => { resolveFirst = resolve; });
+    await renderReleasedResult((call) => {
+      const result = resultRoute(call, { ...releasedResult, questions: [releasedResult.questions[0], second] });
+      if (result) return result;
+      if (call.url.pathname.endsWith("/annotations")) return jsonResponse({ annotations: [] });
+      if (call.url.pathname.endsWith("/questions/question-1")) return firstResponse;
+      if (call.url.pathname.endsWith("/questions/question-2")) return jsonResponse({ question: second });
+      return undefined;
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^第 1 题，/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^第 2 题，/ }));
+    await screen.findByText("第二题评分依据");
+    resolveFirst(jsonResponse({ question: { ...releasedResult.questions[0], feedback: "过期的第一题内容" } }));
+    await waitFor(() => expect(screen.queryByText("正在加载本题…")).toBeNull());
+    expect(screen.getByText("第二题评分依据")).toBeTruthy();
+    expect(screen.queryByText("过期的第一题内容")).toBeNull();
+    expect(screen.getByRole("heading", { name: "第 2 题 · 作答与评分依据" })).toBeTruthy();
+  });
+
   it("does not show scores or grading details before a release exists", async () => {
     installApi((call) => {
       if (call.url.pathname === "/api/v1/student/exams") {
@@ -155,6 +177,8 @@ describe("Student Portal released-score boundaries", () => {
     }));
 
     expect(screen.getByRole("heading", { name: "学科均衡" })).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "我的各科得分率与学校平均雷达图" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "展开学科雷达图" }));
     expect(screen.getByRole("img", { name: "我的各科得分率与学校平均雷达图" })).toBeTruthy();
     expect(screen.getByRole("img", { name: "各科得分率分组柱状图" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /我的得分率/ })).toBeTruthy();
@@ -171,6 +195,7 @@ describe("Student Portal released-score boundaries", () => {
       ]
     }));
 
+    fireEvent.click(screen.getByRole("button", { name: "展开学科雷达图" }));
     const radar = screen.getByRole("img", { name: "我的各科得分率与学校平均雷达图" });
     const bars = screen.getByRole("img", { name: "各科得分率分组柱状图" });
     expect(radar.querySelector(".radar-series.student")).toBeTruthy();
@@ -204,10 +229,11 @@ describe("Student Portal released-score boundaries", () => {
 
     expect(screen.getByRole("heading", { name: "数学逐题分析" })).toBeTruthy();
     expect(screen.getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual([
-      "题号", "正确答案", "实际答案", "得分", "班级平均分", "学校平均分", "掌握程度"
+      "题号", "正确答案", "实际答案", "得分", "班级平均分", "学校平均分", "群体中位分对比"
     ]);
-    expect(screen.getByText("已掌握")).toBeTruthy();
-    expect(screen.getByText("待巩固")).toBeTruthy();
+    expect(screen.getByText("达到群体中位分")).toBeTruthy();
+    expect(screen.getByText("低于群体中位分")).toBeTruthy();
+    expect(screen.queryByText("已掌握")).toBeNull();
   });
 
   it("pages through annotated paper images and switches to the released high-score paper", async () => {

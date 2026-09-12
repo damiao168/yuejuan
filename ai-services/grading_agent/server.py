@@ -64,6 +64,9 @@ class GradingAgentHandler(BaseHTTPRequestHandler):
             request_id = payload.get("request_id", "") if isinstance(payload, dict) else ""
             if self.path == "/paper/parse":
                 parser = PaperParser(paper_model(self.server.application, payload))
+                if "application/x-ndjson" in self.headers.get("Accept", "").lower():
+                    self._paper_parse_stream(parser, payload)
+                    return
                 self._json(200, parser.parse(payload))
                 return
             idempotency_key = self.headers.get("Idempotency-Key", "").strip()
@@ -91,6 +94,57 @@ class GradingAgentHandler(BaseHTTPRequestHandler):
                 flush=True,
             )
             self._error(AgentError("internal_error", "grading-agent operation failed", status=500))
+
+    def _paper_parse_stream(self, parser, payload):
+        """Stream factual parser milestones; a heartbeat is not completion."""
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def emit(event_type, value):
+            line = json.dumps(
+                {"type": event_type, event_type: value},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8") + b"\n"
+            self.wfile.write(line)
+            self.wfile.flush()
+
+        try:
+            result = parser.parse(payload, progress=lambda value: emit("progress", value))
+            emit("result", result)
+        except AgentError as exc:
+            emit("error", {"status": exc.status, **exc.payload()})
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception as exc:  # noqa: BLE001 - stream already has HTTP headers.
+            print(
+                json.dumps(
+                    {
+                        "event": "grading_agent_paper_stream_error",
+                        "error_type": type(exc).__name__,
+                    },
+                    separators=(",", ":"),
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            try:
+                emit(
+                    "error",
+                    AgentError(
+                        "internal_error",
+                        "grading-agent operation failed",
+                        status=500,
+                    ).payload(),
+                )
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
     def _authorize(self):
         expected = self.server.application.settings.service_token

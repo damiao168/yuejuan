@@ -148,9 +148,9 @@ const productionRouteDefinitions: AppRoute[] = [
     workspaces: ["tenant_admin", "school_admin"], experiences: { admin: { title: "年级与班级", group: "成员管理" } }
   },
   {
-    key: "membersTeachers", path: "/members/teachers", title: "教师与阅卷人员", group: "学校管理", icon: <UserCog size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
+    key: "membersTeachers", path: "/members/teachers", title: "阅卷教师", group: "学校管理", icon: <UserCog size={18} />, permissions: ["org:manage"], mock: false, productionReady: true,
     excludedRoles: ["platform_admin"],
-    workspaces: ["tenant_admin", "school_admin"], experiences: { admin: { title: "教师与阅卷人员", group: "成员管理" } }
+    workspaces: ["tenant_admin", "school_admin"], experiences: { admin: { title: "阅卷教师", group: "成员管理" } }
   },
   {
     key: "organization", path: "/organization/setup", title: "学校初始化", group: "学校管理", icon: <Settings size={18} />, permissions: ["org:manage"], navigation: false, mock: false, productionReady: true,

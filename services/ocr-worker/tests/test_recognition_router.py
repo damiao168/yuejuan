@@ -1,6 +1,7 @@
 from ocr_worker.engine import OCRBlock
 from ocr_worker.recognition_router import (
     FormulaRecognitionResult,
+    PaddleFormulaNetEngine,
     RecognitionRouter,
     RegionKind,
     UniMERNetEngine,
@@ -63,3 +64,18 @@ def test_paddle_formula_result_and_unimernet_adapter():
     assert (latex, confidence) == ("x^2", 0.8)
     challenger = UniMERNetEngine(model_version="checkpoint-1", predictor=lambda _: (" y = 3 ", 0.7))
     assert challenger.recognize_formula(b"image").canonical_latex == "y=3"
+
+
+def test_formula_engine_deduplicates_batch_and_reuses_lru_cache():
+    engine = PaddleFormulaNetEngine(model_version="PP-FormulaNet_plus-M", cache_size=4)
+    calls = []
+
+    def predict(images, *, batch_size):
+        calls.append((len(images), batch_size))
+        return [FormulaRecognitionResult("x^2", "x^{2}", 0, "paddle-formula", engine.model_version, "recognized") for _ in images]
+
+    engine._predict_uncached = predict
+    first = engine.recognize_formulas([b"same", b"same", b"different"], batch_size=4)
+    second = engine.recognize_formulas([b"same"], batch_size=4)
+    assert len(first) == 3 and len(second) == 1
+    assert calls == [(2, 4)]

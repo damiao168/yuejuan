@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import { Button, Input, Popconfirm, Space, Tooltip } from "antd";
+import { Button, Checkbox, Input, Popconfirm, Space, Tooltip } from "antd";
 import { Award, Check, CheckCircle2, Flag } from "lucide-react";
 import type { RubricPoint } from "../../../../api/papers";
 import type { AiGrade } from "../../../../api/review";
@@ -24,6 +24,8 @@ export interface ScoreEditorProps {
   onAdoptAiScore: () => void;
   onMarkDispute: () => Promise<void>;
   onSubmit: (nominateAsGold?: boolean) => Promise<void>;
+  quickSubmit?: boolean;
+  onQuickSubmitChange?: (value: boolean) => void;
 }
 
 export function ScoreEditor({
@@ -40,7 +42,9 @@ export function ScoreEditor({
   actioning,
   onAdoptAiScore,
   onMarkDispute,
-  onSubmit
+  onSubmit,
+  quickSubmit = false,
+  onQuickSubmitChange
 }: ScoreEditorProps) {
   return (
     <section className="score-panel">
@@ -61,6 +65,13 @@ export function ScoreEditor({
         value={{ score: draft.score, rubricSelections: draft.rubricSelections }}
         onChange={(value) => setDraft((current) => ({ ...current, ...value }))}
       />
+
+      {rubricPoints.length > 0 && draft.score !== null && Math.abs(draft.score - rubricPoints.reduce((sum, point) => sum + (draft.rubricSelections[point.id] ?? 0), 0)) > 0.001 ? (
+        <div className="grading-field">
+          <label htmlFor="score-adjustment-reason">人工调整原因（必填）</label>
+          <Input.TextArea id="score-adjustment-reason" disabled={!canEditDraft} value={draft.reason} rows={2} placeholder="说明最终分与评分点合计不同的依据" onChange={(event) => setDraft((current) => ({ ...current, reason: event.target.value }))} />
+        </div>
+      ) : null}
 
       <details className="grading-more-fields">
         <summary>评语与备注（可选）</summary>
@@ -92,7 +103,7 @@ export function ScoreEditor({
             <Input.TextArea id="grading-student-feedback-input" disabled={!canEditDraft} rows={2} placeholder="这段文字会展示给学生（可选）" value={draft.studentFeedback} onChange={(event) => setDraft((current) => ({ ...current, studentFeedback: event.target.value }))} />
           </div>
           <div className="grading-field">
-            <label className="grading-field-label muted" htmlFor="grading-private-note-input">私密备注（仅教师可见）</label>
+            <label className="grading-field-label muted" htmlFor="grading-private-note-input">内部备注（阅卷教师及授权管理员可见）</label>
             <Input.TextArea id="grading-private-note-input" disabled={!canEditDraft} rows={2} placeholder="仅教师与管理端可见（可选）" value={draft.privateNote} onChange={(event) => setDraft((current) => ({ ...current, privateNote: event.target.value }))} />
           </div>
           {canReturn ? <Input disabled={!canEditDraft} placeholder="争议原因（可选，退回重评时会一并记录）" prefix={<Flag size={14} />} value={draft.disputeReason} onChange={(event) => setDraft((current) => ({ ...current, disputeReason: event.target.value }))} /> : null}
@@ -100,7 +111,8 @@ export function ScoreEditor({
       </details>
 
       <div className="grading-submit-note">提交后进入质检，不会直接发布成绩</div>
-      <div className="muted">快捷键：有评分点时 1–9 勾选评分点并重算总分；否则 1–9 直接打分 · A 采纳建议 · Enter 提交 · F 异常 · R 退回 · Z 撤销 · +/- 缩放</div>
+      <Checkbox checked={quickSubmit} onChange={(event) => onQuickSubmitChange?.(event.target.checked)}>连续阅卷：允许 Enter 提交并下一份</Checkbox>
+      <details className="grading-shortcut-help"><summary>键盘帮助 · {quickSubmit ? "Enter" : "Ctrl / ⌘ + Enter"} 提交</summary><p>{rubricPoints.length ? "1–9 仅切换对应评分点并合计；没有对应评分点的数字键不生效。" : "1–9 直接打分，0分或小数请在最终分输入框填写。"} A 采纳建议 · F 标记异常 · R 退回 · Z 撤销本次评分编辑 · +/- 缩放。输入文字或打开弹窗时快捷键暂停。</p></details>
 
       <Space wrap className="grading-submit-bar">
         {canReturn ? (
@@ -120,7 +132,7 @@ export function ScoreEditor({
             提交并提名标准卷
           </Button>
         ) : null}
-        <Tooltip title="Ctrl+Enter">
+        <Tooltip title={quickSubmit ? "Enter（连续阅卷）" : "Ctrl / ⌘ + Enter"}>
           <Button type="primary" icon={<CheckCircle2 size={16} />} disabled={!canSubmit || context.task.status === "submitted"} loading={actioning === "submit"} onClick={() => void onSubmit()}>
             提交并下一份
           </Button>

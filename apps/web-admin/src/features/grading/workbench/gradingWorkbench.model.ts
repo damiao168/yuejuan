@@ -11,6 +11,7 @@ import type {
 } from "./gradingWorkbench.types";
 
 export const taskFilterOptions: { label: string; value: TaskFilter }[] = [
+  { label: "全部状态", value: "all" },
   { label: "可处理", value: "active" },
   { label: "待分配", value: "pending" },
   { label: "已分配", value: "assigned" },
@@ -218,7 +219,7 @@ export function createInitialDraft(ctx: WorkbenchContext | null): ScoreDraft {
     comments: "",
     privateNote: "",
     studentFeedback: "",
-    reason: "教师复核完成",
+    reason: "",
     disputeReason: "",
     rubricSelections: selections,
     answerText: ocrText

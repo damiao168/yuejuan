@@ -1012,7 +1012,7 @@ export function CaptureBatchPage({
   if (correctionRunId) return <RegistrationCorrectionWorkspace runId={correctionRunId} canManage={batchCanManage} onClose={() => setCorrectionRunId(undefined)} onChanged={async () => { await loadDetail(selectedId, true); }} />;
   return (
     <div className="capture-batch-page">
-      <section className="page-heading">
+      <section className="member-management-heading">
         <div>
           <h1>答卷导入</h1>
           <p>上传扫描文件并优先处理学生匹配、图像质量和处理失败问题。</p>

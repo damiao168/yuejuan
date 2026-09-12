@@ -1,4 +1,15 @@
 :root {
+  --eg-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', Arial, sans-serif;
+  --eg-font-caption: 0.8125rem;
+  --eg-font-body: 0.875rem;
+  --eg-font-reading: 1rem;
+  --eg-font-section: 1.125rem;
+  --eg-font-title: 1.5rem;
+  --eg-line-body: 1.6;
+  --eg-line-reading: 1.625;
+  --eg-control-height: 2.5rem;
+  --eg-touch-height: 2.75rem;
+  --eg-row-height: 3rem;
   --eg-color-action: #1677ff;
   --eg-color-on-action: #ffffff;
   --eg-color-action-soft: #eaf3ff;
@@ -27,4 +38,21 @@
   --eg-space-4: 16px;
   --eg-space-5: 20px;
   --eg-space-6: 24px;
+}
+
+:root[data-reading-size="large"] {
+  --eg-font-caption: 0.875rem;
+  --eg-font-body: 1rem;
+  --eg-font-reading: 1.125rem;
+  --eg-control-height: 2.75rem;
+  --eg-row-height: 3.5rem;
+}
+
+:where(button, input, select, textarea, summary, a, [tabindex]):focus-visible {
+  outline: 2px solid #175cd3;
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { scroll-behavior: auto; }
 }

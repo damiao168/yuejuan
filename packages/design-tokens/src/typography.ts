@@ -1,6 +1,6 @@
 export const typographyTokens = {
-  body: "14px",
-  helper: "12px",
-  sectionTitle: "19px",
-  metric: "26px"
+  body: "var(--eg-font-body)",
+  helper: "var(--eg-font-caption)",
+  sectionTitle: "var(--eg-font-section)",
+  metric: "1.625rem"
 } as const;

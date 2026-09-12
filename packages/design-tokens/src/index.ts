@@ -6,6 +6,7 @@ export { radiusTokens } from "./radius";
 export { shadowTokens } from "./shadow";
 export { spacingTokens } from "./spacing";
 export { typographyTokens } from "./typography";
+export { applyReadingSize, readReadingSize, type ReadingSize } from "./reading";
 export { zIndexTokens } from "./zIndex";
 
 export { colorTokens as semanticColors } from "./color";

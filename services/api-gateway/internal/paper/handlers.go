@@ -185,6 +185,29 @@ func (h *Handler) CancelPaperImport(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"import": out})
 }
 
+func (h *Handler) RetryPaperImportParse(w http.ResponseWriter, r *http.Request) {
+	retryStore, ok := h.store.(interface {
+		RetryPaperImportParseGeneration(context.Context, string, string, int64) (PaperImportJob, error)
+	})
+	if !ok {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "paper_parse_retry_unavailable", "试卷内容解析重试服务未配置")
+		return
+	}
+	expected, err := strconv.ParseInt(r.URL.Query().Get("expected_generation"), 10, 64)
+	if err != nil || expected <= 0 {
+		writeStoreError(w, r, ErrInvalidInput)
+		return
+	}
+	user := mustUser(r)
+	out, err := retryStore.RetryPaperImportParseGeneration(r.Context(), user.TenantID, r.PathValue("id"), expected)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.import_parse_retried", "paper_import_job", out.ID, "retry AI parsing with persisted OCR and formula evidence")
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"import": out})
+}
+
 func (h *Handler) CompletePaperImportDecode(w http.ResponseWriter, r *http.Request) {
 	runtime, ok := h.store.(PaperImportRuntime)
 	if !ok {
@@ -223,8 +246,28 @@ func (h *Handler) CompletePaperImportOCR(w http.ResponseWriter, r *http.Request)
 		writeStoreError(w, r, err)
 		return
 	}
-	h.auditAction(r, "paper.import_ocr_completed", "paper_import_job", job.ID, "complete scanned document OCR and queue durable paper parsing")
-	httpx.JSON(w, http.StatusAccepted, map[string]any{"import": job, "parse_queued": true})
+	formulaQueued := job.Subject == "mathematics"
+	h.auditAction(r, "paper.import_ocr_completed", "paper_import_job", job.ID, "complete scanned document OCR and apply the governed subject recognition route")
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"import": job, "formula_queued": formulaQueued, "parse_queued": !formulaQueued})
+}
+
+func (h *Handler) CompletePaperImportFormula(w http.ResponseWriter, r *http.Request) {
+	runtime, ok := h.store.(PaperImportRuntime)
+	if !ok {
+		httpx.Error(w, r, http.StatusServiceUnavailable, "paper_formula_unavailable", "paper formula runtime is unavailable")
+		return
+	}
+	user := mustUser(r)
+	var input PaperImportFormulaResult
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := runtime.CompletePaperImportFormula(r.Context(), user.TenantID, r.PathValue("id"), input); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	h.auditAction(r, "paper.import_formula_completed", "paper_import_job", r.PathValue("id"), "complete governed formula ROI recognition and release paper parsing barrier")
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"accepted": true, "parse_queued": true})
 }
 
 func (h *Handler) FailPaperImportRuntime(w http.ResponseWriter, r *http.Request) {

@@ -15,55 +15,72 @@ import (
 )
 
 var (
-	ErrManagedConfigUnavailable = errors.New("managed model API configuration is unavailable")
-	ErrInvalidManagedConfig     = errors.New("invalid managed model API configuration")
+	ErrManagedConfigUnavailable  = errors.New("managed model API configuration is unavailable")
+	ErrInvalidManagedConfig      = errors.New("invalid managed model API configuration")
+	ErrManagedProviderUnknown    = errors.New("managed model API provider is unknown")
+	ErrManagedDefaultMutation    = errors.New("current managed model API must remain active")
+	ErrManagedCapabilityRequired = errors.New("managed model API capability verification is required")
 )
 
 type ManagedAPIConfig struct {
-	ID                   string     `json:"id"`
-	TenantID             string     `json:"tenant_id"`
-	ProviderKey          string     `json:"provider_key"`
-	DisplayName          string     `json:"display_name"`
-	AdapterType          string     `json:"adapter_type"`
-	BaseURL              string     `json:"base_url"`
-	ModelName            string     `json:"model_name"`
-	ModelVersion         string     `json:"model_version"`
-	Region               string     `json:"region"`
-	CredentialConfigured bool       `json:"credential_configured"`
-	CredentialHint       string     `json:"credential_hint,omitempty"`
-	Status               string     `json:"status"`
-	IsDefault            bool       `json:"is_default"`
-	LastTestStatus       string     `json:"last_test_status"`
-	LastTestMessage      string     `json:"last_test_message,omitempty"`
-	LastTestedAt         *time.Time `json:"last_tested_at,omitempty"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	ID                       string                    `json:"id"`
+	TenantID                 string                    `json:"tenant_id"`
+	ProviderKey              string                    `json:"provider_key"`
+	DisplayName              string                    `json:"display_name"`
+	AdapterType              string                    `json:"adapter_type"`
+	BaseURL                  string                    `json:"base_url"`
+	ModelName                string                    `json:"model_name"`
+	ModelVersion             string                    `json:"model_version"`
+	Region                   string                    `json:"region"`
+	CredentialConfigured     bool                      `json:"credential_configured"`
+	CredentialHint           string                    `json:"credential_hint,omitempty"`
+	Status                   string                    `json:"status"`
+	IsDefault                bool                      `json:"is_default"`
+	LastTestStatus           string                    `json:"last_test_status"`
+	LastTestMessage          string                    `json:"last_test_message,omitempty"`
+	LastTestLatencyMS        int64                     `json:"last_test_latency_ms,omitempty"`
+	LastTestedAt             *time.Time                `json:"last_tested_at,omitempty"`
+	LastProbeMode            string                    `json:"last_probe_mode,omitempty"`
+	LastCapabilityStatus     string                    `json:"last_capability_status"`
+	LastCapabilityMessage    string                    `json:"last_capability_message,omitempty"`
+	LastCapabilityTestedAt   *time.Time                `json:"last_capability_tested_at,omitempty"`
+	LastCapabilityVersion    string                    `json:"last_capability_probe_version,omitempty"`
+	LastCapabilityUsage      ManagedAPIProbeUsage      `json:"last_capability_usage"`
+	LastCapabilityDiagnostic ManagedAPIProbeDiagnostic `json:"last_capability_diagnostic"`
+	ConfigSource             string                    `json:"config_source"`
+	ProviderRegistryVersion  string                    `json:"provider_registry_version,omitempty"`
+	CreatedAt                time.Time                 `json:"created_at"`
+	UpdatedAt                time.Time                 `json:"updated_at"`
 }
 
 type ManagedAPIConfigInput struct {
-	TenantID     string `json:"tenant_id"`
-	ProviderKey  string `json:"provider_key"`
-	DisplayName  string `json:"display_name"`
-	AdapterType  string `json:"adapter_type"`
-	BaseURL      string `json:"base_url"`
-	ModelName    string `json:"model_name"`
-	ModelVersion string `json:"model_version"`
-	Region       string `json:"region"`
-	APIKey       string `json:"api_key"`
-	Status       string `json:"status"`
-	IsDefault    bool   `json:"is_default"`
+	TenantID                string                 `json:"tenant_id"`
+	ProviderKey             string                 `json:"provider_key"`
+	DisplayName             string                 `json:"display_name"`
+	AdapterType             string                 `json:"adapter_type"`
+	BaseURL                 string                 `json:"base_url"`
+	ModelName               string                 `json:"model_name"`
+	ModelVersion            string                 `json:"model_version"`
+	Region                  string                 `json:"region"`
+	APIKey                  string                 `json:"api_key"`
+	Status                  string                 `json:"status"`
+	IsDefault               bool                   `json:"is_default"`
+	ConfigSource            string                 `json:"-"`
+	ProviderRegistryVersion string                 `json:"-"`
+	InitialProbe            *ManagedAPIProbeResult `json:"-"`
 }
 
 type ManagedAPIConfigUpdateInput struct {
-	DisplayName  string `json:"display_name"`
-	AdapterType  string `json:"adapter_type"`
-	BaseURL      string `json:"base_url"`
-	ModelName    string `json:"model_name"`
-	ModelVersion string `json:"model_version"`
-	Region       string `json:"region"`
-	APIKey       string `json:"api_key,omitempty"`
-	Status       string `json:"status"`
-	IsDefault    bool   `json:"is_default"`
+	DisplayName  string                 `json:"display_name"`
+	AdapterType  string                 `json:"adapter_type"`
+	BaseURL      string                 `json:"base_url"`
+	ModelName    string                 `json:"model_name"`
+	ModelVersion string                 `json:"model_version"`
+	Region       string                 `json:"region"`
+	APIKey       string                 `json:"api_key,omitempty"`
+	Status       string                 `json:"status"`
+	IsDefault    bool                   `json:"is_default"`
+	InitialProbe *ManagedAPIProbeResult `json:"-"`
 }
 
 type ManagedAPIConnection struct {
@@ -71,23 +88,75 @@ type ManagedAPIConnection struct {
 	APIKey string
 }
 
+type ManagedAPICheckResult struct {
+	OK      bool   `json:"ok"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
 type ManagedAPIProbeResult struct {
-	OK         bool   `json:"ok"`
-	StatusCode int    `json:"status_code,omitempty"`
-	LatencyMS  int64  `json:"latency_ms"`
-	Message    string `json:"message"`
+	OK               bool                      `json:"ok"`
+	ProbeMode        string                    `json:"probe_mode"`
+	GeneratedRequest bool                      `json:"generated_request"`
+	Reused           bool                      `json:"reused,omitempty"`
+	Coalesced        bool                      `json:"coalesced,omitempty"`
+	Provider         string                    `json:"provider,omitempty"`
+	Model            string                    `json:"model,omitempty"`
+	StatusCode       int                       `json:"status_code,omitempty"`
+	LatencyMS        int64                     `json:"latency_ms"`
+	Message          string                    `json:"message"`
+	ErrorCode        string                    `json:"error_code,omitempty"`
+	CredentialCheck  ManagedAPICheckResult     `json:"credential_check"`
+	ModelCheck       ManagedAPICheckResult     `json:"model_check"`
+	CapabilityCheck  ManagedAPICheckResult     `json:"capability_check"`
+	Usage            ManagedAPIProbeUsage      `json:"usage"`
+	Diagnostic       ManagedAPIProbeDiagnostic `json:"diagnostic"`
+}
+
+type ManagedAPIProbeUsage struct {
+	InputTokens       int64 `json:"input_tokens"`
+	CachedInputTokens int64 `json:"cached_input_tokens"`
+	OutputTokens      int64 `json:"output_tokens"`
+	ReasoningTokens   int64 `json:"reasoning_tokens"`
+	TotalTokens       int64 `json:"total_tokens"`
+}
+
+// ManagedAPIProbeDiagnostic contains bounded, non-secret evidence explaining a
+// capability result. ContentPreview is returned only for the current request;
+// stores must clear it before persistence.
+type ManagedAPIProbeDiagnostic struct {
+	FinishReason   string `json:"finish_reason,omitempty"`
+	ResponseFormat string `json:"response_format,omitempty"`
+	ContentLength  int    `json:"content_length,omitempty"`
+	ContentSHA256  string `json:"content_sha256,omitempty"`
+	ContentPreview string `json:"content_preview,omitempty"`
+}
+
+type ManagedAPIModelListResult struct {
+	Provider  string   `json:"provider"`
+	Models    []string `json:"models"`
+	LatencyMS int64    `json:"latency_ms"`
 }
 
 type ManagedAPIConfigStore interface {
 	ListManagedAPIConfigs(ctx context.Context, tenantID string) ([]ManagedAPIConfig, error)
 	CreateManagedAPIConfig(ctx context.Context, tenantID, actorID string, input ManagedAPIConfigInput) (ManagedAPIConfig, error)
 	UpdateManagedAPIConfig(ctx context.Context, tenantID, id string, input ManagedAPIConfigUpdateInput) (ManagedAPIConfig, error)
+	DeleteManagedAPIConfig(ctx context.Context, tenantID, id string) error
 	GetManagedAPIConnection(ctx context.Context, tenantID, id string) (ManagedAPIConnection, error)
 	RecordManagedAPIProbe(ctx context.Context, tenantID, id string, result ManagedAPIProbeResult) (ManagedAPIConfig, error)
 }
 
 type ManagedAPIProber interface {
 	Probe(ctx context.Context, connection ManagedAPIConnection) ManagedAPIProbeResult
+}
+
+type ManagedAPIModelLister interface {
+	ListModels(ctx context.Context, connection ManagedAPIConnection) (ManagedAPIModelListResult, ManagedAPIProbeResult)
+}
+
+type ManagedAPIQuickProber interface {
+	ProbeQuick(ctx context.Context, connection ManagedAPIConnection) ManagedAPIProbeResult
 }
 
 // No default means the existing local parser remains in use. An explicitly
@@ -105,7 +174,8 @@ func ResolveDefaultManagedAPI(ctx context.Context, store ManagedAPIConfigStore, 
 		if err != nil {
 			return nil, err
 		}
-		if connection.Config.TenantID != tenantID || !connection.Config.IsDefault || connection.Config.Status != "active" {
+		if connection.Config.TenantID != tenantID || !connection.Config.IsDefault || connection.Config.Status != "active" ||
+			connection.Config.LastCapabilityStatus != "success" || connection.Config.LastCapabilityVersion != ManagedCapabilityProbeVersion {
 			return nil, ErrManagedConfigUnavailable
 		}
 		return &connection, nil
@@ -171,8 +241,13 @@ func normalizeManagedAPIInput(input ManagedAPIConfigInput, requireKey bool) (Man
 	input.Region = strings.TrimSpace(input.Region)
 	input.APIKey = strings.TrimSpace(input.APIKey)
 	input.Status = strings.TrimSpace(input.Status)
+	input.ConfigSource = strings.TrimSpace(input.ConfigSource)
+	input.ProviderRegistryVersion = strings.TrimSpace(input.ProviderRegistryVersion)
 	if input.Status == "" {
 		input.Status = "active"
+	}
+	if input.ConfigSource == "" {
+		input.ConfigSource = "manual"
 	}
 	if input.Region == "" {
 		input.Region = "global"
@@ -183,6 +258,12 @@ func normalizeManagedAPIInput(input ManagedAPIConfigInput, requireKey bool) (Man
 		!boundedManagedValue(input.DisplayName) || !boundedManagedValue(input.ModelName) ||
 		!boundedManagedValue(input.ModelVersion) || !boundedManagedValue(input.Region) ||
 		(requireKey && len(input.APIKey) < 16) || (!requireKey && input.APIKey != "" && len(input.APIKey) < 16) {
+		return ManagedAPIConfigInput{}, ErrInvalidManagedConfig
+	}
+	if input.IsDefault && input.Status != "active" {
+		return ManagedAPIConfigInput{}, ErrManagedDefaultMutation
+	}
+	if input.ConfigSource != "manual" && input.ConfigSource != "auto" && input.ConfigSource != "imported" {
 		return ManagedAPIConfigInput{}, ErrInvalidManagedConfig
 	}
 	parsed, err := url.Parse(input.BaseURL)
@@ -213,6 +294,7 @@ func normalizeManagedAPIUpdate(input ManagedAPIConfigUpdateInput) (ManagedAPICon
 		BaseURL: normalized.BaseURL, ModelName: normalized.ModelName,
 		ModelVersion: normalized.ModelVersion, Region: normalized.Region,
 		APIKey: normalized.APIKey, Status: normalized.Status, IsDefault: normalized.IsDefault,
+		InitialProbe: input.InitialProbe,
 	}, nil
 }
 

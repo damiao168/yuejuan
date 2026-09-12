@@ -4,9 +4,10 @@ import unittest
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
+from helpers import FakeModel, settings, valid_request
+
 from grading_agent.app import GradingAgentApplication
 from grading_agent.server import GradingAgentHTTPServer
-from helpers import FakeModel, settings, valid_request
 
 
 class HTTPTests(unittest.TestCase):
@@ -76,6 +77,41 @@ class HTTPTests(unittest.TestCase):
         self.assertIn("subject.chinese.essay", component_keys)
         self.assertIn("subject.math.calculation", component_keys)
         self.assertNotIn("calculation", component_keys)
+
+    def test_paper_parse_can_stream_factual_progress_and_result(self):
+        paper = {
+            "request_id": "paper-stream-1",
+            "subject": "数学",
+            "documents": [
+                {
+                    "source_id": "source-1",
+                    "file_asset_id": "file-1",
+                    "document_index": 0,
+                    "role_hint": "auto",
+                    "content": "北师保研分享会\n会议号：120732118\n发起人：任辰红\n最近入会\n参会时长\n回放",
+                    "blocks": [],
+                }
+            ],
+        }
+        request = urlrequest.Request(
+            f"{self.base_url}/paper/parse",
+            data=json.dumps(paper, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.settings.service_token}",
+                "Accept": "application/x-ndjson",
+            },
+            method="POST",
+        )
+
+        with urlrequest.urlopen(request, timeout=2) as response:
+            self.assertIn("application/x-ndjson", response.headers["Content-Type"])
+            events = [json.loads(line) for line in response if line.strip()]
+
+        self.assertEqual(events[0]["type"], "progress")
+        self.assertEqual(events[-1]["type"], "result")
+        self.assertEqual(events[-2]["progress"]["route"], "unrelated_guard")
+        self.assertEqual(events[-1]["result"]["question_candidates"], [])
 
 
 if __name__ == "__main__":

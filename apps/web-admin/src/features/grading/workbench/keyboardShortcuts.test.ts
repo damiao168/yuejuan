@@ -17,7 +17,10 @@ const allowed = (overrides: Partial<GradingShortcutContext> = {}): GradingShortc
 
 describe("grading workbench keyboard shortcuts", () => {
   it("maps the supported scoring and safety shortcuts to explicit intents", () => {
-    expect(gradingShortcutIntent(allowed({ key: "Enter" }))).toEqual({ type: "submit" });
+    expect(gradingShortcutIntent(allowed({ key: "Enter" }))).toBeNull();
+    expect(gradingShortcutIntent(allowed({ key: "Enter", ctrlKey: true }))).toEqual({ type: "submit" });
+    expect(gradingShortcutIntent(allowed({ key: "Enter", metaKey: true }))).toEqual({ type: "submit" });
+    expect(gradingShortcutIntent(allowed({ key: "Enter", quickSubmit: true }))).toEqual({ type: "submit" });
     expect(gradingShortcutIntent(allowed({ key: "1" }))).toEqual({ type: "set_score", score: 1 });
     expect(gradingShortcutIntent(allowed({ key: "2", rubricPointCount: 3 }))).toEqual({ type: "toggle_criterion", index: 1 });
     expect(gradingShortcutIntent(allowed({ key: "A" }))).toEqual({ type: "adopt_ai" });
@@ -34,6 +37,19 @@ describe("grading workbench keyboard shortcuts", () => {
     for (const key of ["Enter", "1", "A", "F", "R", "Z", "+", "-"]) {
       expect(gradingShortcutIntent(allowed({ key, isInputTarget: true }))).toBeNull();
     }
+  });
+
+  it("does not turn a missing rubric point into an unrelated total score", () => {
+    expect(gradingShortcutIntent(allowed({ key: "4", rubricPointCount: 3, maxScore: 10 }))).toBeNull();
+    expect(gradingShortcutIntent(allowed({ key: "9", rubricPointCount: 3, maxScore: 10 }))).toBeNull();
+  });
+
+  it("ignores input composition, repeated keydown, dialogs and platform shortcuts", () => {
+    for (const guard of [{ isComposing: true }, { repeat: true }, { blocked: true }, { altKey: true }]) {
+      expect(gradingShortcutIntent(allowed({ key: "Enter", ctrlKey: true, ...guard }))).toBeNull();
+      expect(gradingShortcutIntent(allowed({ key: "1", ...guard }))).toBeNull();
+    }
+    expect(gradingShortcutIntent(allowed({ key: "a", metaKey: true }))).toBeNull();
   });
 
   it("does not bypass edit, submit, return, or task permissions", () => {

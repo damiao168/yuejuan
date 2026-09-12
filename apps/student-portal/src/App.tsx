@@ -1,4 +1,4 @@
-import { FormEvent, PointerEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createQuestionAppeal,
   currentUser,
@@ -23,6 +23,7 @@ import {
 import { ScoreHero, displaySubject } from "./features/results/ResultOverview";
 import { AnswerReview } from "./features/questions/AnswerReview";
 import { SubjectPerformance } from "./features/results/SubjectPerformance";
+import { applyReadingSize, readReadingSize } from "@edugrade/design-tokens";
 
 type Page = { kind: "home" } | { kind: "exam"; examID: string };
 
@@ -43,6 +44,8 @@ function goHome() { window.location.hash = "/"; }
 function goExam(examID: string) { window.location.hash = `/exams/${encodeURIComponent(examID)}`; }
 
 export default function App() {
+  const [readingSize, setReadingSize] = useState(readReadingSize);
+  useEffect(() => { applyReadingSize(readingSize); }, [readingSize]);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
   const [page, setPage] = useState<Page>(readPage);
@@ -84,12 +87,13 @@ export default function App() {
           <span><strong>EduGrade</strong><small>学生端</small></span>
         </button>
         <div className="account-area">
+          <button type="button" className="text-button" aria-pressed={readingSize === "large"} onClick={() => setReadingSize((size) => size === "large" ? "standard" : "large")}>{readingSize === "large" ? "标准字号" : "大字阅读"}</button>
           <span>{user.display_name || user.username}</span>
           <button type="button" className="text-button" onClick={() => void logout().finally(() => setUser(null))}>退出登录</button>
         </div>
       </header>
       <main className="portal-content">
-        {page.kind === "home" ? <ExamList userName={user.display_name || user.username} onOpen={goExam} /> : <ResultDetail examID={page.examID} onBack={goHome} />}
+        {page.kind === "home" ? <ExamList userName={user.display_name || user.username} onOpen={goExam} /> : <ResultDetail key={page.examID} examID={page.examID} onBack={goHome} />}
       </main>
     </div>
   );
@@ -155,7 +159,7 @@ function ExamList({ userName, onOpen }: { userName: string; onOpen: (examID: str
     setError("");
     try {
       const response = await listPublishedExams();
-      setItems(response.exams);
+      setItems([...response.exams].sort((a, b) => (Date.parse(b.published_at ?? "") || 0) - (Date.parse(a.published_at ?? "") || 0)));
     } catch (reason) {
       setError(friendlyError(reason));
     } finally {
@@ -197,6 +201,7 @@ function greeting(name: string) {
 }
 
 function ResultDetail({ examID, onBack }: { examID: string; onBack: () => void }) {
+  const [appealRevision, setAppealRevision] = useState(0);
   const [result, setResult] = useState<StudentResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -223,20 +228,22 @@ function ResultDetail({ examID, onBack }: { examID: string; onBack: () => void }
     <section className="result-page" aria-labelledby="result-title">
       <button type="button" className="back-button" onClick={onBack}>← 返回我的考试</button>
       <div className="result-heading">
-        <div><span className="sr-only">已发布成绩 · 第 {result.release_version} 版</span><p className="eyebrow">考试位次</p><h1 id="result-title">{examName}</h1></div>
+        <div><span className="release-state">已发布成绩 · 第 {result.release_version} 版</span><p className="eyebrow">成绩与逐题复盘</p><h1 id="result-title">{examName}</h1></div>
       </div>
       <ScoreHero result={result} />
       {result.subject_balance?.length ? <SubjectPerformance items={result.subject_balance} /> : null}
       <section className="question-section" aria-labelledby="questions-title" id="question-review">
-        {questionsVisible && result.questions && result.questions.length > 0 ? <QuestionTables examID={examID} result={result} questions={result.questions} fallbackSubject={result.exam?.subject} /> : null}
+        {questionsVisible && result.questions && result.questions.length > 0 ? <QuestionTables examID={examID} result={result} questions={result.questions} fallbackSubject={result.exam?.subject} onAppealSubmitted={() => setAppealRevision((value) => value + 1)} /> : null}
         {questionsVisible && result.questions?.length === 0 ? <p className="muted section-empty">学校暂未提供逐题结果。</p> : null}
       </section>
       <PaperViewer examID={examID} result={result} />
+      <AppealWindow result={result} />
+      <AppealStatus examID={examID} revision={appealRevision} />
     </section>
   );
 }
 
-function QuestionTables({ examID, result, questions, fallbackSubject }: { examID: string; result: StudentResult; questions: StudentQuestion[]; fallbackSubject?: string }) {
+function QuestionTables({ examID, result, questions, fallbackSubject, onAppealSubmitted }: { examID: string; result: StudentResult; questions: StudentQuestion[]; fallbackSubject?: string; onAppealSubmitted: () => void }) {
   const groups = useMemo(() => {
     const values = new Map<string, StudentQuestion[]>();
     for (const question of questions) {
@@ -251,41 +258,57 @@ function QuestionTables({ examID, result, questions, fallbackSubject }: { examID
   const [annotations, setAnnotations] = useState<StudentQuestionAnnotation[]>([]);
   const [detailError, setDetailError] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
+  const [annotationError, setAnnotationError] = useState("");
+  const [lostOnly, setLostOnly] = useState(false);
+  const detailRegionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (selected) detailRegionRef.current?.scrollIntoView?.({ block: "nearest" }); }, [selected]);
+  const requestRef = useRef(0);
+  useEffect(() => () => { requestRef.current += 1; }, [examID]);
   const activeGroups = groups.filter(([subject]) => subject === activeSubject || groups.length === 1);
-  const openQuestion = async (question: StudentQuestion) => {
-    if (selected?.question_id === question.question_id) { setSelected(null); return; }
-    setSelected(question); setDetail(null); setAnnotations([]); setDetailError(""); setDetailLoading(true);
+  const openQuestion = async (question: StudentQuestion, retry = false) => {
+    const requestId = ++requestRef.current;
+    if (!retry && selected?.question_id === question.question_id) { setSelected(null); setDetail(null); setDetailLoading(false); return; }
+    setSelected(question); setDetail(null); setAnnotations([]); setAnnotationError(""); setDetailError(""); setDetailLoading(true);
     try {
-      const [questionResponse, annotationResponse] = await Promise.all([
+      const [questionResponse, annotationResponse] = await Promise.allSettled([
         getQuestion(examID, question.question_id),
-        listQuestionAnnotations(examID, question.question_id).catch(() => ({ annotations: [] }))
+        listQuestionAnnotations(examID, question.question_id)
       ]);
-      setDetail(questionResponse.question); setAnnotations(annotationResponse.annotations);
-    } catch (reason) { setDetailError(friendlyError(reason)); }
-    finally { setDetailLoading(false); }
+      if (requestId !== requestRef.current) return;
+      if (questionResponse.status === "rejected") throw questionResponse.reason;
+      if (questionResponse.value.question.question_id !== question.question_id) throw new Error("题目详情与当前题号不一致，请重新加载");
+      setDetail(questionResponse.value.question);
+      if (annotationResponse.status === "fulfilled") setAnnotations(annotationResponse.value.annotations);
+      else setAnnotationError("教师批注暂时无法加载，当前显示的评分详情仍可查看。");
+    } catch (reason) { if (requestId === requestRef.current) setDetailError(friendlyError(reason)); }
+    finally { if (requestId === requestRef.current) setDetailLoading(false); }
   };
   return <div className="subject-tables">
-    {groups.length > 1 ? <nav className="subject-tabs" aria-label="科目">{groups.map(([subject]) => <button type="button" className={activeSubject === subject ? "active" : ""} onClick={() => setActiveSubject(subject)} key={subject}>{subject}</button>)}</nav> : null}
+    {groups.length > 1 ? <nav className="subject-tabs" aria-label="科目">{groups.map(([subject]) => <button type="button" aria-pressed={activeSubject === subject} className={activeSubject === subject ? "active" : ""} onClick={() => { requestRef.current += 1; setActiveSubject(subject); setSelected(null); setDetail(null); }} key={subject}>{subject}</button>)}</nav> : null}
+    <div className="question-filter"><label><input type="checkbox" checked={lostOnly} onChange={(event) => setLostOnly(event.target.checked)} /> 只看有失分的题目</label><span>群体对比仅表示本次得分位置，不代表知识掌握程度。</span></div>
     {activeGroups.map(([subject, items]) => <section className="subject-table" key={subject}>
     <header><h2 id="questions-title">{subject}逐题分析</h2><span>学生得分：{formatScore(items.reduce((sum, item) => sum + item.score, 0))} 分　满分：{formatScore(items.reduce((sum, item) => sum + item.max_score, 0))} 分</span></header>
     <div className="paper-table-scroll"><table className="paper-score-table">
-      <thead><tr><th>题号</th><th>正确答案</th><th>实际答案</th><th>得分</th><th>班级平均分</th><th>学校平均分</th><th>掌握程度</th></tr></thead>
-      <tbody>{items.map((question) => {
-        const known = question.cohort?.median_score !== undefined;
+      <thead><tr><th>题号</th><th>正确答案</th><th>实际答案</th><th>得分</th><th>班级平均分</th><th>学校平均分</th><th>群体中位分对比</th></tr></thead>
+      <tbody>{items.filter((question) => !lostOnly || question.score < question.max_score).map((question) => {
+        const known = typeof question.cohort?.median_score === "number" && Number.isFinite(question.cohort.median_score);
         const mastered = known && question.score >= Number(question.cohort?.median_score);
         const lost = question.score < question.max_score;
         return <tr key={question.question_id} className={lost ? "lost" : ""}>
-          <td><button type="button" className="question-cell-link" aria-label={`第 ${question.question_no} 题，${formatScore(question.score)} / ${formatScore(question.max_score)} 分`} onClick={() => void openQuestion(question)}>{question.question_no}</button></td><td title={question.correct_answer}>{answerText(question.correct_answer)}</td><td className="actual-answer" title={question.actual_answer}>{answerText(question.actual_answer)}</td>
-          <td className="student-cell"><strong>{formatScore(question.score)}</strong><small> / {formatScore(question.max_score)}</small></td>
-          <td>{scoreOrDash(question.cohort?.class_mean_score)}</td><td>{scoreOrDash(question.cohort?.school_mean_score)}</td>
-          <td><span className={`mastery ${known ? (mastered ? "mastered" : "review") : "unknown"}`}>{known ? (mastered ? "已掌握" : "待巩固") : "—"}</span></td>
+          <td data-label="题目"><button type="button" className="question-cell-link" aria-expanded={selected?.question_id === question.question_id} aria-label={`第 ${question.question_no} 题，${formatScore(question.score)} / ${formatScore(question.max_score)} 分`} onClick={() => void openQuestion(question)}><span>第 {question.question_no} 题</span><small>{selected?.question_id === question.question_id ? "收起详情" : "查看作答与评分"}</small></button></td><td data-label="正确答案" title={question.correct_answer}>{answerText(question.correct_answer)}</td><td data-label="实际答案" className="actual-answer" title={question.actual_answer}>{answerText(question.actual_answer)}</td>
+          <td data-label="得分" className="student-cell"><strong>{formatScore(question.score)}</strong><small> / {formatScore(question.max_score)}</small></td>
+          <td data-label="班级平均分">{scoreOrDash(question.cohort?.class_mean_score)}</td><td data-label="学校平均分">{scoreOrDash(question.cohort?.school_mean_score)}</td>
+          <td data-label="群体对比"><span className={`mastery ${known ? (mastered ? "mastered" : "review") : "unknown"}`}>{known ? (mastered ? "达到群体中位分" : "低于群体中位分") : "暂无对比数据"}</span></td>
         </tr>;
       })}</tbody>
     </table></div>
-    {selected && items.some((item) => item.question_id === selected.question_id) ? <div className="question-drilldown">
-      {detailLoading ? <p className="muted">正在加载本题…</p> : null}
-      {detailError ? <p className="detail-error">{detailError}</p> : null}
-      {detail ? <><AnswerReview question={detail} annotations={annotations} imageURL={studentQuestionAnswerImageURL(examID,selected.question_id)} />{result.appeal_window.open ? <QuestionAppealForm examID={examID} releaseID={result.release_id} releaseVersion={result.release_version} question={selected} allowedReasonCodes={result.appeal_window.allowed_reason_codes ?? []} onSubmitted={() => undefined} /> : null}</> : null}
+    {lostOnly && !items.some((item) => item.score < item.max_score) ? <p role="status">本学科没有失分题目，可以切换为查看全部题目。</p> : null}
+    {selected && items.some((item) => item.question_id === selected.question_id) ? <div className="question-drilldown" ref={detailRegionRef}>
+      <h3>第 {selected.question_no} 题 · 作答与评分依据</h3>
+      {detailLoading ? <p className="muted" role="status">正在加载本题…</p> : null}
+      {detailError ? <p className="detail-error" role="alert">{detailError} <button type="button" className="text-button" onClick={() => void openQuestion(selected, true)}>重新加载</button></p> : null}
+      {annotationError ? <p role="alert">{annotationError} <button type="button" className="text-button" onClick={() => void openQuestion(selected, true)}>重试批注</button></p> : null}
+      {detail && detail.question_id === selected.question_id ? <><AnswerReview key={detail.question_id} question={detail} annotations={annotations} imageURL={studentQuestionAnswerImageURL(examID,detail.question_id)} />{result.appeal_window.open ? <QuestionAppealForm key={`${result.release_id}:${detail.question_id}`} examID={examID} releaseID={result.release_id} releaseVersion={result.release_version} question={detail} allowedReasonCodes={result.appeal_window.allowed_reason_codes ?? []} onSubmitted={onAppealSubmitted} /> : null}</> : null}
     </div> : null}
   </section>)}</div>;
 }
@@ -427,6 +450,7 @@ function AppealRegionSelector({ imageURL, value, onChange }: {
 }) {
   const [imageState, setImageState] = useState<"loading" | "ready" | "unavailable">("loading");
   const [start, setStart] = useState<{ x: number; y: number } | null>(null);
+  const [pointMode, setPointMode] = useState(false);
 
   const point = (event: PointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -442,17 +466,25 @@ function AppealRegionSelector({ imageURL, value, onChange }: {
   });
   const begin = (event: PointerEvent<HTMLDivElement>) => {
     if (imageState !== "ready") return;
+    if (pointMode) {
+      if (!start) setStart(point(event));
+      else { const region = regionFrom(start, point(event)); setStart(null); if (region.width >= .01 && region.height >= .01) onChange(region); }
+      return;
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
     setStart(point(event));
   };
   const finish = (event: PointerEvent<HTMLDivElement>) => {
+    if (pointMode) return;
     if (!start) return;
     const region = regionFrom(start, point(event));
     setStart(null);
     if (region.width >= 0.01 && region.height >= 0.01) onChange(region);
   };
   return <section className="appeal-region-selector" aria-labelledby="appeal-region-title">
-    <div><h4 id="appeal-region-title">圈选争议区域（可选）</h4><p>在本题答题图上拖动框选，帮助老师快速定位；未圈选也可以提交。</p></div>
+    <div><h4 id="appeal-region-title">圈选争议区域（可选）</h4><p>可拖动框选，也可依次点击区域的两个对角；未圈选也可以提交。</p></div>
+    <label><input type="checkbox" checked={pointMode} onChange={(event) => { setPointMode(event.target.checked); setStart(null); }} /> 使用两点点击框选</label>
+    {pointMode && start ? <p role="status">起点已选，请点击区域的另一角。</p> : null}
     <div className="appeal-region-image-wrap">
       <img src={imageURL} alt="本题答题区域" onLoad={() => setImageState("ready")} onError={() => setImageState("unavailable")} />
       {imageState === "ready" ? <div
@@ -468,6 +500,8 @@ function AppealRegionSelector({ imageURL, value, onChange }: {
       {imageState === "loading" ? <span className="appeal-region-loading">正在加载本题答题区域…</span> : null}
     </div>
     {imageState === "unavailable" ? <p className="detail-error">本题答题图暂时不可用，仍可通过文字说明提交复核。</p> : null}
+    <button type="button" className="secondary-button" disabled={imageState !== "ready"} onClick={() => onChange({ coordinate_space: "canonical_image_normalized", x: 0, y: 0, width: 1, height: 1 })}>选择整个答题区域</button>
+    {value ? <details><summary>精确调整区域（百分比）</summary><div className="region-coordinate-fields">{(["x", "y", "width", "height"] as const).map((key) => <label key={key}>{{ x: "距左侧", y: "距顶部", width: "宽度", height: "高度" }[key]}<input type="number" min={key === "x" || key === "y" ? 0 : 1} max={100} value={Math.round(value[key] * 100)} onChange={(event) => { const next = { ...value, [key]: Math.max(key === "x" || key === "y" ? 0 : .01, Math.min(1, Number(event.target.value) / 100)) }; next.x = Math.min(.99, next.x); next.y = Math.min(.99, next.y); next.width = Math.min(next.width, 1 - next.x); next.height = Math.min(next.height, 1 - next.y); onChange(next); }} /></label>)}</div></details> : null}
     {value ? <div className="appeal-region-summary"><span>已圈选争议区域</span><button type="button" className="text-button" onClick={() => onChange(undefined)}>清除</button></div> : null}
   </section>;
 }
@@ -475,7 +509,7 @@ function AppealRegionSelector({ imageURL, value, onChange }: {
 export function AppealWindow({ result }: { result: StudentResult }) {
   const windowState = result.appeal_window;
   if (windowState.open) {
-    return <section className="appeal-notice open"><div><h2>成绩复核</h2><p>本次成绩的复核窗口已开启{windowState.closes_at ? `，截止至 ${formatDateTime(windowState.closes_at)}` : ""}。请在需要复核的题目下提交申请。</p></div><span>锚定第 {result.release_version} 版</span></section>;
+    return <section className="appeal-notice open"><div><h2>成绩复核</h2><p>本次成绩的复核窗口已开启{windowState.closes_at ? `，截止至 ${formatDateTime(windowState.closes_at)}` : ""}。请在需要复核的题目下提交申请。</p></div><span>对应第 {result.release_version} 版成绩</span></section>;
   }
   return <section className="appeal-notice"><div><h2>成绩复核</h2><p>{windowState.closes_at ? `本次成绩的复核窗口已于 ${formatDateTime(windowState.closes_at)} 结束。` : "学校未开放本次成绩的复核窗口。"}</p></div></section>;
 }

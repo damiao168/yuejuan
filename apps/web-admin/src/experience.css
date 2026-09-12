@@ -1,0 +1,103 @@
+/* Shared business UI: typography, readable controls and workspace reflow. */
+body { font-family: var(--eg-font-family); font-size: var(--eg-font-body); line-height: var(--eg-line-body); }
+.workspace { min-width: 0; container: workspace / inline-size; }
+.workspace h1 { font-size: var(--eg-font-title); line-height: 1.35; overflow-wrap: anywhere; }
+.workspace h2 { line-height: 1.45; }
+.workspace p { line-height: var(--eg-line-body); }
+.skip-to-workspace { position: fixed; top: -100px; left: 16px; z-index: 2000; padding: 12px 20px; background: white; color: #175cd3; border: 2px solid currentColor; }
+.skip-to-workspace:focus { top: 12px; }
+.mobile-page-context { display: grid; gap: 2px; min-width: 0; line-height: 1.4; }
+.mobile-page-context strong { font-size: var(--eg-font-reading); }
+.mobile-page-context span { font-size: var(--eg-font-caption); color: var(--eg-color-muted); overflow-wrap: anywhere; }
+.mobile-shellbar { min-height: 48px; height: 48px; padding-block: 0; }
+.workspace { scrollbar-color: #98a2b3 transparent; scrollbar-gutter: stable; }
+.ant-form-item-label > label, .ant-select, .ant-input, .ant-btn, .ant-input-number { font-size: var(--eg-font-body); }
+.ant-input-number-input { min-height: 36px; }
+.ant-btn { white-space: normal; height: auto; min-height: 36px; line-height: 1.5; }
+.ant-btn-primary { min-height: var(--eg-control-height); }
+.ant-table-cell { font-size: var(--eg-font-body); line-height: 1.6; overflow-wrap: anywhere; }
+.ant-table-tbody > tr > td { height: var(--eg-row-height); }
+.ant-table-wrapper, .responsive-table-region { min-width: 0; max-width: 100%; }
+.responsive-table-region { overflow-x: auto; }
+.table-interaction-hint { color: var(--eg-color-muted); font-size: var(--eg-font-body); margin: 0 0 12px; }
+.responsive-record-field dt { font-size: var(--eg-font-body); color: var(--eg-color-muted); }
+.responsive-record-field dd { font-size: var(--eg-font-body); overflow-wrap: anywhere; }
+.responsive-record-details summary { min-height: 40px; padding-block: 10px; }
+.ant-form-item-explain-error, .quality-issue-list small, .quality-inspector-heading span,
+.quality-dimension-row, .quality-section-label, .readiness-details-heading span,
+.eg-workspace-notice p, .eg-workspace-stage small, .eg-status-badge, .grading-submit-note { font-size: var(--eg-font-body); line-height: 1.6; }
+.eg-workspace-stage small, .eg-workspace-metric p { white-space: normal; overflow: visible; }
+.eg-rubric-criterion { align-items: flex-start; min-height: 48px; }
+.eg-rubric-criterion-main { align-items: flex-start; font-size: var(--eg-font-reading); line-height: var(--eg-line-reading); }
+.eg-rubric-criterion-main > span { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.eg-rubric-criterion-meta { font-size: var(--eg-font-body); }
+.identity-workspace { max-width: 1100px; }
+.identity-heading { display: flex; gap: 16px; align-items: flex-start; padding-bottom: 24px; border-bottom: 1px solid var(--border); }
+.identity-heading h1 { margin: 0 0 8px; }
+.identity-start { padding-block: 32px; }
+.identity-start p { max-width: 48em; }
+.exam-context-header { flex-wrap: wrap; gap: 12px; }
+.exam-context-title { min-width: 0; flex: 1 1 280px; }
+.exam-context-title h1 { white-space: normal; }
+.exam-create-stage > footer { position: sticky; bottom: 0; background: var(--eg-color-surface); border-top: 1px solid var(--border); padding: 16px 0; z-index: 5; gap: 12px; flex-wrap: wrap; }
+.exam-draft-status { font-size: var(--eg-font-body); }
+.grading-shell { container: grading / inline-size; }
+.grading-field { margin-block: 12px; }
+.grading-field label { display: block; font-size: var(--eg-font-body); margin-bottom: 6px; }
+.score-panel .ant-input-number-input { font-size: var(--eg-font-reading); }
+.score-input-row > .ant-input-number .ant-input-number-input { font-size: 2rem; line-height: 1.3; height: 52px; }
+.score-panel .grading-inline-note, .grading-shortcut-help { font-size: var(--eg-font-body); line-height: 1.6; }
+.grading-shortcut-help summary { padding-block: 12px; cursor: pointer; }
+.grading-submit-bar { position: sticky; bottom: 0; background: var(--eg-color-surface); padding: 12px 0; border-top: 1px solid var(--border); z-index: 4; }
+.grading-submit-bar .ant-btn { min-height: var(--eg-touch-height); }
+.grading-inspector .panel-head p, .grading-field .ant-input, .review-annotation-comment,
+.rubric-evidence-text, .student-feedback-preview { font-size: var(--eg-font-reading); line-height: var(--eg-line-reading); }
+.grading-task-row { min-height: 52px; }
+.grading-inspector { scroll-padding-bottom: 100px; }
+.score-panel { scroll-margin-bottom: 100px; }
+.login-panel { width: min(100%, 480px); }
+.login-options { flex-wrap: wrap; }
+.login-options span { font-size: var(--eg-font-body); }
+.image-quality-inspector { overflow-wrap: anywhere; }
+.template-coordinate-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.template-coordinate-fields label { min-width: 0; }
+.template-coordinate-fields .ant-input-number { width: 100%; }
+.template-question-pane > .ant-select { width: 100%; margin-bottom: 12px; }
+.release-visibility-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-block: 20px; padding: 16px 0; border: 0; border-block: 1px solid var(--border); }
+.release-visibility-options legend { font-size: var(--eg-font-reading); font-weight: 600; }
+@container workspace (max-width: 1100px) {
+  .image-quality-layout { grid-template-columns: 180px minmax(0, 1fr); }
+  .image-quality-inspector { grid-column: 1 / -1; max-height: none; }
+  .scoring-monitor-body { grid-template-columns: 180px minmax(0, 1fr); }
+  .scoring-activity-rail { grid-column: 1 / -1; }
+}
+@container workspace (max-width: 720px) {
+  .image-quality-layout, .scoring-monitor-body, .class-management-layout,
+  .paper-import-review-grid, .paper-import-rubric-point, .platform-model-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .exam-context-progress { display: none; }
+}
+@container grading (max-width: 1050px) {
+  .immersive-workspace .grading-workspace, .grading-workspace { grid-template-columns: minmax(0, 1fr); }
+  .immersive-workspace .grading-task-rail, .grading-task-rail { height: auto; max-height: 180px; }
+  .grading-task-list { max-height: 120px; }
+}
+@media (max-width: 760px) {
+  .workspace { padding: 16px; }
+  .ant-btn, .ant-input, .ant-select-selector { min-height: var(--eg-touch-height); }
+  .ant-space { max-width: 100%; }
+  .ant-modal { max-width: calc(100vw - 24px); margin-inline: auto; }
+  .ant-drawer-content-wrapper { max-width: 100vw; }
+  .exam-create-page-header .ant-steps { margin-block: 12px; }
+  .exam-context-header { align-items: flex-start; }
+  .eg-workspace-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .eg-workspace-stages { display: flex; overflow-x: auto; }
+  .eg-workspace-stage { flex: 0 0 180px; }
+  .immersive-workspace .grading-shell, .immersive-workspace .grading-main,
+  .immersive-workspace .grading-workspace, .immersive-workspace .grading-panels { height: auto; overflow: visible; }
+  .immersive-workspace .grading-panels { display: flex; flex-direction: column; }
+  .immersive-workspace .answer-panel { min-height: 420px; height: auto; }
+  .immersive-workspace .grading-inspector { height: auto; overflow: visible; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace, .workspace > *, .grading-shell, .scoring-paper-monitor { animation: none; scroll-behavior: auto; }
+}

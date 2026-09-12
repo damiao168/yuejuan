@@ -38,6 +38,7 @@ type Task struct {
 	Payload              map[string]any `json:"payload"`
 	PayloadSchemaVersion string         `json:"payload_schema_version"`
 	Result               map[string]any `json:"result,omitempty"`
+	Progress             map[string]any `json:"progress,omitempty"`
 	ResultSchemaVersion  string         `json:"result_schema_version,omitempty"`
 	ResultPayloadHash    string         `json:"-"`
 	IdempotencyKey       string         `json:"idempotency_key"`

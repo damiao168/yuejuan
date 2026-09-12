@@ -2,7 +2,14 @@ import os
 import unittest
 from unittest.mock import patch
 
-from ocr_worker.config import load_settings
+from ocr_worker.config import load_settings, resolve_formula_plan
+from ocr_worker.deployment_profile import (
+    FORMULA_PROFILE_SCHEMA,
+    descriptor_fingerprint,
+    formula_hardware_descriptor,
+    formula_software_descriptor,
+    resolve_formula_runtime_plan,
+)
 
 BASE_ENV = {
     "EDUGRADE_API_BASE_URL": "http://api-gateway:8080",
@@ -27,6 +34,57 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(settings.use_textline_orientation)
         self.assertEqual(settings.text_det_limit_side_len, 64)
         self.assertEqual(settings.text_recognition_batch_size, 1)
+        self.assertIsNone(settings.formula_recognition_batch_size)
+        self.assertEqual(settings.formula_result_cache_size, 2048)
+        self.assertEqual(settings.formula_max_padding_height_ratio, 0.75)
+        self.assertEqual(settings.formula_model_lifecycle, "auto")
+        self.assertFalse(settings.formula_prewarm_fallback)
+        plan = resolve_formula_plan(settings)
+        self.assertEqual((plan.lifecycle, plan.batch_size), ("per_job", 1))
+        self.assertEqual(plan.source, "compatibility_default")
+
+    @patch.dict(
+        os.environ,
+        {
+            **BASE_ENV,
+            "EDUGRADE_FORMULA_MODEL_LIFECYCLE": "resident",
+            "EDUGRADE_FORMULA_RECOGNITION_BATCH_SIZE": "8",
+            "EDUGRADE_FORMULA_PREWARM_FALLBACK": "yes",
+        },
+        clear=True,
+    )
+    def test_formula_model_lifecycle_can_be_overridden(self):
+        settings = load_settings()
+
+        self.assertEqual(settings.formula_model_lifecycle, "resident")
+        self.assertEqual(settings.formula_recognition_batch_size, 8)
+        self.assertTrue(settings.formula_prewarm_fallback)
+        plan = resolve_formula_plan(settings)
+        self.assertEqual((plan.lifecycle, plan.batch_size, plan.source), ("resident", 8, "explicit"))
+
+    @patch.dict(os.environ, BASE_ENV, clear=True)
+    def test_formula_lifecycle_auto_uses_only_compatible_measured_profile(self):
+        settings = load_settings()
+        hardware = formula_hardware_descriptor(settings.device)
+        profile = {
+            "schema_version": FORMULA_PROFILE_SCHEMA,
+            "hardware_fingerprint": descriptor_fingerprint(hardware),
+            "software": formula_software_descriptor(settings),
+            "evidence": {"output_consistency_passed": True},
+            "recommendation": {"lifecycle": "resident", "batch_size": 4},
+        }
+
+        plan = resolve_formula_runtime_plan(settings, profile)
+        self.assertEqual((plan.lifecycle, plan.batch_size, plan.source), ("resident", 4, "measured_profile"))
+        profile["hardware_fingerprint"] = "different-machine"
+        rejected = resolve_formula_runtime_plan(settings, profile)
+        self.assertEqual((rejected.lifecycle, rejected.batch_size), ("per_job", 1))
+        self.assertEqual(rejected.reason, "profile_hardware_mismatch")
+
+    @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_FORMULA_MODEL_LIFECYCLE": "sometimes"}, clear=True)
+    def test_formula_lifecycle_must_be_supported(self):
+        with self.assertRaisesRegex(ValueError, "MODEL_LIFECYCLE"):
+            load_settings()
 
     @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_OCR_CPU_THREADS": "0"}, clear=True)
     def test_cpu_threads_are_bounded(self):
@@ -70,6 +128,11 @@ class ConfigTests(unittest.TestCase):
     @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_OCR_POLL_INTERVAL": "-1"}, clear=True)
     def test_non_positive_poll_interval_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "POLL_INTERVAL"):
+            load_settings()
+
+    @patch.dict(os.environ, {**BASE_ENV, "EDUGRADE_FORMULA_MAX_PADDING_HEIGHT_RATIO": "5"}, clear=True)
+    def test_formula_padding_height_ratio_is_bounded(self):
+        with self.assertRaisesRegex(ValueError, "MAX_PADDING_HEIGHT_RATIO"):
             load_settings()
 
     @patch.dict(

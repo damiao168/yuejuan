@@ -1,4 +1,5 @@
 import pytest
+
 from grading_agent.errors import AgentError
 from grading_agent.paper_parser import PaperParser
 
@@ -32,6 +33,28 @@ def test_answer_only_is_valid_and_does_not_hallucinate_question():
     assert result["answer_candidates"][0]["standard_answer"] == "A"
 
 
+def test_full_model_progress_reports_real_route_and_completed_request():
+    answer = {"candidate_id": "a1", "question_no_hint": "1", "question_no_normalized": "1", "subquestion_no_hint": None, "standard_answer": "A", "equivalent_answers": [], "tolerance": None, "confidence": .95, "source_refs": [ref()], "issues": []}
+    events = []
+
+    PaperParser(FakeStructuredModel(output("answer", answers=[answer]))).parse(
+        payload(), progress=events.append
+    )
+
+    assert events[0] == {
+        "unit": "parse_chunk",
+        "phase": "routing",
+        "completed": 0,
+        "total": 0,
+        "route": "pending",
+        "message": "正在根据版面锚点选择解析路径",
+    }
+    assert [(event["route"], event["completed"], event["total"]) for event in events[1:]] == [
+        ("full_model", 0, 1),
+        ("full_model", 1, 1),
+    ]
+
+
 def test_question_only_allows_unknown_score_answer_and_rubric():
     question = {"candidate_id": "q1", "question_no_raw": "第1题", "question_no_normalized": "1", "parent_question_no": None, "subquestion_no": None, "section_hint": None, "stem": "计算", "options": [], "question_type": "calculation", "score": None, "knowledge_point_hints": [], "confidence": .9, "source_refs": [ref()], "issues": []}
     result = PaperParser(FakeStructuredModel(output("question", questions=[question]))).parse(payload("第1题 计算"))
@@ -57,6 +80,16 @@ def test_obvious_meeting_screenshot_is_rejected_without_running_full_model():
     assert result["documents"][0]["detected_role"] == "unknown"
     assert result["question_candidates"] == []
     assert result["answer_candidates"] == []
+
+
+def test_unrelated_guard_progress_explicitly_reports_non_model_route():
+    request = payload("北师保研分享会\n会议号：120732118\n发起人：任辰红\n最近入会\n参会时长\n回放")
+    events = []
+
+    PaperParser(FakeStructuredModel(output("unknown"))).parse(request, progress=events.append)
+
+    assert events[-1]["route"] == "unrelated_guard"
+    assert events[-1]["completed"] == events[-1]["total"] == 1
 
 
 def test_exam_markers_take_priority_over_unrelated_ui_words():

@@ -60,6 +60,28 @@ EDUGRADE_AI_PROMPT_VERSION=subjective-governed-cn-subject-routing-v5
 .\scripts\init.ps1 -SkipBuild -EnableObservability
 ```
 
+### 公式运行时标定（不同电脑分别执行）
+
+公式模型生命周期和 batch 不再根据固定 RAM 阈值猜测。OCR 镜像首次部署或 CPU/GPU、容器资源限制、PaddleOCR/模型版本变化后，执行：
+
+```powershell
+.\scripts\calibrate-formula-runtime.ps1
+```
+
+脚本会在当前部署机上实测 batch `1/2/4/8`，逐轮输出当前 batch、重复轮次和已完成轮次，校验各 batch 输出与 batch 1 一致，把带硬件/软件指纹的画像写入持久化 `ocr_model_cache`，然后重启公式 Worker。默认 `compatibility` 模式会在连续任务队列排空后释放模型；明确要求降低冷启动延迟且已为常驻模型预留资源时，才使用：
+
+```powershell
+.\scripts\calibrate-formula-runtime.ps1 -LifecycleGoal latency
+```
+
+可用匿名化的真实公式 ROI 替换内置性能样本：
+
+```powershell
+.\scripts\calibrate-formula-runtime.ps1 -SampleDirectory D:\formula-calibration-rois
+```
+
+标定只验证部署性能和不同 batch 的输出一致性，不冒充公式绝对准确率评测。公式/ROI 准确率仍须使用人工标注的项目验证集。设计依据和证据边界见 [`docs/ocr-formula-ai-evidence-review-2026-09-12.md`](../../docs/ocr-formula-ai-evidence-review-2026-09-12.md)。模型权重和画像都在持久卷中；重启 Worker 不会重新下载模型。
+
 等价手工命令：
 
 ```powershell

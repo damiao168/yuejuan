@@ -12,6 +12,11 @@ export interface ApiErrorPayload {
   trace_id?: string;
   field_errors?: Record<string, string[]>;
   conflict_revision?: number;
+  providers?: Array<{
+    key: string;
+    display_name: string;
+  }>;
+  validation?: import("./modelApiConfig").ManagedAPIProbeResult;
 }
 
 export class ApiClientError extends Error {
@@ -22,8 +27,9 @@ export class ApiClientError extends Error {
   fieldErrors?: Record<string, string[]>;
   conflictRevision?: number;
   retryAfterSeconds?: number;
+  payload: ApiErrorPayload;
 
-  constructor(status: number, code: string, message: string, context: Pick<ApiErrorPayload, "request_id" | "trace_id" | "field_errors" | "conflict_revision"> = {}, retryAfterSeconds?: number) {
+  constructor(status: number, code: string, message: string, context: ApiErrorPayload = {}, retryAfterSeconds?: number) {
     super(message);
     this.name = "ApiClientError";
     this.status = status;
@@ -33,6 +39,7 @@ export class ApiClientError extends Error {
     this.fieldErrors = context.field_errors;
     this.conflictRevision = context.conflict_revision;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.payload = context;
   }
 }
 

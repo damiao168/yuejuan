@@ -4,9 +4,11 @@ import logging
 import time
 
 from .api import APIError, AuthenticationError, EduGradeClient
-from .config import load_settings
+from .config import load_settings, resolve_formula_plan
 from .engine import PaddleOCREngine
+from .formula_validation import FormulaValidator
 from .math_runner import MathUnderstandingRunner, MathVerificationClient
+from .paper_formula import PaddleFormulaLayoutDetector, PaperFormulaRunner
 from .recognition_router import PaddleFormulaNetEngine, RecognitionRouter
 from .runner import OCRRunner, WorkerConfig
 
@@ -26,13 +28,14 @@ def main() -> None:
         text_det_limit_side_len=getattr(settings, "text_det_limit_side_len", 64),
         text_recognition_batch_size=getattr(settings, "text_recognition_batch_size", 1),
     )
-    log.info("initializing OCR engine before worker registration")
-    engine.initialize()
-    log.info(
-        "OCR engine ready: model=%s device=%s cpu_threads=%s effective_mkldnn=%s hpi=%s orientation=%s",
-        engine.model_version, engine.device, engine.cpu_threads, engine.effective_mkldnn,
-        engine.enable_hpi, engine.use_textline_orientation,
-    )
+    if getattr(settings, "ocr_runtime_enabled", True) or getattr(settings, "math_runtime_enabled", False):
+        log.info("initializing OCR engine before worker registration")
+        engine.initialize()
+        log.info(
+            "OCR engine ready: model=%s device=%s cpu_threads=%s effective_mkldnn=%s hpi=%s orientation=%s",
+            engine.model_version, engine.device, engine.cpu_threads, engine.effective_mkldnn,
+            engine.enable_hpi, engine.use_textline_orientation,
+        )
     client = EduGradeClient(
         base_url=settings.api_base_url,
         tenant_code=settings.tenant_code,
@@ -75,6 +78,62 @@ def main() -> None:
             config=worker_config,
         )
         log.info("math understanding runtime ready: formula_model=%s available=%s", settings.formula_model_version, formula_engine is not None)
+    paper_formula_runner = None
+    formula_model_lifecycle = "resident"
+    formula_processed_since_start = False
+    if getattr(settings, "paper_formula_runtime_enabled", False):
+        detector = PaddleFormulaLayoutDetector(settings.formula_layout_model_version, settings.device)
+        formula_cache_size = getattr(settings, "formula_result_cache_size", 2048)
+        primary = PaddleFormulaNetEngine(
+            model_version=settings.formula_model_version,
+            device=settings.device,
+            cache_size=formula_cache_size,
+        )
+        fallback = PaddleFormulaNetEngine(
+            model_version=settings.formula_fallback_model_version,
+            device=settings.device,
+            cache_size=formula_cache_size,
+        )
+        formula_plan = resolve_formula_plan(settings)
+        formula_model_lifecycle = formula_plan.lifecycle
+        log.info(
+            "paper formula runtime plan: requested=%s effective=%s batch=%s source=%s reason=%s device=%s profile=%s",
+            settings.formula_model_lifecycle,
+            formula_model_lifecycle,
+            formula_plan.batch_size,
+            formula_plan.source,
+            formula_plan.reason,
+            settings.device,
+            formula_plan.profile_sha256 or "none",
+        )
+        if formula_model_lifecycle == "resident":
+            log.info("preloading paper formula detector and plus-M model")
+            detector.initialize()
+            primary.initialize()
+        else:
+            log.info("paper formula detector and plus-M will load after a task is claimed")
+        if formula_model_lifecycle == "resident" and getattr(settings, "formula_prewarm_fallback", False):
+            log.info("preloading governed plus-L fallback model")
+            fallback.initialize()
+        paper_formula_runner = PaperFormulaRunner(
+            api=client,
+            config=worker_config,
+            detector=detector,
+            primary=primary,
+            fallback=fallback,
+            max_padding=getattr(settings, "formula_max_padding_pixels", 96),
+            max_padding_height_ratio=getattr(settings, "formula_max_padding_height_ratio", 0.75),
+            batch_size=formula_plan.batch_size,
+            runtime_plan={
+                "runtime_mode": formula_plan.lifecycle,
+                "runtime_plan_source": formula_plan.source,
+                "runtime_batch_size": formula_plan.batch_size,
+            },
+            validator=FormulaValidator(
+                render_similarity_threshold=getattr(settings, "formula_render_similarity_threshold", 0.34),
+            ),
+        )
+        log.info("paper formula runtime ready: detector=%s primary=%s fallback=%s", settings.formula_layout_model_version, settings.formula_model_version, settings.formula_fallback_model_version)
     while True:
         try:
             if client.token is None:
@@ -83,6 +142,18 @@ def main() -> None:
             processed = runner.process_once() if runner is not None else 0
             if math_runner is not None:
                 processed += math_runner.process_once()
+            if paper_formula_runner is not None:
+                formula_processed = paper_formula_runner.process_once()
+                processed += formula_processed
+                formula_processed_since_start = formula_processed_since_start or formula_processed > 0
+                if formula_processed_since_start and formula_processed == 0 and formula_model_lifecycle == "per_job":
+                    # Paddle/oneDNN may retain native allocator arenas even
+                    # after Python references are released. A clean process
+                    # exit is the only reliable way to return that memory. A
+                    # burst is drained first, so queued exams reuse one load
+                    # without an arbitrary idle timeout.
+                    log.info("paper formula queue drained; per_job lifecycle is releasing model memory")
+                    return
             if processed == 0:
                 time.sleep(settings.poll_interval)
         except AuthenticationError:

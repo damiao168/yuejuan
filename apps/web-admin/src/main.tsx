@@ -9,10 +9,11 @@ import "@edugrade/design-tokens/tokens.css";
 import "@edugrade/ui/styles.css";
 import "./styles.css";
 import "./features/grading/workbench/grading-workbench.css";
+import "./experience.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ConfigProvider locale={zhCN}>
+    <ConfigProvider locale={zhCN} theme={{ token: { fontSize: 14, fontSizeSM: 13, controlHeight: 40, controlHeightSM: 36, lineHeight: 1.6 } }}>
       <App />
     </ConfigProvider>
   </StrictMode>

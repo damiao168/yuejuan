@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { applyReadingSize, readReadingSize } from "@edugrade/design-tokens";
 import {
   Alert,
   Button,
@@ -129,6 +130,8 @@ const sourceLabels: Record<string, string> = {
 };
 
 function App() {
+  const [readingSize, setReadingSize] = useState(readReadingSize);
+  useEffect(() => { applyReadingSize(readingSize); }, [readingSize]);
   const [workspace, setWorkspace] = useState<WorkspaceKey>("connect");
   const [serverUrl, setServerUrl] = useState(() => window.sessionStorage.getItem("edugrade.desktop.server_url") ?? defaultServer);
   const [tenantCode, setTenantCode] = useState("demo");
@@ -896,7 +899,12 @@ function App() {
     <ConfigProvider
       locale={zhCN}
       theme={{
-        token: {
+          token: {
+            fontSize: readingSize === "large" ? 16 : 14,
+            fontSizeSM: readingSize === "large" ? 14 : 13,
+            controlHeight: readingSize === "large" ? 44 : 40,
+            controlHeightSM: 36,
+            lineHeight: 1.6,
           colorPrimary: "#1677ff",
           colorSuccess: "#52c41a",
           colorWarning: "#faad14",
@@ -941,7 +949,8 @@ function App() {
               <p className="eyebrow">Windows 桌面客户端</p>
               <h2>{navItems.find((item) => item.key === workspace)?.label}</h2>
             </div>
-            <div className="topbar-actions">
+              <div className="topbar-actions">
+                <Button aria-pressed={readingSize === "large"} onClick={() => setReadingSize((size) => size === "large" ? "standard" : "large")}>{readingSize === "large" ? "标准字号" : "大字阅读"}</Button>
               <Tag color={token ? "success" : "default"}>{token ? "已登录" : "未登录"}</Tag>
               <Tag color={activeCapabilityWarnings.length ? "warning" : "success"}>
                 {activeCapabilityWarnings.length ? "存在待接入能力" : "本地能力就绪"}

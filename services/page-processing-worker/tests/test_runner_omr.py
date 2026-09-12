@@ -16,7 +16,7 @@ class FakeClient:
         self.reference = reference
         self.completed: tuple[str, dict] | None = None
 
-    def heartbeat(self, task: dict, worker_id: str, lease_seconds: int) -> None:
+    def heartbeat(self, task: dict, worker_id: str, lease_seconds: int, timeout: float | None = None, progress: dict | None = None) -> None:
         assert task["lease_token"] == "lease-1"
 
     def download(self, path: str) -> bytes:

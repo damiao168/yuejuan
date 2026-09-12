@@ -54,9 +54,9 @@ class Client:
             "worker_instance_id": worker_instance_id,
         }
 
-    def heartbeat(self, task: dict[str, Any], worker_id: str, lease_seconds: int, timeout: float | None = None) -> None:
+    def heartbeat(self, task: dict[str, Any], worker_id: str, lease_seconds: int, timeout: float | None = None, progress: dict[str, Any] | None = None) -> None:
         self.activate_task(task, worker_id)
-        self._json("POST", f"/api/v1/internal/worker/tasks/{task['id']}/heartbeat", {"lease_token": task["lease_token"], "worker_service": "page-processing", "worker_instance_id": worker_id, "state": "running", "progress": {"phase": "processing"}, "lease_seconds": lease_seconds}, timeout=timeout)
+        self._json("POST", f"/api/v1/internal/worker/tasks/{task['id']}/heartbeat", {"lease_token": task["lease_token"], "worker_service": "page-processing", "worker_instance_id": worker_id, "state": "running", "progress": progress or {}, "lease_seconds": lease_seconds}, timeout=timeout)
 
     def download(self, path: str) -> bytes:
         req = self._request("GET", path, None)

@@ -102,7 +102,7 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
       title: `第 ${task.question_no} 题阅卷`,
       detail: sourceLabels[task.source] ? `密号 ${task.anonymous_code} · ${sourceLabels[task.source]}` : `密号 ${task.anonymous_code}`,
       status: task.status,
-      path: "/grading"
+      path: `/grading?task=${encodeURIComponent(task.id)}`
     })),
     ...activeArbitrations.map((task) => ({
       id: task.id,
@@ -110,7 +110,7 @@ export function TeacherDashboardPage({ user, onNavigate }: { user: SessionUser; 
       title: `第 ${task.question_no} 题仲裁`,
       detail: `密号 ${task.anonymous_code} · 分差 ${task.score_difference}`,
       status: task.status,
-      path: "/arbitration"
+      path: `/arbitration?task=${encodeURIComponent(task.id)}`
     }))
   ], [activeArbitrations, activeReviews]);
 

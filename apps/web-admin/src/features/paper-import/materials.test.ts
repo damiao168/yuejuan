@@ -50,13 +50,17 @@ describe("paper import materials", () => {
     expect(hasBlockingImportIssues(base)).toBe(true);
   });
 
-  it("reports stable processing stages from source state", () => {
+  it("reports only factual worker counters and never invents a stage percentage", () => {
     const source = (processing_status: PaperImportSource["processing_status"]): PaperImportSource => ({ id: "s", document_index: 0, file_asset_id: "f", role_hint: "auto", detected_role: "unknown", role_confidence: 0, processing_status });
     const base = { id: "i", generation: 1, run_id: "r1", source_revision: "s1", exam_id: "e", exam_paper_id: "", paper_file_asset_id: "", answer_file_asset_id: "", status: "processing" as const, subject: "math", question_candidates: [], answer_candidates: [], solution_candidates: [], rubric_candidates: [], structured_issues: [], questions: [], issues: [], created_at: "2026-08-30T00:00:00Z" };
 
-    expect(paperImportProgress({ ...base, sources: [source("pending")] })).toMatchObject({ percent: 30, label: "页面预处理" });
-    expect(paperImportProgress({ ...base, sources: [source("processing")] })).toMatchObject({ percent: 60, label: "文字识别" });
-    expect(paperImportProgress({ ...base, sources: [source("processed")] })).toMatchObject({ percent: 85, label: "AI 内容解析" });
+    expect(paperImportProgress({ ...base, sources: [source("pending")] })).toMatchObject({ percent: undefined, label: "等待 Worker" });
+    expect(paperImportProgress({ ...base, sources: [source("processing")], runtime_progress: { task_type: "ocr", task_status: "running", stage: "text_ocr", completed: 2, total: 5, unit: "page", message: "已识别 2/5 页", updated_at: "2026-08-30T00:00:02Z" } })).toMatchObject({ percent: 40, label: "文字识别", detail: expect.stringContaining("2/5") });
+    expect(paperImportProgress({ ...base, sources: [source("processed")], runtime_progress: { task_type: "paper_parse", task_status: "running", updated_at: "2026-08-30T00:00:02Z" } })).toMatchObject({ percent: undefined, label: "AI 内容解析" });
+		expect(paperImportProgress({ ...base, sources: [source("processed")], runtime_progress: { task_type: "paper_parse", task_status: "running", stage: "paper_parse", phase: "model_request", parse_route: "compact_model", completed: 2, total: 5, unit: "parse_chunk", message: "大模型已完成 2/5 个实际解析块", updated_at: "2026-08-30T00:00:02Z" } })).toMatchObject({ percent: 40, counter: "2/5 个解析块", detail: expect.stringContaining("仅歧义解析块调用大模型") });
+		expect(paperImportProgress({ ...base, sources: [source("processed")], runtime_progress: { task_type: "paper_parse", task_status: "running", stage: "paper_parse", phase: "deterministic_structuring", parse_route: "anchored", completed: 1, total: 1, unit: "parse_chunk", message: "确定性结构重建完成，未调用大模型", updated_at: "2026-08-30T00:00:02Z" } })).toMatchObject({ percent: 100, detail: expect.stringContaining("本阶段未调用大模型") });
+		expect(paperImportProgress({ ...base, subject: "mathematics", authoritative_subject_code: "mathematics", formula_status: "running", sources: [source("processed")], runtime_progress: { task_type: "paper_formula", task_status: "running", stage: "formula_recognition", completed: 3, total: 12, unit: "formula_region", model: "PP-FormulaNet_plus-M", updated_at: "2026-08-30T00:00:02Z" } })).toMatchObject({ percent: 25, label: "数学公式识别", detail: expect.stringContaining("PP-FormulaNet_plus-M") });
+		expect(paperImportProgress({ ...base, sources: [source("processed")], runtime_progress: { task_type: "paper_formula", task_status: "running", stage: "formula_recognition", phase: "model_loading", completed: 0, total: 12, unit: "formula_region", cold_start: true, progress_changed_at: "2026-08-30T00:00:01Z", updated_at: "2026-08-30T00:00:02Z" } })).toMatchObject({ percent: undefined, counter: "0/12 个 ROI", changedAt: "2026-08-30T00:00:01Z", detail: expect.stringContaining("不会重新下载模型") });
   });
 
   it("reports unrelated uploads as a completed but blocked recognition result", () => {
@@ -82,6 +86,6 @@ describe("paper import materials", () => {
     };
 
     expect(isPaperImportCancelled(job)).toBe(true);
-    expect(paperImportProgress(job)).toMatchObject({ percent: 100, label: "已停止识别" });
+    expect(paperImportProgress(job)).toMatchObject({ percent: undefined, label: "已停止识别" });
   });
 });

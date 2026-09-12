@@ -266,15 +266,57 @@ FROM agent_worker_task WHERE tenant_id=$1 AND id=$2::uuid FOR UPDATE`, tenantID,
 
 func (s *PostgresStore) hydratePaperImportRun(ctx context.Context, tenantID string, job *PaperImportJob) error {
 	var resultGeneration sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT j.current_generation,j.source_revision,COALESCE(r.id::text,''),j.result_generation
+	var policyJSON, formulaResult []byte
+	err := s.db.QueryRowContext(ctx, `SELECT j.current_generation,j.source_revision,COALESCE(r.id::text,''),j.result_generation,
+COALESCE(r.authoritative_subject_code,''),COALESCE(r.recognition_policy_hash,''),COALESCE(r.recognition_policy_snapshot,'{}'::jsonb),
+COALESCE(f.status,''),COALESCE(f.result,'{}'::jsonb)
 FROM paper_import_job j
 LEFT JOIN paper_import_run r ON r.tenant_id=j.tenant_id AND r.paper_import_id=j.id AND r.generation=j.current_generation
-WHERE j.tenant_id=$1 AND j.id=$2::uuid`, tenantID, job.ID).Scan(&job.Generation, &job.SourceRevision, &job.RunID, &resultGeneration)
+LEFT JOIN paper_import_formula_input f ON f.tenant_id=r.tenant_id AND f.run_id=r.id
+WHERE j.tenant_id=$1 AND j.id=$2::uuid`, tenantID, job.ID).Scan(&job.Generation, &job.SourceRevision, &job.RunID, &resultGeneration, &job.AuthoritativeSubjectCode, &job.RecognitionPolicyHash, &policyJSON, &job.FormulaStatus, &formulaResult)
 	if err != nil {
 		return err
 	}
 	if resultGeneration.Valid {
 		job.ResultGeneration = resultGeneration.Int64
+	}
+	var policy PaperRecognitionPolicy
+	if json.Unmarshal(policyJSON, &policy) == nil {
+		job.RecognitionPolicyVersion = policy.Version
+	}
+	var formulaResultValue PaperImportFormulaResult
+	if json.Unmarshal(formulaResult, &formulaResultValue) == nil {
+		job.FormulaRegionCount = len(formulaResultValue.Regions)
+		for _, region := range formulaResultValue.Regions {
+			if region.Status != "accepted" {
+				job.FormulaReviewCount++
+			}
+		}
+	}
+	if job.RunID == "" {
+		return nil
+	}
+	var runtime PaperImportRuntimeProgress
+	var runtimeJSON []byte
+	var startedAt sql.NullTime
+	err = s.db.QueryRowContext(ctx, `SELECT task_type,status,progress,started_at,updated_at
+FROM agent_worker_task
+WHERE tenant_id=$1 AND paper_import_run_id=$2::uuid AND paper_import_generation=$3
+ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'leased' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END,
+         created_at DESC
+LIMIT 1`, tenantID, job.RunID, job.Generation).Scan(
+		&runtime.TaskType, &runtime.TaskStatus, &runtimeJSON, &startedAt, &runtime.UpdatedAt,
+	)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil {
+		_ = json.Unmarshal(runtimeJSON, &runtime)
+		if startedAt.Valid {
+			value := startedAt.Time.UTC()
+			runtime.StartedAt = &value
+		}
+		job.RuntimeProgress = &runtime
 	}
 	return nil
 }

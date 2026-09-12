@@ -213,6 +213,7 @@ func (s *MemoryStore) Heartbeat(_ context.Context, tenantID string, taskID strin
 	task.UpdatedAt = now
 	task.Revision++
 	task.LeaseExpiresAt = &expires
+	task.Progress = cloneMap(input.Progress)
 	if len(task.Attempts) > 0 {
 		attempt := &task.Attempts[len(task.Attempts)-1]
 		attempt.Status = StatusRunning
@@ -665,6 +666,7 @@ func percentile95(values []int) int {
 func cloneTask(task Task) Task {
 	task.Payload = cloneMap(task.Payload)
 	task.Result = cloneMap(task.Result)
+	task.Progress = cloneMap(task.Progress)
 	task.ErrorDetail = cloneMap(task.ErrorDetail)
 	task.Attempts = append([]Attempt{}, task.Attempts...)
 	for i := range task.Attempts {

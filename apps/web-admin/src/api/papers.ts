@@ -87,6 +87,37 @@ export interface PaperImportJob {
   source_revision: string;
   result_generation?: number;
   subject: string;
+	authoritative_subject_code?: string;
+	recognition_policy_version?: string;
+	recognition_policy_hash?: string;
+	formula_status?: "pending" | "running" | "succeeded" | "review_required" | "failed";
+	formula_region_count?: number;
+	formula_review_count?: number;
+	runtime_progress?: {
+		task_type: string;
+		task_status: string;
+		stage?: string;
+		phase?: string;
+		completed?: number;
+		total?: number;
+		unit?: "document" | "page" | "formula_region" | string;
+		page_no?: number;
+		page_total?: number;
+		batch_no?: number;
+		batch_total?: number;
+		batch_size?: number;
+		event_seq?: number;
+		cold_start?: boolean;
+		model?: string;
+		runtime_mode?: "resident" | "per_job" | string;
+		runtime_plan_source?: "explicit" | "measured_profile" | "compatibility_default" | string;
+		runtime_batch_size?: number;
+		parse_route?: string;
+		message?: string;
+		progress_changed_at?: string;
+		started_at?: string;
+		updated_at: string;
+	};
 	sources: PaperImportSource[];
 	question_candidates: QuestionCandidate[];
 	answer_candidates: AnswerCandidate[];
@@ -97,6 +128,7 @@ export interface PaperImportJob {
   issues: string[];
   error_code?: string;
   created_at: string;
+  updated_at?: string;
   applied_at?: string;
 }
 
@@ -222,6 +254,10 @@ export async function listPaperImports(examId: string) {
   return generatedApi.listPaperImports({ path: { examId } });
 }
 
+export async function getPaperImport(importId: string) {
+	return apiClient.request<{ import: PaperImportJob }>(`/api/v1/paper-imports/${encodeURIComponent(importId)}`);
+}
+
 export async function createPaperImport(examId: string, payload: { exam_paper_id?: string; subject: string; sources: { file_asset_id: string; document_index: number; role_hint?: PaperImportRole }[]; paper_file_asset_id?: string; answer_file_asset_id?: string }, commandId: string) {
   return apiClient.request<{ import: PaperImportJob }>(`/api/v1/exams/${encodeURIComponent(examId)}/paper-imports`, { method: "POST", headers: { "Idempotency-Key": commandId }, body: JSON.stringify(payload) });
 }
@@ -246,6 +282,12 @@ export async function cancelPaperImport(importId: string, expectedGeneration: nu
   return apiClient.request<{ import: PaperImportJob }>(`/api/v1/paper-imports/${encodeURIComponent(importId)}/cancel?expected_generation=${expectedGeneration}`, {
     method: "POST", headers: { "Idempotency-Key": commandId }
   });
+}
+
+export async function retryPaperImportParse(importId: string, expectedGeneration: number) {
+	return apiClient.request<{ import: PaperImportJob }>(`/api/v1/paper-imports/${encodeURIComponent(importId)}/retry-parse?expected_generation=${expectedGeneration}`, {
+		method: "POST"
+	});
 }
 
 export async function listQuestions(examId: string) {

@@ -71,6 +71,7 @@ func newOrganizationAdminStore(t *testing.T) *auth.MemoryStore {
 	store.AddRole("t-1", auth.AssignableRole{Code: "teacher", Name: "教师", ScopeType: "class"})
 	store.AddRole("t-1", auth.AssignableRole{Code: "grader", Name: "阅卷员", ScopeType: "exam_task"})
 	store.AddRole("t-1", auth.AssignableRole{Code: "arbitrator", Name: "仲裁员", ScopeType: "exam_task"})
+	store.AddRole("t-1", auth.AssignableRole{Code: "school_admin", Name: "学校管理员", ScopeType: "school"})
 	store.AddRole("t-1", auth.AssignableRole{Code: "student", Name: "学生", ScopeType: "self"})
 	store.AddRole("t-1", auth.AssignableRole{Code: "page_processing_worker", Name: "Worker", ScopeType: "service"})
 	store.AddRole("t-1", auth.AssignableRole{Code: "tenant_admin", Name: "租户管理员", ScopeType: "tenant"})
@@ -310,6 +311,63 @@ func TestOrganizationAdminCreatesAndListsTenantUser(t *testing.T) {
 	}
 	if !foundAudit {
 		t.Fatal("expected auth.user_created audit")
+	}
+}
+
+func TestOrganizationAdminCannotDisableLastActiveSchoolAdmin(t *testing.T) {
+	store := newOrganizationAdminStore(t)
+	router := newTestRouter(store)
+	token := login(t, router, "demo", "admin", "AdminStart123!")
+	createAdmin := func(username string) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{
+			"username":"`+username+`","display_name":"学校管理员","password":"SchoolAdmin123!","role_code":"school_admin","school_id":"school-1"
+		}`))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create school admin expected 201, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var response struct {
+			User auth.ManagedUser `json:"user"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+			t.Fatalf("decode school admin: %v", err)
+		}
+		return response.User.ID
+	}
+	updateStatus := func(userID, status string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/"+userID+"/status", strings.NewReader(`{"status":"`+status+`"}`))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	firstID := createAdmin("school_admin_1")
+	secondID := createAdmin("school_admin_2")
+	if rec := updateStatus(firstID, "disabled"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"disabled"`) {
+		t.Fatalf("disable school admin expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec := updateStatus(secondID, "disabled"); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"last_school_admin"`) {
+		t.Fatalf("last school admin expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec := updateStatus(firstID, "active"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"active"`) {
+		t.Fatalf("restore school admin expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	foundAudit := false
+	for _, event := range store.Audits() {
+		if event.Action == "auth.user_status_updated" && event.TargetID == firstID {
+			foundAudit = true
+		}
+	}
+	if !foundAudit {
+		t.Fatal("expected auth.user_status_updated audit")
 	}
 }
 

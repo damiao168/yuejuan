@@ -57,7 +57,7 @@ class HeartbeatRecordingClient:
     def claim(self, worker_id: str, limit: int, lease_seconds: int) -> list[dict]:
         return [_omr_task()]
 
-    def heartbeat(self, task: dict, worker_id: str, lease_seconds: int, timeout: float | None = None) -> None:
+    def heartbeat(self, task: dict, worker_id: str, lease_seconds: int, timeout: float | None = None, progress: dict | None = None) -> None:
         self.attempts += 1
         if self.fail_after is not None and self.attempts > self.fail_after:
             raise self.failure

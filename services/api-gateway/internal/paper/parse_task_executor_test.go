@@ -64,3 +64,49 @@ func TestParseTaskExecutorRejectsTimeoutWithoutLeaseSafetyMargin(t *testing.T) {
 		t.Fatalf("unsafe timeout accepted: %v", err)
 	}
 }
+
+func TestParseHeartbeatDoesNotAdvanceEventSequenceWithoutNewProgress(t *testing.T) {
+	ctx := context.Background()
+	runtime := workerruntime.NewMemoryStore()
+	created, err := runtime.CreateTask(ctx, "tenant-1", "actor-1", workerruntime.CreateTaskInput{
+		TaskType: "paper_parse", QueueName: "paper-parse", SourceType: "paper_import_parse", SourceID: "input-1",
+		IdempotencyKey: "paper-parse:input-1", PayloadSchemaVersion: "paper-parse.v1", MaxAttempts: 1, RetryBackoffSeconds: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := runtime.Claim(ctx, "tenant-1", workerruntime.ClaimInput{
+		QueueName: "paper-parse", WorkerService: "api-gateway-paper-parser", WorkerInstanceID: "parser-1", Limit: 1, LeaseSeconds: 300,
+	})
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim parse task: %v %#v", err, claimed)
+	}
+	executionCtx, cancelExecution := context.WithCancel(ctx)
+	heartbeat := newParseTaskHeartbeat(runtime, claimed[0], "parser-1", 300, 5*time.Millisecond, cancelExecution)
+	if err := heartbeat.setProgress(executionCtx, "model_request", 0, 2, "compact_model", "正在处理"); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := runtime.Get(ctx, "tenant-1", created.ID)
+	heartbeat.start(executionCtx)
+	time.Sleep(18 * time.Millisecond)
+	if err := heartbeat.close(); err != nil {
+		t.Fatal(err)
+	}
+	last, _ := runtime.Get(ctx, "tenant-1", created.ID)
+	cancelExecution()
+	if last.Progress["event_seq"] != first.Progress["event_seq"] {
+		t.Fatalf("liveness heartbeat changed factual event sequence: first=%#v last=%#v", first.Progress, last.Progress)
+	}
+	if !last.UpdatedAt.After(first.UpdatedAt) {
+		t.Fatalf("periodic heartbeat did not update liveness timestamp: first=%v last=%v", first.UpdatedAt, last.UpdatedAt)
+	}
+}
+
+func TestNormalizedParseProgressRejectsInventedOrFractionalCounts(t *testing.T) {
+	phase, completed, total, route := normalizedParseProgress(map[string]any{
+		"phase": "invented", "route": "invented", "completed": 1.5, "total": 2.0,
+	})
+	if phase != "structuring" || completed != 0 || total != 0 || route != "" {
+		t.Fatalf("untrusted progress was accepted: %q %d/%d %q", phase, completed, total, route)
+	}
+}

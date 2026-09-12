@@ -4,8 +4,10 @@ import hashlib
 import io
 import logging
 import math
+import threading
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from edugrade_worker_runtime import LeaseHeartbeat, validate_lease_timing
@@ -221,8 +223,11 @@ class OCRRunner:
         ) as heartbeat:
             blocks: list[dict[str, Any]] = []
             try:
-                for page in pages:
+                page_total = len(pages)
+                heartbeat.set_progress({"stage": "text_ocr", "phase": "recognizing", "completed": 0, "total": page_total, "unit": "page", "page_total": page_total, "model": self.engine.model_version, "message": "正在识别第 1 页"}, flush=True)
+                for page_index, page in enumerate(pages, 1):
                     heartbeat.raise_if_failed()
+                    heartbeat.set_progress({"stage": "text_ocr", "phase": "recognizing", "completed": page_index - 1, "total": page_total, "unit": "page", "page_no": page_index, "page_total": page_total, "model": self.engine.model_version, "message": f"正在识别第 {page_index}/{page_total} 页"}, flush=True)
                     source_id = str(page.get("source_id") or "")
                     document_index = int(page.get("document_index", -1))
                     page_no = int(page.get("page_no") or 0)
@@ -232,6 +237,7 @@ class OCRRunner:
                     for block in self.engine.recognize(image):
                         if _valid_block(block.text, block.bbox, block.confidence):
                             blocks.append({"source_id": source_id, "document_index": document_index, "page_no": page_no, "block_id": f"{source_id}:{page_no}:{len(blocks)+1}", "text": block.text, "bbox": block.bbox, "confidence": block.confidence})
+                    heartbeat.set_progress({"stage": "text_ocr", "phase": "recognizing", "completed": page_index, "total": page_total, "unit": "page", "page_no": page_index, "page_total": page_total, "model": self.engine.model_version, "message": f"已识别 {page_index}/{page_total} 页，累计 {len(blocks)} 个文本块"}, flush=True)
                 if not blocks:
                     raise ValueError("empty_ocr_result")
             except AuthenticationError:
@@ -311,6 +317,9 @@ class _LeaseHeartbeat(LeaseHeartbeat):
         self.lease_token = lease_token
         self.worker_id = worker_id
         self.tenant_id = tenant_id
+        self._progress: dict[str, Any] = {}
+        self._progress_event_seq = 0
+        self._progress_lock = threading.Lock()
         super().__init__(
             send=self._send,
             interval=interval,
@@ -320,6 +329,8 @@ class _LeaseHeartbeat(LeaseHeartbeat):
         )
 
     def _send(self) -> None:
+        with self._progress_lock:
+            progress = dict(self._progress)
         self.api.heartbeat_task(
             self.runtime_task_id,
             self.lease_token,
@@ -327,7 +338,19 @@ class _LeaseHeartbeat(LeaseHeartbeat):
             self.lease_seconds,
             self.request_timeout,
             self.tenant_id,
+            progress=progress,
         )
+
+    def set_progress(self, progress: dict[str, Any], *, flush: bool = False) -> None:
+        with self._progress_lock:
+            self._progress_event_seq += 1
+            self._progress = {
+                **progress,
+                "event_seq": self._progress_event_seq,
+                "progress_changed_at": datetime.now(UTC).isoformat(),
+            }
+        if flush:
+            self._send()
 
 
 def _valid_block(text: str, bbox: list[float], confidence: float) -> bool:

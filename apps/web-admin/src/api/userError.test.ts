@@ -18,6 +18,7 @@ describe("user-facing API errors", () => {
     ["student_no_conflict", "该学号已存在，请更换学号。"],
     ["class_code_conflict", "该年级中已存在相同的班级代码，请更换代码。"],
     ["username_exists", "该登录账号已被使用，请更换账号。"],
+    ["last_school_admin", "每所学校必须保留至少一位启用的学校管理员，请先添加或恢复另一位管理员。"],
     ["invalid_role_binding", "所选角色与学校或班级不匹配，请重新选择。"]
   ])("maps %s to Chinese", (code, expected) => {
     expect(getUserErrorMessage(new ApiClientError(409, code, "English backend message"))).toBe(expected);

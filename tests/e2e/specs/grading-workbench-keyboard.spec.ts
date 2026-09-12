@@ -44,9 +44,9 @@ test("阅卷教师先理解异常原因，再用键盘连续完成 20 份跨学�
 
     // Refresh leaves focus outside form inputs. The score and submit are then
     // exclusively driven by the documented keyboard shortcuts.
-    await page.keyboard.press(String((index % 8) + 1));
+    await page.keyboard.press("1");
     await expect(submit).toBeEnabled();
-    await page.keyboard.press("Enter");
+    await page.keyboard.press("Control+Enter");
     await expect.poll(() => state.submissions).toHaveLength(index + 1);
 
     if (index + 1 < state.tasks.length) {

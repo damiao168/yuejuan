@@ -144,6 +144,7 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
   const [tasks, setTasks] = useState<ArbitrationTask[]>([]);
   const [examNames, setExamNames] = useState<Record<string, string>>({});
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const requestedTaskRef = useRef(hashQueryParam("task"));
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [loadingMoreTasks, setLoadingMoreTasks] = useState(false);
   const [nextTaskCursor, setNextTaskCursor] = useState("");
@@ -254,10 +255,18 @@ export function ArbitrationPage({ canAssign, canWork, canReadAudit, canReadExams
       const scopedTasks = initialExamId
         ? result.arbitration_tasks.filter((task) => task.exam_id === initialExamId)
         : result.arbitration_tasks;
+      const requestedId = requestedTaskRef.current;
+      if (requestedId && !scopedTasks.some((task) => task.id === requestedId)) {
+        const { arbitration_task: task } = await getArbitrationTask(requestedId);
+        if (requestId !== taskRequestRef.current) return;
+        if ((initialExamId && task.exam_id !== initialExamId) || ((personalScope || scope === "mine") && task.assigned_to !== actorId)) throw new Error("此任务不在当前考试或已转派，请返回我的工作查看最新任务");
+        scopedTasks.unshift(task);
+      }
+      requestedTaskRef.current = "";
       setTasks(scopedTasks);
       setNextTaskCursor(result.next_cursor ?? "");
       setHasMoreTasks(Boolean(result.has_more));
-      setSelectedTaskId((current) => (scopedTasks.some((task) => task.id === current) ? current : scopedTasks[0]?.id ?? ""));
+      setSelectedTaskId((current) => requestedId || (scopedTasks.some((task) => task.id === current) ? current : scopedTasks[0]?.id ?? ""));
       void loadExamNames(scopedTasks);
     } catch (error) {
       if (requestId !== taskRequestRef.current) return;

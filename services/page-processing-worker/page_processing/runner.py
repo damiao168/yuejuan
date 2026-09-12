@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import threading
 import time
 import traceback
 
@@ -32,6 +33,9 @@ class _NullHeartbeat:
         return None
 
     def stop(self, raise_on_error: bool = True) -> None:
+        return None
+
+    def set_progress(self, progress: dict, *, flush: bool = False) -> None:
         return None
 
 
@@ -94,13 +98,16 @@ class Runner:
         if str(task.get("source_type") or "") != "paper_import_job" or not isinstance(payload.get("documents"), list):
             raise DecodeError("unsupported_layout_task")
         results = []
-        for document in payload["documents"]:
+        document_total = len(payload["documents"])
+        heartbeat.set_progress({"stage": "page_decode", "phase": "decoding", "completed": 0, "total": document_total, "unit": "document", "message": f"准备处理 {document_total} 份资料"}, flush=True)
+        for document_position, document in enumerate(payload["documents"], 1):
             source_id = str(document.get("source_id") or "")
             document_index = int(document.get("document_index", -1))
             if not source_id or document_index < 0:
                 raise DecodeError("paper_import_source_invalid")
             source = self.client.download(str(document["download_url"]))
             heartbeat.raise_if_failed()
+            heartbeat.set_progress({"stage": "page_decode", "phase": "decoding", "completed": document_position - 1, "total": document_total, "unit": "document", "message": f"正在解析第 {document_position}/{document_total} 份资料"}, flush=True)
             pages, _ = decode_document(
                 source, str(document.get("content_type") or ""),
                 render_dpi=int(document.get("render_dpi") or 220),
@@ -108,10 +115,13 @@ class Runner:
                 max_page_pixels=self.config.max_page_pixels,
                 max_total_pixels=self.config.max_total_pixels,
             )
-            for page in pages:
+            page_total = len(pages)
+            for page_position, page in enumerate(pages, 1):
                 heartbeat.raise_if_failed()
+                heartbeat.set_progress({"stage": "page_decode", "phase": "uploading", "completed": page_position - 1, "total": page_total, "unit": "page", "page_no": page_position, "page_total": page_total, "message": f"正在保存第 {page_position}/{page_total} 页"}, flush=True)
                 asset = self.client.upload_asset(task, "import", str(payload["paper_import_id"]), f"source-{document_index:04d}-page-{page.index:04d}.png", page.png)
-                results.append({"source_id": source_id, "document_index": document_index, "page_no": page.index, "file_asset_id": asset["id"], "sha256": asset["hash_sha256"]})
+                results.append({"source_id": source_id, "document_index": document_index, "page_no": page.index, "file_asset_id": asset["id"], "sha256": asset["hash_sha256"], "width": page.width, "height": page.height})
+            heartbeat.set_progress({"stage": "page_decode", "phase": "decoding", "completed": document_position, "total": document_total, "unit": "document", "message": f"已处理 {document_position}/{document_total} 份资料，共生成 {len(results)} 页"}, flush=True)
         heartbeat.stop(raise_on_error=False)
         self.client.complete_paper_import_decode(str(payload["paper_import_id"]), {
             "task_id": task["id"], "lease_token": task["lease_token"],
@@ -437,6 +447,8 @@ class _LeaseHeartbeat(LeaseHeartbeat):
         self.client = client
         self.task = task
         self.worker_id = worker_id
+        self._progress: dict[str, object] = {}
+        self._progress_lock = threading.Lock()
         super().__init__(
             send=self._send,
             interval=interval,
@@ -446,4 +458,12 @@ class _LeaseHeartbeat(LeaseHeartbeat):
         )
 
     def _send(self) -> None:
-        self.client.heartbeat(self.task, self.worker_id, self.lease_seconds, timeout=self.request_timeout)
+        with self._progress_lock:
+            progress = dict(self._progress)
+        self.client.heartbeat(self.task, self.worker_id, self.lease_seconds, timeout=self.request_timeout, progress=progress)
+
+    def set_progress(self, progress: dict, *, flush: bool = False) -> None:
+        with self._progress_lock:
+            self._progress = dict(progress)
+        if flush:
+            self._send()

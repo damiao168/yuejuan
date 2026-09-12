@@ -6,7 +6,7 @@ var validTaskTypes = map[string]bool{
 	"ocr": true, "layout": true, "preprocess": true, "image_quality": true,
 	"ai_grade": true, "evidence_verify": true, "report_generate": true,
 	"export": true, "desktop_sync": true, "omr_extract": true,
-	"paper_parse": true,
+	"paper_parse": true, "paper_formula": true,
 }
 
 func normalizeCreateInput(input CreateTaskInput) CreateTaskInput {

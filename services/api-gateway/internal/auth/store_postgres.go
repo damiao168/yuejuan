@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -714,6 +715,93 @@ ON CONFLICT (tenant_id, teacher_id, class_id) DO UPDATE SET deleted_at=NULL, upd
 	}
 	user.Roles = []string{input.RoleCode}
 	return user, nil
+}
+
+func (s *PostgresStore) UpdateManagedUserStatus(ctx context.Context, actor User, actorScope AccessScope, userID string, status string) (ManagedUser, string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ManagedUser{}, "", err
+	}
+	defer tx.Rollback()
+
+	var user ManagedUser
+	err = tx.QueryRowContext(ctx, `
+SELECT id::text, username, display_name, status, COALESCE(school_id::text, ''), created_at
+FROM app_user
+WHERE tenant_id=$1::uuid AND id::text=$2 AND deleted_at IS NULL
+FOR UPDATE
+`, actor.TenantID, userID).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, &user.SchoolID, &user.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ManagedUser{}, "", ErrManagedUserNotFound
+	}
+	if err != nil {
+		return ManagedUser{}, "", err
+	}
+	if user.ID == actor.ID {
+		return ManagedUser{}, "", ErrUserStatusForbidden
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT r.code
+FROM user_role ur
+JOIN role r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id AND r.deleted_at IS NULL
+WHERE ur.tenant_id=$1::uuid AND ur.user_id=$2::uuid AND ur.deleted_at IS NULL
+ORDER BY r.code
+`, actor.TenantID, user.ID)
+	if err != nil {
+		return ManagedUser{}, "", err
+	}
+	for rows.Next() {
+		var role string
+		if err := rows.Scan(&role); err != nil {
+			rows.Close()
+			return ManagedUser{}, "", err
+		}
+		user.Roles = append(user.Roles, role)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ManagedUser{}, "", err
+	}
+	if err := rows.Close(); err != nil {
+		return ManagedUser{}, "", err
+	}
+	if !CanManageUserRoles(actor, user.Roles) {
+		return ManagedUser{}, "", ErrUserStatusForbidden
+	}
+	if !actorScope.TenantWide && (user.SchoolID == "" || !actorScope.AllowsSchool(user.SchoolID)) {
+		return ManagedUser{}, "", ErrOrganizationScope
+	}
+	previousStatus := user.Status
+	if previousStatus == status {
+		return user, previousStatus, nil
+	}
+	if status == "disabled" && slices.Contains(user.Roles, "school_admin") {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, actor.TenantID+"|"+user.SchoolID+"|school-admin-status"); err != nil {
+			return ManagedUser{}, "", err
+		}
+		var activeAdmins int
+		if err := tx.QueryRowContext(ctx, `
+SELECT count(DISTINCT u.id)
+FROM app_user u
+JOIN user_role ur ON ur.tenant_id=u.tenant_id AND ur.user_id=u.id AND ur.deleted_at IS NULL
+JOIN role r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id AND r.deleted_at IS NULL
+WHERE u.tenant_id=$1::uuid AND COALESCE(u.school_id::text, '')=$2
+  AND u.status='active' AND u.deleted_at IS NULL AND r.code='school_admin'
+`, actor.TenantID, user.SchoolID).Scan(&activeAdmins); err != nil {
+			return ManagedUser{}, "", err
+		}
+		if activeAdmins <= 1 {
+			return ManagedUser{}, "", ErrLastSchoolAdmin
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE app_user SET status=$3, updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`, actor.TenantID, user.ID, status); err != nil {
+		return ManagedUser{}, "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return ManagedUser{}, "", err
+	}
+	user.Status = status
+	return user, previousStatus, nil
 }
 
 func auditJSON(value map[string]any) any {

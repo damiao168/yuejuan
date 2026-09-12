@@ -4,9 +4,9 @@
   "exception_ledger": "contracts/openapi/registered-route-exceptions.json",
   "policy": "Every registered route is covered by OpenAPI or an exact, reviewed exception-ledger entry; generation never invents approvals.",
   "counts": {
-    "registered": 430,
-    "openapi": 163,
-    "registered_gaps": 267
+    "registered": 438,
+    "openapi": 165,
+    "registered_gaps": 273
   },
   "routes": [
     {
@@ -2380,6 +2380,19 @@
     },
     {
       "method": "POST",
+      "path": "/api/v1/internal/paper-imports/{id}/formula-result",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "interface_category": "internal-worker",
+      "contract_carrier": "versioned worker runtime payloads and Go integration tests",
+      "exception_scope": "Only the exact service-to-service endpoints listed below; no browser/client use.",
+      "exception_policy": "internal-worker-protocol-v1",
+      "owner": "api-platform",
+      "review_after": "2026-12-31",
+      "reason": "Internal worker transport is versioned and tested independently from the public SDK."
+    },
+    {
+      "method": "POST",
       "path": "/api/v1/internal/paper-imports/{id}/ocr-result",
       "source": "services/api-gateway/internal/server/server.go",
       "coverage": "registered-gap",
@@ -3259,6 +3272,13 @@
       "operation_id": "cancelPaperImport"
     },
     {
+      "method": "POST",
+      "path": "/api/v1/paper-imports/{id}/retry-parse",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "retryPaperImportParse"
+    },
+    {
       "method": "PUT",
       "path": "/api/v1/paper-imports/{id}/review",
       "source": "services/api-gateway/internal/server/server.go",
@@ -3306,6 +3326,19 @@
       "reason": "Legacy command surface predates the OpenAPI migration; this exact list is a temporary reviewed exception."
     },
     {
+      "method": "DELETE",
+      "path": "/api/v1/platform/model-api-configs/{id}",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "interface_category": "public-feature",
+      "contract_carrier": "Go handler and registry tests plus the typed web-admin API client",
+      "exception_scope": "Only the exact managed model automatic resolution, validation, creation, and safe deletion endpoints listed below.",
+      "exception_policy": "managed-model-auto-config-v1",
+      "owner": "model-platform",
+      "review_after": "2026-12-31",
+      "reason": "The managed model page predates OpenAPI migration; these endpoints complete its bounded typed workflow without expanding the generated SDK surface in this release."
+    },
+    {
       "method": "PATCH",
       "path": "/api/v1/platform/model-api-configs/{id}",
       "source": "services/api-gateway/internal/server/server.go",
@@ -3330,6 +3363,58 @@
       "owner": "api-platform",
       "review_after": "2026-12-31",
       "reason": "Legacy command surface predates the OpenAPI migration; this exact list is a temporary reviewed exception."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/model-api-configs/auto",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "interface_category": "public-feature",
+      "contract_carrier": "Go handler and registry tests plus the typed web-admin API client",
+      "exception_scope": "Only the exact managed model automatic resolution, validation, creation, and safe deletion endpoints listed below.",
+      "exception_policy": "managed-model-auto-config-v1",
+      "owner": "model-platform",
+      "review_after": "2026-12-31",
+      "reason": "The managed model page predates OpenAPI migration; these endpoints complete its bounded typed workflow without expanding the generated SDK surface in this release."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/model-api-configs/models",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "interface_category": "public-feature",
+      "contract_carrier": "Go handler and registry tests plus the typed web-admin API client",
+      "exception_scope": "Only the exact managed model automatic resolution, validation, creation, and safe deletion endpoints listed below.",
+      "exception_policy": "managed-model-auto-config-v1",
+      "owner": "model-platform",
+      "review_after": "2026-12-31",
+      "reason": "The managed model page predates OpenAPI migration; these endpoints complete its bounded typed workflow without expanding the generated SDK surface in this release."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/model-api-configs/resolve",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "interface_category": "public-feature",
+      "contract_carrier": "Go handler and registry tests plus the typed web-admin API client",
+      "exception_scope": "Only the exact managed model automatic resolution, validation, creation, and safe deletion endpoints listed below.",
+      "exception_policy": "managed-model-auto-config-v1",
+      "owner": "model-platform",
+      "review_after": "2026-12-31",
+      "reason": "The managed model page predates OpenAPI migration; these endpoints complete its bounded typed workflow without expanding the generated SDK surface in this release."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/model-api-configs/validate",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "registered-gap",
+      "interface_category": "public-feature",
+      "contract_carrier": "Go handler and registry tests plus the typed web-admin API client",
+      "exception_scope": "Only the exact managed model automatic resolution, validation, creation, and safe deletion endpoints listed below.",
+      "exception_policy": "managed-model-auto-config-v1",
+      "owner": "model-platform",
+      "review_after": "2026-12-31",
+      "reason": "The managed model page predates OpenAPI migration; these endpoints complete its bounded typed workflow without expanding the generated SDK surface in this release."
     },
     {
       "method": "GET",
@@ -4594,6 +4679,13 @@
       "owner": "api-platform",
       "review_after": "2026-12-31",
       "reason": "Legacy command surface predates the OpenAPI migration; this exact list is a temporary reviewed exception."
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/users/{id}/status",
+      "source": "services/api-gateway/internal/server/server.go",
+      "coverage": "openapi",
+      "operation_id": "updateManagedUserStatus"
     },
     {
       "method": "GET",

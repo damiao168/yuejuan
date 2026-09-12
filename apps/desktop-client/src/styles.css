@@ -68,7 +68,7 @@ select {
   border-radius: 8px;
   background: var(--primary);
   color: #fff;
-  font-size: 20px;
+  font-size: 1.25rem;
   font-weight: 800;
 }
 
@@ -86,7 +86,7 @@ select {
 }
 
 .desktop-brand h1 {
-  font-size: 18px;
+  font-size: var(--eg-font-section);
   line-height: 1.2;
   letter-spacing: 0;
 }
@@ -154,13 +154,13 @@ select {
 
 .desktop-topbar h2 {
   margin: 2px 0 0;
-  font-size: 26px;
+  font-size: 1.625rem;
   line-height: 1.2;
   letter-spacing: 0;
 }
 
 .eyebrow {
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
   text-transform: uppercase;
   letter-spacing: 0;
 }
@@ -231,7 +231,7 @@ select {
 }
 
 .section-head h3 {
-  font-size: 17px;
+  font-size: 1.0625rem;
   line-height: 1.3;
   letter-spacing: 0;
 }
@@ -262,7 +262,7 @@ select {
   grid-template-columns: auto minmax(0, 1fr) 8px;
   gap: 8px;
   align-items: center;
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
 }
 
 .status-line span {
@@ -342,7 +342,7 @@ select {
   object-fit: cover;
   color: var(--text-muted);
   background: var(--surface-soft);
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
   font-weight: 700;
 }
 
@@ -519,7 +519,7 @@ select {
 
 .capability-tile h4 {
   margin: 12px 0 6px;
-  font-size: 15px;
+  font-size: 0.9375rem;
   letter-spacing: 0;
 }
 
@@ -565,7 +565,7 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 24px;
+  font-size: var(--eg-font-title);
   line-height: 1;
   letter-spacing: 0;
 }
@@ -582,7 +582,7 @@ select {
 .local-cache-security p {
   margin: 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
 }
 
 .capability-row,

@@ -2,6 +2,7 @@ package paper
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -21,6 +22,7 @@ import (
 )
 
 const maxDocumentTextBytes = 700_000
+const maxDocumentParseResponseBytes = 4 << 20
 
 var errDocumentOCRRequired = errors.New("document OCR required")
 
@@ -326,7 +328,7 @@ func (s *DocumentImportService) ExecuteParse(ctx context.Context, tenantID, impo
 	return s.store.CompletePaperImportCandidates(ctx, tenantID, job.ID, parsed.Documents, parsed.QuestionCandidates, parsed.AnswerCandidates, parsed.SolutionCandidates, parsed.RubricCandidates, parsed.Issues)
 }
 
-func (s *DocumentImportService) computeParseRun(ctx context.Context, tenantID string, binding PaperImportRunBinding) (documentParseResponse, error) {
+func (s *DocumentImportService) computeParseRun(ctx context.Context, tenantID string, binding PaperImportRunBinding, onProgress func(map[string]any) error) (documentParseResponse, error) {
 	job, err := s.store.GetPaperImport(ctx, tenantID, binding.ImportID)
 	if err != nil {
 		return documentParseResponse{}, err
@@ -336,7 +338,7 @@ func (s *DocumentImportService) computeParseRun(ctx context.Context, tenantID st
 	}
 	parseContext, release := s.beginParse(ctx, tenantID, job.ID)
 	defer release()
-	parsed, err := s.parseForTenant(parseContext, tenantID, job.ID, job.Subject, binding.Input.Documents)
+	parsed, err := s.parseForTenantWithProgress(parseContext, tenantID, job.ID, job.Subject, binding.Input.Documents, onProgress)
 	if err != nil {
 		return documentParseResponse{}, err
 	}
@@ -428,6 +430,10 @@ func (s *DocumentImportService) assetText(ctx context.Context, tenantID, id stri
 }
 
 func (s *DocumentImportService) parseForTenant(ctx context.Context, tenantID, requestID, subject string, documents []normalizedImportDocument) (documentParseResponse, error) {
+	return s.parseForTenantWithProgress(ctx, tenantID, requestID, subject, documents, nil)
+}
+
+func (s *DocumentImportService) parseForTenantWithProgress(ctx context.Context, tenantID, requestID, subject string, documents []normalizedImportDocument, onProgress func(map[string]any) error) (documentParseResponse, error) {
 	if s.baseURL == "" || len(s.token) < 32 {
 		return documentParseResponse{}, errors.New("AI service not configured")
 	}
@@ -446,6 +452,7 @@ func (s *DocumentImportService) parseForTenant(ctx context.Context, tenantID, re
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.token)
+	req.Header.Set("Accept", "application/x-ndjson, application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return documentParseResponse{}, err
@@ -454,12 +461,74 @@ func (s *DocumentImportService) parseForTenant(ctx context.Context, tenantID, re
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return documentParseResponse{}, fmt.Errorf("paper parser returned %d", resp.StatusCode)
 	}
-	var out documentParseResponse
-	dec := json.NewDecoder(io.LimitReader(resp.Body, 4<<20))
-	if err := dec.Decode(&out); err != nil {
-		return documentParseResponse{}, err
+	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "application/x-ndjson") {
+		var out documentParseResponse
+		dec := json.NewDecoder(io.LimitReader(resp.Body, maxDocumentParseResponseBytes))
+		if err := dec.Decode(&out); err != nil {
+			return documentParseResponse{}, err
+		}
+		return out, nil
 	}
-	return out, nil
+
+	type streamFrame struct {
+		Type     string                 `json:"type"`
+		Progress map[string]any         `json:"progress"`
+		Result   *documentParseResponse `json:"result"`
+		Error    json.RawMessage        `json:"error"`
+	}
+	type streamError struct {
+		Status int `json:"status"`
+		Error  struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, maxDocumentParseResponseBytes+1))
+	scanner.Buffer(make([]byte, 64<<10), maxDocumentParseResponseBytes+1)
+	readBytes := 0
+	var result *documentParseResponse
+	for scanner.Scan() {
+		readBytes += len(scanner.Bytes()) + 1
+		if readBytes > maxDocumentParseResponseBytes {
+			return documentParseResponse{}, errors.New("paper parser response exceeded size limit")
+		}
+		var frame streamFrame
+		if err := json.Unmarshal(scanner.Bytes(), &frame); err != nil {
+			return documentParseResponse{}, errors.New("paper parser stream contained invalid JSON")
+		}
+		switch frame.Type {
+		case "progress":
+			if onProgress != nil {
+				if err := onProgress(frame.Progress); err != nil {
+					return documentParseResponse{}, err
+				}
+			}
+		case "result":
+			if frame.Result == nil || result != nil {
+				return documentParseResponse{}, errors.New("paper parser stream contained an invalid result")
+			}
+			result = frame.Result
+		case "error":
+			var detail streamError
+			if json.Unmarshal(frame.Error, &detail) != nil {
+				return documentParseResponse{}, errors.New("paper parser stream reported an invalid error")
+			}
+			code := strings.TrimSpace(detail.Error.Code)
+			if code == "" {
+				code = "unknown_error"
+			}
+			return documentParseResponse{}, fmt.Errorf("paper parser stream failed: %s", code)
+		default:
+			return documentParseResponse{}, errors.New("paper parser stream contained an unknown event")
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return documentParseResponse{}, fmt.Errorf("read paper parser stream: %w", err)
+	}
+	if result == nil {
+		return documentParseResponse{}, errors.New("paper parser stream ended without a result")
+	}
+	return *result, nil
 }
 
 func extractDOCXText(data []byte) (string, error) {

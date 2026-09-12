@@ -49,6 +49,7 @@ func TestClaimHeartbeatAndComplete(t *testing.T) {
 
 	running, err := store.Heartbeat(context.Background(), runtimeTenantID, task.ID, workerruntime.HeartbeatInput{
 		LeaseToken: claimed[0].LeaseToken, WorkerService: "image-quality-worker", WorkerInstanceID: "worker-a", State: workerruntime.StatusRunning, LeaseSeconds: 600,
+		Progress: map[string]any{"stage": "quality", "completed": 2, "total": 5},
 	})
 	if err != nil || running.Status != workerruntime.StatusRunning {
 		t.Fatalf("heartbeat task: %v %#v", err, running)
@@ -58,6 +59,9 @@ func TestClaimHeartbeatAndComplete(t *testing.T) {
 	}
 	if running.Revision <= claimed[0].Revision {
 		t.Fatalf("heartbeat must advance task revision: claimed=%d running=%d", claimed[0].Revision, running.Revision)
+	}
+	if running.Progress["stage"] != "quality" || running.Progress["completed"] != float64(2) || running.Progress["total"] != float64(5) {
+		t.Fatalf("heartbeat progress was not persisted: %#v", running.Progress)
 	}
 
 	completed, err := store.Complete(context.Background(), runtimeTenantID, task.ID, workerruntime.CompleteInput{

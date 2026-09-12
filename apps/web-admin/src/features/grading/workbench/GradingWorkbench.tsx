@@ -8,6 +8,7 @@ import {
   batchAssignReviewTasks,
   claimNextReviewTask,
   listReviewTasks,
+  getReviewTask,
   returnReviewTask,
   renewReviewTask,
   releaseReviewTask,
@@ -54,6 +55,7 @@ import { TaskRail } from "./components/TaskRail";
 import { WorkbenchHeader } from "./components/WorkbenchHeader";
 import { ExamScoringPanel } from "./components/ExamScoringPanel";
 import { useGradingKeyboard } from "./hooks/useGradingKeyboard";
+import { hashQueryParam } from "../../../router/query";
 import { useGradingPrefetch } from "./hooks/useGradingPrefetch";
 import { useExamScoring } from "./hooks/useExamScoring";
 import { useAnswerViewer } from "./hooks/useAnswerViewer";
@@ -79,6 +81,8 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
   const [keyword, setKeyword] = useState("");
   const [tasks, setTasks] = useState<ReviewTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const requestedTaskRef = useRef(hashQueryParam("task"));
+  const actionLock = useRef(false);
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [loadingMoreTasks, setLoadingMoreTasks] = useState(false);
   const [nextTaskCursor, setNextTaskCursor] = useState("");
@@ -92,6 +96,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
   const [contextLoading, setContextLoading] = useState(false);
   const [contextError, setContextError] = useState<string | null>(null);
   const [draft, setDraft] = useState<ScoreDraft>(() => createInitialDraft(null));
+  const [quickSubmit, setQuickSubmit] = useState(false);
   const [actioning, setActioning] = useState<string | null>(null);
   const [goldPaperManagerOpen, setGoldPaperManagerOpen] = useState(false);
   const [calibrationQuestionId, setCalibrationQuestionId] = useState("");
@@ -111,7 +116,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     const text = keyword.trim().toLowerCase();
     return tasks.filter((task) => {
       const activeStatuses = canManageTasks ? ["pending", "assigned", "in_progress", "returned"] : ["assigned", "in_progress", "returned"];
-      const statusMatched = taskFilter === "active" ? activeStatuses.includes(task.status) : task.status === taskFilter;
+      const statusMatched = taskFilter === "all" || (taskFilter === "active" ? activeStatuses.includes(task.status) : task.status === taskFilter);
       const examMatched = !initialExamId || task.exam_id === initialExamId;
       const keywordMatched =
         !text ||
@@ -250,7 +255,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
   const rubricPoints = ctx?.question?.rubric?.points ?? [];
   const ownsSelectedTask = Boolean(ctx?.task.assigned_to && ctx.task.assigned_to === currentUserId);
   const canEditDraft = canWork && hasSession && ownsSelectedTask && Boolean(ctx && ["assigned", "in_progress", "returned"].includes(ctx.task.status));
-  const canSubmit = canEditDraft;
+  const canSubmit = canEditDraft && !actioning && draft.score !== null;
   const canUndoScoreChange = hasLastScoreDraftChange;
   const loadTasks = useCallback(async () => {
     const requestId = ++taskListRequestRef.current;
@@ -266,12 +271,20 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
       });
       if (requestId !== taskListRequestRef.current) return;
       const scopedTasks = initialExamId ? result.tasks.filter((task) => task.exam_id === initialExamId) : result.tasks;
+      const requestedId = requestedTaskRef.current;
+      if (requestedId && !scopedTasks.some((task) => task.id === requestedId)) {
+        const { task } = await getReviewTask(requestedId);
+        if (requestId !== taskListRequestRef.current) return;
+        if ((initialExamId && task.exam_id !== initialExamId) || (personalQueue && task.assigned_to !== currentUserId)) throw new Error("此任务不在当前考试或已转派，请返回我的工作查看最新任务");
+        scopedTasks.unshift(task);
+      }
+      if (requestedId) { setSelectedTaskId(requestedId); setTaskFilter("all"); requestedTaskRef.current = ""; }
       setTasks(scopedTasks);
       setNextTaskCursor(result.next_cursor ?? "");
       setHasMoreTasks(Boolean(result.has_more));
-      setSelectedTaskId((current) => scopedTasks.some((task) => task.id === current)
+      setSelectedTaskId((current) => requestedId || (scopedTasks.some((task) => task.id === current)
         ? current
-        : scopedTasks.find((task) => ["assigned", "in_progress", "returned"].includes(task.status))?.id || "");
+        : scopedTasks.find((task) => ["assigned", "in_progress", "returned"].includes(task.status))?.id || ""));
     } catch (currentError) {
       if (requestId !== taskListRequestRef.current) return;
       setTasks([]);
@@ -523,6 +536,8 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
   };
 
   const runAction = async (key: string, action: () => Promise<void>, successText: string) => {
+    if (actionLock.current) return;
+    actionLock.current = true;
     setActioning(key);
     try {
       await action();
@@ -530,6 +545,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     } catch (currentError) {
       message.error(formatError(currentError));
     } finally {
+      actionLock.current = false;
       setActioning(null);
     }
   };
@@ -611,6 +627,10 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     if (!ctx) {
       message.error("请先选择任务");
       return;
+    }
+    if (!canSubmit || draft.score === null) { message.error("请先填写最终分，0分也需要明确输入"); return; }
+    if (rubricPoints.length && Math.abs(draft.score - rubricPoints.reduce((sum, point) => sum + (draft.rubricSelections[point.id] ?? 0), 0)) > 0.001 && (!draft.reason.trim() || draft.reason === "教师复核完成")) {
+      message.error("最终分与评分细则合计不同，请填写人工调整原因"); return;
     }
     const score = Number(draft.score);
     if (!Number.isFinite(score) || score < 0 || score > maxScore) {
@@ -759,6 +779,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
   };
 
   useGradingKeyboard({
+    quickSubmit,
     hasTask: Boolean(ctx),
     canEditDraft,
     canSubmit,
@@ -914,6 +935,8 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
                   context={ctx}
                   draft={draft}
                   setDraft={setDraft}
+                  quickSubmit={quickSubmit}
+                  onQuickSubmitChange={setQuickSubmit}
                   maxScore={maxScore}
                   rubricPoints={rubricPoints}
                   selectedGrade={selectedGrade}

@@ -119,8 +119,8 @@ test("成员管理入口进入正式班级和教师页面", async ({ page }) => 
   await expect(page.getByText("高二（1）班")).toBeVisible();
 
   await page.goto("/#/admin/dashboard");
-  await page.getByRole("button", { name: /教师与阅卷人员/ }).click();
+  await page.getByRole("button", { name: /阅卷教师/ }).click();
   await expect(page).toHaveURL(/#\/admin\/members\/teachers/);
-  await expect(page.getByRole("heading", { name: "教师与阅卷人员" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "阅卷教师" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("数学阅卷老师")).toBeVisible();
 });

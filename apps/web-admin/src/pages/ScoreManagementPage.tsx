@@ -58,6 +58,17 @@ interface IdentityMaps {
   error?: string;
 }
 
+const defaultReleaseVisibility = {
+  show_question_scores: true, show_feedback: false, show_rubric_summary: false,
+  show_cohort_statistics: true, show_percentile: true, show_exact_rank: true,
+  show_question_statistics: true, show_answers: true
+};
+const releaseVisibilityLabels: Record<keyof typeof defaultReleaseVisibility, string> = {
+  show_question_scores: "逐题得分", show_feedback: "教师公开反馈", show_rubric_summary: "评分要点",
+  show_cohort_statistics: "群体统计", show_percentile: "百分位", show_exact_rank: "具体排名",
+  show_question_statistics: "题目统计", show_answers: "参考答案与本人答案"
+};
+
 interface ScoreSummary {
   expectedStudents: number;
   receivedSubmissions: number;
@@ -309,6 +320,7 @@ export function ScoreManagementPage({
   const [attendanceReason, setAttendanceReason] = useState("");
   const [releaseReason, setReleaseReason] = useState("");
   const [releaseHighScorePaper, setReleaseHighScorePaper] = useState(false);
+  const [releaseVisibility, setReleaseVisibility] = useState(defaultReleaseVisibility);
   const [releaseModalOpen, setReleaseModalOpen] = useState(false);
   const [regradeModalOpen, setRegradeModalOpen] = useState(false);
   const [regradeQuestionId, setRegradeQuestionId] = useState("");
@@ -655,14 +667,7 @@ export function ScoreManagementPage({
           reason: releaseReason.trim(),
           idempotency_key: crypto.randomUUID(),
           visibility_policy: {
-            show_question_scores: true,
-            show_feedback: false,
-            show_rubric_summary: false,
-            show_cohort_statistics: true,
-            show_percentile: true,
-            show_exact_rank: true,
-            show_question_statistics: true,
-            show_answers: true,
+            ...releaseVisibility,
             show_high_score_paper: releaseHighScorePaper
           },
           appeal_window: { enabled: selectedExam?.appeal_enabled ?? false }
@@ -682,7 +687,7 @@ export function ScoreManagementPage({
     }
     modal.confirm({
       title: `发布成绩版本 V${release.version}`,
-      content: "发布后该版本成为学生可见的正式成绩。后续更正必须创建新的成绩版本，不能直接改写本版本。",
+      content: <div><p>考试：{selectedExam?.name} · 共 {gradeTotal} 份成绩 · 第 {release.version} 版</p><p>向学生公开：{(Object.keys(releaseVisibilityLabels) as Array<keyof typeof releaseVisibilityLabels>).filter((key) => release.visibility_policy[key]).map((key) => releaseVisibilityLabels[key]).join("、") || "总分"}{release.visibility_policy.show_high_score_paper ? "、最高分答卷" : ""}</p><p>后续更正需创建新版本；本次公开内容以此版本的冻结设置为准。</p></div>,
       okText: "确认发布",
       cancelText: "取消",
       onOk: () => runAction("release-publish", async () => { await publishScoreRelease(release.id); }, "成绩版本已发布")
@@ -1336,6 +1341,8 @@ export function ScoreManagementPage({
         onCancel={() => { setReleaseModalOpen(false); setReleaseReason(""); setReleaseHighScorePaper(false); }}
       >
         <Alert type="info" showIcon message="草稿不会立即对学生生效" description="提交后会冻结当前已确认的成绩事实。请在发布门禁通过后，单独确认发布。" />
+        <p><strong>{selectedExam?.name}</strong> · {gradeTotal} 份成绩</p>
+        <fieldset className="release-visibility-options"><legend>学生可见内容</legend>{(Object.keys(releaseVisibilityLabels) as Array<keyof typeof releaseVisibilityLabels>).map((key) => <Checkbox key={key} checked={releaseVisibility[key]} onChange={(event) => setReleaseVisibility((current) => ({ ...current, [key]: event.target.checked }))}>{releaseVisibilityLabels[key]}</Checkbox>)}</fieldset>
         <label className="score-attendance-label" htmlFor="score-release-reason">发布说明（必填）</label>
         <Input.TextArea id="score-release-reason" rows={3} maxLength={1000} showCount value={releaseReason} placeholder="例如：期末考试首次正式发布" onChange={(event) => setReleaseReason(event.target.value)} />
         <Checkbox checked={releaseHighScorePaper} onChange={(event) => setReleaseHighScorePaper(event.target.checked)}>向学生开放本场最高分答卷</Checkbox>

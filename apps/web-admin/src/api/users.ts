@@ -7,6 +7,7 @@ export interface ManagedUser {
   display_name: string;
   status: string;
   roles: string[];
+  school_id?: string;
   created_at?: string;
 }
 
@@ -38,5 +39,12 @@ export async function createManagedUser(payload: CreateManagedUserPayload) {
   return apiClient.request<{ user: ManagedUser }>("/api/v1/users", {
     method: "POST",
     body: JSON.stringify(payload)
+  });
+}
+
+export async function updateManagedUserStatus(id: string, status: "active" | "disabled") {
+  return apiClient.request<{ user: ManagedUser }>(`/api/v1/users/${encodeURIComponent(id)}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status })
   });
 }

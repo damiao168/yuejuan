@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { App, Button, Form, Input, Modal, Select, Space, Upload, type TableColumnsType } from "antd";
+import { App, Button, Form, Input, Modal, Select, Upload, type TableColumnsType } from "antd";
 import { Download, Plus, RefreshCw, Search, Upload as UploadIcon } from "lucide-react";
 import { getUserErrorMessage } from "../api/client";
 import {
@@ -188,27 +188,42 @@ export function StudentManagementPage() {
   if (error && !students.length) return <ErrorState message={error} onRetry={() => void load()} />;
 
   return (
-    <div className="page-stack student-management-page">
-      <header className="student-management-heading">
+    <div className="member-management-page student-management-page">
+      <section className="member-management-heading">
         <div><h1>学生管理</h1><p>维护日常学生名册；考试创建时直接选择班级范围。</p></div>
-        <Space wrap>
+        <div>
           <Button icon={<RefreshCw size={16} />} loading={loading} onClick={() => void load()}>刷新</Button>
           <Button icon={<UploadIcon size={16} />} onClick={() => setImportOpen(true)}>导入学生</Button>
           <Button type="primary" icon={<Plus size={16} />} onClick={() => setCreateOpen(true)}>新增学生</Button>
-        </Space>
-      </header>
+        </div>
+      </section>
 
       <section className="student-management-filters" aria-label="学生筛选">
-        <Select value={academicYear} options={[{ value: "all", label: "全部学年" }, ...academicYears.map((value) => ({ value, label: `${value}学年` }))]} onChange={(value) => { setAcademicYear(value); setGradeId("all"); setClassId("all"); }} />
-        <Select value={gradeId} options={[{ value: "all", label: "全部年级" }, ...visibleGrades.map((item) => ({ value: item.id, label: gradeBusinessLabel(item) }))]} onChange={(value) => { setGradeId(value); setClassId("all"); }} />
-        <Select value={classId} options={[{ value: "all", label: "全部班级" }, ...visibleClasses.map((item) => ({ value: item.id, label: item.name }))]} onChange={setClassId} />
-        <Select value={status} options={[{ value: "active", label: "在籍" }, { value: "inactive", label: "停用" }, { value: "all", label: "全部状态" }]} onChange={setStatus} />
-        <Input allowClear prefix={<Search size={15} />} value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索姓名或学号" />
+        <label className="student-filter-field student-filter-year">
+          <span>学年</span>
+          <Select size="small" value={academicYear} options={[{ value: "all", label: "全部学年" }, ...academicYears.map((value) => ({ value, label: `${value}学年` }))]} onChange={(value) => { setAcademicYear(value); setGradeId("all"); setClassId("all"); }} />
+        </label>
+        <label className="student-filter-field student-filter-grade">
+          <span>年级</span>
+          <Select size="small" value={gradeId} options={[{ value: "all", label: "全部年级" }, ...visibleGrades.map((item) => ({ value: item.id, label: gradeBusinessLabel(item) }))]} onChange={(value) => { setGradeId(value); setClassId("all"); }} />
+        </label>
+        <label className="student-filter-field student-filter-class">
+          <span>班级</span>
+          <Select size="small" value={classId} options={[{ value: "all", label: "全部班级" }, ...visibleClasses.map((item) => ({ value: item.id, label: item.name }))]} onChange={setClassId} />
+        </label>
+        <label className="student-filter-field student-filter-status">
+          <span>状态</span>
+          <Select size="small" value={status} options={[{ value: "active", label: "在籍" }, { value: "inactive", label: "停用" }, { value: "all", label: "全部状态" }]} onChange={setStatus} />
+        </label>
+        <label className="student-filter-field student-filter-search">
+          <span>搜索</span>
+          <Input size="small" allowClear prefix={<Search size={15} />} value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="姓名或学号" />
+        </label>
       </section>
 
       <section className="student-management-table">
         <div className="section-head"><div><h2>学生名册</h2><p>{filtered.length} 名学生</p></div></div>
-        <ResponsiveTable rowKey="id" columns={columns} dataSource={filtered} scroll={{ x: 760 }} pagination={{ pageSize: 20, showSizeChanger: true }} locale={{ emptyText: <EmptyState title="暂无学生" description="可新增学生，或下载模板后批量导入。" /> }} />
+        <ResponsiveTable rowKey="id" size="small" columns={columns} dataSource={filtered} scroll={{ x: 760 }} pagination={{ size: "small", pageSize: 20, showSizeChanger: true }} locale={{ emptyText: <EmptyState title="暂无学生" description="可新增学生，或下载模板后批量导入。" /> }} />
       </section>
 
       <Modal title="新增学生" open={createOpen} okText="保存" cancelText="取消" confirmLoading={saving} onOk={() => void submitStudent()} onCancel={() => { setCreateOpen(false); form.resetFields(); }}>

@@ -21,11 +21,11 @@ export function SharedScoreControl({
   disabled?: boolean;
   onChange: (value: SharedScoreValue) => void;
 }) {
-  const rubricTotal = rubricPoints.reduce((total, point) => total + (value.rubricSelections[point.id] ?? 0), 0);
-  const setPoint = (point: RubricPoint, score: number) => onChange({
-    ...value,
-    rubricSelections: { ...value.rubricSelections, [point.id]: score }
-  });
+  const rubricTotal = Number(rubricPoints.reduce((total, point) => total + (value.rubricSelections[point.id] ?? 0), 0).toFixed(1));
+  const setPoint = (point: RubricPoint, score: number) => {
+    const rubricSelections = { ...value.rubricSelections, [point.id]: score };
+    onChange({ ...value, rubricSelections, score: Number(rubricPoints.reduce((total, item) => total + (rubricSelections[item.id] ?? 0), 0).toFixed(1)) });
+  };
 
   return (
     <>
@@ -34,7 +34,7 @@ export function SharedScoreControl({
           aria-label="最终得分"
           disabled={disabled}
           min={0}
-          max={maxScore || undefined}
+          max={maxScore}
           precision={1}
           value={value.score}
           placeholder="最终分"
@@ -49,14 +49,15 @@ export function SharedScoreControl({
             <strong>评分细则</strong>
             <Space size={8} wrap>
               <span>{rubricTotal} 分</span>
-              {value.score !== null && rubricTotal > 0 && value.score !== rubricTotal
-                ? <StatusTag tone="warning">与最终分不一致</StatusTag>
+              {value.score !== null && value.score !== rubricTotal
+                ? <StatusTag tone="warning">{`人工调整：与细则合计相差 ${Number((value.score - rubricTotal).toFixed(1))} 分`}</StatusTag>
                 : null}
               <Button size="small" disabled={disabled} onClick={() => onChange({ ...value, score: rubricTotal })}>
                 填入最终分
               </Button>
             </Space>
           </div>
+          <p className="grading-inline-note">调整评分点会自动合计最终分；直接修改最终分属于人工调整，请记录原因。</p>
           {rubricPoints.map((point) => (
             <RubricCriterion
               key={point.id}

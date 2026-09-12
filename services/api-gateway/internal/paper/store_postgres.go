@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	"edugrade-enterprise/services/api-gateway/internal/assessment"
 	"github.com/google/uuid"
 )
 
@@ -134,6 +135,21 @@ func (s *PostgresStore) CreatePaperImport(ctx context.Context, tenantID, examID,
 		return PaperImportJob{}, err
 	}
 	defer tx.Rollback()
+	var authoritativeSubject string
+	if err = tx.QueryRowContext(ctx, `SELECT subject FROM exam WHERE tenant_id=$1 AND id=$2::uuid AND deleted_at IS NULL`, tenantID, examID).Scan(&authoritativeSubject); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PaperImportJob{}, ErrNotFound
+		}
+		return PaperImportJob{}, err
+	}
+	authoritativeCode, authoritativeOK := assessment.NormalizeSubjectCode(authoritativeSubject)
+	requestedCode, requestedOK := assessment.NormalizeSubjectCode(input.Subject)
+	if !authoritativeOK || !requestedOK || authoritativeCode != requestedCode {
+		return PaperImportJob{}, ErrInvalidInput
+	}
+	// The browser value is only a consistency assertion. Persist the canonical
+	// subject read from the exam record so a forged/stale request cannot route OCR.
+	input.Subject = string(authoritativeCode)
 	requestHash := paperImportCommandHash(input)
 	if existingID, existingHash, replayErr := findPaperImportCommandInTx(ctx, tx, tenantID, userID, input.CommandID); replayErr == nil {
 		if existingHash != requestHash {

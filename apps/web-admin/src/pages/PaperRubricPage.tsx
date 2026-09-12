@@ -21,8 +21,10 @@ import { listExams, type Exam } from "../api/exams";
 import {
   createQuestion,
 	createPaperImport,
+	getPaperImport,
 	addPaperImportSources,
 	cancelPaperImport,
+	retryPaperImportParse,
 	replacePaperImportSources,
 	savePaperImportReview,
   createRubric,
@@ -225,6 +227,7 @@ export function PaperRubricPage({
 	const [savingImportReview, setSavingImportReview] = useState(false);
 	const [updatingImportSources, setUpdatingImportSources] = useState(false);
 	const [stoppingImport, setStoppingImport] = useState(false);
+	const [retryingParse, setRetryingParse] = useState(false);
 
   const selectedExam = useMemo(() => exams.find((exam) => exam.id === selectedExamId), [exams, selectedExamId]);
   const selectedQuestion = useMemo(
@@ -307,21 +310,27 @@ export function PaperRubricPage({
     void loadConfig(selectedExamId);
   }, [loadConfig, selectedExamId]);
 
-  const hasProcessingImport = paperImports.some((item) => item.status === "processing");
+  const processingImportId = paperImports.find((item) => item.status === "processing")?.id;
   useEffect(() => {
-    if (!selectedExamId || !hasProcessingImport) return;
+    if (!selectedExamId || !processingImportId) return;
     let pending = false;
-    const timer = window.setInterval(async () => {
+    let disposed = false;
+    const refreshProgress = async () => {
       if (pending) return;
       pending = true;
       try {
-        await loadConfig(selectedExamId, { silent: true });
+        const result = await getPaperImport(processingImportId);
+        if (disposed) return;
+        setPaperImports((current) => current.map((item) => item.id === result.import.id ? result.import : item));
+        if (result.import.status !== "processing") await loadConfig(selectedExamId, { silent: true });
       } finally {
         pending = false;
       }
-    }, 2500);
-    return () => window.clearInterval(timer);
-  }, [hasProcessingImport, loadConfig, selectedExamId]);
+    };
+    void refreshProgress();
+    const timer = window.setInterval(() => void refreshProgress(), 1000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [loadConfig, processingImportId, selectedExamId]);
 
 	useEffect(() => { setReviewDrafts(paperImports[0]?.questions ?? []); }, [paperImports]);
 
@@ -658,6 +667,20 @@ export function PaperRubricPage({
 		});
 	}
 
+	async function retryImportParse(job: PaperImportJob) {
+		if (job.status !== "failed" || job.error_code !== "ai_parse_failed" || retryingParse) return;
+		setRetryingParse(true);
+		try {
+			await retryPaperImportParse(job.id, job.generation);
+			message.success("已复用文字和公式识别结果，正在重新解析题目结构");
+			if (selectedExam) await loadConfig(selectedExam.id, { silent: true });
+		} catch (currentError) {
+			message.error(formatError(currentError));
+		} finally {
+			setRetryingParse(false);
+		}
+	}
+
 	async function removeImportSource(job: PaperImportJob, sourceID: string) {
 		await replaceImportSources(job, orderedSourcesAfterRemoval(job.sources, sourceID));
 	}
@@ -858,6 +881,9 @@ export function PaperRubricPage({
 		: (latestPaperImport?.issues ?? []).map((message) => ({ message, certainty: "unknown" as const }));
 	const importSummary = latestPaperImport ? paperImportSummary(latestPaperImport) : null;
 	const importProgress = latestPaperImport ? paperImportProgress(latestPaperImport) : null;
+	const progressTiming = importProgress?.startedAt
+		? `已运行 ${Math.max(0, Math.floor((Date.now() - new Date(importProgress.startedAt).getTime()) / 1000))} 秒 · ${Math.max(0, Math.floor((Date.now() - new Date(importProgress.changedAt ?? importProgress.startedAt).getTime()) / 1000))} 秒前有新进展 · 心跳 ${Math.max(0, Math.floor((Date.now() - new Date(importProgress.updatedAt ?? importProgress.startedAt).getTime()) / 1000))} 秒前`
+		: "";
 	const invalidReviewRubric = reviewDrafts.some(reviewRubricHasScoreMismatch);
 	const canEditImportSources = latestPaperImport?.status === "processing" || latestPaperImport?.status === "review_required" || latestPaperImport?.status === "failed" || latestPaperImport?.status === "cancelled";
 	function updateReviewDraft(index: number, field: string, patch: Partial<PaperImportDraftQuestion>) {
@@ -969,7 +995,9 @@ export function PaperRubricPage({
 					noExamContentDetected ? (
 						<Space wrap><Button type="primary" loading={updatingImportSources} onClick={() => void replaceImportSources(latestPaperImport, latestPaperImport.sources)}>重新识别</Button><Button onClick={() => { setShowQuestionEditor(true); document.getElementById("paper-question-summary")?.scrollIntoView({ behavior: "smooth", block: "start" }); }}>手动补充题目</Button></Space>
 					) : <Space><Button loading={savingImportReview} onClick={() => void saveImportReview(latestPaperImport)}>保存人工核对</Button><Button type="primary" loading={parsing} disabled={hasBlockingImportIssues(latestPaperImport) || invalidReviewRubric} onClick={() => void confirmPaperImport(latestPaperImport)}>确认导入</Button></Space>
-                ) : latestPaperImport.status === "failed" && latestPaperImport.sources.length ? (
+                ) : latestPaperImport.status === "failed" && latestPaperImport.error_code === "ai_parse_failed" ? (
+					<Space wrap><Button type="primary" loading={retryingParse} onClick={() => void retryImportParse(latestPaperImport)}>仅重新解析</Button><Button loading={updatingImportSources} onClick={() => void replaceImportSources(latestPaperImport, latestPaperImport.sources)}>重新识别全部</Button></Space>
+				) : latestPaperImport.status === "failed" && latestPaperImport.sources.length ? (
 					<Button type="primary" loading={updatingImportSources} onClick={() => void replaceImportSources(latestPaperImport, latestPaperImport.sources)}>重新识别</Button>
 				) : latestPaperImport.status === "cancelled" && latestPaperImport.sources.length ? (
 					<Button type="primary" loading={updatingImportSources} onClick={() => void replaceImportSources(latestPaperImport, latestPaperImport.sources)}>重新识别</Button>
@@ -979,14 +1007,14 @@ export function PaperRubricPage({
               </div>
 			  {latestPaperImport.status === "processing" && importProgress ? (
 				<div className="paper-import-progress" aria-live="polite">
-					<div><strong>{importProgress.label}</strong><span>{importProgress.detail}</span></div>
-					<Progress percent={importProgress.percent} status="active" />
+					<div><strong>{importProgress.label}</strong><span>{importProgress.detail}{progressTiming ? ` · ${progressTiming}` : ""}</span></div>
+					{importProgress.percent === undefined ? <div className="paper-import-progress-indeterminate" role="progressbar" aria-label="正在处理，暂无可计算的完成比例"><span /></div> : <Progress percent={importProgress.percent} format={() => importProgress.counter ?? `${importProgress.percent}%`} status="active" />}
 				</div>
 			  ) : null}
 			  {latestPaperImport.status === "cancelled" && importProgress ? (
 				<div className="paper-import-progress" aria-live="polite">
 					<div><strong>{importProgress.label}</strong><span>{importProgress.detail}</span></div>
-					<Progress percent={importProgress.percent} status="normal" />
+					{importProgress.percent === undefined ? null : <Progress percent={importProgress.percent} status="normal" />}
 				</div>
 			  ) : null}
               {latestPaperImport.status === "review_required" ? (

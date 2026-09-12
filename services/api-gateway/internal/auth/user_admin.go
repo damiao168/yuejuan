@@ -122,3 +122,51 @@ func (h *Handler) CreateManagedUser(w http.ResponseWriter, r *http.Request) {
 	})
 	httpx.JSON(w, http.StatusCreated, map[string]any{"user": created})
 }
+
+func (h *Handler) UpdateManagedUserStatus(w http.ResponseWriter, r *http.Request) {
+	actor, _ := UserFromContext(r.Context())
+	var input UpdateManagedUserStatusInput
+	if err := decodeAuthJSON(w, r, &input, true); err != nil {
+		if authRequestBodyTooLarge(err) {
+			httpx.Error(w, r, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body is too large")
+			return
+		}
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "invalid status field")
+		return
+	}
+	input.Status = strings.TrimSpace(input.Status)
+	if input.Status != "active" && input.Status != "disabled" {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_user_status", "status must be active or disabled")
+		return
+	}
+	actorScope, ok := AccessScopeFromContext(r.Context())
+	if !ok {
+		httpx.Error(w, r, http.StatusForbidden, "access_scope_missing", "no valid data access scope is assigned")
+		return
+	}
+	updated, previousStatus, err := h.store.UpdateManagedUserStatus(r.Context(), actor, actorScope, strings.TrimSpace(r.PathValue("id")), input.Status)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrManagedUserNotFound):
+			httpx.Error(w, r, http.StatusNotFound, "managed_user_not_found", "managed user not found")
+		case errors.Is(err, ErrUserStatusForbidden):
+			httpx.Error(w, r, http.StatusForbidden, "user_status_forbidden", "current identity cannot update this user")
+		case errors.Is(err, ErrOrganizationScope):
+			httpx.Error(w, r, http.StatusForbidden, "organization_scope_forbidden", "organization binding is outside the current data access scope")
+		case errors.Is(err, ErrLastSchoolAdmin):
+			httpx.Error(w, r, http.StatusConflict, "last_school_admin", "the last active school administrator cannot be disabled")
+		default:
+			httpx.Error(w, r, http.StatusInternalServerError, "user_status_update_failed", "failed to update user status")
+		}
+		return
+	}
+	if previousStatus != updated.Status {
+		RecordAudit(r.Context(), h.store, AuditEvent{
+			TenantID: actor.TenantID, ActorID: actor.ID, Action: "auth.user_status_updated",
+			TargetType: "user", TargetID: updated.ID,
+			BeforeValue: map[string]any{"status": previousStatus}, AfterValue: map[string]any{"status": updated.Status},
+			Reason: "update organization user status", IPAddress: h.remoteIP(r), UserAgent: r.UserAgent(), RequestID: logger.RequestID(r.Context()),
+		})
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"user": updated})
+}

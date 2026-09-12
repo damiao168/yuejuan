@@ -37,7 +37,7 @@
 .grading-overview-head p {
   margin-top: 3px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--eg-font-body);
 }
 
 .grading-run-strip {
@@ -63,7 +63,7 @@
   gap: 18px;
   flex-wrap: wrap;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--eg-font-body);
 }
 
 .grading-readiness-counts strong {
@@ -84,7 +84,7 @@
   display: flex;
   align-items: baseline;
   gap: 9px;
-  font-size: 13px;
+  font-size: var(--eg-font-body);
 }
 
 .grading-readiness-issues li strong {
@@ -101,7 +101,7 @@
 
 .grading-readiness-ok {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--eg-font-body);
 }
 
 .reviewer-progress-panel {
@@ -132,14 +132,14 @@
 }
 
 .reviewer-progress-head h2 {
-  font-size: 16px;
+  font-size: var(--eg-font-reading);
 }
 
 .reviewer-progress-head p,
 .reviewer-progress-label span,
 .reviewer-progress-meta {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
 }
 
 .reviewer-progress-head p {
@@ -209,7 +209,7 @@
 .automation-results-head > div:first-child span,
 .automation-result-cell span {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
 }
 
 .automation-result-metrics {
@@ -232,7 +232,7 @@
 .automation-result-metrics strong {
   margin-left: 4px;
   color: var(--text);
-  font-size: 18px;
+  font-size: var(--eg-font-section);
 }
 
 .automation-result-metrics .danger strong {
@@ -307,7 +307,7 @@
 }
 
 .grading-topbar h1 {
-  font-size: 18px;
+  font-size: var(--eg-font-section);
   line-height: 1.2;
 }
 
@@ -500,7 +500,7 @@
 
 .annotation-entry-placeholder {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
 }
 
 .structured-evidence-list {
@@ -540,7 +540,7 @@
 .math-edge-summary,
 .math-evidence-actions span {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
 }
 
 .math-evidence-body,
@@ -579,7 +579,7 @@
   padding: 6px 8px;
   border-left: 2px solid var(--primary);
   background: var(--surface);
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
 }
 
 .math-step-row span {
@@ -616,7 +616,7 @@
 
 .panel-head h2,
 .grading-bottom h2 {
-  font-size: 16px;
+  font-size: var(--eg-font-reading);
 }
 
 .answer-viewer {
@@ -682,7 +682,7 @@
   overflow: auto;
   white-space: pre-wrap;
   font-family: Consolas, "JetBrains Mono", monospace;
-  font-size: 13px;
+  font-size: var(--eg-font-body);
   line-height: 1.6;
   color: var(--text);
   background: rgba(255, 255, 255, 0.96);
@@ -717,7 +717,7 @@
 .ocr-snippet span,
 .ai-evidence-details small {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
 }
 
 .ocr-snippet p {
@@ -755,12 +755,12 @@
 .task-automation-grid span,
 .task-automation-note span {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
 }
 
 .task-automation-grid strong {
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--eg-font-body);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -825,11 +825,11 @@
 .ai-score-strip span {
   display: block;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
 }
 
 .ai-score-strip strong {
-  font-size: 18px;
+  font-size: var(--eg-font-section);
   letter-spacing: 0;
 }
 
@@ -847,7 +847,7 @@
   padding: 7px 2px;
   color: var(--primary);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--eg-font-body);
   font-weight: 600;
 }
 
@@ -876,7 +876,7 @@
 
 .evidence-item code {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
 }
 
 .score-input-row {
@@ -891,7 +891,7 @@
 }
 
 .score-input-row input {
-  font-size: 28px !important;
+  font-size: 1.75rem !important;
   font-weight: 700;
 }
 
@@ -936,12 +936,12 @@
 .grading-submit-note {
   margin: 0;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--eg-font-body);
   line-height: 1.4;
 }
 
 .draft-save-status {
-  font-size: 12px;
+  font-size: var(--eg-font-caption);
   color: var(--text-muted);
 }
 
@@ -1064,7 +1064,7 @@
 }
 
 .immersive-workspace .grading-overview-head h2 {
-  font-size: 16px;
+  font-size: var(--eg-font-reading);
 }
 
 .immersive-workspace .grading-overview-head p,
@@ -1117,7 +1117,7 @@
 }
 
 .immersive-workspace .grading-topbar h1 {
-  font-size: 16px;
+  font-size: var(--eg-font-reading);
 }
 
 .immersive-workspace .grading-topbar p {
@@ -1386,12 +1386,12 @@
 
 .grading-reason-banner { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 14px; padding: 13px 16px; border-left: 3px solid #d48806; background: #fffaf0; }
 .grading-reason-banner > div:first-child { display: grid; gap: 3px; }
-.grading-reason-banner span { color: var(--text-muted); font-size: 12px; }
-.grading-reason-banner strong { font-size: 15px; }
-.grading-reason-banner p { margin: 0; color: #5f6672; font-size: 12px; line-height: 1.55; }
+.grading-reason-banner span { color: var(--text-muted); font-size: var(--eg-font-caption); }
+.grading-reason-banner strong { font-size: 0.9375rem; }
+.grading-reason-banner p { margin: 0; color: #5f6672; font-size: var(--eg-font-caption); line-height: 1.55; }
 .grading-reason-banner > div:last-child { min-width: 100px; text-align: right; }
-.grading-reason-banner > div:last-child strong { display: block; margin-top: 3px; font-size: 18px; }
+.grading-reason-banner > div:last-child strong { display: block; margin-top: 3px; font-size: var(--eg-font-section); }
 .math-evidence-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 10px 0; }
-.math-evidence-summary > span { color: var(--text-muted); font-size: 12px; }
-.math-evidence-summary > strong { grid-column: 1; font-size: 13px; }
+.math-evidence-summary > span { color: var(--text-muted); font-size: var(--eg-font-caption); }
+.math-evidence-summary > strong { grid-column: 1; font-size: var(--eg-font-body); }
 .math-evidence-summary > .ant-btn { grid-column: 2; grid-row: 1 / span 2; }

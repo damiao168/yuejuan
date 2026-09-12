@@ -51,7 +51,12 @@ func (s *MemoryStore) CreateManagedAPIConfig(_ context.Context, tenantID, _ stri
 		BaseURL: normalized.BaseURL, ModelName: normalized.ModelName, ModelVersion: normalized.ModelVersion,
 		Region: normalized.Region, CredentialConfigured: true, CredentialHint: credentialHint(normalized.APIKey),
 		Status: normalized.Status, IsDefault: normalized.IsDefault, LastTestStatus: "untested",
+		LastCapabilityStatus: "untested",
+		ConfigSource:         normalized.ConfigSource, ProviderRegistryVersion: normalized.ProviderRegistryVersion,
 		CreatedAt: now, UpdatedAt: now,
+	}
+	if normalized.InitialProbe != nil {
+		applyManagedProbe(&item, *normalized.InitialProbe, now)
 	}
 	s.managedConfigs[id] = item
 	s.managedSecrets[id] = normalized.APIKey
@@ -72,7 +77,8 @@ func (s *MemoryStore) UpdateManagedAPIConfig(_ context.Context, tenantID, id str
 	if normalized.IsDefault {
 		s.clearManagedDefault(tenantID, id)
 	}
-	connectionChanged := item.BaseURL != normalized.BaseURL || normalized.APIKey != ""
+	connectionChanged := item.AdapterType != normalized.AdapterType || item.BaseURL != normalized.BaseURL ||
+		item.ModelName != normalized.ModelName || normalized.APIKey != ""
 	item.DisplayName = normalized.DisplayName
 	item.AdapterType = normalized.AdapterType
 	item.BaseURL = normalized.BaseURL
@@ -86,13 +92,38 @@ func (s *MemoryStore) UpdateManagedAPIConfig(_ context.Context, tenantID, id str
 		s.managedSecrets[id] = normalized.APIKey
 		item.CredentialHint = credentialHint(normalized.APIKey)
 	}
-	if connectionChanged {
+	if normalized.InitialProbe != nil {
+		applyManagedProbe(&item, *normalized.InitialProbe, item.UpdatedAt)
+	} else if connectionChanged {
 		item.LastTestStatus = "untested"
 		item.LastTestMessage = ""
+		item.LastTestLatencyMS = 0
 		item.LastTestedAt = nil
+		item.LastProbeMode = ""
+		item.LastCapabilityStatus = "untested"
+		item.LastCapabilityMessage = ""
+		item.LastCapabilityTestedAt = nil
+		item.LastCapabilityVersion = ""
+		item.LastCapabilityUsage = ManagedAPIProbeUsage{}
+		item.LastCapabilityDiagnostic = ManagedAPIProbeDiagnostic{}
 	}
 	s.managedConfigs[id] = item
 	return item, nil
+}
+
+func (s *MemoryStore) DeleteManagedAPIConfig(_ context.Context, tenantID, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.managedConfigs[id]
+	if !ok || item.TenantID != tenantID {
+		return ErrNotFound
+	}
+	if item.IsDefault {
+		return ErrManagedDefaultMutation
+	}
+	delete(s.managedConfigs, id)
+	delete(s.managedSecrets, id)
+	return nil
 }
 
 func (s *MemoryStore) GetManagedAPIConnection(_ context.Context, tenantID, id string) (ManagedAPIConnection, error) {
@@ -116,16 +147,46 @@ func (s *MemoryStore) RecordManagedAPIProbe(_ context.Context, tenantID, id stri
 	if !ok || item.TenantID != tenantID {
 		return ManagedAPIConfig{}, ErrNotFound
 	}
-	item.LastTestStatus = "failed"
-	if result.OK {
-		item.LastTestStatus = "success"
-	}
-	item.LastTestMessage = strings.TrimSpace(result.Message)
 	now := time.Now().UTC()
-	item.LastTestedAt = &now
+	applyManagedProbe(&item, result, now)
 	item.UpdatedAt = now
 	s.managedConfigs[id] = item
 	return item, nil
+}
+
+func applyManagedProbe(item *ManagedAPIConfig, result ManagedAPIProbeResult, testedAt time.Time) {
+	item.LastTestStatus = "failed"
+	connectionOK := result.OK || (result.ProbeMode == "capability" && result.CredentialCheck.OK && result.ModelCheck.OK)
+	if connectionOK {
+		item.LastTestStatus = "success"
+	}
+	if connectionOK && !result.OK {
+		item.LastTestMessage = "连接正常，结构化能力检测未通过"
+	} else {
+		item.LastTestMessage = strings.TrimSpace(result.Message)
+	}
+	item.LastTestLatencyMS = result.LatencyMS
+	item.LastTestedAt = &testedAt
+	item.LastProbeMode = result.ProbeMode
+	if item.LastProbeMode == "" {
+		item.LastProbeMode = "capability"
+	}
+	if item.LastProbeMode == "capability" && !result.Reused &&
+		(result.GeneratedRequest || result.CapabilityCheck.OK || result.CapabilityCheck.Code != "") {
+		item.LastCapabilityStatus = "failed"
+		if result.CapabilityCheck.OK {
+			item.LastCapabilityStatus = "success"
+		}
+		item.LastCapabilityMessage = strings.TrimSpace(result.CapabilityCheck.Message)
+		if item.LastCapabilityMessage == "" {
+			item.LastCapabilityMessage = strings.TrimSpace(result.Message)
+		}
+		item.LastCapabilityTestedAt = &testedAt
+		item.LastCapabilityVersion = ManagedCapabilityProbeVersion
+		item.LastCapabilityUsage = result.Usage
+		item.LastCapabilityDiagnostic = result.Diagnostic
+		item.LastCapabilityDiagnostic.ContentPreview = ""
+	}
 }
 
 func (s *MemoryStore) clearManagedDefault(tenantID, exceptID string) {

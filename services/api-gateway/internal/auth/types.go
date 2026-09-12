@@ -7,14 +7,17 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrUnauthenticated    = errors.New("unauthenticated")
-	ErrForbidden          = errors.New("forbidden")
-	ErrUsernameExists     = errors.New("username already exists")
-	ErrRoleNotFound       = errors.New("role not found")
-	ErrRoleAssignment     = errors.New("role assignment is not allowed")
-	ErrOrganizationScope  = errors.New("organization scope is not allowed")
-	ErrInvalidRoleBinding = errors.New("role organization binding is invalid")
+	ErrInvalidCredentials  = errors.New("invalid credentials")
+	ErrUnauthenticated     = errors.New("unauthenticated")
+	ErrForbidden           = errors.New("forbidden")
+	ErrUsernameExists      = errors.New("username already exists")
+	ErrRoleNotFound        = errors.New("role not found")
+	ErrRoleAssignment      = errors.New("role assignment is not allowed")
+	ErrOrganizationScope   = errors.New("organization scope is not allowed")
+	ErrInvalidRoleBinding  = errors.New("role organization binding is invalid")
+	ErrManagedUserNotFound = errors.New("managed user not found")
+	ErrUserStatusForbidden = errors.New("managed user status change is not allowed")
+	ErrLastSchoolAdmin     = errors.New("last active school administrator cannot be disabled")
 )
 
 const PlatformTenantID = "00000000-0000-0000-0000-000000000001"
@@ -83,6 +86,10 @@ type CreateManagedUserInput struct {
 	RoleCode    string   `json:"role_code"`
 	SchoolID    string   `json:"school_id,omitempty"`
 	ClassIDs    []string `json:"class_ids,omitempty"`
+}
+
+type UpdateManagedUserStatusInput struct {
+	Status string `json:"status"`
 }
 
 type Session struct {
@@ -183,4 +190,5 @@ type Store interface {
 	ListManagedUsers(ctx context.Context, tenantID string, filter ManagedUserFilter) ([]ManagedUser, error)
 	ListAssignableRoles(ctx context.Context, actor User) ([]AssignableRole, error)
 	CreateManagedUser(ctx context.Context, actor User, actorScope AccessScope, input CreateManagedUserInput, passwordHash string) (ManagedUser, error)
+	UpdateManagedUserStatus(ctx context.Context, actor User, actorScope AccessScope, userID string, status string) (ManagedUser, string, error)
 }

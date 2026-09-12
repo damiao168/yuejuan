@@ -48,6 +48,7 @@
         "POST /api/v1/internal/page-template-match-runs/{runId}/result",
         "POST /api/v1/internal/paper-imports/{id}/decode-result",
         "POST /api/v1/internal/paper-imports/{id}/failure",
+        "POST /api/v1/internal/paper-imports/{id}/formula-result",
         "POST /api/v1/internal/paper-imports/{id}/ocr-result",
         "POST /api/v1/internal/subjective-grading/runs/{runId}/execute",
         "POST /api/v1/internal/subjective-grading/runs/{runId}/failure",
@@ -73,6 +74,22 @@
         "DELETE /api/v1/exams/{examId}/answer-sheet-template-binding",
         "GET /api/v1/exams/{examId}/answer-sheet-template-binding",
         "PUT /api/v1/exams/{examId}/answer-sheet-template-binding"
+      ]
+    },
+    {
+      "id": "managed-model-auto-config-v1",
+      "interface_category": "public-feature",
+      "contract_carrier": "Go handler and registry tests plus the typed web-admin API client",
+      "exception_scope": "Only the exact managed model automatic resolution, validation, creation, and safe deletion endpoints listed below.",
+      "owner": "model-platform",
+      "review_after": "2026-12-31",
+      "reason": "The managed model page predates OpenAPI migration; these endpoints complete its bounded typed workflow without expanding the generated SDK surface in this release.",
+      "routes": [
+        "DELETE /api/v1/platform/model-api-configs/{id}",
+        "POST /api/v1/platform/model-api-configs/auto",
+        "POST /api/v1/platform/model-api-configs/models",
+        "POST /api/v1/platform/model-api-configs/resolve",
+        "POST /api/v1/platform/model-api-configs/validate"
       ]
     },
     {

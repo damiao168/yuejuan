@@ -6,6 +6,7 @@ import type { Key, ReactNode } from "react";
 type ResponsiveTableProps<T extends object> = Omit<TableProps<T>, "columns"> & {
   columns: TableColumnsType<T>;
   mobilePrimaryCount?: number;
+  mobilePrimaryKeys?: string[];
 };
 
 function flattenColumns<T extends object>(columns: TableColumnsType<T>): ColumnType<T>[] {
@@ -55,6 +56,7 @@ export function ResponsiveTable<T extends object>({
   rowClassName,
   className,
   mobilePrimaryCount = 3,
+  mobilePrimaryKeys,
   pagination,
   scroll,
   ...tableProps
@@ -103,8 +105,13 @@ export function ResponsiveTable<T extends object>({
       }
     : undefined;
 
-  if (!mobile) {
+  // Preserve Ant Design's complete interaction contract for selection, filtering,
+  // expansion and sorting. A read-only card conversion must not drop controls.
+  const needsFullTable = Boolean(tableProps.rowSelection || tableProps.expandable || flatColumns.some((column) => column.sorter || column.filters || column.filterDropdown));
+  if (!mobile || needsFullTable) {
     return (
+      <div className="responsive-table-region" role="region" aria-label="数据表格" tabIndex={mobile ? 0 : undefined}>
+      {mobile ? <p className="table-interaction-hint">左右滑动查看各列；可在表头筛选、排序或选择记录。</p> : null}
       <Table<T>
         {...tableProps}
         columns={columns}
@@ -117,9 +124,10 @@ export function ResponsiveTable<T extends object>({
         className={`responsive-desktop-table ${className ?? ""}`.trim()}
         tableLayout="fixed"
         pagination={pagination}
-        scroll={scroll}
-        size={tableProps.size ?? "small"}
+        scroll={mobile ? { ...scroll, x: scroll?.x ?? "max-content" } : scroll}
+        size={tableProps.size ?? "middle"}
       />
+      </div>
     );
   }
 
@@ -136,7 +144,7 @@ export function ResponsiveTable<T extends object>({
       <div className="responsive-record-list" role="list">
       {mobileDataSource.map((record, pageIndex) => {
         const index = serverPaginated ? pageIndex : (currentPage - 1) * pageSize + pageIndex;
-        const primaryColumns = flatColumns.filter((column, columnIndex) => columnIndex < mobilePrimaryCount || columnLabel(column) === "操作");
+        const primaryColumns = flatColumns.filter((column, columnIndex) => (mobilePrimaryKeys ? mobilePrimaryKeys.includes(String(column.key ?? column.dataIndex)) : columnIndex < mobilePrimaryCount) || columnLabel(column) === "操作");
         const detailColumns = flatColumns.filter((column) => !primaryColumns.includes(column));
         const rowProps = accessibleOnRow?.(record, index) ?? {};
         const className = typeof rowClassName === "function" ? rowClassName(record, index, 0) : rowClassName;
@@ -158,7 +166,7 @@ export function ResponsiveTable<T extends object>({
               ))}
             </dl>
             {detailColumns.length ? (
-              <details className="responsive-record-details">
+              <details className="responsive-record-details" onClick={(event) => event.stopPropagation()}>
                 <summary>查看完整信息</summary>
                 <dl>
                   {detailColumns.map((column, columnIndex) => (

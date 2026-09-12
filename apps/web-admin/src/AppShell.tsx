@@ -239,7 +239,7 @@ export function AppShell() {
     ) : route.path === "/dashboard" ? (
       experience === "admin" ? <DashboardPage user={user} onNavigate={navigate} />
         : experience === "teacher" ? <TeacherDashboardPage user={user} onNavigate={navigate} />
-          : <IdentityLandingPage user={user} experience={experience} />
+          : <IdentityLandingPage user={user} experience={experience} onNavigate={navigate} />
     ) : examWorkspace ? (
       <ExamWorkspacePage examId={examWorkspace.examId} section={examWorkspace.section} experience={experience} currentUser={user} moduleContent={workspaceModule} onNavigate={navigate} />
     ) : route.path === "/exams/new" ? (
@@ -260,7 +260,7 @@ export function AppShell() {
     ) : route.path === "/members/classes" ? (
       <ClassManagementPage />
     ) : route.path === "/members/teachers" ? (
-      <TeacherManagementPage />
+      <TeacherManagementPage currentUser={user} />
     ) : route.path === "/platform/schools" ? (
       <PlatformSchoolsPage />
     ) : route.path === "/platform/model-config" ? (

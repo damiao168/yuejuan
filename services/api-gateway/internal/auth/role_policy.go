@@ -52,6 +52,18 @@ func CanAssignManagedRole(actor User, targetRole string) bool {
 	return false
 }
 
+func CanManageUserRoles(actor User, targetRoles []string) bool {
+	if len(targetRoles) == 0 {
+		return false
+	}
+	for _, role := range targetRoles {
+		if !CanAssignManagedRole(actor, role) {
+			return false
+		}
+	}
+	return true
+}
+
 func canonicalRoleDataScope(roleCode, schoolID string) map[string]any {
 	policy := RolePolicy(roleCode)
 	scope := map[string]any{"scope": policy.CanonicalScope}

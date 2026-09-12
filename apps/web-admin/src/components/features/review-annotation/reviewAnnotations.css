@@ -19,7 +19,7 @@
 
 .review-save-state {
   color: #5f6b7a;
-  font-size: 13px;
+  font-size: var(--eg-font-body);
 }
 
 .review-save-state--saved {
@@ -120,7 +120,7 @@
   display: grid;
   gap: 6px;
   color: #445064;
-  font-size: 13px;
+  font-size: var(--eg-font-body);
 }
 
 .review-template-suggestions {

@@ -8,6 +8,7 @@ type Point = { x: number; y: number };
 export function SubjectPerformance({ items }: { items: BalanceItem[] }) {
   const [studentVisible, setStudentVisible] = useState(true);
   const [averageVisible, setAverageVisible] = useState(true);
+  const [radarVisible, setRadarVisible] = useState(false);
   if (items.length === 0) return null;
   const orderedItems = [...items].sort((left, right) => subjectOrder(left.subject) - subjectOrder(right.subject));
   return <section className="subject-performance" aria-labelledby="subject-performance-title">
@@ -17,9 +18,11 @@ export function SubjectPerformance({ items }: { items: BalanceItem[] }) {
       <button type="button" className={averageVisible ? "active average" : "average"} onClick={() => setAverageVisible((value) => !value)}><i />学校平均</button>
     </div>
     <div className="subject-chart-grid">
-      {orderedItems.length >= 3 ? <RadarChart items={orderedItems} studentVisible={studentVisible} averageVisible={averageVisible} /> : null}
+      {orderedItems.length >= 3 ? <button type="button" className="secondary-button" aria-expanded={radarVisible} onClick={() => setRadarVisible((value) => !value)}>{radarVisible ? "收起雷达图" : "展开学科雷达图"}</button> : null}
+      {radarVisible && orderedItems.length >= 3 ? <RadarChart items={orderedItems} studentVisible={studentVisible} averageVisible={averageVisible} /> : null}
       <BarChart items={orderedItems} studentVisible={studentVisible} averageVisible={averageVisible} />
     </div>
+    <table className="subject-numeric-list"><caption>各科得分率明细</caption><thead><tr><th scope="col">科目</th><th scope="col">我的得分率</th><th scope="col">学校平均</th></tr></thead><tbody>{orderedItems.map((item) => <tr key={item.subject}><th scope="row">{displaySubject(item.subject)}</th><td>{Number.isFinite(item.student_score_rate) ? percent(item.student_score_rate) : "暂无数据"}</td><td>{Number.isFinite(item.school_mean_score_rate) ? percent(item.school_mean_score_rate) : "暂无数据"}</td></tr>)}</tbody></table>
   </section>;
 }
 

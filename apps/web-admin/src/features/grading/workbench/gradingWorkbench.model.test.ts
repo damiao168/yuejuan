@@ -31,7 +31,7 @@ describe("grading workbench draft model", () => {
       comments: "",
       privateNote: "",
       studentFeedback: "",
-      reason: "教师复核完成",
+      reason: "",
       disputeReason: "",
       rubricSelections: { conclusion: 0 },
       answerText: "第二题答案"

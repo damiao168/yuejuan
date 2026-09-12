@@ -51,7 +51,7 @@ function MembersSection({ statistics, onNavigate }: { statistics: DashboardOrgan
       icon: <GraduationCap size={18} />
     },
     {
-      label: "教师与阅卷人员",
+      label: "阅卷教师",
       value: `${statistics.teacher_count} 名教师`,
       detail: `${statistics.grader_count} 名阅卷人员`,
       action: "管理人员",

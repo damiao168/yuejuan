@@ -12,6 +12,12 @@ export interface GradingShortcutContext {
   key: string;
   code?: string;
   ctrlKey?: boolean;
+  metaKey?: boolean;
+  altKey?: boolean;
+  isComposing?: boolean;
+  repeat?: boolean;
+  blocked?: boolean;
+  quickSubmit?: boolean;
   isInputTarget: boolean;
   hasTask: boolean;
   canEditDraft: boolean;
@@ -28,16 +34,16 @@ export interface GradingShortcutContext {
  * The component owns the actual action and its confirmation/error handling.
  */
 export function gradingShortcutIntent(context: GradingShortcutContext): GradingShortcutIntent | null {
-  if (context.isInputTarget) return null;
+  if (context.isInputTarget || context.isComposing || context.repeat || context.blocked || context.altKey) return null;
 
   const key = context.key.toLowerCase();
   if (key === "enter") {
-    return context.canSubmit ? { type: "submit" } : null;
+    return context.canSubmit && (context.ctrlKey || context.metaKey || context.quickSubmit) ? { type: "submit" } : null;
   }
 
   // Keep Ctrl+Enter compatible with the older workbench, but do not hijack
   // browser shortcuts such as Ctrl+A.
-  if (context.ctrlKey) return null;
+  if (context.ctrlKey || context.metaKey) return null;
 
   if (key === "+" || context.code === "NumpadAdd") {
     return context.hasTask ? { type: "zoom", direction: 1 } : null;
@@ -50,7 +56,7 @@ export function gradingShortcutIntent(context: GradingShortcutContext): GradingS
 
   if (/^[1-9]$/.test(key)) {
     const index = Number(key) - 1;
-    if (index < context.rubricPointCount) return { type: "toggle_criterion", index };
+    if (context.rubricPointCount > 0) return index < context.rubricPointCount ? { type: "toggle_criterion", index } : null;
     const score = Number(key);
     return score <= context.maxScore ? { type: "set_score", score } : null;
   }

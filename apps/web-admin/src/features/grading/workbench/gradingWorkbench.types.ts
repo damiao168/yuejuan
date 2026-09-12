@@ -8,7 +8,7 @@ import type {
 } from "../../../api/review";
 import type { AnswerSegment, OcrResult, OcrTask, SubmissionPage } from "../../../api/submissions";
 
-export type TaskFilter = "active" | "pending" | "assigned" | "in_progress" | "returned" | "submitted";
+export type TaskFilter = "all" | "active" | "pending" | "assigned" | "in_progress" | "returned" | "submitted";
 export type ViewerMode = "segment" | "original" | "ocr";
 export type DraftSaveStatus = "idle" | "saving" | "saved" | "offline" | "conflict" | "error" | "readonly";
 export type ScoringResultType = "all" | "choice" | "fill";

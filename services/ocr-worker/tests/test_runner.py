@@ -4,10 +4,16 @@ import time
 import unittest
 from unittest.mock import patch
 
+from PIL import Image
+
 from ocr_worker.api import APIError, AuthenticationError
 from ocr_worker.engine import OCRBlock
-from ocr_worker.runner import OCRRunner, WorkerConfig, _decode_region_page
-from PIL import Image
+from ocr_worker.runner import (
+    OCRRunner,
+    WorkerConfig,
+    _decode_region_page,
+    _LeaseHeartbeat,
+)
 
 
 class FakeAPI:
@@ -18,6 +24,7 @@ class FakeAPI:
         self.downloads = {}
         self.pending_error = None
         self.heartbeats = []
+        self.heartbeat_progress = []
         self.runtime_failed = []
         self.paper_completed = []
         self.paper_failed = []
@@ -37,8 +44,9 @@ class FakeAPI:
             },
         }]
 
-    def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds, tenant_id=None):
+    def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds, tenant_id=None, progress=None):
         self.heartbeats.append((runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds))
+        self.heartbeat_progress.append(progress)
 
     def start_task(self, task_id, tenant_id=None):
         self.started.append(task_id)
@@ -81,6 +89,26 @@ class FakeEngine:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_progress_events_distinguish_real_change_from_periodic_heartbeat(self):
+        api = FakeAPI()
+        heartbeat = _LeaseHeartbeat(
+            api=api,
+            runtime_task_id="runtime-1",
+            lease_token="lease-1",
+            worker_id="worker-a",
+            interval=10,
+            lease_seconds=300,
+            request_timeout=3,
+            tenant_id="tenant-1",
+        )
+
+        heartbeat.set_progress({"stage": "formula_recognition", "completed": 1, "total": 2}, flush=True)
+        heartbeat._send()
+        heartbeat.set_progress({"stage": "formula_recognition", "completed": 2, "total": 2}, flush=True)
+
+        self.assertEqual([item["event_seq"] for item in api.heartbeat_progress], [1, 1, 2])
+        self.assertEqual(api.heartbeat_progress[0]["progress_changed_at"], api.heartbeat_progress[1]["progress_changed_at"])
+
     def test_multiple_fractional_regions_decode_once_and_preserve_pixel_offsets(self):
         api = FakeAPI()
         encoded = io.BytesIO()
@@ -301,7 +329,7 @@ class RunnerTests(unittest.TestCase):
                 self.heartbeat_active = threading.Event()
                 self.terminal_while_heartbeat_active = False
 
-            def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds, tenant_id=None):
+            def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds, tenant_id=None, progress=None):
                 super().heartbeat_task(
                     runtime_task_id,
                     lease_token,
@@ -309,6 +337,7 @@ class RunnerTests(unittest.TestCase):
                     lease_seconds,
                     timeout_seconds,
                     tenant_id,
+                    progress,
                 )
                 if len(self.heartbeats) != 2:
                     return
@@ -353,7 +382,7 @@ class RunnerTests(unittest.TestCase):
                 super().__init__()
                 self.periodic_attempted = threading.Event()
 
-            def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds, tenant_id=None):
+            def heartbeat_task(self, runtime_task_id, lease_token, worker_instance_id, lease_seconds, timeout_seconds, tenant_id=None, progress=None):
                 super().heartbeat_task(
                     runtime_task_id,
                     lease_token,
@@ -361,6 +390,7 @@ class RunnerTests(unittest.TestCase):
                     lease_seconds,
                     timeout_seconds,
                     tenant_id,
+                    progress,
                 )
                 if len(self.heartbeats) >= 2:
                     self.periodic_attempted.set()

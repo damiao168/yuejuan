@@ -509,6 +509,20 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
     setLayout((current) => ({ pages: current.pages.map((page) => ({ ...page, question_regions: page.question_regions.map((region) => region.id === regionId ? { ...region, ...patch } : region) })) }));
   }
 
+  function createRegionWithoutDragging() {
+    if (readonly || !currentPage || !selectedQuestionId) return;
+    const existing = layout.pages.flatMap((page) => page.question_regions).find((region) => region.question_id === selectedQuestionId);
+    if (existing) {
+      const page = layout.pages.find((item) => item.question_regions.some((region) => region.id === existing.id));
+      if (page) setPageNo(page.page_no);
+      setSelectedRegionId(existing.id);
+      return;
+    }
+    const region: LayoutRegion = { id: crypto.randomUUID(), question_id: selectedQuestionId, label: questions.find((question) => question.id === selectedQuestionId)?.question_no ?? "题目", x: .1, y: .1, width: .8, height: .2, option_regions: [] };
+    setLayout((current) => ({ ...current, pages: current.pages.map((page) => page.page_no === pageNo ? { ...page, question_regions: [...page.question_regions, region] } : page) }));
+    setSelectedRegionId(region.id);
+  }
+
   function removeRegion(regionId: string) {
     setLayout((current) => ({ pages: current.pages.map((page) => ({ ...page, question_regions: page.question_regions.filter((region) => region.id !== regionId) })) }));
     setSelectedRegionId("");
@@ -878,6 +892,8 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
         <section className="template-workbench">
           <aside className="template-question-pane">
             <div className="template-pane-head"><strong>题目</strong><span>{coveredQuestions.size}/{questions.length}</span></div>
+            <Select aria-label="选择要配置的题目" value={selectedQuestionId || undefined} placeholder="选择题目" options={questions.map((question) => ({ value: question.id, label: `第 ${question.question_no} 题 · ${question.score} 分` }))} onChange={setSelectedQuestionId} />
+            <Button block disabled={readonly || !selectedQuestionId} onClick={createRegionWithoutDragging}>创建或定位答题区域</Button>
             <List dataSource={questions} locale={{ emptyText: "尚未配置题目" }} renderItem={(question) => <List.Item className={selectedQuestionId === question.id ? "template-question active" : "template-question"} onClick={() => setSelectedQuestionId(question.id)}><div><strong>{question.question_no}</strong><span>{question.score} 分</span></div><StatusTag tone={coveredQuestions.has(question.id) ? "success" : "warning"}>{coveredQuestions.has(question.id) ? "已框选" : "待框选"}</StatusTag></List.Item>} />
           </aside>
 
@@ -898,6 +914,7 @@ export function AnswerSheetTemplatePage({ examId, canManage, canCalibrate = fals
           <aside className="template-inspector">
             <div className="template-pane-head"><strong>模板属性</strong>{selectedTemplate.status === "locked" ? <StatusTag tone="success">已锁定</StatusTag> : <StatusTag tone="processing">草稿</StatusTag>}</div>
             <label><span>模板名称</span><Input value={name} disabled={readonly} onChange={(event) => setName(event.target.value)} /></label>
+            {selectedRegion ? <section className="template-option-editor"><strong>第 {selectedRegion.label} 题 · 精确区域</strong><p>无需拖动，可按页面比例调整位置与大小。</p><div className="template-coordinate-fields">{(["x", "y", "width", "height"] as const).map((key) => <label key={key}><span>{coordLabels[key]}</span><InputNumber aria-label={`答题区域${coordLabels[key]}`} min={key === "x" || key === "y" ? 0 : .01} max={1} step={.01} precision={3} disabled={readonly} value={selectedRegion[key]} onChange={(value) => { const next = { ...selectedRegion, [key]: Number(value ?? 0) }; next.x = clamp(next.x, 0, .99); next.y = clamp(next.y, 0, .99); next.width = clamp(next.width, .01, 1 - next.x); next.height = clamp(next.height, .01, 1 - next.y); updateRegion(selectedRegion.id, next); }} /></label>)}</div></section> : null}
 			<section className="template-option-editor">
 				<div className="template-pane-head"><strong>本场考试模板</strong>{examBinding ? <StatusTag tone={examBinding.mode === "bound_auto" ? "warning" : "success"}>{examBinding.mode === "bound_auto" ? "自动识别待确认" : "已绑定"}</StatusTag> : <StatusTag tone="neutral">未绑定</StatusTag>}</div>
 				{examBinding ? <>

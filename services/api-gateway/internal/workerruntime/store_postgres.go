@@ -22,7 +22,7 @@ type taskQueryRower interface {
 
 const taskColumns = `
 id::text, tenant_id::text, task_type, queue_name, source_type, source_id::text,
-status, priority, payload, payload_schema_version, result,
+status, priority, payload, payload_schema_version, result, progress,
 COALESCE(result_schema_version, ''), COALESCE(result_payload_hash, ''),
 idempotency_key, COALESCE(dedupe_key, ''), max_attempts, attempt_count,
 retry_backoff_seconds, not_before, COALESCE(lease_token, ''), lease_expires_at,
@@ -324,13 +324,14 @@ func (s *PostgresStore) Heartbeat(ctx context.Context, tenantID string, taskID s
 	}
 	metadataValue := cloneMap(input.Progress)
 	metadataValue["state"] = StatusRunning
+	progressJSON, _ := json.Marshal(input.Progress)
 	expires := dbNow.Add(time.Duration(input.LeaseSeconds) * time.Second)
 	row := tx.QueryRowContext(ctx, `
 UPDATE agent_worker_task
 SET status = 'running', started_at = COALESCE(started_at, $3),
-  lease_expires_at = $4, updated_at = $3, revision = revision + 1
+  lease_expires_at = $4, progress = $5, updated_at = $3, revision = revision + 1
 WHERE tenant_id = $1 AND id = $2::uuid
-RETURNING `+taskColumns, tenantID, taskID, dbNow, expires)
+RETURNING `+taskColumns, tenantID, taskID, dbNow, expires, progressJSON)
 	task, err = scanTask(row)
 	if err != nil {
 		return Task{}, err
@@ -759,11 +760,11 @@ type rowScanner interface{ Scan(dest ...any) error }
 
 func scanTask(row rowScanner) (Task, error) {
 	var task Task
-	var payload, result, errorDetail []byte
+	var payload, result, progress, errorDetail []byte
 	var notBefore, leaseExpires, started, completed, cancelled sql.NullTime
 	err := row.Scan(
 		&task.ID, &task.TenantID, &task.TaskType, &task.QueueName, &task.SourceType, &task.SourceID,
-		&task.Status, &task.Priority, &payload, &task.PayloadSchemaVersion, &result,
+		&task.Status, &task.Priority, &payload, &task.PayloadSchemaVersion, &result, &progress,
 		&task.ResultSchemaVersion, &task.ResultPayloadHash, &task.IdempotencyKey, &task.DedupeKey,
 		&task.MaxAttempts, &task.AttemptCount, &task.RetryBackoffSeconds, &notBefore,
 		&task.LeaseToken, &leaseExpires, &task.LeasedBy, &task.WorkerService, &task.WorkerInstanceID,
@@ -798,12 +799,16 @@ func scanTask(row rowScanner) (Task, error) {
 	}
 	_ = json.Unmarshal(payload, &task.Payload)
 	_ = json.Unmarshal(result, &task.Result)
+	_ = json.Unmarshal(progress, &task.Progress)
 	_ = json.Unmarshal(errorDetail, &task.ErrorDetail)
 	if task.Payload == nil {
 		task.Payload = map[string]any{}
 	}
 	if task.Result == nil {
 		task.Result = map[string]any{}
+	}
+	if task.Progress == nil {
+		task.Progress = map[string]any{}
 	}
 	if task.ErrorDetail == nil {
 		task.ErrorDetail = map[string]any{}

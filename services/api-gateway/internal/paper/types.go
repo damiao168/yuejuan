@@ -181,33 +181,69 @@ type PaperImportIssue struct {
 	ResolutionHint string                 `json:"resolution_hint,omitempty"`
 }
 
+// PaperImportRuntimeProgress is the latest factual worker heartbeat for the
+// active import stage. Completed/total always describe the named unit; an
+// absent or zero total means the stage is intentionally indeterminate.
+type PaperImportRuntimeProgress struct {
+	TaskType          string     `json:"task_type"`
+	TaskStatus        string     `json:"task_status"`
+	Stage             string     `json:"stage,omitempty"`
+	Phase             string     `json:"phase,omitempty"`
+	Completed         int        `json:"completed,omitempty"`
+	Total             int        `json:"total,omitempty"`
+	Unit              string     `json:"unit,omitempty"`
+	PageNo            int        `json:"page_no,omitempty"`
+	PageTotal         int        `json:"page_total,omitempty"`
+	BatchNo           int        `json:"batch_no,omitempty"`
+	BatchTotal        int        `json:"batch_total,omitempty"`
+	BatchSize         int        `json:"batch_size,omitempty"`
+	EventSeq          int        `json:"event_seq,omitempty"`
+	ColdStart         bool       `json:"cold_start,omitempty"`
+	Model             string     `json:"model,omitempty"`
+	RuntimeMode       string     `json:"runtime_mode,omitempty"`
+	RuntimePlanSource string     `json:"runtime_plan_source,omitempty"`
+	RuntimeBatchSize  int        `json:"runtime_batch_size,omitempty"`
+	ParseRoute        string     `json:"parse_route,omitempty"`
+	Message           string     `json:"message,omitempty"`
+	ProgressChangedAt *time.Time `json:"progress_changed_at,omitempty"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
 type PaperImportJob struct {
-	dispatchLeaseOwner string
-	ID                 string                     `json:"id"`
-	TenantID           string                     `json:"tenant_id"`
-	ExamID             string                     `json:"exam_id"`
-	ExamPaperID        string                     `json:"exam_paper_id"`
-	PaperFileAssetID   string                     `json:"paper_file_asset_id"`
-	AnswerFileAssetID  string                     `json:"answer_file_asset_id"`
-	Status             string                     `json:"status"`
-	Generation         int64                      `json:"generation"`
-	RunID              string                     `json:"run_id"`
-	SourceRevision     string                     `json:"source_revision"`
-	ResultGeneration   int64                      `json:"result_generation,omitempty"`
-	Subject            string                     `json:"subject"`
-	Sources            []PaperImportSource        `json:"sources"`
-	QuestionCandidates []QuestionCandidate        `json:"question_candidates"`
-	AnswerCandidates   []AnswerCandidate          `json:"answer_candidates"`
-	SolutionCandidates []SolutionCandidate        `json:"solution_candidates"`
-	RubricCandidates   []RubricCandidate          `json:"rubric_candidates"`
-	StructuredIssues   []PaperImportIssue         `json:"structured_issues"`
-	Questions          []PaperImportDraftQuestion `json:"questions"`
-	Issues             []string                   `json:"issues"`
-	ErrorCode          string                     `json:"error_code,omitempty"`
-	CreatedBy          string                     `json:"created_by"`
-	CreatedAt          time.Time                  `json:"created_at"`
-	UpdatedAt          time.Time                  `json:"updated_at"`
-	AppliedAt          *time.Time                 `json:"applied_at,omitempty"`
+	dispatchLeaseOwner       string
+	ID                       string                      `json:"id"`
+	TenantID                 string                      `json:"tenant_id"`
+	ExamID                   string                      `json:"exam_id"`
+	ExamPaperID              string                      `json:"exam_paper_id"`
+	PaperFileAssetID         string                      `json:"paper_file_asset_id"`
+	AnswerFileAssetID        string                      `json:"answer_file_asset_id"`
+	Status                   string                      `json:"status"`
+	Generation               int64                       `json:"generation"`
+	RunID                    string                      `json:"run_id"`
+	SourceRevision           string                      `json:"source_revision"`
+	ResultGeneration         int64                       `json:"result_generation,omitempty"`
+	Subject                  string                      `json:"subject"`
+	AuthoritativeSubjectCode string                      `json:"authoritative_subject_code,omitempty"`
+	RecognitionPolicyVersion string                      `json:"recognition_policy_version,omitempty"`
+	RecognitionPolicyHash    string                      `json:"recognition_policy_hash,omitempty"`
+	FormulaStatus            string                      `json:"formula_status,omitempty"`
+	FormulaRegionCount       int                         `json:"formula_region_count,omitempty"`
+	FormulaReviewCount       int                         `json:"formula_review_count,omitempty"`
+	RuntimeProgress          *PaperImportRuntimeProgress `json:"runtime_progress,omitempty"`
+	Sources                  []PaperImportSource         `json:"sources"`
+	QuestionCandidates       []QuestionCandidate         `json:"question_candidates"`
+	AnswerCandidates         []AnswerCandidate           `json:"answer_candidates"`
+	SolutionCandidates       []SolutionCandidate         `json:"solution_candidates"`
+	RubricCandidates         []RubricCandidate           `json:"rubric_candidates"`
+	StructuredIssues         []PaperImportIssue          `json:"structured_issues"`
+	Questions                []PaperImportDraftQuestion  `json:"questions"`
+	Issues                   []string                    `json:"issues"`
+	ErrorCode                string                      `json:"error_code,omitempty"`
+	CreatedBy                string                      `json:"created_by"`
+	CreatedAt                time.Time                   `json:"created_at"`
+	UpdatedAt                time.Time                   `json:"updated_at"`
+	AppliedAt                *time.Time                  `json:"applied_at,omitempty"`
 }
 
 type CreatePaperImportInput struct {
@@ -264,6 +300,8 @@ type PaperImportDecodedPage struct {
 	PageNo        int    `json:"page_no"`
 	FileAssetID   string `json:"file_asset_id"`
 	SHA256        string `json:"sha256"`
+	Width         int    `json:"width,omitempty"`
+	Height        int    `json:"height,omitempty"`
 }
 
 type PaperImportDecodeResult struct {
@@ -274,14 +312,30 @@ type PaperImportDecodeResult struct {
 }
 
 type PaperImportOCRBlock struct {
-	Role          string  `json:"role,omitempty"`
-	SourceID      string  `json:"source_id"`
-	DocumentIndex int     `json:"document_index"`
-	BlockID       string  `json:"block_id,omitempty"`
-	PageNo        int     `json:"page_no"`
-	Text          string  `json:"text"`
-	BBox          any     `json:"bbox"`
-	Confidence    float64 `json:"confidence"`
+	Role           string                      `json:"role,omitempty"`
+	SourceID       string                      `json:"source_id"`
+	DocumentIndex  int                         `json:"document_index"`
+	BlockID        string                      `json:"block_id,omitempty"`
+	PageNo         int                         `json:"page_no"`
+	Text           string                      `json:"text"`
+	BBox           any                         `json:"bbox"`
+	Confidence     float64                     `json:"confidence"`
+	Kind           string                      `json:"kind,omitempty"`
+	RawLatex       string                      `json:"raw_latex,omitempty"`
+	CanonicalLatex string                      `json:"canonical_latex,omitempty"`
+	Engine         string                      `json:"engine,omitempty"`
+	EngineVersion  string                      `json:"engine_version,omitempty"`
+	ReviewStatus   string                      `json:"review_status,omitempty"`
+	RawText        string                      `json:"raw_text,omitempty"`
+	Segments       []PaperImportContentSegment `json:"segments,omitempty"`
+}
+
+type PaperImportContentSegment struct {
+	Kind          string    `json:"kind"`
+	Text          string    `json:"text,omitempty"`
+	Latex         string    `json:"latex,omitempty"`
+	BBox          []float64 `json:"bbox,omitempty"`
+	SourceBlockID string    `json:"source_block_id,omitempty"`
 }
 
 type PaperImportOCRResult struct {
@@ -289,6 +343,47 @@ type PaperImportOCRResult struct {
 	LeaseToken string                `json:"lease_token"`
 	DurationMS int                   `json:"duration_ms"`
 	Blocks     []PaperImportOCRBlock `json:"blocks"`
+}
+
+type PaperImportFormulaCandidate struct {
+	ModelVersion     string   `json:"model_version"`
+	RawLatex         string   `json:"raw_latex"`
+	CanonicalLatex   string   `json:"canonical_latex"`
+	Confidence       float64  `json:"confidence"`
+	Valid            bool     `json:"valid"`
+	SyntaxValid      bool     `json:"syntax_valid"`
+	StructureValid   bool     `json:"structure_valid"`
+	RenderValid      *bool    `json:"render_valid,omitempty"`
+	RenderSimilarity *float64 `json:"render_similarity,omitempty"`
+	ValidationAction string   `json:"validation_action"`
+	ReasonCodes      []string `json:"reason_codes,omitempty"`
+}
+
+type PaperImportFormulaRegion struct {
+	SourceID           string                        `json:"source_id"`
+	DocumentIndex      int                           `json:"document_index"`
+	PageNo             int                           `json:"page_no"`
+	RegionID           string                        `json:"region_id"`
+	BBox               []float64                     `json:"bbox"`
+	DetectorModel      string                        `json:"detector_model"`
+	DetectorConfidence float64                       `json:"detector_confidence"`
+	CropSHA256         string                        `json:"crop_sha256"`
+	EdgeInkRatio       float64                       `json:"edge_ink_ratio"`
+	CropComplete       bool                          `json:"crop_complete"`
+	RecropCount        int                           `json:"recrop_count"`
+	ValidationVersion  string                        `json:"validation_version"`
+	Candidates         []PaperImportFormulaCandidate `json:"candidates"`
+	SelectedLatex      string                        `json:"selected_latex"`
+	SelectedModel      string                        `json:"selected_model"`
+	Status             string                        `json:"status"`
+	ReasonCodes        []string                      `json:"reason_codes,omitempty"`
+}
+
+type PaperImportFormulaResult struct {
+	TaskID     string                     `json:"task_id"`
+	LeaseToken string                     `json:"lease_token"`
+	DurationMS int                        `json:"duration_ms"`
+	Regions    []PaperImportFormulaRegion `json:"regions"`
 }
 
 type PaperImportParseDocument struct {
@@ -334,6 +429,7 @@ type PaperImportRuntime interface {
 	QueuePaperImportParse(context.Context, string, PaperImportJob, string, PaperImportParseRequest) error
 	CompletePaperImportDecode(context.Context, string, string, PaperImportDecodeResult) error
 	CompletePaperImportOCR(context.Context, string, string, PaperImportOCRResult, PaperImportParseRequest) error
+	CompletePaperImportFormula(context.Context, string, string, PaperImportFormulaResult) error
 	FailPaperImportRuntime(context.Context, string, string, PaperImportRuntimeFailure) error
 }
 

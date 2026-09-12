@@ -482,6 +482,55 @@ func (s *MemoryStore) CreateManagedUser(_ context.Context, actor User, actorScop
 	return ManagedUser{ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, Status: user.Status, Roles: user.Roles, SchoolID: schoolID}, nil
 }
 
+func (s *MemoryStore) UpdateManagedUserStatus(_ context.Context, actor User, actorScope AccessScope, userID string, status string) (ManagedUser, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var targetKey string
+	var target UserWithPassword
+	for key, user := range s.users {
+		if user.TenantID == actor.TenantID && user.ID == userID && user.Status != "deleted" {
+			targetKey = key
+			target = user
+			break
+		}
+	}
+	if targetKey == "" {
+		return ManagedUser{}, "", ErrManagedUserNotFound
+	}
+	if target.ID == actor.ID || !CanManageUserRoles(actor, target.Roles) {
+		return ManagedUser{}, "", ErrUserStatusForbidden
+	}
+	schoolID := firstScopeID(target.DataScope, "school_id")
+	if !actorScope.TenantWide && (schoolID == "" || !actorScope.AllowsSchool(schoolID)) {
+		return ManagedUser{}, "", ErrOrganizationScope
+	}
+	previousStatus := target.Status
+	if previousStatus == status {
+		return managedUserFromMemory(target, schoolID), previousStatus, nil
+	}
+	if status == "disabled" && HasRole(target.User, "school_admin") {
+		activeAdmins := 0
+		for _, user := range s.users {
+			if user.TenantID == actor.TenantID && user.Status == "active" && HasRole(user.User, "school_admin") && firstScopeID(user.DataScope, "school_id") == schoolID {
+				activeAdmins++
+			}
+		}
+		if activeAdmins <= 1 {
+			return ManagedUser{}, "", ErrLastSchoolAdmin
+		}
+	}
+	target.Status = status
+	s.users[targetKey] = target
+	return managedUserFromMemory(target, schoolID), previousStatus, nil
+}
+
+func managedUserFromMemory(user UserWithPassword, schoolID string) ManagedUser {
+	return ManagedUser{
+		ID: user.ID, Username: user.Username, DisplayName: user.DisplayName,
+		Status: user.Status, Roles: append([]string(nil), user.Roles...), SchoolID: schoolID,
+	}
+}
+
 func scopeDeclaresSynthetic(scope map[string]any) bool {
 	for key, raw := range scope {
 		if key == "synthetic" {

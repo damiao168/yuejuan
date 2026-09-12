@@ -35,7 +35,7 @@ export function CreateExamWizard({ step, draft, schools, grades, classes, templa
   return (
     <div className="exam-create-wizard">
       <button type="button" className="exam-create-back" onClick={onCancel}><ArrowLeft size={16} /> 返回考试列表</button>
-      <header className="exam-create-page-header"><div><h1>新建考试</h1><span className="exam-draft-status"><Cloud size={14} /> {savedAt ? `草稿已保存 ${savedAt}` : "草稿将自动保存"}</span></div><Steps current={step} responsive={false} items={steps.map(({ title }) => ({ title }))} /></header>
+      <header className="exam-create-page-header"><div><h1>新建考试</h1><span className="exam-draft-status" role="status"><Cloud size={14} /> {savedAt ? `草稿已保存到本机 ${savedAt}` : "草稿将自动保存到本机"}</span></div><Steps current={step} responsive items={steps.map(({ title }) => ({ title }))} /></header>
       <section className="exam-create-stage">
         <header><h2>{current.title}</h2><p>{current.description}</p></header>
         <AnimatePresence mode="wait" initial={false}>
