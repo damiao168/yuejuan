@@ -40,7 +40,7 @@ export async function installApiMocks(
   const user = userFor(role);
   let authenticated = options.initiallyAuthenticated ?? false;
 
-  await page.route("**/api/v1/**", async (route) => {
+  await page.route(/\/api\/v1(?:\/|$)/, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
@@ -249,20 +249,32 @@ export async function installApiMocks(
         }
       });
     }
-    if (path === "/api/v1/exams/exam-1/workspace") {
+    if (path === "/api/v1/review-tasks" && request.method() === "GET") {
+      return json(route, { tasks: [], next_cursor: "", has_more: false });
+    }
+    if (/^\/api\/v1\/exams\/[^/]+\/scoring-readiness$/.test(path) && request.method() === "GET") {
+      return json(route, { scoring_readiness: { ready: true, checks: [], metrics: {} } });
+    }
+    if (/^\/api\/v1\/exams\/[^/]+\/scoring-summary$/.test(path) && request.method() === "GET") {
+      return json(route, { scoring_summary: { questions: [] } });
+    }
+
+    const workspaceMatch = path.match(/^\/api\/v1\/exams\/([^/]+)\/workspace$/);
+    if (workspaceMatch && request.method() === "GET") {
+      const examID = decodeURIComponent(workspaceMatch[1]);
       return json(route, {
         workspace: {
-          exam_id: "exam-1",
+          exam_id: examID,
           exam_name: "2026 春季数学期中考试",
           exam_status: "collecting",
           revision: 3,
           stage: "capture",
           stages: [
-            { key: "prepare", label: "开考准备", state: "completed", action_route: "/exams/exam-1/settings" },
-            { key: "capture", label: "答卷导入", state: "current", action_route: "/exams/exam-1/capture" },
-            { key: "grading", label: "阅卷", state: "pending", action_route: "/exams/exam-1/grading" },
-            { key: "quality", label: "复核与异常", state: "pending", action_route: "/exams/exam-1/quality" },
-            { key: "results", label: "成绩与报告", state: "pending", action_route: "/exams/exam-1/scores" }
+            { key: "prepare", label: "开考准备", state: "completed", action_route: `/exams/${examID}/settings` },
+            { key: "capture", label: "答卷导入", state: "current", action_route: `/exams/${examID}/capture` },
+            { key: "grading", label: "阅卷", state: "pending", action_route: `/exams/${examID}/grading` },
+            { key: "quality", label: "复核与异常", state: "pending", action_route: `/exams/${examID}/quality` },
+            { key: "results", label: "成绩与报告", state: "pending", action_route: `/exams/${examID}/scores` }
           ],
           stage_progress: [
             { stage: "prepare", status: "completed", completed: 5, total: 5, unit: "项", summary: "已通过 5 / 5 项开考检查" },
@@ -277,7 +289,7 @@ export async function installApiMocks(
             message: "1 份答卷处理失败，会阻断后续阅卷",
             severity: "blocker",
             action_label: "查看并重试",
-            action_route: "/exams/exam-1/capture"
+            action_route: `/exams/${examID}/capture`
           }],
           warnings: [{
             code: "quality_issues",
@@ -285,7 +297,7 @@ export async function installApiMocks(
             message: "1 份答卷存在图像质量问题",
             severity: "warning",
             action_label: "查看异常",
-            action_route: "/exams/exam-1/capture"
+            action_route: `/exams/${examID}/capture`
           }],
           counts: {
             paper_count: 1,
@@ -301,7 +313,7 @@ export async function installApiMocks(
             code: "failed_submissions",
             label: "查看并重试",
             description: "答卷处理失败",
-            route: "/exams/exam-1/capture",
+            route: `/exams/${examID}/capture`,
             priority: "high"
           }],
           risk_tier: "R2",

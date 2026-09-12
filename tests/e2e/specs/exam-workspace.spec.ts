@@ -1,5 +1,32 @@
 import { expect, test } from "@playwright/test";
-import { installApiMocks } from "../fixtures/apiMocks";
+import { captureFailedRequests, installApiMocks } from "../fixtures/apiMocks";
+
+test("mock API 支持动态考试 ID，并在测试层拦截未配置接口", async ({ page }) => {
+  await installApiMocks(page, { role: "school_admin", initiallyAuthenticated: true });
+  const failedRequests = captureFailedRequests(page);
+  await page.goto("/#/admin/dashboard", { waitUntil: "domcontentloaded" });
+
+  const result = await page.evaluate(async () => {
+    const workspaceResponse = await fetch("/api/v1/exams/exam-created-math/workspace");
+    const workspace = await workspaceResponse.json();
+    const missingResponse = await fetch("/api/v1/e2e-unconfigured");
+    const missing = await missingResponse.json();
+    return {
+      workspaceStatus: workspaceResponse.status,
+      workspaceExamID: workspace.workspace.exam_id,
+      missingStatus: missingResponse.status,
+      missingCode: missing.error.code
+    };
+  });
+
+  expect(result).toEqual({
+    workspaceStatus: 200,
+    workspaceExamID: "exam-created-math",
+    missingStatus: 404,
+    missingCode: "e2e_mock_missing"
+  });
+  expect(failedRequests).toEqual([]);
+});
 
 test("考试工作区按四阶段导航，并让阻断项跳到可处理环节", async ({ page }) => {
   await installApiMocks(page, { role: "school_admin", initiallyAuthenticated: true });

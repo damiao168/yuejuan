@@ -9,7 +9,11 @@ test("stale human-submit command resumes after reload without changing score or 
     requests.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData()! });
     await route.fulfill({ status: 503, json: { error: { code: "idempotency_persist_failed" } } });
   });
-  await page.route("**/api/v1/review-commands/*", route => route.fulfill({ json: { command_id: route.request().url().split("/").at(-1), status: "takeover_ready" } }));
+  await page.route("**/api/v1/review-commands/*", route => route.fulfill({ json: {
+    command_id: route.request().url().split("/").at(-1),
+    status: "takeover_ready",
+    payload: JSON.parse(requests[0]!.body)
+  } }));
   await page.goto("/#/teacher/grading");
   await page.getByRole("button", { name: "开始处理" }).click();
   await page.getByRole("spinbutton", { name: "最终得分" }).fill("4");
