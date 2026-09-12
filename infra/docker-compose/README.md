@@ -80,7 +80,25 @@ EDUGRADE_AI_PROMPT_VERSION=subjective-governed-cn-subject-routing-v5
 .\scripts\calibrate-formula-runtime.ps1 -SampleDirectory D:\formula-calibration-rois
 ```
 
-标定只验证部署性能和不同 batch 的输出一致性，不冒充公式绝对准确率评测。公式/ROI 准确率仍须使用人工标注的项目验证集。设计依据和证据边界见 [`docs/ocr-formula-ai-evidence-review-2026-09-12.md`](../../docs/ocr-formula-ai-evidence-review-2026-09-12.md)。模型权重和画像都在持久卷中；重启 Worker 不会重新下载模型。
+标定只验证部署性能和不同 batch 的输出一致性，不冒充公式绝对准确率评测。公式/ROI 准确率仍须使用人工标注的项目验证集。设计依据和证据边界见 [`docs/ocr-formula-ai-evidence-review-2026-09-12.md`](../../docs/ocr-formula-ai-evidence-review-2026-09-12.md)。模型权重和画像都在持久缓存中；重启 Worker 不会重新下载模型。
+
+本地 Docker Desktop 环境默认把 PaddleOCR/公式模型放在仓库根目录的
+`.cache/ocr-models`（约需数 GB，已加入 `.gitignore`），而不是 Docker 的内部卷。
+因此执行 `down`、重建容器或更新业务代码都不会重新下载模型。可在 `.env` 中通过
+`EDUGRADE_OCR_MODEL_CACHE_DIR` 改到其他磁盘；相对路径从
+`infra/docker-compose` 解析。
+
+日常从仓库根目录启动时使用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-local.ps1
+```
+
+该命令复用已有镜像，不会无条件构建。依赖或源码确实发生变化时才执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-local.ps1 -Build
+```
 
 等价手工命令：
 

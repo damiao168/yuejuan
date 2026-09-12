@@ -35,9 +35,9 @@ RUN python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
 # with INSTALL_PADDLEOCR=false.
 RUN python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" "ftfy==6.3.1" "matplotlib>=3.9,<4"
 
-COPY services/ocr-worker/ocr_worker ./ocr_worker
-RUN python -m pip install --no-cache-dir --no-deps /tmp/worker-runtime-python .
-
+# System libraries change far less often than application source. Keep this
+# before the source COPY so editing the OCR worker does not invalidate apt's
+# layer and download the same Debian packages again.
 RUN sed -i \
       -e "s|http://deb.debian.org/debian-security|$DEBIAN_SECURITY_MIRROR|g" \
       -e "s|http://deb.debian.org/debian|$DEBIAN_MIRROR|g" \
@@ -45,6 +45,11 @@ RUN sed -i \
     && apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
+
+COPY services/ocr-worker/ocr_worker ./ocr_worker
+# setuptools is already pinned above. Avoid creating two isolated build
+# environments (and downloading setuptools twice) on every source rebuild.
+RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation /tmp/worker-runtime-python .
 
 RUN install -d -o nobody -g nogroup \
       /home/ocr-worker/.paddlex \

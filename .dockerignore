@@ -2,6 +2,7 @@
 .gotmp
 .playwright-cli
 .claude
+.cache
 
 # Never send local credentials or private keys to BuildKit. Runtime
 # configuration is injected by Compose and does not belong in image contexts.

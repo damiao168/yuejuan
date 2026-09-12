@@ -14,13 +14,14 @@ test("识别轮询在短暂失败后恢复，停止及重试保留资料和滚�
   let failNext = false;
   await page.route("**/api/v1/exams/exam-1/papers", route => route.fulfill({ json: { papers: [] } }));
   await page.route("**/api/v1/exams/exam-1/questions", route => route.fulfill({ json: { questions: [] } }));
-  await page.route("**/api/v1/exams/exam-1/paper-imports", async route => {
+  await page.route("**/api/v1/exams/exam-1/paper-imports", route => route.fulfill({ json: { imports: [job] } }));
+  await page.route("**/api/v1/paper-imports/import-1", async route => {
     polls += 1;
     if (failNext) {
       failNext = false;
       return route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "temporary" } } });
     }
-    return route.fulfill({ json: { imports: [job] } });
+    return route.fulfill({ json: { import: job } });
   });
   await page.route("**/api/v1/paper-imports/import-1/cancel?expected_generation=1", route => {
     job.status = "cancelled";
@@ -41,7 +42,7 @@ test("识别轮询在短暂失败后恢复，停止及重试保留资料和滚�
   const startPolls = polls;
   failNext = true;
   await expect.poll(() => polls, { timeout: 15_000 }).toBeGreaterThanOrEqual(startPolls + 2);
-  await expect(page.getByText("文字识别", { exact: true })).toBeVisible();
+  await expect(page.getByRole("progressbar")).toBeVisible();
   expect(await scrollPosition()).toEqual(before);
 
   await page.getByRole("button", { name: "停止识别", exact: true }).click();

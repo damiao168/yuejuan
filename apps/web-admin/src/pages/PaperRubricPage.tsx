@@ -323,6 +323,9 @@ export function PaperRubricPage({
         if (disposed) return;
         setPaperImports((current) => current.map((item) => item.id === result.import.id ? result.import : item));
         if (result.import.status !== "processing") await loadConfig(selectedExamId, { silent: true });
+      } catch {
+        // A transient progress request must not discard the current import state.
+        // The next interval retries the authoritative import endpoint.
       } finally {
         pending = false;
       }

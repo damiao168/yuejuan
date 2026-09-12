@@ -108,10 +108,9 @@ export function ResponsiveTable<T extends object>({
   // Preserve Ant Design's complete interaction contract for selection, filtering,
   // expansion and sorting. A read-only card conversion must not drop controls.
   const needsFullTable = Boolean(tableProps.rowSelection || tableProps.expandable || flatColumns.some((column) => column.sorter || column.filters || column.filterDropdown));
-  if (!mobile || needsFullTable) {
+  if (!mobile) {
     return (
-      <div className="responsive-table-region" role="region" aria-label="数据表格" tabIndex={mobile ? 0 : undefined}>
-      {mobile ? <p className="table-interaction-hint">左右滑动查看各列；可在表头筛选、排序或选择记录。</p> : null}
+      <div className="responsive-table-region" role="region" aria-label="数据表格">
       <Table<T>
         {...tableProps}
         columns={columns}
@@ -124,9 +123,32 @@ export function ResponsiveTable<T extends object>({
         className={`responsive-desktop-table ${className ?? ""}`.trim()}
         tableLayout="fixed"
         pagination={pagination}
-        scroll={mobile ? { ...scroll, x: scroll?.x ?? "max-content" } : scroll}
-        size={tableProps.size ?? "middle"}
+        scroll={scroll}
+        size={tableProps.size ?? "small"}
       />
+      </div>
+    );
+  }
+
+  if (needsFullTable) {
+    return (
+      <div className="responsive-table-region" role="region" aria-label="数据表格" tabIndex={0}>
+        <p className="table-interaction-hint">左右滑动查看各列；可在表头筛选、排序或选择记录。</p>
+        <Table<T>
+          {...tableProps}
+          columns={columns}
+          dataSource={dataSource}
+          rowKey={rowKey}
+          loading={loading}
+          locale={locale}
+          onRow={accessibleOnRow}
+          rowClassName={rowClassName}
+          className={`responsive-desktop-table ${className ?? ""}`.trim()}
+          tableLayout="fixed"
+          pagination={pagination}
+          scroll={{ ...scroll, x: scroll?.x ?? "max-content" }}
+          size={tableProps.size ?? "small"}
+        />
       </div>
     );
   }

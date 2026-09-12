@@ -108,6 +108,17 @@ Remove-Item Env:EDUGRADE_BOOTSTRAP_PASSWORD
 
 初始化脚本会依次执行环境预检、基础服务启动、数据库迁移、MinIO 初始化、应用构建、管理员创建和健康检查。不要在迁移执行期间中断进程。
 
+完成首次初始化后，日常启动请回到仓库根目录运行以下脚本。它会复用已有
+Docker 镜像，并把 PaddleOCR/公式模型持续保存在项目的 `.cache/ocr-models`：
+
+```powershell
+Set-Location ..\..
+powershell -ExecutionPolicy Bypass -File scripts\start-local.ps1
+```
+
+只有依赖或源码发生变化、确实需要重建镜像时才追加 `-Build`。不要把
+`docker compose up -d --build` 当作每次启动命令。
+
 需要同时启用 Prometheus 和 Grafana 时，增加 `-EnableObservability`：
 
 ```powershell

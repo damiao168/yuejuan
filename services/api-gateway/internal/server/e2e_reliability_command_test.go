@@ -266,7 +266,8 @@ VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,'import',$4::uuid,'paper.pdf','applic
 		t.Fatalf("import replay=%#v err=%v", replayed, err)
 	}
 	changedImport := createImport
-	changedImport.Subject = "physics"
+	changedImport.Sources = append([]paper.CreatePaperImportSourceInput(nil), createImport.Sources...)
+	changedImport.Sources[0].RoleHint = "answer"
 	if _, err = paperStore.CreatePaperImport(context.Background(), tenantID, first.Exams[0].ID, userID, changedImport); !errors.Is(err, paper.ErrConflict) {
 		t.Fatalf("changed import command replay error=%v", err)
 	}
