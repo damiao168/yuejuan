@@ -2,7 +2,8 @@ import { executeBusinessCommand } from "./businessCommand";
 import { EduGradeApi } from "@edugrade/sdk";
 import type {
   ReviewTask as GeneratedReviewTask,
-  ReviewTaskContext as GeneratedReviewTaskContext
+  ReviewTaskContext as GeneratedReviewTaskContext,
+  SubjectiveAIGrade
 } from "@edugrade/sdk";
 import { apiClient } from "./client";
 import type { Question } from "./papers";
@@ -170,7 +171,7 @@ export interface GradeEvidence {
   bbox?: number[];
 }
 
-export interface AiGrade {
+export interface AiGrade extends Pick<SubjectiveAIGrade, "math_artifact_id" | "math_artifact_version" | "math_correction_revision" | "math_scoring_version"> {
   id: string;
   tenant_id: string;
   answer_segment_id: string;
@@ -517,17 +518,13 @@ export async function createRuleGrade(segmentId: string) {
   });
 }
 
-export async function createSubjectiveAiGrade(segmentId: string) {
-  return apiClient.request<{ grade: AiGrade }>(`/api/v1/answer-segments/${encodeURIComponent(segmentId)}/subjective-ai-grade`, {
-    method: "POST",
-    body: JSON.stringify({
-      model_policy: {
-        model_version: "mock-llm-v1",
-        prompt_version: "subjective-mock-prompt-v1",
-        min_confidence: 0.8
-      }
-    })
-  });
+export async function createSubjectiveAiGrade(segmentId: string): Promise<{ grade: AiGrade }> {
+  // Model governance and production defaults are owned by the gateway. The
+  // workbench must never select a mock deployment or override score authority.
+  const result = await generatedApi.createSubjectiveAIGrade({ path: { id: segmentId }, body: {} });
+  const mode = result.grade.delivery_mode;
+  if (mode !== "teacher_suggestion" && mode !== "teacher_review" && mode !== "shadow_only") throw new Error("Unexpected AI delivery mode");
+  return { grade: { ...result.grade, delivery_mode: mode } };
 }
 
 export async function listAiGrades(segmentId: string) {

@@ -187,6 +187,8 @@ export interface ExamReadiness {
   ready: boolean;
   confirmed: boolean;
   configuration_hash: string;
+  snapshot_id?: string;
+  import_snapshot_available: boolean;
   checks: ReadinessCheck[];
   confirmed_at?: string;
   confirmed_by?: string;

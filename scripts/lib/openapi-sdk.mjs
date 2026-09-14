@@ -175,6 +175,9 @@ export function generateClient(spec) {
       if (request) {
         initParts.push(request.json ? "body: args.body === undefined ? undefined : JSON.stringify(args.body)" : "body: args.body as BodyInit");
         if (!request.json) initParts.push(`headers: { \"Content-Type\": ${JSON.stringify(request.contentType)}, ...Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) }`);
+        else if (parameters.some((parameter) => parameter?.in === "header")) {
+          initParts.push("headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)]))");
+        }
       } else if (parameters.some((parameter) => parameter?.in === "header")) {
         initParts.push("headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)]))");
       }

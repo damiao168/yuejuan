@@ -3,6 +3,7 @@ export type ViewKey =
   | "exams"
   | "examCreate"
   | "papers"
+  | "questionBank"
   | "capture"
   | "grading"
   | "review"

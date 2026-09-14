@@ -18,7 +18,7 @@ from .deployment_profile import (
     formula_hardware_descriptor,
     formula_software_descriptor,
 )
-from .paper_formula import PaddleFormulaLayoutDetector
+from .math_layout import PaddleFormulaLayoutDetector
 from .recognition_router import PaddleFormulaNetEngine
 
 BUILTIN_FORMULAS = (

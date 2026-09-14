@@ -9,10 +9,13 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"edugrade-enterprise/services/api-gateway/internal/assessment"
+	"edugrade-enterprise/services/api-gateway/internal/mathunderstanding"
 )
 
 func TestBuildGradingAgentV2RequestBuildsOneBoundedAttestedCrop(t *testing.T) {
-	input := validHTTPAdapterInput()
+	input := validMathV2AdapterInput()
 	input.RequestID = "subjective-grade-image-0001"
 	input.AnswerImageRef = map[string]any{
 		"student_name": "must-not-leak",
@@ -81,7 +84,7 @@ func TestBuildGradingAgentV2RequestBuildsOneBoundedAttestedCrop(t *testing.T) {
 }
 
 func TestBuildGradingAgentV2RequestRejectsInvalidCropFacts(t *testing.T) {
-	input := validHTTPAdapterInput()
+	input := validMathV2AdapterInput()
 	policy := ModelPolicy{ModelVersion: "fixture-v1", PromptVersion: "prompt-v2", MinConfidence: 0.8}
 	cases := []struct {
 		name   string
@@ -107,7 +110,7 @@ func TestBuildGradingAgentV2RequestRejectsInvalidCropFacts(t *testing.T) {
 }
 
 func TestBuildGradingAgentV2RequestEnforcesIndependentEightMiBLimit(t *testing.T) {
-	input := validHTTPAdapterInput()
+	input := validMathV2AdapterInput()
 	input.Rubric.Examples = []any{strings.Repeat("x", maxGradingAgentV2RequestBytes)}
 	crop := validResolvedActiveCrop(t)
 	policy := ModelPolicy{ModelVersion: "fixture-v1", PromptVersion: "prompt-v2", MinConfidence: 0.8}
@@ -120,7 +123,7 @@ func TestBuildGradingAgentV2RequestEnforcesIndependentEightMiBLimit(t *testing.T
 }
 
 func TestBuiltGradingAgentV2RequestClearOverwritesBody(t *testing.T) {
-	input := validHTTPAdapterInput()
+	input := validMathV2AdapterInput()
 	crop := validResolvedActiveCrop(t)
 	policy := ModelPolicy{ModelVersion: "fixture-v1", PromptVersion: "prompt-v2", MinConfidence: 0.8}
 	built, err := BuildGradingAgentV2Request(input.RequestID, input, crop, policy)
@@ -140,7 +143,7 @@ func TestBuiltGradingAgentV2RequestClearOverwritesBody(t *testing.T) {
 }
 
 func TestGradingAgentV2IdempotencyDigestBindsMediaWithoutEncodingIt(t *testing.T) {
-	input := validHTTPAdapterInput()
+	input := validMathV2AdapterInput()
 	crop := validResolvedActiveCrop(t)
 	policy := ModelPolicy{ModelVersion: "fixture-v1", PromptVersion: "prompt-v2", MinConfidence: 0.8}
 
@@ -171,6 +174,21 @@ func TestGradingAgentV2IdempotencyDigestBindsMediaWithoutEncodingIt(t *testing.T
 	if first.IdempotencyDigest == third.IdempotencyDigest {
 		t.Fatal("different normalized requests must not share a digest")
 	}
+}
+
+func validMathV2AdapterInput() AdapterInput {
+	input := validHTTPAdapterInput()
+	input.Subject = "mathematics"
+	input.Question.QuestionType = "calculation"
+	input.AssessmentSnapshot = assessment.ExamQuestionSnapshot{ID: "snapshot-001", SubjectCode: assessment.SubjectMathematics}
+	input.MathEvidence = &MathEvidenceContext{
+		ArtifactID: "math-artifact-001", ArtifactVersion: 3, ExamQuestionSnapshotID: "snapshot-001", ScoringVersion: MathScoringVersionV1,
+		OverallConfidence: 0.94, Quality: MathEvidenceQuality{Recognition: 0.95, Formula: 0.94, Structure: 0.93, Verification: 0.96, RubricMapping: 0.92, Critical: 0.92},
+		Steps:         []MathEvidenceStep{{ID: "s1", Text: "12+8=20", FormulaIDs: []string{"f1"}, Confidence: 0.94}},
+		Formulas:      []MathEvidenceFormula{{ID: "f1", StepIDs: []string{"s1"}, CanonicalLatex: "12+8=20", ParseStatus: "parsed", ReasonCodes: []string{}, BoundingBox: mathunderstanding.BoundingBox{X: 0.1, Y: 0.2, Width: 0.4, Height: 0.2}, Confidence: 0.94}},
+		Verifications: []MathEvidenceVerification{}, RubricEvidence: []mathunderstanding.RubricEvidence{},
+	}
+	return input
 }
 
 func validResolvedActiveCrop(t *testing.T) ResolvedActiveCrop {

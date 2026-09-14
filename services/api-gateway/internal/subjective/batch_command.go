@@ -94,7 +94,7 @@ func (s *PostgresStore) SaveEnqueuePlan(ctx context.Context, tenantID, actorID s
 			return plan, ErrIdempotencyConflict
 		}
 		if count == 1 {
-			err = tx.QueryRowContext(ctx, `SELECT answer_version,question_id::text,rubric_version,model_version,prompt_version,min_confidence::float8,request_id FROM subjective_grading_run WHERE tenant_id=$1::uuid AND batch_id=$2::uuid AND answer_segment_id=$3::uuid`, tenantID, plan.BatchID, input.AnswerSegmentID).Scan(&input.AnswerVersion, &input.QuestionID, &input.RubricVersion, &input.ModelVersion, &input.PromptVersion, &input.MinConfidence, &input.RequestID)
+			err = tx.QueryRowContext(ctx, `SELECT answer_version,question_id::text,rubric_version,model_version,prompt_version,min_confidence::float8,request_id,COALESCE(math_artifact_id::text,''),math_artifact_version,math_correction_revision,math_scoring_version FROM subjective_grading_run WHERE tenant_id=$1::uuid AND batch_id=$2::uuid AND answer_segment_id=$3::uuid`, tenantID, plan.BatchID, input.AnswerSegmentID).Scan(&input.AnswerVersion, &input.QuestionID, &input.RubricVersion, &input.ModelVersion, &input.PromptVersion, &input.MinConfidence, &input.RequestID, &input.MathArtifactID, &input.MathArtifactVersion, &input.MathCorrectionRevision, &input.MathScoringVersion)
 			if err != nil {
 				return plan, err
 			}

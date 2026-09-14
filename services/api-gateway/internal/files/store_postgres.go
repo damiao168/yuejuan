@@ -137,6 +137,23 @@ WHERE tenant_id=$1 AND id::text=$2 AND deleted_at IS NULL
 	if !AllowsAsset(scope, asset) {
 		return FileAsset{}, ErrForbidden
 	}
+	// A file becomes question-bank content once a version pins it. School scope
+	// alone must never turn that durable reference into a download capability.
+	var bankAuthorized bool
+	if err := s.db.QueryRowContext(ctx, `SELECT NOT EXISTS(
+		SELECT 1 FROM question_bank_item_asset qa WHERE qa.tenant_id=$1 AND qa.file_asset_id=$2
+	) OR EXISTS(
+		SELECT 1 FROM question_bank_item_asset qa
+		JOIN question_bank_item_version v ON v.tenant_id=qa.tenant_id AND v.id=qa.version_id
+		JOIN question_bank_item i ON i.tenant_id=v.tenant_id AND i.id=v.item_id
+		WHERE qa.tenant_id=$1 AND qa.file_asset_id=$2
+		AND question_bank_actor_has_action(i.tenant_id,i.bank_id,$3::uuid,'read')
+	)`, scope.TenantID, id, scope.ActorID).Scan(&bankAuthorized); err != nil {
+		return FileAsset{}, err
+	}
+	if !bankAuthorized {
+		return FileAsset{}, ErrForbidden
+	}
 	return asset, nil
 }
 
@@ -155,6 +172,13 @@ func (s *PostgresStore) BeginDelete(ctx context.Context, scope auth.AccessScope,
 	}
 	if asset.Revision != expectedRevision {
 		return FileAsset{}, ErrConflict
+	}
+	var pinned bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM question_bank_item_asset WHERE tenant_id=$1 AND file_asset_id=$2)`, scope.TenantID, id).Scan(&pinned); err != nil {
+		return FileAsset{}, err
+	}
+	if pinned {
+		return FileAsset{}, ErrForbidden
 	}
 	if asset.LegalHold || (asset.RetentionUntil != nil && asset.RetentionUntil.After(time.Now().UTC())) {
 		return FileAsset{}, ErrForbidden

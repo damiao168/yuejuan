@@ -28,16 +28,7 @@ func BuildSolutionGraph(input SolutionBuildInput) (SolutionGraph, error) {
 	for _, formula := range input.Formulas {
 		formulaByBlock[formula.BlockID] = append(formulaByBlock[formula.BlockID], formula.ID)
 	}
-	steps := make([]SolutionStep, 0, len(input.Blocks))
-	stepByBlock := map[string]string{}
-	for _, block := range input.Blocks {
-		if block.Status == "crossed_out" || block.Kind == "connector" {
-			continue
-		}
-		stepID := "step-" + block.ID
-		stepByBlock[block.ID] = stepID
-		steps = append(steps, SolutionStep{ID: stepID, OrderHint: len(steps) + 1, BlockIDs: []string{block.ID}, FormulaIDs: formulaByBlock[block.ID], NormalizedText: block.Normalized, Confidence: clamp((block.RecognitionConfidence + block.StructureConfidence) / 2)})
-	}
+	steps, stepByBlock := SegmentSolutionSteps(input.Blocks, formulaByBlock)
 	edgeMap := map[string]SolutionEdge{}
 	for _, relation := range input.Relations {
 		from, fromOK := stepByBlock[relation.FromID]
@@ -61,12 +52,12 @@ func BuildSolutionGraph(input SolutionBuildInput) (SolutionGraph, error) {
 		}
 		return edges[i].FromStepID < edges[j].FromStepID
 	})
-	confidence := 0.0
-	for _, step := range steps {
-		confidence += step.Confidence
+	confidence := 1.0
+	if len(steps) == 0 {
+		confidence = 0
 	}
-	if len(steps) > 0 {
-		confidence /= float64(len(steps))
+	for _, step := range steps {
+		confidence = min(confidence, step.Confidence)
 	}
 	graph := SolutionGraph{ID: fmt.Sprintf("solution-%s", input.AnswerSegmentID), AnswerSegmentID: input.AnswerSegmentID, BuilderVersion: input.BuilderVersion, FormulaModelVersion: input.FormulaModelVersion, OverallConfidence: confidence, RequiresHumanReview: confidence < .75 || len(steps) == 0, Steps: steps, Edges: edges}
 	blocks, formulas := map[string]bool{}, map[string]bool{}

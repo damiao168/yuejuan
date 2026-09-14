@@ -132,7 +132,9 @@ func (s *MemoryStore) GetOrCreateRun(_ context.Context, tenantID string, _ strin
 		status = RunQueued
 		attemptCount = 0
 	}
-	run := GradingRun{ID: s.id("subjective-run"), TenantID: tenantID, AnswerSegmentID: input.AnswerSegmentID, BatchID: input.BatchID, AnswerVersion: input.AnswerVersion, QuestionID: input.QuestionID, RubricVersion: input.RubricVersion, ModelVersion: input.ModelVersion, PromptVersion: input.PromptVersion, MinConfidence: input.MinConfidence, RequestID: input.RequestID, Status: status, AttemptCount: attemptCount, StartedAt: startedAt, CreatedAt: now, UpdatedAt: now}
+	run := GradingRun{ID: s.id("subjective-run"), TenantID: tenantID, AnswerSegmentID: input.AnswerSegmentID, BatchID: input.BatchID, AnswerVersion: input.AnswerVersion, QuestionID: input.QuestionID, RubricVersion: input.RubricVersion, ModelVersion: input.ModelVersion, PromptVersion: input.PromptVersion, MinConfidence: input.MinConfidence, RequestID: input.RequestID,
+		MathArtifactID: input.MathArtifactID, MathArtifactVersion: input.MathArtifactVersion, MathCorrectionRevision: input.MathCorrectionRevision, MathScoringVersion: input.MathScoringVersion,
+		Status: status, AttemptCount: attemptCount, StartedAt: startedAt, CreatedAt: now, UpdatedAt: now}
 	s.runs[runKey] = run
 	return run, nil
 }

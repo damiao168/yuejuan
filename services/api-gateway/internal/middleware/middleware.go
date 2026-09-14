@@ -104,7 +104,11 @@ func BrowserCSRF(sessionCookieName string) Middleware {
 	sessionCookieName = strings.TrimSpace(sessionCookieName)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !requestMayHaveBody(r.Method) || r.URL.Path == "/api/v1/auth/token" || strings.TrimSpace(r.Header.Get("Authorization")) != "" {
+			// Match auth's bearer parser. An invalid Authorization header may
+			// fall back to ambient cookies and must not exempt that request.
+			parts := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
+			hasBearer := len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") && strings.TrimSpace(parts[1]) != ""
+			if !requestMayHaveBody(r.Method) || r.URL.Path == "/api/v1/auth/token" || hasBearer {
 				next.ServeHTTP(w, r)
 				return
 			}

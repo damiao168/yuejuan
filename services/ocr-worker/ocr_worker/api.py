@@ -93,6 +93,24 @@ class EduGradeClient:
         tasks = response.get("tasks", [])
         return tasks if isinstance(tasks, list) else []
 
+    def claim_math_verification_tasks(self, worker_instance_id: str, lease_seconds: int) -> list[dict[str, Any]]:
+        self.worker_instance_id = worker_instance_id
+        response = self._request("POST", "/api/v1/internal/worker/tasks/claim", {
+            "queue_name": "math-verification", "worker_service": "ocr-worker",
+            "worker_instance_id": worker_instance_id, "limit": 1, "lease_seconds": lease_seconds,
+        })
+        tasks = response.get("tasks", [])
+        return tasks if isinstance(tasks, list) else []
+
+    def get_math_verification_input(self, task_id: str, tenant_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/api/v1/internal/math-verification/tasks/{task_id}/input", tenant_id=tenant_id)
+
+    def complete_math_verification_task(self, task_id: str, payload: dict[str, Any], tenant_id: str) -> None:
+        self._request("POST", f"/api/v1/internal/math-verification/tasks/{task_id}/complete", payload, tenant_id=tenant_id)
+
+    def fail_math_verification_task(self, task_id: str, payload: dict[str, Any], tenant_id: str) -> None:
+        self._request("POST", f"/api/v1/internal/math-verification/tasks/{task_id}/fail", payload, tenant_id=tenant_id)
+
     def get_math_task_input(self, runtime_task_id: str, tenant_id: str | None = None) -> dict[str, Any]:
         return self._request("GET", f"/api/v1/internal/math-understanding/tasks/{runtime_task_id}/input", tenant_id=tenant_id)
 

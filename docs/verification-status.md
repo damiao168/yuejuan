@@ -1,14 +1,88 @@
 # EduGrade 当前能力与验证状态
 
-- 状态更新时间：2026-08-30
+- 状态更新时间：2026-09-14（补充本地 MATH-14；原 main 审阅快照保留）
 - 审阅基线：`56cf04466b163b1194400340165f338969fe0e99`（本轮修改前核验的 GitHub `main` HEAD，用于界定审阅起点，不是“本文档所在提交”）
-- 适用范围：GitHub `main` 中已提交的代码、自动化验证入口和本文已记录的验证证据。
+- 适用范围：原 GitHub `main` 审阅快照，以及下节明确标记的当前工作分支本地 STORY-069A/069B/069C/069D 实现与验证证据。
 
 本文件只记录代码、自动验证和明确的外部边界。它不把 Mock、协议模拟器、静态检查或本机构建写成真实设备、真实模型质量或学校现场验收。
 
 本文件不代表学校生产环境验收、真实教师现场效果、真实模型准确率、真实扫描设备兼容性或外部 Provider SLA。
 
 ## 证据分层
+
+### 2026-09-14 本地数学阅卷工作台证据闭环 MATH-14
+
+当前本地工作树已把 MATH-11～13 的 verified artifact、服务端 Rubric 决策、建议区间、step/bbox/SymPy 验证和版本化建议历史接入教师阅卷工作台。当前建议必须精确匹配 segment、artifact/version、effective correction lineage、scorer、Rubric 和服务端总分；校正未保存、等待重验、待确认分、crop 漂移或任一版本不一致都会使旧建议不可采纳。采纳前再次读取服务器证据，模型建议只能由具备 `grading:manage` 的管理端显式请求；R3 默认保持教师独立评分。
+
+Go 全包 test/vet、工作台 49 项 Vitest、全工作区 TypeScript、web-admin production build、OpenAPI/SDK/route/contract/schema 门禁通过。隔离 PostgreSQL 17 应用当前全历史迁移至 schema `000150`，生产绑定 E2E 验证建议历史及错误 version/segment、缺 artifact、不完整绑定拒绝。Playwright CLI 的 UI-only 合成夹具检查当前/未决/crop drift/校正 pending/R3/管理端显式新建议，以及 390×844 无横向溢出；稳定态只有既有 Ant Design 弃用提示。定向 Biome 无 error、9 条 hook dependency warning；隔离数据库和临时浏览器夹具已在验收后清理。
+
+这些证据不代表真实 VLM 准确率、真实学校答卷、教师现场、预生产升级、容量或自动最终评分获批。数学 v2 功能旗标保持关闭，MATH-15 的真实错答、替代解、风险召回 benchmark 与 promotion gate 仍未完成。详见 [MATH-14](stories/STORY-MATH-14-grading-workbench-evidence-loop.md)。
+
+### 2026-09-14 本地 Grading Agent v2 数学生产接线 MATH-13
+
+当前本地工作树已把 verified effective math evidence、score-free v2 模型候选和 MATH-12 服务器确定性计分接入 direct/batch/worker 主观题路径。新链路仅在默认关闭的 feature flag、数学 Assessment Snapshot、已验证数学工件三项同时满足时启用；模型不能返回或持有总分，所有建议仍固定进入教师复核。run/grade 和幂等身份绑定 artifact/version/correction/scorer，推理期间版本变化会 conflict；任何未决 rubric 点只返回 nullable total 与区间，不写成功建议。
+
+最终 Go 全包 `go test -p 2 ./...` 与 `go vet -p 2 ./...`、Python v2 contract/application/HTTP 定向（`17 passed, 15 subtests passed`）和 AI services 全套（`125 passed, 45 subtests passed`）、定向 Ruff、全工作区 TypeScript、OpenAPI/SDK/route/schema contract gates 通过。入口覆盖 verified crop、幂等版本绑定、未决项无 grade、worker execute/complete 重算与伪造分数/非法模式拒绝；crop 变更阻断旧缓存重放，推理期间版本/crop 漂移会 conflict，worker 失效路径同时终结 task。Go 全包运行未配置数据库 E2E 环境；Docker PostgreSQL 18 先前独立隔离库全历史迁移至 `000148` 的核心工作流通过，本轮另一隔离库迁移至最新 `000149` 的绑定回读、batch 冻结恢复与精确 FK/check 四组断言通过，隔离库已清理。使用的是合成工件与 Fake/协议 HTTP 模型，不代表真实 VLM、脱敏学校答案、教师现场、容量或生产升级已验证；开关保持关闭，MATH-14 工作台闭环和 MATH-15 shadow/promotion 尚未实施。全套 Ruff 仍有其他既有测试文件的 10 条 import-sort 诊断。
+
+详见 [MATH-13](stories/STORY-MATH-13-grading-agent-v2-production.md)。
+
+### 2026-09-13 本地数学评分基线 MATH-12
+
+当前本地工作树新增冻结考试 Rubric 的只读数学评分预览；不宣称合入远端 main、部署学校或获准自动评分。服务端逐点生成 CriterionDecision，以整数分值聚合 verified/unresolved 与建议区间；未解决分值不成为零分或旧 missing_points，有待确认分时建议总分为 null。候选无分值权，精确目标和已绑定的步骤/公式/验证来源才可确定判定；当前语义与扣分策略仍要求人工判断。
+
+详情和定向单测、契约、隔离 PostgreSQL 验证范围见 [MATH-12](stories/STORY-MATH-12-deterministic-rubric-scorer.md)。本轮不写 AI/教师/最终成绩，也未完成生产模型接线、follow-through、自我纠正、工作台建议区间展示、真实答卷门禁或完整教师提交 E2E。
+
+### 2026-09-13 本地 STORY-069A 批准时快照
+
+当前工作分支 `fix/postgres-integration-regressions`，修改前 HEAD `5ec969389c30fd07851135e901775b88d160872b`。以下为本地工作树实现，未宣称已合入远端 main 或部署到学校。
+
+- 私有题库核心已接线：Bank、稳定 Item、draft Content Version、显式用户动作 ACL、草稿 revision、派生历史、审计/outbox/持久命令回执和管理页面。迁移 000140 开启四表 RLS 与 tenant 复合外键。
+- 真实独立 PostgreSQL 18：全历史迁移、生产 Store/Router、HTTP 认证与同租户 ACL、8 个并发/锁定/回滚/RLS/模板/重放子场景通过；已有考试→阅卷→发布→仲裁/报表恢复 PostgreSQL 回归通过。
+- Go auth/idempotency/questionbank/server 定向测试、go vet、SDK 一致性、OpenAPI breaking gate、schema version、Web 类型/构建/生产导航、24 项既有 Web 授权与路由相关测试通过。全库 lint 40 条既有 warning；新增题库文件无诊断。
+- Playwright CLI 的网络 fixture 明确为 UI-only Mock：创建、预览、换行选项、409 保留编辑、显式加载后保存/派生、撤权隐藏旧缓存、后台刷新保持编辑、1440px 桌面与 390px 移动布局均已检查；移动页面无横向溢出。
+- 069A 批准时边界：CGO=0 且无本机 C 编译器，race 检查未成功运行；数据库并发用例已通过。未验收学校现场、容量或预生产升级。当时答案/Rubric、发布 scoring bundle、用于考试和组卷尚未实现，当前 draft hash 不代表发布 hash；后续 069B 证据见下一节。
+
+详见 [069A 实施/审阅/审批记录](stories/STORY-069A-question-bank-core-item-version.md)与[题库 API](api/question-bank.md)。后续章节保留原有证据范围。
+
+### 2026-09-13 本地 STORY-069B 补充
+
+在同一工作分支上继续完成 069B；以下为未合入远端 main、未部署学校的本地工作树证据。
+
+- 答案、解析、Rubric、附件摘要和模板来源成为完整评分 bundle；`draft → reviewing → approved → published` 审核链绑定 revision/hash，作者默认不能自审，退回修改使旧审批失效。
+- 真实独立 PostgreSQL 18 执行全部历史迁移至 000141：published 主表/子表/附件/来源直接 SQL 修改拒绝，approve/publish 并发各仅一次成功，故障注入 materialize 零残留、原 key 恢复、重启重放同 ID，跨范围与 ready 考试拒绝。
+- 指定 published 版本以单事务复制 Question、AnswerKey、Solution、Rubric、默认 Assessment config 和来源追溯。发布模板/题目 v2 及退役 Item 后，考试 JSON、考试内评分事实和 schema v2 snapshot hash 保持不变；缺 AnswerArea 继续被既有 ValidateConfig 判为 not_ready。
+- OpenAPI/SDK/route/schema 门禁、Go 定向测试与 vet、全 workspace TypeScript、Web 构建、lint/copy/diff 检查通过。Playwright CLI 使用显式 UI-only Mock 串通评分编辑、独立审核、发布和考试复制；390px 无横向溢出，控制台 0 error/0 warning。
+- 边界：本地 PostgreSQL 与协议 fixture 不代表预生产升级、容量或教师现场体验；069B 仅有最小用户级 Reviewer/Publisher 绑定。组 ACL、受控 metadata 与组合搜索归 069C。
+
+详见 [069B 实施/审阅/审批记录](stories/STORY-069B-answer-rubric-publish-workflow.md)与[题库 API](api/question-bank.md)。
+
+### 2026-09-13 本地 STORY-069C 补充
+
+在同一工作分支上继续完成 069C；以下为未合入远端 main、未部署学校的本地工作树证据。
+
+- Bank metadata schema 与 ItemVersion values 分别版本化；enum/string/number/boolean/taxonomy、required、范围、稳定 ID 与受控 knowledge_points 在写入、送审和发布时校验。schema 升级后旧 Version 继续按旧定义读取且 hash 不变。
+- ACL 扩展到 read/create/edit/review/publish/retire/statistics/manage，并提供五个命名预设、用户与题库组 membership。Manager 只有结构权；用户/组撤权后，列表、内容、搜索和题库附件通用读取入口都重新校验当前 read。
+- 组合搜索先应用 Bank 授权，再在 repeatable-read 内执行 total/page 与确定排序；支持题干/编号、学科、知识点、题型/archetype、工作流、难度、认知、版权、用途、custom metadata 和统计可用性筛选。069F 前统计明确为 unavailable。
+- 独立 PostgreSQL 18 执行包含 069C 迁移 000142 的当前全历史迁移（至 000143），069A/B/C 三套 E2E 同时通过，覆盖字段错误、历史 schema/hash、派生新 schema、Manager 内容拒绝、组撤权、附件撤权、组合分页、退役与 audit。Go 定向测试、OpenAPI/SDK/route/schema 门禁、Web 类型和构建通过。
+- 浏览器以明确 UI-only fixture 验证受控编辑、schema、ACL、组合检索、统计标记与退役入口；桌面和 390×844 响应式布局通过且无横向溢出。修正 Form.List key 后控制台 0 error/0 warning。
+- 边界：本地数据库与 UI fixture 不代表预生产升级、学校现场或容量验收；版本级真实统计仍归 069F。
+
+详见 [069C 实施/审阅/审批记录](stories/STORY-069C-metadata-acl-search.md)与[题库 API](api/question-bank.md)。
+
+### 2026-09-13 本地 STORY-069D 补充
+
+在同一工作分支上继续完成 069D；以下为未合入远端 main、未部署学校的本地工作树证据。
+
+- 新 readiness 确认在考试锁与单事务内保存不含学生身份/作答/AnswerArea 的题目内容 companion，并绑定 ready 触发器生成的具体 Assessment Snapshot ID/hash。旧 hash-only readiness 保持 unavailable；导入没有 live Question/Rubric 回退。
+- 单题与最多 50 题批量先预览后生成 Draft。每题固定来源、目标题库/schema/revision、mapping 和 command；批量按逐题事务返回 HTTP 207。命令回执、audit/outbox 与 Item/Version 同事务，响应中断可复用原请求，部分成功后只重试失败项。
+- 服务端同时检查来源考试范围、目标题库 read/create 和关联 Item edit；回执重放复查当前授权。查重只在获授权目标库返回摘要，区分 exact bundle、同内容不同评分与相同标准化题干，教师显式选择新 Item 或关联新版本。
+- 导入 provenance 记录 readiness/Assessment 身份与 hash、Profile/archetype/scoring policy、目标 schema、mapping、去重决定与 command。真实 PostgreSQL 16 E2E 串通 Draft 补齐、独立审核发布、用于新考试，并从目标版本追溯到原 snapshot；来源考试保持不变。
+- 069A～069D 四套真实数据库 E2E、questionbank/paper/server Go 回归与 vet、OpenAPI/SDK/route/schema 门禁、全 workspace TypeScript/Web 构建、生产路由、相关身份兼容测试及浏览器 UI-only fixture 通过。构建仅保留既有大 chunk 提示。
+- 边界：旧 readiness 无内容时需要重新确认；当前只支持和 Assessment Snapshot 一致的原考试评分事实，不提供重评分版本选择。手工历史客观题没有冻结选项字段时需教师补齐。未完成预生产升级、容量或学校教师现场验收。
+
+详见 [069D 实施/审阅/审批记录](stories/STORY-069D-existing-exam-bank-import.md)与[题库 API](api/question-bank.md)。
+
+### 原有证据分类
 
 | 证据类型 | 本文件可以声明 | 本文件不能据此声明 |
 | --- | --- | --- |
@@ -97,6 +171,18 @@ MATH-00～08 的软件底座已接线：版本化数学工件、现有 OCR Worke
 2026-08-29 MATH-09 定向验证：现有 deterministic `BuildSpatialRelations` / `BuildSolutionGraph` 已接入 math-understanding runtime，Worker 空 relations 会在入库前补全，SolutionGraph 会由服务器 canonical builder 重建并保留 Worker 的人工复核信号。这不代表 learned layout model 已实现，也不代表复杂手写阅读顺序准确率或真实学校数据已完成验证。
 
 2026-08-29 MATH-10 定向验证：`image-quality-worker` 已接入 deterministic skew、page-border、perspective 与 shadow geometry measurement，并仅对满足安全条件的小角度 skew 执行扩大画布、可追踪矩阵的 deskew。未自动 perspective rectify、shadow removal 或 page crop，未实现 Answer Perception，也未验证真实学校图像准确率。
+
+2026-09-13 MATH-08A 有效证据投影：新增统一 current artifact + latest correction resolver，GET 保留 raw artifact，工作台全部数学草稿从 effective contract 加载，并提交 artifact version + correction revision 防止并发覆盖。Go mathunderstanding / apicontract、9 个前端测试、Web / SDK 类型检查、定向 lint、OpenAPI 兼容性和生成契约检查通过。真实 PostgreSQL 最小测试表回归验证生产查询与行锁（含 revision 503 / 500 条历史上限），独立临时库已清理；Chromium stateful mock 检查确认重复校正与刷新保留新公式和步骤，不提交 human grade。不是全量迁移/RLS/E2E/真实学校数学模型验证；Windows CGO 未启用，race detector 未运行。自动重新验证、建议版本失效以及后续 Mixed Perception / Grading Agent v2 仍未接入。编号使用 08A 以保留原 08 Pilot Gate 历史。
+
+2026-09-13 MATH-09A Mixed Perception：学生答题区新增 `mixed` 路由，同图并行执行全文 OCR、共享 Paddle 公式布局检测和 FormulaNet ROI 批识别；OCR/公式重叠区域去重，像素 bbox 统一归一化，FormulaArtifact 保存候选与所选索引。`000145` 只升级 queued 数学任务，运行中与历史证据保持不可变。OCR Worker mixed/math/paper-formula/calibration 定向测试及 Go mathunderstanding/apicontract 测试通过；真实模型、脱敏手写答卷、字符级 overlap 精度和学校 benchmark 尚未验证，因此仍仅供人工复核/教师建议链路。
+
+2026-09-13 MATH-10A SolutionGraph v2：服务器 canonical builder 增加同一视觉行的 mixed block 分组，step 保存 bbox、类型、识别/结构分层置信度，graph overall confidence 改为关键 step 最小值；同高远距离 block 保持平行流，block 关系投影后不产生 step 自环。Go mathunderstanding/apicontract、OpenAPI breaking、generated contracts、SDK/Web TypeScript 通过；真实多栏、涂改、分类讨论和 learned layout benchmark 尚未验证。
+
+2026-09-13 MATH-11 Symbolic Verification：新增 `math-verification` 第二阶段任务和不可变 verified 派生工件，绑定 parent/version/hash/exact correction revision；recognition/correction 数据库触发器原子排队，验证证据激活与任务完成原子提交，无效租约回滚，新 crop/teacher revision 使旧任务 superseded，不同结果重试冲突。OCR Worker 89 tests + 5 subtests、SymPy 11 tests、Go mathunderstanding/workerruntime/apicontract 通过；真实 PostgreSQL 隔离库验证 projection、invalid lease、successful activation、correction supersession，并实际执行 `000146` 后回滚部署库事务。OpenAPI breaking、generated SDK/route coverage 和 SDK/Web TypeScript 通过。定义域保留约分前分母排除点及根式限制；显式复杂约束、多变量、substitution/unit、真实手写 benchmark 和完整 segment→teacher-submit E2E 仍待验证；解集计算不等于学生答案完整正确，不写 final_grade。
+
+2026-09-14 MATH-13 Grading Agent v2：数学 verified effective artifact 经最小化、无 AST/debug 的 evidence DTO 进入生产 `/grading/grade-v2`；模型结构化响应只有 criterion/evidence semantic candidates，Gateway 以 frozen rubric 和 canonical verification facts 重算建议分。未决、低关键质量、diagram、graph uncertainty、替代解或版本漂移全部失败关闭到人工。run/grade/幂等绑定 artifact/version/effective correction lineage/scorer；OpenAPI/SDK 正式覆盖 public subjective grade 和新字段，schema version 为 `000148`。本地 Go/Python/契约/Ruff 与隔离 PostgreSQL 全迁移核心 E2E 通过，但 feature flag 默认关闭，未做真实模型 shadow、学校现场、MATH-14 工作台或 MATH-15 promotion，不授予自动最终评分权。
+
+2026-09-14 MATH-14 数学阅卷工作台：当前数学证据、MATH-12 服务端评分、评分点×步骤、bbox 高亮和最近 20 条版本建议统一接入阅卷上下文；crop/artifact/correction/scorer/Rubric/分数任一漂移都会使旧建议不可采纳，待确认分显示区间而非零分。校正排队状态显式，管理端只在点击后请求新建议，R3 默认教师独立评分。Go 全包、工作台 49 项测试、TypeScript/build、契约门禁、隔离 PostgreSQL 绑定 E2E 和 UI-only Playwright 边界态/移动布局通过；feature flag、真实模型/答卷/教师现场和 MATH-15 promotion 仍未验证。
 
 - 新增“已实现”必须同时列出代码接线、验证入口和未覆盖边界。
 - 必须区分 Repository implementation、Automated verification 和 External evidence，不得用前两类替代外部验收。

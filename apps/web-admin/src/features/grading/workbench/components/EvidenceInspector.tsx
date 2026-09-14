@@ -4,6 +4,9 @@ import { getSafeUserText } from "../../../../api/client";
 import type { AiGrade } from "../../../../api/review";
 import { StatusTag } from "../../../../components/StatusTag";
 import { MathEvidenceInspector } from "../MathEvidenceInspector";
+import { MathRubricMatrix } from "./MathRubricMatrix";
+import type { useMathWorkbenchEvidence } from "../hooks/useMathWorkbenchEvidence";
+import { mathSuggestionState } from "../mathWorkbenchEvidence";
 import { ReviewContextInspector } from "../ReviewContextInspector";
 import { requiresExplicitSecondOpinion } from "../reviewContext";
 import {
@@ -26,6 +29,13 @@ export interface EvidenceInspectorProps {
   canVerifyEvidence: boolean;
   actioning: string | null;
   onVerifyEvidence: () => Promise<void>;
+  math: ReturnType<typeof useMathWorkbenchEvidence>;
+  onRefreshMath: () => void;
+  onSelectMathStep: (stepId: string) => void;
+  canRequestMath: boolean;
+  requestingMath: boolean;
+  onRequestMath: () => void;
+  mathRequestNotice: string;
 }
 
 export function EvidenceInspector({
@@ -36,7 +46,8 @@ export function EvidenceInspector({
   canEditDraft,
   canVerifyEvidence,
   actioning,
-  onVerifyEvidence
+  onVerifyEvidence,
+  math, onRefreshMath, onSelectMathStep, canRequestMath, requestingMath, onRequestMath, mathRequestNotice
 }: EvidenceInspectorProps) {
   const automationSummary = () => {
     const result = context.automationResult;
@@ -63,10 +74,11 @@ export function EvidenceInspector({
   const evidence = () => {
     if (!selectedGrade) return <div className="ai-empty-state"><strong>暂无 AI 建议</strong><span>请按评分细则人工判定。</span></div>;
     const confidenceCalibrated = selectedGrade.confidence > 0;
+    const mathState = context.reviewContext.subject_tool_hints.subject_code === "mathematics" ? mathSuggestionState(selectedGrade, math.state, math.dirty) : null;
     return (
       <div className="evidence-stack">
         <div className="ai-score-strip">
-          <div><span>建议分</span><strong>{selectedGrade.suggested_score} / {selectedGrade.max_score}</strong></div>
+          <div><span>{mathState && !mathState.current ? "历史建议 · 不可采纳" : "建议分"}</span><strong>{selectedGrade.suggested_score} / {selectedGrade.max_score}</strong></div>
           <div>
             <span>置信度</span>
             {confidenceCalibrated
@@ -76,7 +88,7 @@ export function EvidenceInspector({
           <div>
             <span>判定</span>
             <StatusTag tone={selectedGrade.needs_human_review ? "warning" : selectedGrade.mock ? "warning" : confidenceTone(selectedGrade.confidence)}>
-              {selectedGrade.needs_human_review ? "需人工复核" : "未标记风险"}
+              {mathState && !mathState.current ? mathState.label : selectedGrade.needs_human_review ? "需人工复核" : "未标记风险"}
             </StatusTag>
           </div>
         </div>
@@ -123,7 +135,9 @@ export function EvidenceInspector({
   return (
     <>
       <ReviewContextInspector key={context.task.id} context={context.reviewContext} />
-      <MathEvidenceInspector key={`math-${context.task.id}`} segmentId={context.task.answer_segment_id} subjectCode={context.reviewContext.subject_tool_hints.subject_code} disabled={!canEditDraft} />
+      {context.reviewContext.subject_tool_hints.subject_code === "mathematics" && !requiresExplicitSecondOpinion(context.reviewContext) ? <MathRubricMatrix evidence={math.state} grades={context.aiGrades.filter((grade) => grade.delivery_mode !== "shadow_only")} points={context.question?.rubric?.points ?? []} dirty={math.dirty} requesting={requestingMath} canRequest={canRequestMath} onRequest={onRequestMath} onSelectStep={onSelectMathStep} /> : null}
+      {mathRequestNotice ? <p role="status" className="math-suggestion-note">{mathRequestNotice}</p> : null}
+      <MathEvidenceInspector key={`math-${context.task.id}`} segmentId={context.task.answer_segment_id} subjectCode={context.reviewContext.subject_tool_hints.subject_code} disabled={!canEditDraft || math.state.phase === "conflict" || math.state.phase === "unavailable"} data={math.state.understanding} loading={math.state.phase === "loading"} onRefresh={onRefreshMath} onCorrectionSaved={math.correctionSaved} onDirtyChange={math.setDirty} onSelectStep={onSelectMathStep} />
       {!requiresExplicitSecondOpinion(context.reviewContext) ? automationSummary() : null}
       {selectedGrade ? evidence() : null}
       {evidenceJob()}

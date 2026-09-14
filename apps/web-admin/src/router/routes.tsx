@@ -55,6 +55,11 @@ export interface AppRoute {
 
 const productionRouteDefinitions: AppRoute[] = [
   {
+    key: "questionBank", path: "/question-bank", title: "题库", group: "题库与组卷", icon: <BookOpenCheck size={18} />, permissions: ["question_bank:read"], mock: false, productionReady: true,
+    excludedRoles: ["platform_admin"], workspaces: ["tenant_admin", "school_admin", "teacher"],
+    experiences: { admin: { title: "题库", group: "题库与组卷" }, teacher: { title: "题库", group: "教学工作" } }
+  },
+  {
     key: "dashboard", path: "/dashboard", title: "工作总览", group: "工作台", icon: <Home size={18} />, permissions: [], mock: false, productionReady: true,
     workspaces: ["platform", "tenant_admin", "school_admin", "exam_owner", "teacher", "grader", "arbitrator", "auditor", "student"],
     experiences: { admin: { title: "工作台", group: "工作台" }, teacher: { title: "我的工作", group: "工作台" }, auditor: { title: "审计总览", group: "工作台" }, student: { title: "我的学习", group: "工作台" } }

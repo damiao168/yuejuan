@@ -61,10 +61,11 @@ type AnswerCandidate struct {
 }
 
 type AISecondOpinion struct {
-	Available           bool           `json:"available"`
-	Presentation        string         `json:"presentation"`
-	ScorePrefillAllowed bool           `json:"score_prefill_allowed"`
-	Metadata            map[string]any `json:"metadata"`
+	Available           bool             `json:"available"`
+	Presentation        string           `json:"presentation"`
+	ScorePrefillAllowed bool             `json:"score_prefill_allowed"`
+	Metadata            map[string]any   `json:"metadata"`
+	History             []map[string]any `json:"history,omitempty"`
 }
 
 type TaskClaim struct {
@@ -122,12 +123,26 @@ func taskContextFromWorkspace(workspace Workspace) TaskContext {
 	if len(workspace.Context.AISuggestion) > 0 {
 		prefillAllowed := allowsAIScorePrefill(snapshot)
 		metadata := cloneMap(workspace.Context.AISuggestion)
+		history := []map[string]any{}
+		if entries, ok := metadata["suggestion_history"].([]any); ok {
+			for _, entry := range entries {
+				if item, valid := entry.(map[string]any); valid {
+					copy := cloneMap(item)
+					if !prefillAllowed {
+						copy = removeScoreFields(copy)
+					}
+					history = append(history, copy)
+				}
+			}
+		}
+		delete(metadata, "suggestion_history")
 		if !prefillAllowed {
 			metadata = removeScoreFields(metadata)
 		}
 		out.AISecondOpinion = &AISecondOpinion{
 			Available: true, Presentation: "explicit_second_opinion",
 			ScorePrefillAllowed: prefillAllowed, Metadata: metadata,
+			History: history,
 		}
 	}
 	return out

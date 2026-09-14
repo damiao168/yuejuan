@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestRubricMatcherSupportsAlternativePathsWithoutScoring(t *testing.T) {
+func TestRubricMatcherDoesNotTrustUnboundFactsOrLabels(t *testing.T) {
 	input := EvidenceMatchInput{Graph: SolutionGraph{OverallConfidence: .9}, Verifications: []MathVerification{{ID: "v1", Kind: "equivalence", Status: "verified"}}, Concepts: []string{"factorization"}}
 	input.Requirements = []EvidenceRequirement{{Type: "any_of", Criterion: "method", Children: []EvidenceRequirement{{Type: "concept", Target: "factorization"}, {Type: "concept", Target: "quadratic_formula"}}}, {Type: "valid_transformation", Criterion: "solve"}}
 	evidence, err := MatchRubricEvidence(input)
@@ -14,8 +14,8 @@ func TestRubricMatcherSupportsAlternativePathsWithoutScoring(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range evidence {
-		if item.Status != "supported" {
-			t.Fatalf("valid alternative rejected: %#v", evidence)
+		if item.Status != "uncertain" {
+			t.Fatalf("unbound fact became scoring authority: %#v", evidence)
 		}
 	}
 }

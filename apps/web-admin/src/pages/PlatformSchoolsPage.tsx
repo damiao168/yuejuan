@@ -4,6 +4,7 @@ import { Building2, Plus, RefreshCw } from "lucide-react";
 import { createTenant, listTenants, updateTenantStatus, type Tenant } from "../api/org";
 import { ResponsiveTable } from "../components/ResponsiveTable";
 import { StatusTag } from "../components/StatusTag";
+import { validateNewPassword } from "../auth/loginSecurity";
 
 interface CreateSchoolValues {
   name: string;
@@ -198,10 +199,10 @@ export function PlatformSchoolsPage() {
           <Form.Item
             name="admin_password"
             label="初始密码"
-            extra="至少 12 位，包含大小写字母、数字和符号"
-            rules={[{ required: true, message: "请输入初始密码" }, { min: 12, message: "密码至少 12 位" }]}
+            extra="建议使用至少 15 个字符的长密码短语"
+            rules={[{ required: true, message: "请输入初始密码" }, { validator: validateNewPassword }]}
           >
-            <Input.Password maxLength={72} autoComplete="new-password" />
+            <Input.Password autoComplete="new-password" />
           </Form.Item>
         </Form>
       </Modal>

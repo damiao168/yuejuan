@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"edugrade-enterprise/services/api-gateway/internal/mathunderstanding"
 )
 
 const (
@@ -19,19 +21,14 @@ const (
 
 var gradingAgentV2InternalID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
-var gradingAgentV2Subjects = map[string]bool{
-	"chinese": true, "math": true, "english": true, "physics": true,
-	"chemistry": true, "biology": true, "history": true, "politics": true,
-	"geography": true, "computer_science": true,
-}
+var gradingAgentV2Subjects = map[string]bool{"math": true}
 
 var gradingAgentV2QuestionTypes = map[string]bool{
 	"short_answer": true, "calculation": true, "essay": true, "discussion": true,
 }
 
-// BuiltGradingAgentV2Request is an unreachable transport seam. It deliberately
-// exposes only the internal request body and non-sensitive idempotency facts.
-// No production handler or adapter constructs this type yet.
+// BuiltGradingAgentV2Request exposes only the internal request body and
+// non-sensitive idempotency facts to the production v2 transport.
 type BuiltGradingAgentV2Request struct {
 	RequestID         string
 	Body              []byte
@@ -69,6 +66,7 @@ type gradingAgentV2Request struct {
 	PromptGuard      gradingAgentPromptGuard      `json:"prompt_guard"`
 	OutputConstraint gradingAgentOutputConstraint `json:"output_constraint"`
 	MediaEvidence    gradingAgentV2MediaEvidence  `json:"media_evidence"`
+	MathEvidence     MathEvidenceContext          `json:"math_evidence"`
 }
 
 type gradingAgentV2MediaEvidence struct {
@@ -103,6 +101,7 @@ type gradingAgentV2DigestRequest struct {
 	PromptGuard      gradingAgentPromptGuard      `json:"prompt_guard"`
 	OutputConstraint gradingAgentOutputConstraint `json:"output_constraint"`
 	MediaEvidence    gradingAgentV2DigestEvidence `json:"media_evidence"`
+	MathEvidence     MathEvidenceContext          `json:"math_evidence"`
 }
 
 type gradingAgentV2DigestEvidence struct {
@@ -117,8 +116,9 @@ type gradingAgentV2DigestEvidence struct {
 	BindingHash    string         `json:"binding_hash"`
 }
 
-// BuildGradingAgentV2Request assembles one verified active crop into the
-// internal v2 contract. It performs no I/O and has no production caller.
+// BuildGradingAgentV2Request assembles one verified active crop and one
+// version-bound mathematical evidence projection into the internal v2
+// contract. It performs no I/O.
 func BuildGradingAgentV2Request(
 	requestID string,
 	input AdapterInput,
@@ -128,8 +128,8 @@ func BuildGradingAgentV2Request(
 	requestID = strings.TrimSpace(requestID)
 	segmentID := strings.TrimSpace(input.SegmentID)
 	questionID := strings.TrimSpace(input.Question.ID)
-	subject := strings.ToLower(strings.TrimSpace(input.Subject))
-	gradeLevel := strings.ToLower(strings.TrimSpace(input.GradeLevel))
+	subject := gradingAgentSubject(input.Subject)
+	gradeLevel := gradingAgentGradeLevel(input.GradeLevel)
 	questionType := strings.ToLower(strings.TrimSpace(input.Question.QuestionType))
 	rubricID := strings.TrimSpace(input.Rubric.ID)
 	rubricVersion := strings.TrimSpace(input.Rubric.Version)
@@ -172,6 +172,9 @@ func BuildGradingAgentV2Request(
 		policy.MinConfidence <= 0 ||
 		policy.MinConfidence > 1 {
 		return BuiltGradingAgentV2Request{}, &GradingAgentError{Code: "grading_v2_policy_invalid"}
+	}
+	if !validMathEvidenceForV2(input.MathEvidence, input) {
+		return BuiltGradingAgentV2Request{}, &GradingAgentError{Code: "math_evidence_invalid"}
 	}
 	if err := validateResolvedActiveCropForV2(crop); err != nil {
 		return BuiltGradingAgentV2Request{}, err
@@ -287,7 +290,11 @@ func BuildGradingAgentV2Request(
 			FinalScoreAuthority:  input.OutputConstraint.FinalScoreAuthority,
 		},
 		MediaEvidence: media,
+		MathEvidence:  *input.MathEvidence,
 	}
+	request.MathEvidence.effective = mathunderstanding.EffectiveArtifact{}
+	request.MathEvidence.frozen = mathunderstanding.FrozenRubric{}
+	request.MathEvidence.baseline = mathunderstanding.RubricScore{}
 	body, err := json.Marshal(request)
 	media.DataBase64 = ""
 	request.MediaEvidence.DataBase64 = ""
@@ -402,6 +409,7 @@ func gradingAgentV2IdempotencyDigest(request gradingAgentV2Request) (string, err
 			NormalizedBBox: media.NormalizedBBox,
 			BindingHash:    media.BindingHash,
 		},
+		MathEvidence: request.MathEvidence,
 	}
 	encoded, err := json.Marshal(safe)
 	if err != nil {
@@ -410,4 +418,33 @@ func gradingAgentV2IdempotencyDigest(request gradingAgentV2Request) (string, err
 	digest := sha256.Sum256(encoded)
 	clear(encoded)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func validMathEvidenceForV2(evidence *MathEvidenceContext, input AdapterInput) bool {
+	if evidence == nil || evidence.ArtifactID == "" || evidence.ArtifactVersion <= 0 || evidence.CorrectionRevision < 0 ||
+		evidence.ExamQuestionSnapshotID == "" || evidence.ExamQuestionSnapshotID != input.AssessmentSnapshot.ID ||
+		evidence.ScoringVersion != MathScoringVersionV1 || evidence.OverallConfidence < 0 || evidence.OverallConfidence > 1 ||
+		evidence.Quality.Critical < 0 || evidence.Quality.Critical > 1 || len(evidence.Steps) == 0 || len(evidence.Steps) > 512 ||
+		len(evidence.Formulas) > 512 || len(evidence.Verifications) > 2048 || len(evidence.RubricEvidence) > 512 {
+		return false
+	}
+	known := map[string]bool{}
+	for _, step := range evidence.Steps {
+		if !boundedNonBlank(step.ID, 128) || len(step.Text) > 4_000 || step.Confidence < 0 || step.Confidence > 1 || known[step.ID] {
+			return false
+		}
+		known[step.ID] = true
+	}
+	for _, formula := range evidence.Formulas {
+		if !boundedNonBlank(formula.ID, 128) || len(formula.CanonicalLatex) > 4_000 || formula.Confidence < 0 || formula.Confidence > 1 || known[formula.ID] {
+			return false
+		}
+		known[formula.ID] = true
+	}
+	for _, check := range evidence.Verifications {
+		if !boundedNonBlank(check.ID, 128) || check.Confidence < 0 || check.Confidence > 1 {
+			return false
+		}
+	}
+	return true
 }

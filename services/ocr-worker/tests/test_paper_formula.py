@@ -1,21 +1,21 @@
 import io
 from types import SimpleNamespace
 
+from PIL import Image, ImageDraw
+
 from ocr_worker.formula_validation import (
     FormulaAction,
     FormulaValidator,
     normalize_latex,
     validate_latex_structure,
 )
+from ocr_worker.math_layout import _adaptive_crop_formula, _merge_formula_boxes
 from ocr_worker.paper_formula import (
-    _adaptive_crop_formula,
     _bucketed_batches,
-    _merge_formula_boxes,
     _needs_fallback,
     _select_formula,
     _valid_formula,
 )
-from PIL import Image, ImageDraw
 
 
 def result(latex: str, model: str = "PP-FormulaNet_plus-M") -> SimpleNamespace:

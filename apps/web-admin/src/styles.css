@@ -701,6 +701,59 @@ body {
   max-width: 460px;
 }
 
+.account-security-methods {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--border);
+}
+
+.account-security-methods > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--surface);
+}
+
+.account-security-methods span {
+  display: grid;
+  gap: 3px;
+}
+
+.account-security-methods small {
+  color: var(--text-muted);
+}
+
+.totp-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 12px 0;
+}
+
+.section-heading.compact.totp-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.totp-heading > div { flex: 1; min-width: 0; }
+
+.totp-status-row > div:first-of-type { flex: 1; min-width: 200px; }
+.totp-status-row p { margin: 4px 0 0; color: var(--text-muted); }
+.totp-management .ant-alert { margin-top: 12px; }
+.totp-help { color: var(--text-muted); font-size: 13px; line-height: 1.7; }
+.ant-modal.totp-flow-modal { top: 32px; }
+.totp-dialog-body { display: grid; gap: 12px; padding: 8px 4px 0 0; max-height: calc(100dvh - 164px); overflow-y: auto; }
+.totp-dialog-body p { margin: 0; line-height: 1.7; }
+.totp-dialog-body label { font-weight: 500; }
+.totp-dialog-actions { justify-content: flex-end; margin-top: 12px; }
+.totp-provisioning { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.totp-provisioning > div { flex: 1; min-width: 180px; }
+.totp-secret { display: block; margin-top: 8px; padding: 10px; background: var(--surface); overflow-wrap: anywhere; user-select: all; }
+.totp-recovery-codes { display: grid; gap: 6px; margin: 0; padding-left: 28px; }
+.totp-recovery-codes code { font-size: 13px; overflow-wrap: anywhere; user-select: all; }
+
 .school-dashboard {
   gap: 16px;
 }
@@ -2690,6 +2743,23 @@ select {
   margin-top: 24px;
 }
 
+.login-tenant-context {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding: 10px 12px;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.login-panel > .ant-alert,
+.login-panel form > .ant-alert {
+  margin-bottom: 18px;
+}
+
 .login-options {
   display: flex;
   align-items: center;
@@ -2702,6 +2772,10 @@ select {
   color: var(--text-muted);
   font-size: var(--eg-font-caption);
   white-space: nowrap;
+}
+
+.login-public-device-alert {
+  margin: -8px 0 18px;
 }
 
 .app-frame {
@@ -2899,6 +2973,13 @@ select {
   margin-top: 1px;
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.login-recovery-help {
+  margin: 14px 0 0;
+  color: var(--text-muted);
+  font-size: var(--eg-font-caption);
+  text-align: center;
 }
 
 .sidebar-inner.is-collapsed .sidebar-account {
@@ -3320,6 +3401,67 @@ select {
 
 .topbar-actions {
   flex-shrink: 0;
+}
+
+.public-computer-banner {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 20px;
+  color: #7a3d00;
+  background: #fff7e6;
+  border-bottom: 1px solid #ffd591;
+  position: sticky;
+  top: 0;
+  z-index: 12;
+}
+
+.public-computer-banner > span {
+  min-width: 0;
+}
+
+.public-computer-banner .ant-tag {
+  margin-right: 8px;
+}
+
+.public-computer-unlock {
+  display: grid;
+  gap: 16px;
+}
+
+.public-computer-lock-modal .ant-modal-mask {
+  background: rgba(18, 24, 32, 0.96);
+  backdrop-filter: blur(10px);
+}
+
+.public-computer-unlock > p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.public-computer-unlock-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+@media (max-width: 640px) {
+  .login-options {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .public-computer-banner {
+    align-items: flex-start;
+    padding-inline: 12px;
+  }
+
+  .public-computer-banner > span {
+    font-size: var(--eg-font-caption);
+  }
 }
 
 .global-search {

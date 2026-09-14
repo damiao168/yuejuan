@@ -55,7 +55,7 @@ class GradingAgentHandler(BaseHTTPRequestHandler):
         self._error(AgentError("invalid_request", "route not found", status=404))
 
     def do_POST(self):
-        if self.path not in {"/grading/grade", "/paper/parse"}:
+        if self.path not in {"/grading/grade", "/grading/grade-v2", "/paper/parse"}:
             self._error(AgentError("invalid_request", "route not found", status=404))
             return
         try:
@@ -77,7 +77,15 @@ class GradingAgentHandler(BaseHTTPRequestHandler):
                     status=400,
                     request_id=request_id,
                 )
-            suggestion, replayed = self.server.application.grade(payload, idempotency_key)
+            if self.path == "/grading/grade-v2":
+                suggestion, replayed = self.server.application.grade_v2(
+                    payload,
+                    idempotency_key,
+                    body_size=int(self.headers.get("Content-Length", "0")),
+                    content_encoding=self.headers.get("Content-Encoding", ""),
+                )
+            else:
+                suggestion, replayed = self.server.application.grade(payload, idempotency_key)
             self._json(200, suggestion, extra_headers={"Idempotent-Replay": "true" if replayed else "false"})
         except AgentError as exc:
             self._error(exc)
@@ -163,7 +171,12 @@ class GradingAgentHandler(BaseHTTPRequestHandler):
             length = int(raw_length)
         except ValueError as exc:
             raise AgentError("invalid_request", "Content-Length is required", status=411) from exc
-        max_bytes = max(self.server.application.settings.max_request_bytes, 2_000_000) if self.path == "/paper/parse" else self.server.application.settings.max_request_bytes
+        if self.path == "/grading/grade-v2":
+            max_bytes = 8 * 1024 * 1024
+        elif self.path == "/paper/parse":
+            max_bytes = max(self.server.application.settings.max_request_bytes, 2_000_000)
+        else:
+            max_bytes = self.server.application.settings.max_request_bytes
         if length <= 0 or length > max_bytes:
             raise AgentError("invalid_request", "request body size is invalid", status=413)
         body = self.rfile.read(length)

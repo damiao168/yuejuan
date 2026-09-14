@@ -10,9 +10,10 @@ export interface UseAnswerViewerOptions {
   context: WorkbenchContext | null;
   canViewOriginalImage: boolean;
   prefetchedPreviewRef: MutableRefObject<Map<string, PreviewPromise>>;
+  contentRevision?: string;
 }
 
-export function useAnswerViewer({ context, canViewOriginalImage, prefetchedPreviewRef }: UseAnswerViewerOptions) {
+export function useAnswerViewer({ context, canViewOriginalImage, prefetchedPreviewRef, contentRevision }: UseAnswerViewerOptions) {
   const { message } = App.useApp();
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -139,20 +140,20 @@ export function useAnswerViewer({ context, canViewOriginalImage, prefetchedPrevi
     setAutoFit(true);
     try {
       const imagePath = mode === "segment" ? context.segmentImageUrl : context.originalImageUrl!;
-      const cachedPreview = mode === "segment" ? prefetchedPreviewRef.current.get(context.task.id) : undefined;
-      if (cachedPreview) prefetchedPreviewRef.current.delete(context.task.id);
+      const cachedPreview = mode === "segment" && !contentRevision ? prefetchedPreviewRef.current.get(context.task.id) : undefined;
+      if (mode === "segment") prefetchedPreviewRef.current.delete(context.task.id);
       const file = (cachedPreview ? await cachedPreview : null) ?? await downloadReviewWorkspaceImage(imagePath);
       if (requestId !== requestRef.current) return;
       setPreview((current) => {
         if (current?.url) URL.revokeObjectURL(current.url);
-        return { url: URL.createObjectURL(file.blob), contentType: file.contentType, filename: file.filename };
+        return { url: URL.createObjectURL(file.blob), contentType: file.contentType, filename: file.filename, contentRevision: mode === "segment" ? contentRevision : undefined };
       });
     } catch (error) {
       if (requestId === requestRef.current) message.error(formatError(error));
     } finally {
       if (requestId === requestRef.current) setPreviewLoading(false);
     }
-  }, [canViewOriginalImage, context, message, mode, prefetchedPreviewRef]);
+  }, [canViewOriginalImage, contentRevision, context, message, mode, prefetchedPreviewRef]);
 
   useEffect(() => {
     if (context && mode !== "ocr") void loadPreview();
@@ -173,7 +174,7 @@ export function useAnswerViewer({ context, canViewOriginalImage, prefetchedPrevi
   }, [preview?.url]);
 
   return {
-    preview,
+    preview: mode !== "segment" || preview?.contentRevision === contentRevision ? preview : null,
     previewLoading,
     mode,
     scale,

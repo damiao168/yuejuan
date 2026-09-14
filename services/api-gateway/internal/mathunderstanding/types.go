@@ -34,20 +34,34 @@ type MathAnswerBlock struct {
 }
 
 type FormulaArtifact struct {
-	ID                 string            `json:"id"`
-	BlockID            string            `json:"block_id"`
-	BoundingBox        BoundingBox       `json:"bbox"`
-	RawLatex           string            `json:"raw_latex,omitempty"`
-	CanonicalLatex     string            `json:"canonical_latex,omitempty"`
-	RecognitionEngine  string            `json:"recognition_engine"`
-	RecognitionVersion string            `json:"recognition_version"`
-	ParserVersion      string            `json:"parser_version"`
-	ParseStatus        string            `json:"parse_status"`
-	Confidence         float64           `json:"confidence"`
-	AST                *FormulaAST       `json:"ast,omitempty"`
-	Symbols            []FormulaSymbol   `json:"symbols,omitempty"`
-	Relations          []FormulaRelation `json:"relations,omitempty"`
-	Warnings           []string          `json:"warnings,omitempty"`
+	ID                 string             `json:"id"`
+	BlockID            string             `json:"block_id"`
+	BoundingBox        BoundingBox        `json:"bbox"`
+	RawLatex           string             `json:"raw_latex,omitempty"`
+	CanonicalLatex     string             `json:"canonical_latex,omitempty"`
+	RecognitionEngine  string             `json:"recognition_engine"`
+	RecognitionVersion string             `json:"recognition_version"`
+	ParserVersion      string             `json:"parser_version"`
+	ParseStatus        string             `json:"parse_status"`
+	Confidence         float64            `json:"confidence"`
+	AST                *FormulaAST        `json:"ast,omitempty"`
+	Symbols            []FormulaSymbol    `json:"symbols,omitempty"`
+	Relations          []FormulaRelation  `json:"relations,omitempty"`
+	Warnings           []string           `json:"warnings,omitempty"`
+	Candidates         []FormulaCandidate `json:"candidates,omitempty"`
+	SelectedCandidate  int                `json:"selected_candidate"`
+}
+
+// FormulaCandidate preserves the governed recognition alternatives that were
+// considered for one ROI. CanonicalLatex remains the selected immutable
+// evidence value; candidates make recognition disputes auditable.
+type FormulaCandidate struct {
+	Latex       string   `json:"latex"`
+	Engine      string   `json:"engine"`
+	Version     string   `json:"version"`
+	Confidence  float64  `json:"confidence"`
+	SyntaxValid bool     `json:"syntax_valid"`
+	RenderScore *float64 `json:"render_score,omitempty"`
 }
 
 type FormulaSymbol struct {
@@ -85,12 +99,16 @@ type SpatialRelation struct {
 }
 
 type SolutionStep struct {
-	ID             string   `json:"id"`
-	OrderHint      int      `json:"order_hint"`
-	BlockIDs       []string `json:"block_ids"`
-	FormulaIDs     []string `json:"formula_ids,omitempty"`
-	NormalizedText string   `json:"normalized_text,omitempty"`
-	Confidence     float64  `json:"confidence"`
+	ID                    string       `json:"id"`
+	OrderHint             int          `json:"order_hint"`
+	BlockIDs              []string     `json:"block_ids"`
+	FormulaIDs            []string     `json:"formula_ids,omitempty"`
+	NormalizedText        string       `json:"normalized_text,omitempty"`
+	BoundingBox           *BoundingBox `json:"bbox,omitempty"`
+	Kind                  string       `json:"kind,omitempty"`
+	RecognitionConfidence float64      `json:"recognition_confidence,omitempty"`
+	StructureConfidence   float64      `json:"structure_confidence,omitempty"`
+	Confidence            float64      `json:"confidence"`
 }
 
 type SolutionEdge struct {
@@ -131,6 +149,7 @@ type RubricEvidence struct {
 	RubricCriterionKey string   `json:"rubric_criterion_key"`
 	EvidenceType       string   `json:"evidence_type"`
 	SourceArtifactIDs  []string `json:"source_artifact_ids"`
+	VerificationIDs    []string `json:"verification_ids,omitempty"`
 	Status             string   `json:"status"`
 	Explanation        string   `json:"explanation,omitempty"`
 	Confidence         float64  `json:"confidence"`
@@ -151,16 +170,31 @@ type CreateArtifactInput struct {
 }
 
 type Artifact struct {
-	ID                     string `json:"id"`
-	TenantID               string `json:"tenant_id"`
-	AnswerSegmentID        string `json:"answer_segment_id"`
-	ExamQuestionSnapshotID string `json:"exam_question_snapshot_id"`
-	Version                int64  `json:"version"`
-	InputHash              string `json:"input_hash"`
-	EngineVersion          string `json:"engine_version"`
-	IsCurrent              bool   `json:"is_current"`
+	ID                     string         `json:"id"`
+	TenantID               string         `json:"tenant_id"`
+	AnswerSegmentID        string         `json:"answer_segment_id"`
+	ExamQuestionSnapshotID string         `json:"exam_question_snapshot_id"`
+	Version                int64          `json:"version"`
+	InputHash              string         `json:"input_hash"`
+	EngineVersion          string         `json:"engine_version"`
+	IsCurrent              bool           `json:"is_current"`
+	Stage                  string         `json:"stage"`
+	ParentArtifactID       string         `json:"parent_artifact_id,omitempty"`
+	CorrectionRevision     int64          `json:"correction_revision"`
+	QualitySummary         map[string]any `json:"quality_summary"`
 	CreateArtifactInput
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// EffectiveArtifact keeps the immutable recognition artifact separate from the
+// latest teacher-authored projection. Downstream consumers should use
+// EffectiveContract for mathematical evidence and BaseArtifact for identity,
+// provenance, and version binding.
+type EffectiveArtifact struct {
+	BaseArtifact       Artifact
+	EffectiveContract  CreateArtifactInput
+	CorrectionRevision int64
+	Corrected          bool
 }
 
 var validBlockKinds = set("text", "formula", "mixed", "diagram", "table", "connector", "unknown")
@@ -170,9 +204,10 @@ var validFormulaRelationKinds = set("right_of", "above", "below", "superscript",
 var validParseStatuses = set("parsed", "ambiguous", "unsupported", "failed")
 var validRelationKinds = set("left_of", "right_of", "above", "below", "contains", "continues", "implies", "labels", "same_line", "unknown")
 var validEdgeKinds = set("next", "derives", "supports", "corrects", "branches")
+var validStepKinds = set("setup", "transformation", "calculation", "conclusion", "explanation", "branch")
 var validVerificationKinds = set("syntax", "equivalence", "substitution", "unit", "constraint", "arithmetic")
 var validVerificationStatuses = set("verified", "contradicted", "uncertain", "not_applicable")
-var validEvidenceStatuses = set("supported", "unsupported", "uncertain")
+var validEvidenceStatuses = set("supported", "contradicted", "uncertain", "not_applicable", "unsupported")
 
 func ValidateCreateArtifact(input CreateArtifactInput) error {
 	if !set("mathematics", "physics", "chemistry")[input.SubjectCode] || input.AnswerSegmentID == "" || input.ExamQuestionSnapshotID == "" || input.InputHash == "" || input.EngineVersion == "" {
@@ -195,6 +230,14 @@ func ValidateCreateArtifact(input CreateArtifactInput) error {
 		}
 		if formula.AST != nil && !validAST(*formula.AST, 0, new(int)) {
 			return fmt.Errorf("%w: invalid formula AST", ErrInvalidInput)
+		}
+		if len(formula.Candidates) > 16 || (len(formula.Candidates) > 0 && (formula.SelectedCandidate < 0 || formula.SelectedCandidate >= len(formula.Candidates))) {
+			return fmt.Errorf("%w: invalid formula candidate selection", ErrInvalidInput)
+		}
+		for _, candidate := range formula.Candidates {
+			if candidate.Latex == "" || candidate.Engine == "" || candidate.Version == "" || !validConfidence(candidate.Confidence) || (candidate.RenderScore != nil && !validConfidence(*candidate.RenderScore)) {
+				return fmt.Errorf("%w: invalid formula candidate", ErrInvalidInput)
+			}
 		}
 		symbols := map[string]bool{}
 		for _, symbol := range formula.Symbols {
@@ -225,14 +268,23 @@ func ValidateCreateArtifact(input CreateArtifactInput) error {
 	for _, step := range input.SolutionGraph.Steps {
 		stepIDs[step.ID] = true
 	}
+	verificationIDs := map[string]bool{}
 	for _, check := range input.Verifications {
-		if check.ID == "" || check.Domain == "" || check.Engine == "" || check.EngineVersion == "" || check.RulesetVersion == "" || !validVerificationKinds[check.Kind] || !validVerificationStatuses[check.Status] || !validConfidence(check.Confidence) || (check.StepID != "" && !stepIDs[check.StepID]) || (check.FormulaID != "" && !formulaIDs[check.FormulaID]) {
+		if check.ID == "" || verificationIDs[check.ID] || check.Domain == "" || check.Engine == "" || check.EngineVersion == "" || check.RulesetVersion == "" || !validVerificationKinds[check.Kind] || !validVerificationStatuses[check.Status] || !validConfidence(check.Confidence) || (check.StepID != "" && !stepIDs[check.StepID]) || (check.FormulaID != "" && !formulaIDs[check.FormulaID]) {
 			return fmt.Errorf("%w: invalid verification", ErrInvalidInput)
 		}
+		verificationIDs[check.ID] = true
 	}
+	evidenceIDs := map[string]bool{}
 	for _, evidence := range input.RubricEvidence {
-		if evidence.ID == "" || evidence.RubricCriterionKey == "" || evidence.EvidenceType == "" || len(evidence.SourceArtifactIDs) == 0 || !validEvidenceStatuses[evidence.Status] || !validConfidence(evidence.Confidence) {
+		if evidence.ID == "" || evidenceIDs[evidence.ID] || evidence.RubricCriterionKey == "" || evidence.EvidenceType == "" || (len(evidence.SourceArtifactIDs) == 0 && set("supported", "contradicted", "unsupported")[evidence.Status]) || !validEvidenceStatuses[evidence.Status] || !validConfidence(evidence.Confidence) {
 			return fmt.Errorf("%w: invalid rubric evidence", ErrInvalidInput)
+		}
+		evidenceIDs[evidence.ID] = true
+		for _, id := range evidence.VerificationIDs {
+			if !verificationIDs[id] {
+				return fmt.Errorf("%w: unknown evidence verification", ErrInvalidInput)
+			}
 		}
 		for _, id := range evidence.SourceArtifactIDs {
 			if !knownArtifact(id, blockIDs, formulaIDs) && !stepIDs[id] {
@@ -249,7 +301,7 @@ func validateGraph(graph SolutionGraph, blocks, formulas map[string]bool) error 
 	}
 	steps := map[string]bool{}
 	for _, step := range graph.Steps {
-		if step.ID == "" || steps[step.ID] || !validConfidence(step.Confidence) || len(step.BlockIDs) == 0 {
+		if step.ID == "" || steps[step.ID] || !validConfidence(step.Confidence) || !validConfidence(step.RecognitionConfidence) || !validConfidence(step.StructureConfidence) || len(step.BlockIDs) == 0 || (step.BoundingBox != nil && !validBox(*step.BoundingBox)) || (step.Kind != "" && !validStepKinds[step.Kind]) {
 			return fmt.Errorf("%w: invalid solution step", ErrInvalidInput)
 		}
 		for _, id := range step.BlockIDs {

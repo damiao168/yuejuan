@@ -25,7 +25,6 @@
       "reason": "Internal worker transport is versioned and tested independently from the public SDK.",
       "routes": [
         "GET /api/v1/internal/answer-segments/{id}/image",
-        "GET /api/v1/internal/math-understanding/tasks/{taskId}/input",
         "GET /api/v1/internal/worker/metrics",
         "GET /api/v1/internal/worker/tasks/{taskId}",
         "POST /api/v1/agent-tasks/{id}/complete",
@@ -37,7 +36,6 @@
         "POST /api/v1/internal/image-quality/jobs/claim",
         "POST /api/v1/internal/image-quality/runs/{runId}/normalized-assets",
         "POST /api/v1/internal/image-quality/runs/{runId}/result",
-        "POST /api/v1/internal/math-understanding/tasks/{taskId}/complete",
         "POST /api/v1/internal/omr-runs/{runId}/failure",
         "POST /api/v1/internal/omr-runs/{runId}/result",
         "POST /api/v1/internal/page-registration-corrections/{id}/failure",
@@ -224,7 +222,6 @@
         "POST /api/v1/ai-grades/{id}/verify-evidence",
         "POST /api/v1/answer-segments/{id}/reprocess-score",
         "POST /api/v1/answer-segments/{id}/rule-grade",
-        "POST /api/v1/answer-segments/{id}/subjective-ai-grade",
         "POST /api/v1/answer-sheet-print-sheets/{id}/reprint",
         "POST /api/v1/answer-sheet-print-sheets/{id}/revoke",
         "POST /api/v1/answer-sheet-templates/{id}/clone",

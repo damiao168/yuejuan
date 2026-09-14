@@ -26,6 +26,10 @@ type Handler struct {
 	evaluation    EvaluationEvidenceProvider
 	calibration   CalibrationEvidenceProvider
 	parserQuality ParserQualityProvider
+	mathV2Enabled bool
+	mathAdapter   LLMGradingAdapter
+	mathEvidence  MathEvidenceSource
+	activeCrops   *ActiveCropResolver
 }
 
 func NewHandler(store Store, adapter LLMGradingAdapter, audit auth.Store) *Handler {
@@ -103,6 +107,10 @@ func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
+	if err := h.prepareMathEvidence(r.Context(), user.TenantID, &ctx); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
 	if !IsSupportedQuestionType(ctx.Question.QuestionType) {
 		writeStoreError(w, r, ErrUnsupportedQuestionType)
 		return
@@ -122,16 +130,7 @@ func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	runID := ""
-	if run, runErr := h.store.GetOrCreateRun(r.Context(), user.TenantID, user.ID, CreateRunInput{
-		AnswerSegmentID: ctx.SegmentID,
-		AnswerVersion:   ctx.AnswerVersion,
-		QuestionID:      ctx.Question.ID,
-		RubricVersion:   ctx.Rubric.Version,
-		ModelVersion:    policy.ModelVersion,
-		PromptVersion:   policy.PromptVersion,
-		MinConfidence:   policy.MinConfidence,
-		RequestID:       requestID,
-	}); runErr != nil {
+	if run, runErr := h.store.GetOrCreateRun(r.Context(), user.TenantID, user.ID, runInputFor(ctx, "", policy, requestID)); runErr != nil {
 		writeStoreError(w, r, runErr)
 		return
 	} else {
@@ -161,22 +160,19 @@ func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	promptGuard := InspectPromptInjection(ctx.AnswerText)
-	adapterInput := AdapterInput{
-		RequestID:          requestID,
-		SegmentID:          ctx.SegmentID,
-		Subject:            ctx.Subject,
-		GradeLevel:         ctx.GradeLevel,
-		Question:           ctx.Question,
-		Rubric:             ctx.Rubric,
-		AnswerText:         ctx.AnswerText,
-		AnswerImageRef:     ctx.AnswerImageRef,
-		OCRConfidence:      ctx.OCRConfidence,
-		AssessmentSnapshot: ctx.AssessmentSnapshot,
-		ModelPolicy:        policy,
-		PromptGuard:        promptGuard,
-		OutputConstraint:   decision.OutputConstraint,
+	adapterInput, activeAdapter, usedMathV2, err := h.buildAdapterInput(r.Context(), user.TenantID, requestID, ctx, policy, promptGuard, decision.OutputConstraint)
+	if err != nil {
+		if isMathRevisionConflict(err) {
+			_, _ = h.store.UpdateRun(r.Context(), user.TenantID, runID, UpdateRunInput{Status: RunConflict, ErrorCode: "math_evidence_version_conflict"})
+			writeStoreError(w, r, err)
+			return
+		}
+		_, _ = h.store.UpdateRun(r.Context(), user.TenantID, runID, UpdateRunInput{Status: RunFailed, ErrorCode: "math_evidence_unavailable"})
+		h.auditAction(r, "subjective.math_human_review_required", "subjective_grading_run", runID, "math evidence or active crop is unavailable")
+		httpx.JSON(w, http.StatusUnprocessableEntity, mathReviewPayload(ctx, AdapterOutput{}))
+		return
 	}
-	output, err := h.adapter.Grade(r.Context(), adapterInput)
+	output, err := activeAdapter.Grade(r.Context(), adapterInput)
 	output.RequestID = requestID
 	if err != nil {
 		var agentErr *GradingAgentError
@@ -207,7 +203,24 @@ func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusCreated, map[string]any{"grade": grade})
 		return
 	}
-	if err := ValidateOutput(output, ctx); err != nil {
+	if usedMathV2 {
+		if settleErr := h.settleMathOutput(r.Context(), user.TenantID, ctx, policy, &output); settleErr != nil {
+			if errors.Is(settleErr, ErrMathHumanReviewRequired) {
+				_, _ = h.store.UpdateRun(r.Context(), user.TenantID, runID, UpdateRunInput{Status: RunFailed, ErrorCode: "math_human_review_required"})
+				h.auditAction(r, "subjective.math_human_review_required", "subjective_grading_run", runID, "math scoring remained unresolved")
+				httpx.JSON(w, http.StatusUnprocessableEntity, mathReviewPayload(ctx, output))
+				return
+			}
+			if isMathRevisionConflict(settleErr) {
+				_, _ = h.store.UpdateRun(r.Context(), user.TenantID, runID, UpdateRunInput{Status: RunConflict, ErrorCode: "math_evidence_version_conflict"})
+				httpx.Error(w, r, http.StatusConflict, "math_evidence_version_conflict", "math evidence changed during grading")
+				return
+			}
+			_, _ = h.store.UpdateRun(r.Context(), user.TenantID, runID, UpdateRunInput{Status: RunFailed, ErrorCode: "invalid_model_output"})
+			writeStoreError(w, r, settleErr)
+			return
+		}
+	} else if err := ValidateOutput(output, ctx); err != nil {
 		ApplyPromptGuard(&output, promptGuard)
 		grade, createErr := h.store.CreateGrade(r.Context(), user.TenantID, user.ID, failedGrade(ctx, policy, runID, err.Error(), output))
 		if createErr != nil {
@@ -223,10 +236,14 @@ func (h *Handler) Grade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ApplyPromptGuard(&output, promptGuard)
-	DeriveSuggestedScore(&output)
-	if err := h.recordCalibrationCandidate(r.Context(), user.TenantID, runID, ctx, policy, decision, &output); err != nil {
-		writeStoreError(w, r, err)
-		return
+	if !usedMathV2 {
+		DeriveSuggestedScore(&output)
+	}
+	if !usedMathV2 {
+		if err := h.recordCalibrationCandidate(r.Context(), user.TenantID, runID, ctx, policy, decision, &output); err != nil {
+			writeStoreError(w, r, err)
+			return
+		}
 	}
 	ApplyReviewPolicy(&output, ctx, policy)
 	grade, err := h.store.CreateGrade(r.Context(), user.TenantID, user.ID, successfulGrade(ctx, policy, runID, output))
@@ -347,13 +364,18 @@ func (h *Handler) EnqueueBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		plan = BatchEnqueuePlan{CommandID: "enqueue:" + batch.ID, BatchID: batch.ID, Runs: make([]CreateRunInput, 0, len(contexts))}
-		for _, ctx := range contexts {
-			requestID, idErr := stableRequestID(user.TenantID, ctx, policy, batch.IdempotencyKey+":"+ctx.SegmentID)
+		for index := range contexts {
+			ctx := &contexts[index]
+			if prepErr := h.prepareMathEvidence(r.Context(), user.TenantID, ctx); prepErr != nil {
+				writeStoreError(w, r, prepErr)
+				return
+			}
+			requestID, idErr := stableRequestID(user.TenantID, *ctx, policy, batch.IdempotencyKey+":"+ctx.SegmentID)
 			if idErr != nil {
 				writeStoreError(w, r, idErr)
 				return
 			}
-			plan.Runs = append(plan.Runs, CreateRunInput{AnswerSegmentID: ctx.SegmentID, BatchID: batch.ID, AnswerVersion: ctx.AnswerVersion, QuestionID: ctx.Question.ID, RubricVersion: ctx.Rubric.Version, ModelVersion: policy.ModelVersion, PromptVersion: policy.PromptVersion, MinConfidence: policy.MinConfidence, RequestID: requestID})
+			plan.Runs = append(plan.Runs, runInputFor(*ctx, batch.ID, policy, requestID))
 		}
 		plan, err = h.store.SaveEnqueuePlan(r.Context(), user.TenantID, user.ID, plan)
 	}
@@ -486,6 +508,17 @@ func (h *Handler) CompleteWorker(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
+	if err := h.prepareMathEvidence(r.Context(), user.TenantID, &ctx); err != nil {
+		h.failMathWorkerEvidence(r.Context(), user.TenantID, run.ID, input.TaskID, input.LeaseToken, task.AttemptCount, input.DurationMS, err)
+		writeStoreError(w, r, err)
+		return
+	}
+	if err := ensureRunMathBinding(run, ctx); err != nil {
+		_, _ = h.runtime.Fail(r.Context(), user.TenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: false, ErrorCode: "math_evidence_version_conflict", DurationMS: input.DurationMS})
+		_, _ = h.store.UpdateRun(r.Context(), user.TenantID, run.ID, UpdateRunInput{Status: RunConflict, ErrorCode: "math_evidence_version_conflict", AttemptCount: task.AttemptCount})
+		httpx.Error(w, r, http.StatusConflict, "math_evidence_version_conflict", "math evidence no longer matches this grading run")
+		return
+	}
 	policy := ModelPolicy{ModelVersion: run.ModelVersion, PromptVersion: run.PromptVersion, MinConfidence: run.MinConfidence}
 	decision, allowed, decisionErr := h.decideEligibility(r.Context(), user.TenantID, run.ID, ctx, policy)
 	if decisionErr != nil {
@@ -498,19 +531,49 @@ func (h *Handler) CompleteWorker(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusUnprocessableEntity, "ai_eligibility_abstained", "AI grading is not admitted for this frozen question context")
 		return
 	}
-	if err := ValidateOutput(input.Output, ctx); err != nil {
+	mathRun := run.MathScoringVersion != ""
+	if mathRun && input.ResultSchemaVersion != "math-grade-v2" {
+		httpx.Error(w, r, http.StatusConflict, "subjective_result_version_conflict", "math worker result must use the server-settled v2 schema")
+		return
+	}
+	output := input.Output
+	if mathRun {
+		if settleErr := h.settleMathOutput(r.Context(), user.TenantID, ctx, policy, &output); settleErr != nil {
+			code := "invalid_model_output"
+			status := http.StatusBadRequest
+			runStatus := RunFailed
+			if errors.Is(settleErr, ErrMathHumanReviewRequired) {
+				code, status = "math_human_review_required", http.StatusUnprocessableEntity
+			}
+			if isMathRevisionConflict(settleErr) {
+				code, status = "math_evidence_version_conflict", http.StatusConflict
+				runStatus = RunConflict
+			}
+			_, _ = h.runtime.Fail(r.Context(), user.TenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: false, ErrorCode: code, ErrorDetail: map[string]any{"reason": settleErr.Error()}, DurationMS: input.DurationMS})
+			_, _ = h.store.UpdateRun(r.Context(), user.TenantID, run.ID, UpdateRunInput{Status: runStatus, ErrorCode: code, AttemptCount: task.AttemptCount})
+			if code == "math_human_review_required" {
+				httpx.JSON(w, status, mathReviewPayload(ctx, output))
+			} else {
+				httpx.Error(w, r, status, code, "math worker result could not be settled")
+			}
+			return
+		}
+	} else if err := ValidateOutput(output, ctx); err != nil {
 		_, _ = h.runtime.Fail(r.Context(), user.TenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: false, ErrorCode: "invalid_model_output", ErrorDetail: map[string]any{"reason": err.Error()}, DurationMS: input.DurationMS})
 		_, _ = h.store.UpdateRun(r.Context(), user.TenantID, run.ID, UpdateRunInput{Status: RunFailed, ErrorCode: "invalid_model_output", AttemptCount: task.AttemptCount})
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_model_output", "worker result failed schema validation")
 		return
 	}
 	promptGuard := InspectPromptInjection(ctx.AnswerText)
-	output := input.Output
-	DeriveSuggestedScore(&output)
+	if !mathRun {
+		DeriveSuggestedScore(&output)
+	}
 	ApplyPromptGuard(&output, promptGuard)
-	if err := h.recordCalibrationCandidate(r.Context(), user.TenantID, run.ID, ctx, policy, decision, &output); err != nil {
-		writeStoreError(w, r, err)
-		return
+	if !mathRun {
+		if err := h.recordCalibrationCandidate(r.Context(), user.TenantID, run.ID, ctx, policy, decision, &output); err != nil {
+			writeStoreError(w, r, err)
+			return
+		}
 	}
 	ApplyReviewPolicy(&output, ctx, policy)
 	grade, err := h.store.GetGradeByAdapterRequestID(r.Context(), user.TenantID, run.RequestID)
@@ -574,6 +637,17 @@ func (h *Handler) ExecuteWorker(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
+	if err := h.prepareMathEvidence(r.Context(), user.TenantID, &ctx); err != nil {
+		h.failMathWorkerEvidence(r.Context(), user.TenantID, run.ID, input.TaskID, input.LeaseToken, task.AttemptCount, 0, err)
+		writeStoreError(w, r, err)
+		return
+	}
+	if err := ensureRunMathBinding(run, ctx); err != nil {
+		_, _ = h.runtime.Fail(r.Context(), user.TenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: false, ErrorCode: "math_evidence_version_conflict"})
+		_, _ = h.store.UpdateRun(r.Context(), user.TenantID, run.ID, UpdateRunInput{Status: RunConflict, ErrorCode: "math_evidence_version_conflict", AttemptCount: task.AttemptCount})
+		httpx.Error(w, r, http.StatusConflict, "math_evidence_version_conflict", "math evidence no longer matches this grading run")
+		return
+	}
 	policy := ModelPolicy{ModelVersion: run.ModelVersion, PromptVersion: run.PromptVersion, MinConfidence: run.MinConfidence}
 	decision, allowed, decisionErr := h.decideEligibility(r.Context(), user.TenantID, run.ID, ctx, policy)
 	if decisionErr != nil {
@@ -587,13 +661,49 @@ func (h *Handler) ExecuteWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	promptGuard := InspectPromptInjection(ctx.AnswerText)
-	output, err := h.adapter.Grade(r.Context(), AdapterInput{RequestID: run.RequestID, SegmentID: ctx.SegmentID, Subject: ctx.Subject, GradeLevel: ctx.GradeLevel, Question: ctx.Question, Rubric: ctx.Rubric, AnswerText: ctx.AnswerText, AnswerImageRef: ctx.AnswerImageRef, OCRConfidence: ctx.OCRConfidence, AssessmentSnapshot: ctx.AssessmentSnapshot, ModelPolicy: policy, PromptGuard: promptGuard, OutputConstraint: decision.OutputConstraint})
+	adapterInput, activeAdapter, usedMathV2, err := h.buildAdapterInput(r.Context(), user.TenantID, run.RequestID, ctx, policy, promptGuard, decision.OutputConstraint)
+	if err != nil {
+		if isMathRevisionConflict(err) {
+			h.failMathWorkerEvidence(r.Context(), user.TenantID, run.ID, input.TaskID, input.LeaseToken, task.AttemptCount, 0, err)
+			writeStoreError(w, r, err)
+			return
+		}
+		_, _ = h.runtime.Fail(r.Context(), user.TenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: false, ErrorCode: "math_evidence_unavailable"})
+		_, _ = h.store.UpdateRun(r.Context(), user.TenantID, run.ID, UpdateRunInput{Status: RunFailed, ErrorCode: "math_evidence_unavailable", AttemptCount: task.AttemptCount})
+		httpx.JSON(w, http.StatusUnprocessableEntity, mathReviewPayload(ctx, AdapterOutput{}))
+		return
+	}
+	output, err := activeAdapter.Grade(r.Context(), adapterInput)
 	output.RequestID = run.RequestID
 	if err != nil {
 		httpx.Error(w, r, http.StatusServiceUnavailable, "ai_service_unavailable", "AI grading service is unavailable; use manual review")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"run_id": run.ID, "task_id": task.ID, "output": output})
+	resultSchemaVersion := "subjective-grade-v1"
+	if usedMathV2 {
+		resultSchemaVersion = "math-grade-v2"
+		if settleErr := h.settleMathOutput(r.Context(), user.TenantID, ctx, policy, &output); settleErr != nil {
+			if errors.Is(settleErr, ErrMathHumanReviewRequired) {
+				_, _ = h.runtime.Fail(r.Context(), user.TenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: false, ErrorCode: "math_human_review_required"})
+				_, _ = h.store.UpdateRun(r.Context(), user.TenantID, run.ID, UpdateRunInput{Status: RunFailed, ErrorCode: "math_human_review_required", AttemptCount: task.AttemptCount})
+				httpx.JSON(w, http.StatusUnprocessableEntity, mathReviewPayload(ctx, output))
+				return
+			}
+			code := "invalid_model_output"
+			status := http.StatusBadRequest
+			runStatus := RunFailed
+			message := "math model candidates could not be settled"
+			if isMathRevisionConflict(settleErr) {
+				code, status, runStatus = "math_evidence_version_conflict", http.StatusConflict, RunConflict
+				message = "math evidence changed during grading"
+			}
+			_, _ = h.runtime.Fail(r.Context(), user.TenantID, input.TaskID, workerruntime.FailInput{LeaseToken: input.LeaseToken, Retryable: false, ErrorCode: code})
+			_, _ = h.store.UpdateRun(r.Context(), user.TenantID, run.ID, UpdateRunInput{Status: runStatus, ErrorCode: code, AttemptCount: task.AttemptCount})
+			httpx.Error(w, r, status, code, message)
+			return
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"run_id": run.ID, "task_id": task.ID, "result_schema_version": resultSchemaVersion, "output": output})
 }
 
 func (h *Handler) FailWorker(w http.ResponseWriter, r *http.Request) {
@@ -641,7 +751,7 @@ func successfulGrade(ctx Context, policy ModelPolicy, runID string, output Adapt
 	if output.Mock {
 		graderType = MockGraderType
 	}
-	return Grade{
+	grade := Grade{
 		AnswerSegmentID:        ctx.SegmentID,
 		QuestionID:             ctx.Question.ID,
 		QuestionNo:             ctx.Question.QuestionNo,
@@ -676,6 +786,13 @@ func successfulGrade(ctx Context, policy ModelPolicy, runID string, output Adapt
 		Status:                 "succeeded",
 		RawOutput:              output.RawOutput,
 	}
+	if ctx.MathEvidence != nil {
+		grade.MathArtifactID = ctx.MathEvidence.ArtifactID
+		grade.MathArtifactVersion = ctx.MathEvidence.ArtifactVersion
+		grade.MathCorrectionRevision = ctx.MathEvidence.CorrectionRevision
+		grade.MathScoringVersion = ctx.MathEvidence.ScoringVersion
+	}
+	return grade
 }
 
 func failedGrade(ctx Context, policy ModelPolicy, runID string, reason string, output AdapterOutput) Grade {
@@ -692,7 +809,7 @@ func failedGrade(ctx Context, policy ModelPolicy, runID string, reason string, o
 		raw = map[string]any{}
 	}
 	raw["failure_reason"] = reason
-	return Grade{
+	grade := Grade{
 		AnswerSegmentID:        ctx.SegmentID,
 		QuestionID:             ctx.Question.ID,
 		QuestionNo:             ctx.Question.QuestionNo,
@@ -728,6 +845,13 @@ func failedGrade(ctx Context, policy ModelPolicy, runID string, reason string, o
 		FailureReason:          reason,
 		RawOutput:              raw,
 	}
+	if ctx.MathEvidence != nil {
+		grade.MathArtifactID = ctx.MathEvidence.ArtifactID
+		grade.MathArtifactVersion = ctx.MathEvidence.ArtifactVersion
+		grade.MathCorrectionRevision = ctx.MathEvidence.CorrectionRevision
+		grade.MathScoringVersion = ctx.MathEvidence.ScoringVersion
+	}
+	return grade
 }
 
 func firstNonEmpty(values ...string) string {
@@ -787,6 +911,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case isMathRevisionConflict(err):
+		httpx.Error(w, r, http.StatusConflict, "math_evidence_version_conflict", "math evidence no longer matches the current crop or artifact revision")
+	case errors.Is(err, ErrActiveCropUnavailable):
+		httpx.JSON(w, http.StatusUnprocessableEntity, mathReviewPayload(Context{}, AdapterOutput{}))
 	case errors.Is(err, ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, "subjective_grading_resource_not_found", "subjective grading resource not found")
 	case errors.Is(err, ErrInvalidInput):

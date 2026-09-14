@@ -36,6 +36,17 @@ func TestStoryA05ReviewTaskContextOpenAPIContract(t *testing.T) {
 	secondOpinion := object(t, schemas, "ReviewAISecondOpinion")
 	assertRequired(t, secondOpinion, []string{"available", "presentation", "score_prefill_allowed", "metadata"})
 	properties := object(t, secondOpinion, "properties")
+	history := object(t, properties, "history")
+	if history["maxItems"] != float64(20) {
+		t.Fatal("task suggestion history must be bounded")
+	}
+	historyItem := object(t, schemas, "ReviewAISuggestionHistoryItem")
+	assertRequired(t, historyItem, []string{"id", "answer_segment_id"})
+	for _, key := range []string{"math_artifact_id", "math_artifact_version", "math_correction_revision", "math_scoring_version"} {
+		if _, ok := object(t, historyItem, "properties")[key]; !ok {
+			t.Fatalf("history missing %s", key)
+		}
+	}
 	if object(t, properties, "presentation")["const"] != "explicit_second_opinion" {
 		t.Fatal("AI material must be contracted as an explicit second opinion")
 	}

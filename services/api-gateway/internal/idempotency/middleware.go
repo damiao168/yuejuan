@@ -211,7 +211,7 @@ func prepareRequestHash(r *http.Request, route string, persistBody bool) (string
 }
 
 func retryableStatus(status int) bool {
-	return status == http.StatusRequestTimeout || status == http.StatusConflict || status == http.StatusTooEarly || status == http.StatusTooManyRequests || status >= 500
+	return status == http.StatusRequestTimeout || status == http.StatusConflict || status == http.StatusTooEarly || status == http.StatusPreconditionRequired || status == http.StatusTooManyRequests || status >= 500
 }
 
 func replayHeaders(header http.Header) map[string]string {

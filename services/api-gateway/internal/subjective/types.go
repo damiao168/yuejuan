@@ -8,6 +8,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/aieligibility"
 	"edugrade-enterprise/services/api-gateway/internal/assessment"
 	"edugrade-enterprise/services/api-gateway/internal/grading"
+	"edugrade-enterprise/services/api-gateway/internal/mathunderstanding"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
 )
 
@@ -24,6 +25,7 @@ var (
 	ErrRubricMissing           = errors.New("question has no rubric")
 	ErrInvalidModelOutput      = errors.New("invalid model output")
 	ErrIdempotencyConflict     = errors.New("subjective grading idempotency conflict")
+	ErrMathHumanReviewRequired = errors.New("math evidence requires human review")
 )
 
 const (
@@ -57,6 +59,7 @@ type Context struct {
 	AnswerImageRef     map[string]any
 	OCRConfidence      *float64
 	AnswerCreatedAt    time.Time
+	MathEvidence       *MathEvidenceContext
 }
 
 type AdapterInput struct {
@@ -76,6 +79,10 @@ type AdapterInput struct {
 	// request to every adapter so a provider cannot reinterpret an admitted
 	// call as authority to issue an independently final score.
 	OutputConstraint aieligibility.OutputConstraint `json:"output_constraint"`
+	MathEvidence     *MathEvidenceContext           `json:"math_evidence,omitempty"`
+	// ActiveCrop is verified locally and encoded only by the v2 adapter. It is
+	// never included by generic JSON serialization or persisted with a run.
+	ActiveCrop *ResolvedActiveCrop `json:"-"`
 }
 
 type PromptGuard struct {
@@ -86,24 +93,28 @@ type PromptGuard struct {
 }
 
 type AdapterOutput struct {
-	RequestID         string                `json:"request_id"`
-	SuggestedScore    float64               `json:"suggested_score"`
-	Confidence        float64               `json:"confidence"`
-	MatchedPoints     []grading.PointResult `json:"matched_points"`
-	MissingPoints     []grading.PointResult `json:"missing_points"`
-	Evidence          []grading.Evidence    `json:"evidence"`
-	RiskFlags         []string              `json:"risk_flags"`
-	NeedsHumanReview  bool                  `json:"needs_human_review"`
-	StudentFeedback   string                `json:"student_feedback"`
-	TeacherNote       string                `json:"teacher_note"`
-	ModelVersion      string                `json:"model_version"`
-	PromptVersion     string                `json:"prompt_version"`
-	RubricVersion     string                `json:"rubric_version"`
-	DeliveryMode      string                `json:"delivery_mode"`
-	CapabilityProfile string                `json:"capability_profile"`
-	Telemetry         AdapterTelemetry      `json:"telemetry"`
-	RawOutput         map[string]any        `json:"raw_output"`
-	Mock              bool                  `json:"mock"`
+	SchemaVersion                string                         `json:"schema_version,omitempty"`
+	RequestID                    string                         `json:"request_id"`
+	SuggestedScore               float64                        `json:"suggested_score"`
+	Confidence                   float64                        `json:"confidence"`
+	MatchedPoints                []grading.PointResult          `json:"matched_points"`
+	MissingPoints                []grading.PointResult          `json:"missing_points"`
+	Evidence                     []grading.Evidence             `json:"evidence"`
+	RiskFlags                    []string                       `json:"risk_flags"`
+	NeedsHumanReview             bool                           `json:"needs_human_review"`
+	StudentFeedback              string                         `json:"student_feedback"`
+	TeacherNote                  string                         `json:"teacher_note"`
+	ModelVersion                 string                         `json:"model_version"`
+	PromptVersion                string                         `json:"prompt_version"`
+	RubricVersion                string                         `json:"rubric_version"`
+	DeliveryMode                 string                         `json:"delivery_mode"`
+	CapabilityProfile            string                         `json:"capability_profile"`
+	Telemetry                    AdapterTelemetry               `json:"telemetry"`
+	RawOutput                    map[string]any                 `json:"raw_output"`
+	Mock                         bool                           `json:"mock"`
+	MathCandidates               []MathCriterionCandidate       `json:"math_candidates,omitempty"`
+	AlternativeSolutionCandidate bool                           `json:"alternative_solution_candidate,omitempty"`
+	MathScore                    *mathunderstanding.RubricScore `json:"math_score,omitempty"`
 }
 
 type AdapterTelemetry struct {
@@ -154,42 +165,54 @@ type Grade struct {
 	Status                 string                `json:"status"`
 	FailureReason          string                `json:"failure_reason,omitempty"`
 	RawOutput              map[string]any        `json:"raw_output"`
+	MathArtifactID         string                `json:"math_artifact_id,omitempty"`
+	MathArtifactVersion    int64                 `json:"math_artifact_version,omitempty"`
+	MathCorrectionRevision int64                 `json:"math_correction_revision,omitempty"`
+	MathScoringVersion     string                `json:"math_scoring_version,omitempty"`
 	CreatedBy              string                `json:"created_by"`
 	CreatedAt              time.Time             `json:"created_at"`
 }
 
 type GradingRun struct {
-	ID              string     `json:"id"`
-	TenantID        string     `json:"tenant_id"`
-	AnswerSegmentID string     `json:"answer_segment_id"`
-	BatchID         string     `json:"batch_id,omitempty"`
-	AnswerVersion   string     `json:"answer_version"`
-	QuestionID      string     `json:"question_id"`
-	RubricVersion   string     `json:"rubric_version"`
-	ModelVersion    string     `json:"model_version"`
-	PromptVersion   string     `json:"prompt_version"`
-	MinConfidence   float64    `json:"min_confidence"`
-	RequestID       string     `json:"request_id"`
-	Status          string     `json:"status"`
-	AttemptCount    int        `json:"attempt_count"`
-	GradeID         string     `json:"grade_id,omitempty"`
-	ErrorCode       string     `json:"error_code,omitempty"`
-	StartedAt       *time.Time `json:"started_at,omitempty"`
-	CompletedAt     *time.Time `json:"completed_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                     string     `json:"id"`
+	TenantID               string     `json:"tenant_id"`
+	AnswerSegmentID        string     `json:"answer_segment_id"`
+	BatchID                string     `json:"batch_id,omitempty"`
+	AnswerVersion          string     `json:"answer_version"`
+	QuestionID             string     `json:"question_id"`
+	RubricVersion          string     `json:"rubric_version"`
+	ModelVersion           string     `json:"model_version"`
+	PromptVersion          string     `json:"prompt_version"`
+	MinConfidence          float64    `json:"min_confidence"`
+	RequestID              string     `json:"request_id"`
+	MathArtifactID         string     `json:"math_artifact_id,omitempty"`
+	MathArtifactVersion    int64      `json:"math_artifact_version,omitempty"`
+	MathCorrectionRevision int64      `json:"math_correction_revision,omitempty"`
+	MathScoringVersion     string     `json:"math_scoring_version,omitempty"`
+	Status                 string     `json:"status"`
+	AttemptCount           int        `json:"attempt_count"`
+	GradeID                string     `json:"grade_id,omitempty"`
+	ErrorCode              string     `json:"error_code,omitempty"`
+	StartedAt              *time.Time `json:"started_at,omitempty"`
+	CompletedAt            *time.Time `json:"completed_at,omitempty"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
 type CreateRunInput struct {
-	AnswerSegmentID string
-	BatchID         string
-	AnswerVersion   string
-	QuestionID      string
-	RubricVersion   string
-	ModelVersion    string
-	PromptVersion   string
-	MinConfidence   float64
-	RequestID       string
+	AnswerSegmentID        string
+	BatchID                string
+	AnswerVersion          string
+	QuestionID             string
+	RubricVersion          string
+	ModelVersion           string
+	PromptVersion          string
+	MinConfidence          float64
+	RequestID              string
+	MathArtifactID         string
+	MathArtifactVersion    int64
+	MathCorrectionRevision int64
+	MathScoringVersion     string
 }
 
 type UpdateRunInput struct {

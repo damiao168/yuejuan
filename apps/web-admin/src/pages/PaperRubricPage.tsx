@@ -61,6 +61,8 @@ import type { StatusTone } from "../types";
 import { questionTypeOptions } from "../constants/examCatalog";
 import { filesFromClipboard, hasBlockingImportIssues, hasNoExamContentDetected, isPaperImportCancelled, isSupportedPaperImportFile, isTextPasteTarget, markImportFieldConfirmed, orderedSourcesAfterMove, orderedSourcesAfterRemoval, paperImportProgress, paperImportSummary, sourcesAfterRoleChange } from "../features/paper-import/materials";
 import { PaperImportReviewPanel } from "../features/paper-import/PaperImportReviewPanel";
+import { BankQuestionPicker } from "../features/question-bank/BankQuestionPicker";
+import { HistoryQuestionImporter } from "../features/question-bank/HistoryQuestionImporter";
 
 const rubricStatusOptions = [
   { label: "草稿", value: "draft" },
@@ -185,12 +187,18 @@ function formulaEvidenceEnabled(subject: string | undefined, questionType: strin
 export function PaperRubricPage({
   canManage,
   canManageAssessment,
+  canReadQuestionBank=false,
+  canImportQuestionBank=false,
+  questionBankScope="",
   initialExamId = "",
   onExamChanged,
   onNavigate
 }: {
   canManage: boolean;
   canManageAssessment: boolean;
+  canReadQuestionBank?:boolean;
+  canImportQuestionBank?:boolean;
+  questionBankScope?:string;
   initialExamId?: string;
   onExamChanged?: () => void;
   onNavigate?: (path: string) => void;
@@ -901,6 +909,8 @@ export function PaperRubricPage({
         <div>
           <Space>
             <h1>考试资料与评分配置</h1>
+            {canManage&&canReadQuestionBank&&selectedExam&&["draft","configured"].includes(selectedExam.status)?<BankQuestionPicker scopeKey={questionBankScope} examId={selectedExam.id} nextOrder={questions.length+1} onCopied={async()=>{await loadConfig(selectedExam.id);onExamChanged?.();}}/>:null}
+			{canImportQuestionBank&&selectedExam&&!["draft","configured"].includes(selectedExam.status)&&questions.length?<HistoryQuestionImporter key={`${questionBankScope}:${selectedExam.id}`} scopeKey={questionBankScope} examId={selectedExam.id} questions={questions} onImported={async()=>{await loadConfig(selectedExam.id,{silent:true});}} onOpenBank={onNavigate?()=>onNavigate("/question-bank"):undefined}/>:null}
           </Space>
           <p>手里有什么考试资料就直接添加；系统自动识别题目、答案与解析，并提示需要核对的缺失或冲突。</p>
         </div>

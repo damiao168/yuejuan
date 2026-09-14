@@ -46,6 +46,20 @@ func TestBrowserCSRFRejectsCookieMutationWithoutHeader(t *testing.T) {
 	}
 }
 
+func TestBrowserCSRFDoesNotExemptCookieFallbackForInvalidAuthorization(t *testing.T) {
+	for _, authorization := range []string{"Basic unrelated", "Bearer ", "not-bearer", " Bearer token"} {
+		handler := BrowserCSRF("edugrade_session")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/mfa/totp/enroll", nil)
+		req.AddCookie(&http.Cookie{Name: "edugrade_session", Value: "session"})
+		req.Header.Set("Authorization", authorization)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		if response.Code != http.StatusForbidden {
+			t.Fatal("invalid Authorization bypassed cookie CSRF protection")
+		}
+	}
+}
+
 func TestBrowserCSRFAcceptsProtectedBrowserMutation(t *testing.T) {
 	handler := BrowserCSRF("edugrade_session")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)

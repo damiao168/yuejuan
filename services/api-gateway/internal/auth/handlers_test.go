@@ -19,6 +19,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/org"
 	"edugrade-enterprise/services/api-gateway/internal/paper"
 	"edugrade-enterprise/services/api-gateway/internal/server"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func newTestStore(t *testing.T) *auth.MemoryStore {
@@ -121,13 +122,42 @@ func TestLoginMeLogout(t *testing.T) {
 	}
 }
 
+func TestSecurityEventsExposeOnlySanitizedCurrentUserActivity(t *testing.T) {
+	store := newTestStore(t)
+	router := newTestRouter(store)
+	token := login(t, router, "demo", "teacher", "ChangeMe123!")
+	if err := store.Audit(context.Background(), auth.AuditEvent{
+		TenantID: "t-1", ActorID: "u-1", Action: "auth.password_changed", TargetType: "user", TargetID: "u-1",
+		IPAddress: "203.0.113.45", UserAgent: "SecretBrowser/1.0 (Windows NT 10.0)", RequestID: "private-request-id",
+		BeforeValue: map[string]any{"secret": "before"}, AfterValue: map[string]any{"secret": "after", "risk_level": "high"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/security-events", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("security events expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, forbidden := range []string{"203.0.113.45", "SecretBrowser", "private-request-id", "before", "after"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("security events leaked %q: %s", forbidden, body)
+		}
+	}
+	if !strings.Contains(body, `"event_type":"auth.password_changed"`) || !strings.Contains(body, `"risk_level":"high"`) || !strings.Contains(body, `"device_summary":"Windows 设备"`) {
+		t.Fatalf("security event projection missing expected fields: %s", body)
+	}
+}
+
 func TestLoginRejectsOversizedCredentialFields(t *testing.T) {
 	store := newTestStore(t)
 	router := newTestRouter(store)
 	tests := []map[string]string{
 		{"tenant_code": strings.Repeat("t", 129), "username": "teacher", "password": "ChangeMe123!"},
 		{"tenant_code": "demo", "username": strings.Repeat("u", 257), "password": "ChangeMe123!"},
-		{"tenant_code": "demo", "username": "teacher", "password": strings.Repeat("P", 73)},
+		{"tenant_code": "demo", "username": "teacher", "password": strings.Repeat("P", 1025)},
 	}
 	for _, payload := range tests {
 		body, err := json.Marshal(payload)
@@ -371,6 +401,235 @@ func TestOrganizationAdminCannotDisableLastActiveSchoolAdmin(t *testing.T) {
 	}
 }
 
+func TestDisableAndReEnableUserDoesNotRestoreExistingSession(t *testing.T) {
+	store := newOrganizationAdminStore(t)
+	router := newTestRouter(store)
+	adminToken := login(t, router, "demo", "admin", "AdminStart123!")
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{
+		"username":"session_teacher","display_name":"Session Teacher","password":"TeacherSession123!","role_code":"teacher","school_id":"school-1"
+	}`))
+	createReq.Header.Set("Authorization", "Bearer "+adminToken)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create user: %d %s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		User auth.ManagedUser `json:"user"`
+	}
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	oldToken := login(t, router, "demo", "session_teacher", "TeacherSession123!")
+	for _, status := range []string{"disabled", "active"} {
+		req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/"+created.User.ID+"/status", strings.NewReader(`{"status":"`+status+`"}`))
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("set status %s: %d %s", status, rec.Code, rec.Body.String())
+		}
+	}
+	meReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	meReq.Header.Set("Authorization", "Bearer "+oldToken)
+	meRec := httptest.NewRecorder()
+	router.ServeHTTP(meRec, meReq)
+	if meRec.Code != http.StatusUnauthorized {
+		t.Fatalf("old session must remain revoked after re-enable, got %d %s", meRec.Code, meRec.Body.String())
+	}
+	_ = login(t, router, "demo", "session_teacher", "TeacherSession123!")
+}
+
+func TestInvitedTeacherActivatesAndLogsInWithPhoneIdentifier(t *testing.T) {
+	store := newOrganizationAdminStore(t)
+	router := newTestRouter(store)
+	adminToken := login(t, router, "demo", "admin", "AdminStart123!")
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{
+		"display_name":"张老师","phone":"138 0013 8000","employee_no":"T-1001","role_code":"teacher","school_id":"school-1"
+	}`))
+	createReq.Header.Set("Authorization", "Bearer "+adminToken)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create invitation: %d %s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		User       auth.ManagedUser `json:"user"`
+		Activation struct {
+			Token string `json:"token"`
+		} `json:"activation"`
+	}
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.User.Status != "invited" || created.Activation.Token == "" || created.User.PhoneMasked != "138****8000" {
+		t.Fatalf("unexpected invitation response: %#v", created)
+	}
+	verifyReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/activation/verify", strings.NewReader(`{"token":"`+created.Activation.Token+`"}`))
+	verifyRec := httptest.NewRecorder()
+	router.ServeHTTP(verifyRec, verifyReq)
+	if verifyRec.Code != http.StatusOK || !strings.Contains(verifyRec.Body.String(), "张老师") {
+		t.Fatalf("verify activation: %d %s", verifyRec.Code, verifyRec.Body.String())
+	}
+	password := "今天认真完成所有班级的阅卷工作流程"
+	completeReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/activation/complete", strings.NewReader(`{"token":"`+created.Activation.Token+`","password":"`+password+`"}`))
+	completeRec := httptest.NewRecorder()
+	router.ServeHTTP(completeRec, completeReq)
+	if completeRec.Code != http.StatusOK {
+		t.Fatalf("complete activation: %d %s", completeRec.Code, completeRec.Body.String())
+	}
+	reuseReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/activation/verify", strings.NewReader(`{"token":"`+created.Activation.Token+`"}`))
+	reuseRec := httptest.NewRecorder()
+	router.ServeHTTP(reuseRec, reuseReq)
+	if reuseRec.Code != http.StatusBadRequest {
+		t.Fatalf("activation token must be single-use, got %d %s", reuseRec.Code, reuseRec.Body.String())
+	}
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token", strings.NewReader(`{"tenant_hint":"demo","identifier":"13800138000","password":"`+password+`","client_type":"desktop"}`))
+	loginRec := httptest.NewRecorder()
+	router.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("phone identifier login: %d %s", loginRec.Code, loginRec.Body.String())
+	}
+}
+
+func TestAdministratorCanReissueTeacherActivation(t *testing.T) {
+	store := newOrganizationAdminStore(t)
+	router := newTestRouter(store)
+	adminToken := login(t, router, "demo", "admin", "AdminStart123!")
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{
+		"phone":"13900139000","employee_no":"T-1002","display_name":"Pending Teacher","role_code":"teacher","school_id":"school-1"
+	}`))
+	createReq.Header.Set("Authorization", "Bearer "+adminToken)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create invitation: %d %s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		User       auth.ManagedUser `json:"user"`
+		Activation struct {
+			Token string `json:"token"`
+		} `json:"activation"`
+	}
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	reissueReq := httptest.NewRequest(http.MethodPost, "/api/v1/users/"+created.User.ID+"/activation", nil)
+	reissueReq.Header.Set("Authorization", "Bearer "+adminToken)
+	reissueRec := httptest.NewRecorder()
+	router.ServeHTTP(reissueRec, reissueReq)
+	if reissueRec.Code != http.StatusCreated {
+		t.Fatalf("reissue activation: %d %s", reissueRec.Code, reissueRec.Body.String())
+	}
+	if got := reissueRec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("activation delivery must not be cached, got %q", got)
+	}
+	var reissued struct {
+		Activation struct {
+			Token string `json:"token"`
+		} `json:"activation"`
+	}
+	if err := json.NewDecoder(reissueRec.Body).Decode(&reissued); err != nil {
+		t.Fatal(err)
+	}
+	if reissued.Activation.Token == "" || reissued.Activation.Token == created.Activation.Token {
+		t.Fatal("reissued activation must return a fresh one-time token")
+	}
+	for token, expected := range map[string]int{created.Activation.Token: http.StatusBadRequest, reissued.Activation.Token: http.StatusOK} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/activation/verify", strings.NewReader(`{"token":"`+token+`"}`))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != expected {
+			t.Fatalf("activation verification expected %d, got %d: %s", expected, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestLegacyBcryptLoginRehashesToArgon2id(t *testing.T) {
+	store := newTestStore(t)
+	legacyPassword := "LegacyTeacher123!"
+	legacyHash, err := bcrypt.GenerateFromPassword([]byte(legacyPassword), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := store.FindUserByLogin(context.Background(), "demo", "teacher")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user.PasswordHash = string(legacyHash)
+	store.AddUser(user)
+	router := newTestRouter(store)
+	_ = login(t, router, "demo", "teacher", legacyPassword)
+	updated, err := store.FindUserByLogin(context.Background(), "demo", "teacher")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(updated.PasswordHash, "$argon2id$") || !auth.CheckPassword(updated.PasswordHash, legacyPassword) || updated.LastLoginAt.IsZero() {
+		t.Fatal("legacy login must transparently upgrade the hash and record last_login_at")
+	}
+}
+
+func TestAdministratorRecoveryRevokesSessionsAndDoesNotAutoLogin(t *testing.T) {
+	store := newOrganizationAdminStore(t)
+	router := newTestRouter(store)
+	adminToken := login(t, router, "demo", "admin", "AdminStart123!")
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(`{
+		"username":"recover_teacher","display_name":"Recover Teacher","password":"OriginalTeacher123!","role_code":"teacher","school_id":"school-1"
+	}`))
+	createReq.Header.Set("Authorization", "Bearer "+adminToken)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create user: %d %s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		User auth.ManagedUser `json:"user"`
+	}
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	oldToken := login(t, router, "demo", "recover_teacher", "OriginalTeacher123!")
+	recoveryReq := httptest.NewRequest(http.MethodPost, "/api/v1/users/"+created.User.ID+"/credential-reset", nil)
+	recoveryReq.Header.Set("Authorization", "Bearer "+adminToken)
+	recoveryRec := httptest.NewRecorder()
+	router.ServeHTTP(recoveryRec, recoveryReq)
+	if recoveryRec.Code != http.StatusCreated {
+		t.Fatalf("create recovery: %d %s", recoveryRec.Code, recoveryRec.Body.String())
+	}
+	var recovery struct {
+		Recovery struct {
+			Token string `json:"token"`
+		} `json:"recovery"`
+	}
+	if err := json.NewDecoder(recoveryRec.Body).Decode(&recovery); err != nil {
+		t.Fatal(err)
+	}
+	newPassword := "这是管理员协助恢复后的教师账号安全密码"
+	completeReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/recovery/complete", strings.NewReader(`{"token":"`+recovery.Recovery.Token+`","password":"`+newPassword+`"}`))
+	completeRec := httptest.NewRecorder()
+	router.ServeHTTP(completeRec, completeReq)
+	if completeRec.Code != http.StatusOK || len(completeRec.Result().Cookies()) != 0 {
+		t.Fatalf("complete recovery must not auto-login: %d %s cookies=%v", completeRec.Code, completeRec.Body.String(), completeRec.Result().Cookies())
+	}
+	meReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	meReq.Header.Set("Authorization", "Bearer "+oldToken)
+	meRec := httptest.NewRecorder()
+	router.ServeHTTP(meRec, meReq)
+	if meRec.Code != http.StatusUnauthorized {
+		t.Fatalf("recovery must revoke old sessions, got %d %s", meRec.Code, meRec.Body.String())
+	}
+	if oldLogin := loginResponseRaw(router, "demo", "recover_teacher", "OriginalTeacher123!"); oldLogin.Code != http.StatusUnauthorized {
+		t.Fatalf("old password must fail after recovery, got %d %s", oldLogin.Code, oldLogin.Body.String())
+	}
+	_ = login(t, router, "demo", "recover_teacher", newPassword)
+	reuseReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/recovery/verify", strings.NewReader(`{"token":"`+recovery.Recovery.Token+`"}`))
+	reuseRec := httptest.NewRecorder()
+	router.ServeHTTP(reuseRec, reuseReq)
+	if reuseRec.Code != http.StatusBadRequest {
+		t.Fatalf("recovery token must be single-use, got %d %s", reuseRec.Code, reuseRec.Body.String())
+	}
+}
+
 func TestOrganizationUserCreationRejectsDuplicateCrossTenantRoleAndTenantField(t *testing.T) {
 	store := newOrganizationAdminStore(t)
 	router := newTestRouter(store)
@@ -396,7 +655,7 @@ func TestOrganizationUserCreationRejectsDuplicateCrossTenantRoleAndTenantField(t
 	if crossTenantRole.Code != http.StatusBadRequest {
 		t.Fatalf("cross tenant role expected 400, got %d: %s", crossTenantRole.Code, crossTenantRole.Body.String())
 	}
-	privilegedRole := request(`{"username":"admin02","display_name":"Admin","password":"AdminStart123!","role_code":"tenant_admin"}`)
+	privilegedRole := request(`{"username":"admin02","display_name":"Admin","password":"AdminStart123!!","role_code":"tenant_admin"}`)
 	if privilegedRole.Code != http.StatusForbidden {
 		t.Fatalf("privileged role expected 403, got %d: %s", privilegedRole.Code, privilegedRole.Body.String())
 	}
@@ -454,6 +713,162 @@ func TestLoginSetsHttpOnlySessionCookieAndMeAcceptsCookie(t *testing.T) {
 	}
 }
 
+func TestPublicComputerLoginUsesShortNonPersistentSession(t *testing.T) {
+	store := newTestStore(t)
+	publicTTL := 45 * time.Minute
+	handler := auth.NewHandler(store, 8*time.Hour, auth.HandlerOptions{PublicSessionTTL: publicTTL})
+	before := time.Now().UTC()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(
+		`{"tenant_code":"demo","identifier":"teacher","password":"ChangeMe123!","public_device":true}`,
+	))
+	rec := httptest.NewRecorder()
+	handler.Login(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public computer login expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	cookie := sessionCookie(t, rec)
+	if cookie.MaxAge != 0 || !cookie.Expires.IsZero() {
+		t.Fatalf("public computer login must use a non-persistent cookie, got %#v", cookie)
+	}
+	var response struct {
+		ExpiresAt time.Time `json:"expires_at"`
+		User      auth.User `json:"user"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.User.CurrentSessionType != auth.SessionTypePublicDevice {
+		t.Fatalf("current session type=%q want %q", response.User.CurrentSessionType, auth.SessionTypePublicDevice)
+	}
+	if response.ExpiresAt.Before(before.Add(publicTTL-time.Second)) || response.ExpiresAt.After(time.Now().UTC().Add(publicTTL+time.Second)) {
+		t.Fatalf("public session expiry %s does not use configured lifetime %s", response.ExpiresAt, publicTTL)
+	}
+	user, err := store.FindUserBySession(context.Background(), auth.HashToken(cookie.Value), time.Now().UTC())
+	if err != nil || user.CurrentSessionType != auth.SessionTypePublicDevice {
+		t.Fatalf("stored public session not recoverable with its type: user=%#v err=%v", user, err)
+	}
+	sessions, err := store.ListSessions(context.Background(), "t-1", "u-1", auth.HashToken(cookie.Value), time.Now().UTC())
+	if err != nil || len(sessions) != 1 || sessions[0].SessionType != auth.SessionTypePublicDevice {
+		t.Fatalf("public session not projected by session management: sessions=%#v err=%v", sessions, err)
+	}
+}
+
+func TestPublicComputerModeRejectsRememberedAndTokenSessions(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "remembered browser",
+			path: "/api/v1/auth/login",
+			body: `{"tenant_code":"demo","identifier":"teacher","password":"ChangeMe123!","remember_device":true,"public_device":true}`,
+		},
+		{
+			name: "bearer token",
+			path: "/api/v1/auth/token",
+			body: `{"tenant_code":"demo","identifier":"teacher","password":"ChangeMe123!","client_type":"desktop","public_device":true}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newTestStore(t)
+			handler := auth.NewHandler(store, time.Hour)
+			req := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			rec := httptest.NewRecorder()
+			if test.path == "/api/v1/auth/token" {
+				handler.TokenLogin(rec, req)
+			} else {
+				handler.Login(rec, req)
+			}
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"invalid_device_mode"`) {
+				t.Fatalf("expected 400 invalid_device_mode, got %d: %s", rec.Code, rec.Body.String())
+			}
+			sessions, err := store.ListSessions(context.Background(), "t-1", "u-1", "", time.Now().UTC())
+			if err != nil || len(sessions) != 0 {
+				t.Fatalf("invalid public mode must not create a session: sessions=%#v err=%v", sessions, err)
+			}
+		})
+	}
+}
+
+func TestPublicComputerSessionCanReauthenticateWithoutLosingWorkspace(t *testing.T) {
+	store := newTestStore(t)
+	router := newTestRouter(store)
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(
+		`{"tenant_code":"demo","identifier":"teacher","password":"ChangeMe123!","public_device":true}`,
+	))
+	loginRec := httptest.NewRecorder()
+	router.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("public computer login expected 200, got %d: %s", loginRec.Code, loginRec.Body.String())
+	}
+	cookie := sessionCookie(t, loginRec)
+	lockReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/lock", nil)
+	lockReq.AddCookie(cookie)
+	lockReq.Header.Set("X-EduGrade-CSRF", "1")
+	lockRec := httptest.NewRecorder()
+	router.ServeHTTP(lockRec, lockReq)
+	if lockRec.Code != http.StatusOK || !strings.Contains(lockRec.Body.String(), `"status":"locked"`) {
+		t.Fatalf("public session lock expected 200, got %d: %s", lockRec.Code, lockRec.Body.String())
+	}
+	lockedMeReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	lockedMeReq.AddCookie(cookie)
+	lockedMeRec := httptest.NewRecorder()
+	router.ServeHTTP(lockedMeRec, lockedMeReq)
+	if lockedMeRec.Code != http.StatusUnauthorized {
+		t.Fatalf("locked session must fail normal authentication, got %d: %s", lockedMeRec.Code, lockedMeRec.Body.String())
+	}
+	reauthenticate := func(password string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/reauthenticate", strings.NewReader(`{"password":"`+password+`"}`))
+		req.AddCookie(cookie)
+		req.Header.Set("X-EduGrade-CSRF", "1")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	wrong := reauthenticate("incorrect password")
+	if wrong.Code != http.StatusUnauthorized || !strings.Contains(wrong.Body.String(), `"code":"reauthentication_failed"`) {
+		t.Fatalf("wrong reauthentication expected generic 401, got %d: %s", wrong.Code, wrong.Body.String())
+	}
+	success := reauthenticate("ChangeMe123!")
+	if success.Code != http.StatusOK || !strings.Contains(success.Body.String(), `"status":"reauthenticated"`) {
+		t.Fatalf("correct reauthentication expected 200, got %d: %s", success.Code, success.Body.String())
+	}
+	meReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	meReq.AddCookie(cookie)
+	meRec := httptest.NewRecorder()
+	router.ServeHTTP(meRec, meReq)
+	if meRec.Code != http.StatusOK || !strings.Contains(meRec.Body.String(), `"current_session_type":"public_device"`) {
+		t.Fatalf("reauthentication must preserve the public session: %d %s", meRec.Code, meRec.Body.String())
+	}
+	audits := store.Audits()
+	foundLocked, foundFailure, foundSuccess := false, false, false
+	for _, event := range audits {
+		foundLocked = foundLocked || event.Action == "auth.session_locked"
+		foundFailure = foundFailure || event.Action == "auth.reauthentication_failed"
+		foundSuccess = foundSuccess || event.Action == "auth.session_reauthenticated"
+	}
+	if !foundLocked || !foundFailure || !foundSuccess {
+		t.Fatalf("reauthentication attempts must be audited: %#v", audits)
+	}
+}
+
+func TestStandardBrowserSessionCannotUsePublicComputerLock(t *testing.T) {
+	store := newTestStore(t)
+	router := newTestRouter(store)
+	cookie := sessionCookie(t, loginResponse(t, router, "demo", "teacher", "ChangeMe123!"))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/lock", nil)
+	req.AddCookie(cookie)
+	req.Header.Set("X-EduGrade-CSRF", "1")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"code":"session_lock_forbidden"`) {
+		t.Fatalf("standard session lock expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestServiceAccountCannotCreateBrowserSession(t *testing.T) {
 	store := newTestStore(t)
 	hash, err := auth.HashPassword("WorkerStart123!")
@@ -498,6 +913,12 @@ func TestLogoutClearsSessionCookieAndRevokesCookieSession(t *testing.T) {
 
 	logoutReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
 	logoutReq.AddCookie(cookie)
+	deniedRec := httptest.NewRecorder()
+	router.ServeHTTP(deniedRec, logoutReq)
+	if deniedRec.Code != http.StatusForbidden {
+		t.Fatalf("cookie logout without CSRF protection expected 403, got %d", deniedRec.Code)
+	}
+	logoutReq.Header.Set("X-EduGrade-CSRF", "1")
 	logoutRec := httptest.NewRecorder()
 	router.ServeHTTP(logoutRec, logoutReq)
 	if logoutRec.Code != http.StatusOK {

@@ -26,17 +26,29 @@ func stableRequestID(tenantID string, ctx Context, policy ModelPolicy, key strin
 		return newAdapterRequestID(), nil
 	}
 	payload := struct {
-		TenantID       string  `json:"tenant_id"`
-		SegmentID      string  `json:"segment_id"`
-		AnswerVersion  string  `json:"answer_version"`
-		QuestionID     string  `json:"question_id"`
-		RubricID       string  `json:"rubric_id"`
-		RubricVersion  string  `json:"rubric_version"`
-		ModelVersion   string  `json:"model_version"`
-		PromptVersion  string  `json:"prompt_version"`
-		MinConfidence  float64 `json:"min_confidence"`
-		IdempotencyKey string  `json:"idempotency_key"`
-	}{tenantID, ctx.SegmentID, ctx.AnswerVersion, ctx.Question.ID, ctx.Rubric.ID, ctx.Rubric.Version, policy.ModelVersion, policy.PromptVersion, policy.MinConfidence, key}
+		TenantID               string  `json:"tenant_id"`
+		SegmentID              string  `json:"segment_id"`
+		AnswerVersion          string  `json:"answer_version"`
+		QuestionID             string  `json:"question_id"`
+		RubricID               string  `json:"rubric_id"`
+		RubricVersion          string  `json:"rubric_version"`
+		ModelVersion           string  `json:"model_version"`
+		PromptVersion          string  `json:"prompt_version"`
+		MinConfidence          float64 `json:"min_confidence"`
+		IdempotencyKey         string  `json:"idempotency_key"`
+		MathArtifactID         string  `json:"math_artifact_id,omitempty"`
+		MathArtifactVersion    int64   `json:"math_artifact_version,omitempty"`
+		MathCorrectionRevision int64   `json:"math_correction_revision,omitempty"`
+		MathScoringVersion     string  `json:"math_scoring_version,omitempty"`
+	}{TenantID: tenantID, SegmentID: ctx.SegmentID, AnswerVersion: ctx.AnswerVersion, QuestionID: ctx.Question.ID,
+		RubricID: ctx.Rubric.ID, RubricVersion: ctx.Rubric.Version, ModelVersion: policy.ModelVersion,
+		PromptVersion: policy.PromptVersion, MinConfidence: policy.MinConfidence, IdempotencyKey: key}
+	if ctx.MathEvidence != nil {
+		payload.MathArtifactID = ctx.MathEvidence.ArtifactID
+		payload.MathArtifactVersion = ctx.MathEvidence.ArtifactVersion
+		payload.MathCorrectionRevision = ctx.MathEvidence.CorrectionRevision
+		payload.MathScoringVersion = ctx.MathEvidence.ScoringVersion
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", err

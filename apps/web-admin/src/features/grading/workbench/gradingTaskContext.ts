@@ -29,6 +29,10 @@ export async function loadTaskContext(taskId: string, allowOriginalImage: boolea
   const task = reviewContext.task;
   const metadata = secondOpinionMetadata(reviewContext, false);
   const suggestion = metadata ? resolveTaskAISuggestion(metadata) : {};
+  const history = metadata ? (reviewContext.ai_second_opinion?.history ?? []).flatMap((item) => {
+    const resolved = resolveTaskAISuggestion(item);
+    return resolved.grade?.answer_segment_id === task.answer_segment_id ? [resolved.grade] : [];
+  }) : [];
   const question = questionFromContext(reviewContext);
   const artifact = reviewContext.answer_artifact;
   const segment = {
@@ -53,7 +57,7 @@ export async function loadTaskContext(taskId: string, allowOriginalImage: boolea
     pages: [],
     ocrTasks: [],
     ocrResults: [],
-    aiGrades: suggestion.grade ? [suggestion.grade] : [],
+    aiGrades: history.length ? history : suggestion.grade ? [suggestion.grade] : [],
     automationResult: reviewContext.automation_result,
     warnings: suggestion.warning ? [suggestion.warning] : [],
     ocrText: recognizedText,

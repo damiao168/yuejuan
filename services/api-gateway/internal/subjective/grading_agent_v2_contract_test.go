@@ -42,7 +42,7 @@ func TestGradingAgentV2InvalidRequestFixturesFailClosed(t *testing.T) {
 	}
 }
 
-func TestGradingAgentV2ResponseFixturesBindCropEvidence(t *testing.T) {
+func TestGradingAgentV2ResponseFixturesBindKnownMathEvidenceWithoutScores(t *testing.T) {
 	request := loadGradingAgentV2Fixture(t, "valid-request.json")
 	response := loadGradingAgentV2Fixture(t, "valid-response.json")
 	if err := validateGradingAgentV2ResponseFixture(response, request); err != nil {
@@ -50,7 +50,7 @@ func TestGradingAgentV2ResponseFixturesBindCropEvidence(t *testing.T) {
 	}
 	invalid := loadGradingAgentV2Fixture(t, "invalid-response-crop-hash-mismatch.json")
 	if err := validateGradingAgentV2ResponseFixture(invalid, request); err == nil {
-		t.Fatal("crop hash mismatch fixture unexpectedly passed validation")
+		t.Fatal("unknown math evidence fixture unexpectedly passed validation")
 	}
 }
 
@@ -74,7 +74,7 @@ func TestGradingAgentV2ErrorFixtureRemainsNonRetryable(t *testing.T) {
 	}
 }
 
-func TestProductionHTTPAdapterRemainsOnGradingAgentV1(t *testing.T) {
+func TestLegacyProductionHTTPAdapterRemainsOnGradingAgentV1(t *testing.T) {
 	if gradingAgentSchemaVersion != "grading-agent-v1" {
 		t.Fatalf("061B0.3A must not switch the production adapter: %s", gradingAgentSchemaVersion)
 	}
@@ -111,7 +111,7 @@ func validateGradingAgentV2RequestFixture(request map[string]any) error {
 		request,
 		"schema_version", "request_id", "subject", "grade_level", "question_id", "answer_segment_id",
 		"question_type", "question_text", "max_score", "answer_text", "ocr_confidence", "rubric_version",
-		"prompt_version", "rubric", "model_policy", "prompt_guard", "output_constraint", "media_evidence",
+		"prompt_version", "rubric", "model_policy", "prompt_guard", "output_constraint", "media_evidence", "math_evidence",
 	); err != nil {
 		return err
 	}
@@ -136,6 +136,16 @@ func validateGradingAgentV2RequestFixture(request map[string]any) error {
 	if constraint["criteria_evidence_only"] != true || constraint["allow_model_final_score"] != false ||
 		constraint["final_score_authority"] != "server_rubric_or_human_confirmation" {
 		return errors.New("output_constraint must preserve server-owned final-score authority")
+	}
+	mathEvidence, ok := request["math_evidence"].(map[string]any)
+	if !ok {
+		return errors.New("math_evidence must be an object")
+	}
+	if err := exactV2Fields(mathEvidence, "artifact_id", "artifact_version", "correction_revision", "exam_question_snapshot_id", "scoring_version", "overall_confidence", "quality", "steps", "formulas", "verifications", "rubric_evidence", "has_diagram", "graph_uncertain", "required_rubric_uncertain"); err != nil {
+		return err
+	}
+	if mathEvidence["scoring_version"] != MathScoringVersionV1 {
+		return errors.New("math scoring version is invalid")
 	}
 
 	media, ok := request["media_evidence"].(map[string]any)
@@ -205,84 +215,73 @@ func validateGradingAgentV2RequestFixture(request map[string]any) error {
 func validateGradingAgentV2ResponseFixture(response map[string]any, request map[string]any) error {
 	if err := exactV2Fields(
 		response,
-		"schema_version", "request_id", "status", "delivery", "suggested_score", "max_score", "confidence",
-		"matched_points", "missing_points", "deductions", "evidence", "risk_flags", "needs_human_review",
-		"student_feedback", "teacher_note", "model_version", "prompt_version", "rubric_version",
+		"schema_version", "request_id", "status", "delivery", "criterion_candidates", "alternative_solution_candidate", "risk_flags", "needs_human_review",
+		"model_version", "prompt_version", "rubric_version",
 		"capability_profile", "mock", "telemetry",
 	); err != nil {
 		return err
 	}
 	if response["schema_version"] != gradingAgentV2SchemaVersion ||
 		response["request_id"] != request["request_id"] ||
-		response["status"] != "suggestion" ||
+		response["status"] != "candidate_mapping" || response["delivery"] != "teacher_suggestion" ||
 		response["needs_human_review"] != true ||
 		response["mock"] != false {
 		return errors.New("response governance fields are invalid")
 	}
-	media := request["media_evidence"].(map[string]any)
-	evidence, ok := response["evidence"].([]any)
-	if !ok {
-		return errors.New("response evidence must be an array")
+	for _, forbidden := range []string{"suggested_score", "max_score", "matched_points", "missing_points", "deductions", "final_score"} {
+		if _, exists := response[forbidden]; exists {
+			return fmt.Errorf("model response contains forbidden score field %s", forbidden)
+		}
 	}
-	ids := make(map[string]string, len(evidence))
-	for _, raw := range evidence {
-		item, ok := raw.(map[string]any)
+	mathEvidence := request["math_evidence"].(map[string]any)
+	knownEvidence := map[string]bool{}
+	for _, field := range []string{"steps", "formulas"} {
+		items, ok := mathEvidence[field].([]any)
 		if !ok {
-			return errors.New("response evidence item must be an object")
+			return fmt.Errorf("%s must be an array", field)
 		}
-		location, _ := item["location"].(string)
-		switch location {
-		case "answer_text":
-			if err := exactV2Fields(item, "evidence_id", "rubric_point_id", "text_excerpt", "location", "confidence"); err != nil {
-				return err
+		for _, raw := range items {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				return errors.New("math evidence item must be an object")
 			}
-			excerpt, _ := item["text_excerpt"].(string)
-			answer, _ := request["answer_text"].(string)
-			if excerpt == "" || !strings.Contains(answer, excerpt) {
-				return errors.New("text evidence is not present in answer")
-			}
-		case "answer_crop":
-			if err := exactV2Fields(item, "evidence_id", "rubric_point_id", "location", "crop_sha256", "normalized_bbox", "confidence"); err != nil {
-				return err
-			}
-			if item["crop_sha256"] != media["sha256"] {
-				return errors.New("crop evidence hash does not match request")
-			}
-			bbox, _, err := gradingAgentV2BBox(item["normalized_bbox"])
-			if err != nil || bbox[0]+bbox[2] > 1 || bbox[1]+bbox[3] > 1 {
-				return errors.New("crop evidence bbox is invalid")
-			}
-		default:
-			return errors.New("response evidence location is unsupported")
+			id, _ := item["id"].(string)
+			knownEvidence[id] = id != ""
 		}
-		id, idOK := item["evidence_id"].(string)
-		pointID, pointOK := item["rubric_point_id"].(string)
-		if !idOK || !pointOK || id == "" || pointID == "" {
-			return errors.New("response evidence identifiers are invalid")
-		}
-		if _, exists := ids[id]; exists {
-			return errors.New("response evidence id is duplicated")
-		}
-		ids[id] = pointID
 	}
-	matched, ok := response["matched_points"].([]any)
+	rubric := request["rubric"].(map[string]any)
+	knownPoints := map[string]bool{}
+	for _, raw := range rubric["points"].([]any) {
+		point := raw.(map[string]any)
+		id, _ := point["id"].(string)
+		knownPoints[id] = true
+	}
+	candidates, ok := response["criterion_candidates"].([]any)
 	if !ok {
-		return errors.New("matched points must be an array")
+		return errors.New("criterion_candidates must be an array")
 	}
-	for _, raw := range matched {
-		point, ok := raw.(map[string]any)
+	seen := map[string]bool{}
+	for _, raw := range candidates {
+		candidate, ok := raw.(map[string]any)
 		if !ok {
-			return errors.New("matched point must be an object")
+			return errors.New("candidate must be an object")
 		}
-		pointID, _ := point["rubric_point_id"].(string)
-		links, ok := point["evidence_ids"].([]any)
-		if !ok || len(links) == 0 {
-			return errors.New("matched point must link evidence")
+		if err := exactV2Fields(candidate, "rubric_point_id", "status", "evidence_ids", "confidence", "reason_code"); err != nil {
+			return err
+		}
+		pointID, _ := candidate["rubric_point_id"].(string)
+		if !knownPoints[pointID] || seen[pointID] {
+			return errors.New("candidate point is unknown or duplicated")
+		}
+		seen[pointID] = true
+		links, ok := candidate["evidence_ids"].([]any)
+		if !ok {
+			return errors.New("candidate evidence ids must be an array")
 		}
 		for _, link := range links {
 			id, _ := link.(string)
-			if ids[id] != pointID {
-				return errors.New("matched point evidence link is invalid")
+			if !knownEvidence[id] {
+				return errors.New("candidate evidence link is invalid")
 			}
 		}
 	}

@@ -10,9 +10,11 @@ import (
 const (
 	maxTenantCodeBytes   = 128
 	maxUsernameBytes     = 256
+	maxPhoneBytes        = 32
+	maxEmployeeNoBytes   = 128
 	maxDisplayNameBytes  = 256
 	maxRoleCodeBytes     = 128
-	maxPasswordBytes     = 72
+	maxPasswordBytes     = 1024
 	maxAuthJSONBodyBytes = 4 * 1024
 )
 
@@ -55,6 +57,8 @@ func managedUserFieldsWithinLimits(input CreateManagedUserInput) bool {
 		}
 	}
 	return len(input.Username) <= maxUsernameBytes &&
+		len(input.Phone) <= maxPhoneBytes &&
+		len(input.EmployeeNo) <= maxEmployeeNoBytes &&
 		len(input.DisplayName) <= maxDisplayNameBytes &&
 		len(input.RoleCode) <= maxRoleCodeBytes &&
 		len(input.Password) <= maxPasswordBytes

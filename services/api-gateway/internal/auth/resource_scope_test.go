@@ -169,6 +169,10 @@ func TestRegisteredDirectIDRoutesDeclareResourceBoundaryOrExplicitTenantScope(t 
 		"/api/v1/score-commands/", "/api/v1/report-commands/",
 		"/api/v1/review/comment-templates/", "/api/v1/model-", "/api/v1/grading-evaluations/",
 		"/api/v1/ai-eligibility/", "/api/v1/platform/model-api-configs/",
+		// Reusable items have no exam ancestry. questionbank stores check the
+		// authenticated tenant, school scope and explicit bank action ACL on
+		// every read/write AND durable receipt replay (real PostgreSQL E2E).
+		"/api/v1/question-banks/", "/api/v1/question-bank/items/", "/api/v1/question-bank/versions/", "/api/v1/question-bank/rubric-templates",
 	}
 	var uncovered []string
 	err := filepath.WalkDir("..", func(path string, entry os.DirEntry, walkErr error) error {

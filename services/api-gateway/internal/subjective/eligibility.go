@@ -40,7 +40,12 @@ func (h *Handler) decideEligibility(ctx context.Context, tenantID, runID string,
 		calibration = aieligibility.CalibrationEvidence{Available: evidence.Available, CalibrationRef: evidence.CalibrationRef}
 	}
 	var parserQuality *float64
-	if h.parserQuality != nil && strings.TrimSpace(value.SegmentID) != "" {
+	if h.mathV2Enabled && mathSubject(value) {
+		if value.MathEvidence != nil {
+			quality := value.MathEvidence.Quality.Critical
+			parserQuality = &quality
+		}
+	} else if h.parserQuality != nil && strings.TrimSpace(value.SegmentID) != "" {
 		quality, err := h.parserQuality.ParserQualityForSegment(ctx, tenantID, value.SegmentID, value.AssessmentSnapshot.SubjectCode, value.AssessmentSnapshot.ArchetypeCode)
 		if err != nil {
 			return aieligibility.Decision{}, false, err

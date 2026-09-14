@@ -3,10 +3,45 @@
 import type { ApiTransport } from "../runtime";
 import { appendQuery, fillPath } from "../runtime";
 import type {
+  MFAStatusResponse,
+  TOTPEnrollmentRequest,
+  TOTPEnrollmentResponse,
+  TOTPConfirmationRequest,
+  MFARecoveryCodesResponse,
+  MFAChallengeStartRequest,
+  MFAChallengeStartResponse,
+  MFAChallengeVerifyRequest,
+  MFAChallengeVerifyResponse,
+  MFACommandRequest,
+  MFADisableResponse,
+  AuthLoginRequest,
+  AuthLoginResponse,
+  AuthTokenResponse,
+  ReauthenticateRequest,
+  SessionLockResponse,
+  ReauthenticateResponse,
+  OneTimeTokenRequest,
+  CompleteOneTimePasswordRequest,
+  ActivationPreviewResponse,
+  RecoveryPreviewResponse,
+  ActivationCompleteResponse,
+  RecoveryCompleteResponse,
+  ManagedUserRecoveryResponse,
+  ManagedUserActivationDeliveryResponse,
+  SecurityEventListResponse,
   CaptureUploadRecoveryResponse,
   CaptureBatchCommandResponse,
   CaptureBatchResponse,
   CaptureBatchCreateRequest,
+  MathRubricScoreResponse,
+  FailMathVerificationRuntimeRequest,
+  MathVerificationFailureResponse,
+  MathVerificationRuntimeInputResponse,
+  CompleteMathVerificationRuntimeRequest,
+  MathVerificationRuntimeResponse,
+  MathUnderstandingRuntimeInputResponse,
+  CompleteMathUnderstandingRuntimeRequest,
+  MathUnderstandingRuntimeResponse,
   CreateMathCorrectionRequest,
   MathUnderstandingResponse,
   MathCorrectionListResponse,
@@ -176,6 +211,8 @@ import type {
   StartScoringRunRequest,
   ScoringRunResponse,
   ScoringCommandRecovery,
+  SubjectiveAIGradeRequest,
+  SubjectiveAIGradeResponse,
   SubjectiveBatchResponse,
   SubjectiveBatchCreateRequest,
   SubjectiveBatchCommandRecovery,
@@ -188,11 +225,69 @@ import type {
   ScoreCommandConfirmInput,
   ScoreCommandPublishResult,
   ScoreCommandPublishInput,
-  BusinessCommandReceipt
+  BusinessCommandReceipt,
+  CreateQuestionBankRequest,
+  UpdateQuestionBankRequest,
+  CreateQuestionBankItemRequest,
+  CreateQuestionBankVersionRequest,
+  UpdateQuestionBankVersionRequest,
+  QuestionBankResponse,
+  QuestionBankItemResponse,
+  QuestionBankItemCreateResponse,
+  QuestionBankVersionResponse,
+  QuestionBankPage,
+  QuestionBankItemPage,
+  QuestionBankVersionPage,
+  QuestionBankReviewRequest,
+  UpdateQuestionBankScoringRequest,
+  QuestionBankReviewerBindingRequest,
+  QuestionBankReviewsResponse,
+  MaterializeQuestionBankRequest,
+  MaterializeQuestionBankResponse,
+  CreateQuestionBankRubricTemplateRequest,
+  QuestionBankMetadataSchemaResponse,
+  UpdateQuestionBankMetadataSchemaRequest,
+  ValidateQuestionBankMetadataRequest,
+  QuestionBankMetadataValidationResult,
+  QuestionBankACLResponse,
+  UpdateQuestionBankACLRequest,
+  RetireQuestionBankItemRequest,
+  QuestionBankSearchPage,
+  QuestionBankImportPreviewRequest,
+  QuestionBankImportPreviewBatch,
+  QuestionBankImportRequest,
+  QuestionBankImportResult,
+  QuestionBankBatchImportRequest,
+  QuestionBankBatchImportResult
 } from "./types";
 
 export interface operations {
-  "updateManagedUserStatus": { args: { path: { "id": string; }; body: { "status": "active" | "disabled"; }; signal?: AbortSignal; }; response: { "user": { "id": string; "username": string; "display_name": string; "status": "active" | "disabled"; "roles": Array<string>; "school_id"?: string; "created_at"?: string; }; }; };
+  "createSubjectiveAIGrade": { args: { path: { "id": string; }; body: SubjectiveAIGradeRequest; signal?: AbortSignal; }; response: SubjectiveAIGradeResponse; };
+  "getMathRubricScore": { args: { path: { "segmentId": string; }; signal?: AbortSignal; }; response: MathRubricScoreResponse; };
+  "getMathUnderstandingRuntimeInput": { args: { path: { "taskId": string; }; signal?: AbortSignal; }; response: MathUnderstandingRuntimeInputResponse; };
+  "completeMathUnderstandingRuntimeTask": { args: { path: { "taskId": string; }; body: CompleteMathUnderstandingRuntimeRequest; signal?: AbortSignal; }; response: MathUnderstandingRuntimeResponse; };
+  "getMathVerificationRuntimeInput": { args: { path: { "taskId": string; }; signal?: AbortSignal; }; response: MathVerificationRuntimeInputResponse; };
+  "completeMathVerificationRuntimeTask": { args: { path: { "taskId": string; }; body: CompleteMathVerificationRuntimeRequest; signal?: AbortSignal; }; response: MathVerificationRuntimeResponse; };
+  "failMathVerificationRuntimeTask": { args: { path: { "taskId": string; }; body: FailMathVerificationRuntimeRequest; signal?: AbortSignal; }; response: MathVerificationFailureResponse; };
+  "login": { args: { body: AuthLoginRequest; signal?: AbortSignal; }; response: AuthLoginResponse; };
+  "createAccessToken": { args: { body: AuthLoginRequest; signal?: AbortSignal; }; response: AuthTokenResponse; };
+  "lockPublicComputerSession": { args: { signal?: AbortSignal; }; response: SessionLockResponse; };
+  "reauthenticateSession": { args: { body: ReauthenticateRequest; signal?: AbortSignal; }; response: ReauthenticateResponse; };
+  "getMFAStatus": { args: { signal?: AbortSignal; }; response: MFAStatusResponse; };
+  "enrollTOTP": { args: { body: TOTPEnrollmentRequest; signal?: AbortSignal; }; response: TOTPEnrollmentResponse; };
+  "confirmTOTP": { args: { body: TOTPConfirmationRequest; signal?: AbortSignal; }; response: MFARecoveryCodesResponse; };
+  "startMFAChallenge": { args: { body: MFAChallengeStartRequest; signal?: AbortSignal; }; response: MFAChallengeStartResponse; };
+  "verifyMFAChallenge": { args: { body: MFAChallengeVerifyRequest; signal?: AbortSignal; }; response: MFAChallengeVerifyResponse; };
+  "disableTOTP": { args: { body: MFACommandRequest; signal?: AbortSignal; }; response: MFADisableResponse; };
+  "rotateMFARecoveryCodes": { args: { body: MFACommandRequest; signal?: AbortSignal; }; response: MFARecoveryCodesResponse; };
+  "listPersonalSecurityEvents": { args: { signal?: AbortSignal; }; response: SecurityEventListResponse; };
+  "verifyAccountActivation": { args: { body: OneTimeTokenRequest; signal?: AbortSignal; }; response: ActivationPreviewResponse; };
+  "completeAccountActivation": { args: { body: CompleteOneTimePasswordRequest; signal?: AbortSignal; }; response: ActivationCompleteResponse; };
+  "verifyCredentialRecovery": { args: { body: OneTimeTokenRequest; signal?: AbortSignal; }; response: RecoveryPreviewResponse; };
+  "completeCredentialRecovery": { args: { body: CompleteOneTimePasswordRequest; signal?: AbortSignal; }; response: RecoveryCompleteResponse; };
+  "createManagedUserCredentialRecovery": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: ManagedUserRecoveryResponse; };
+  "reissueManagedUserActivation": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: ManagedUserActivationDeliveryResponse; };
+  "updateManagedUserStatus": { args: { path: { "id": string; }; body: { "status": "active" | "disabled"; }; signal?: AbortSignal; }; response: { "user": { "id": string; "username": string; "display_name": string; "status": "active" | "disabled"; "roles": Array<string>; "school_id"?: string; "phone_masked"?: string; "employee_no"?: string; "activated_at"?: string; "last_login_at"?: string; "created_at"?: string; }; }; };
   "listSubmissionPageQualityRuns": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: { "runs": Array<Record<string, unknown>>; }; };
   "recoverCaptureUpload": { args: { path: { "id": string; }; signal?: AbortSignal; }; response: CaptureUploadRecoveryResponse; };
   "recoverCaptureBatchCommand": { args: { path: { "examId": string; "commandId": string; }; signal?: AbortSignal; }; response: CaptureBatchCommandResponse; };
@@ -367,10 +462,166 @@ export interface operations {
   "recoverScoreCommand": { args: { path: { "commandId": string; }; signal?: AbortSignal; }; response: BusinessCommandReceipt; };
   "recoverReportCommand": { args: { path: { "commandId": string; }; signal?: AbortSignal; }; response: BusinessCommandReceipt; };
   "exportLearningReport": { args: { path: { "examId": string; }; headers: { "Idempotency-Key": string; }; signal?: AbortSignal; }; response: unknown; };
+  "listQuestionBanks": { args: { query?: { "limit"?: number; "offset"?: number; "q"?: string; }; signal?: AbortSignal; }; response: QuestionBankPage; };
+  "createQuestionBank": { args: { headers: { "Idempotency-Key": string; }; body: CreateQuestionBankRequest; signal?: AbortSignal; }; response: QuestionBankResponse; };
+  "getQuestionBank": { args: { path: { "bankId": string; }; signal?: AbortSignal; }; response: QuestionBankResponse; };
+  "updateQuestionBank": { args: { path: { "bankId": string; }; headers: { "Idempotency-Key": string; }; body: UpdateQuestionBankRequest; signal?: AbortSignal; }; response: QuestionBankResponse; };
+  "listQuestionBankItems": { args: { path: { "bankId": string; }; query?: { "limit"?: number; "offset"?: number; "q"?: string; }; signal?: AbortSignal; }; response: QuestionBankItemPage; };
+  "createQuestionBankItem": { args: { path: { "bankId": string; }; headers: { "Idempotency-Key": string; }; body: CreateQuestionBankItemRequest; signal?: AbortSignal; }; response: QuestionBankItemCreateResponse; };
+  "getQuestionBankItem": { args: { path: { "itemId": string; }; signal?: AbortSignal; }; response: QuestionBankItemResponse; };
+  "listQuestionBankVersions": { args: { path: { "itemId": string; }; query?: { "limit"?: number; "offset"?: number; }; signal?: AbortSignal; }; response: QuestionBankVersionPage; };
+  "createQuestionBankVersion": { args: { path: { "itemId": string; }; headers: { "Idempotency-Key": string; }; body: CreateQuestionBankVersionRequest; signal?: AbortSignal; }; response: QuestionBankVersionResponse; };
+  "getQuestionBankVersion": { args: { path: { "versionId": string; }; signal?: AbortSignal; }; response: QuestionBankVersionResponse; };
+  "updateQuestionBankVersion": { args: { path: { "versionId": string; }; headers: { "Idempotency-Key": string; }; body: UpdateQuestionBankVersionRequest; signal?: AbortSignal; }; response: QuestionBankVersionResponse; };
+  "updateQuestionBankScoring": { args: { path: { "versionId": string; }; headers: { "Idempotency-Key": string; }; body: UpdateQuestionBankScoringRequest; signal?: AbortSignal; }; response: QuestionBankVersionResponse; };
+  "listQuestionBankReviews": { args: { path: { "versionId": string; }; signal?: AbortSignal; }; response: QuestionBankReviewsResponse; };
+  "bindQuestionBankReviewers": { args: { path: { "bankId": string; }; headers: { "Idempotency-Key": string; }; body: QuestionBankReviewerBindingRequest; signal?: AbortSignal; }; response: QuestionBankResponse; };
+  "listQuestionBankRubricTemplates": { args: { query: { "bank_id": string; "limit"?: number; "offset"?: number; "q"?: string; }; signal?: AbortSignal; }; response: QuestionBankItemPage; };
+  "createQuestionBankRubricTemplate": { args: { headers: { "Idempotency-Key": string; }; body: CreateQuestionBankRubricTemplateRequest; signal?: AbortSignal; }; response: QuestionBankItemCreateResponse; };
+  "materializeQuestionBankVersions": { args: { path: { "examId": string; }; headers: { "Idempotency-Key": string; }; body: MaterializeQuestionBankRequest; signal?: AbortSignal; }; response: MaterializeQuestionBankResponse; };
+  "submitQuestionBankReview": { args: { path: { "versionId": string; }; headers: { "Idempotency-Key": string; }; body: QuestionBankReviewRequest; signal?: AbortSignal; }; response: QuestionBankVersionResponse; };
+  "approveQuestionBankVersion": { args: { path: { "versionId": string; }; headers: { "Idempotency-Key": string; }; body: QuestionBankReviewRequest; signal?: AbortSignal; }; response: QuestionBankVersionResponse; };
+  "returnQuestionBankVersionToDraft": { args: { path: { "versionId": string; }; headers: { "Idempotency-Key": string; }; body: QuestionBankReviewRequest; signal?: AbortSignal; }; response: QuestionBankVersionResponse; };
+  "publishQuestionBankVersion": { args: { path: { "versionId": string; }; headers: { "Idempotency-Key": string; }; body: QuestionBankReviewRequest; signal?: AbortSignal; }; response: QuestionBankVersionResponse; };
+  "getQuestionBankMetadataSchema": { args: { path: { "bankId": string; }; query?: { "version"?: number; }; signal?: AbortSignal; }; response: QuestionBankMetadataSchemaResponse; };
+  "updateQuestionBankMetadataSchema": { args: { path: { "bankId": string; }; headers: { "Idempotency-Key": string; }; body: UpdateQuestionBankMetadataSchemaRequest; signal?: AbortSignal; }; response: QuestionBankMetadataSchemaResponse; };
+  "validateQuestionBankMetadata": { args: { path: { "bankId": string; }; body: ValidateQuestionBankMetadataRequest; signal?: AbortSignal; }; response: QuestionBankMetadataValidationResult; };
+  "getQuestionBankACL": { args: { path: { "bankId": string; }; signal?: AbortSignal; }; response: QuestionBankACLResponse; };
+  "updateQuestionBankACL": { args: { path: { "bankId": string; }; headers: { "Idempotency-Key": string; }; body: UpdateQuestionBankACLRequest; signal?: AbortSignal; }; response: QuestionBankACLResponse; };
+  "searchQuestionBankItems": { args: { query?: { "q"?: string; "bank_id"?: string; "subject_code"?: SubjectCode; "knowledge_point"?: string; "question_type"?: string; "archetype"?: string; "workflow_status"?: "draft" | "reviewing" | "approved" | "published"; "difficulty_band"?: string; "cognitive_level"?: string; "copyright"?: string; "intended_use"?: string; "use_policy"?: "practice_only" | "exam_allowed"; "metadata_key"?: string; "metadata_value"?: string; "statistics_available"?: boolean; "mode"?: "default" | "published" | "my_drafts" | "all"; "sort"?: "updated_desc" | "created_desc" | "item_code_asc"; "limit"?: number; "offset"?: number; }; signal?: AbortSignal; }; response: QuestionBankSearchPage; };
+  "retireQuestionBankItem": { args: { path: { "itemId": string; }; headers: { "Idempotency-Key": string; }; body: RetireQuestionBankItemRequest; signal?: AbortSignal; }; response: QuestionBankItemResponse; };
+  "previewQuestionBankImports": { args: { body: QuestionBankImportPreviewRequest; signal?: AbortSignal; }; response: QuestionBankImportPreviewBatch; };
+  "confirmQuestionBankImportBatch": { args: { body: QuestionBankBatchImportRequest; signal?: AbortSignal; }; response: QuestionBankBatchImportResult; };
+  "importQuestionBankItemFromExamQuestion": { args: { path: { "questionId": string; }; headers: { "Idempotency-Key": string; }; body: QuestionBankImportRequest; signal?: AbortSignal; }; response: QuestionBankImportResult; };
 }
 
 export class EduGradeApi {
   constructor(private readonly transport: ApiTransport) {}
+
+  createSubjectiveAIGrade(args: operations["createSubjectiveAIGrade"]["args"]): Promise<operations["createSubjectiveAIGrade"]["response"]> {
+    const requestPath = fillPath("/api/v1/answer-segments/{id}/subjective-ai-grade", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  getMathRubricScore(args: operations["getMathRubricScore"]["args"]): Promise<operations["getMathRubricScore"]["response"]> {
+    const requestPath = fillPath("/api/v1/math-answer-segments/{segmentId}/rubric-score", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  getMathUnderstandingRuntimeInput(args: operations["getMathUnderstandingRuntimeInput"]["args"]): Promise<operations["getMathUnderstandingRuntimeInput"]["response"]> {
+    const requestPath = fillPath("/api/v1/internal/math-understanding/tasks/{taskId}/input", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  completeMathUnderstandingRuntimeTask(args: operations["completeMathUnderstandingRuntimeTask"]["args"]): Promise<operations["completeMathUnderstandingRuntimeTask"]["response"]> {
+    const requestPath = fillPath("/api/v1/internal/math-understanding/tasks/{taskId}/complete", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  getMathVerificationRuntimeInput(args: operations["getMathVerificationRuntimeInput"]["args"]): Promise<operations["getMathVerificationRuntimeInput"]["response"]> {
+    const requestPath = fillPath("/api/v1/internal/math-verification/tasks/{taskId}/input", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  completeMathVerificationRuntimeTask(args: operations["completeMathVerificationRuntimeTask"]["args"]): Promise<operations["completeMathVerificationRuntimeTask"]["response"]> {
+    const requestPath = fillPath("/api/v1/internal/math-verification/tasks/{taskId}/complete", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  failMathVerificationRuntimeTask(args: operations["failMathVerificationRuntimeTask"]["args"]): Promise<operations["failMathVerificationRuntimeTask"]["response"]> {
+    const requestPath = fillPath("/api/v1/internal/math-verification/tasks/{taskId}/fail", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  login(args: operations["login"]["args"]): Promise<operations["login"]["response"]> {
+    const requestPath = "/api/v1/auth/login";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  createAccessToken(args: operations["createAccessToken"]["args"]): Promise<operations["createAccessToken"]["response"]> {
+    const requestPath = "/api/v1/auth/token";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  lockPublicComputerSession(args: operations["lockPublicComputerSession"]["args"] = {}): Promise<operations["lockPublicComputerSession"]["response"]> {
+    const requestPath = "/api/v1/auth/lock";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal });
+  }
+
+  reauthenticateSession(args: operations["reauthenticateSession"]["args"]): Promise<operations["reauthenticateSession"]["response"]> {
+    const requestPath = "/api/v1/auth/reauthenticate";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  getMFAStatus(args: operations["getMFAStatus"]["args"] = {}): Promise<operations["getMFAStatus"]["response"]> {
+    const requestPath = "/api/v1/auth/mfa";
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  enrollTOTP(args: operations["enrollTOTP"]["args"]): Promise<operations["enrollTOTP"]["response"]> {
+    const requestPath = "/api/v1/auth/mfa/totp/enroll";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  confirmTOTP(args: operations["confirmTOTP"]["args"]): Promise<operations["confirmTOTP"]["response"]> {
+    const requestPath = "/api/v1/auth/mfa/totp/confirm";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  startMFAChallenge(args: operations["startMFAChallenge"]["args"]): Promise<operations["startMFAChallenge"]["response"]> {
+    const requestPath = "/api/v1/auth/step-up/start";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  verifyMFAChallenge(args: operations["verifyMFAChallenge"]["args"]): Promise<operations["verifyMFAChallenge"]["response"]> {
+    const requestPath = "/api/v1/auth/step-up/verify";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  disableTOTP(args: operations["disableTOTP"]["args"]): Promise<operations["disableTOTP"]["response"]> {
+    const requestPath = "/api/v1/auth/mfa/totp/disable";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  rotateMFARecoveryCodes(args: operations["rotateMFARecoveryCodes"]["args"]): Promise<operations["rotateMFARecoveryCodes"]["response"]> {
+    const requestPath = "/api/v1/auth/mfa/recovery-codes/rotate";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  listPersonalSecurityEvents(args: operations["listPersonalSecurityEvents"]["args"] = {}): Promise<operations["listPersonalSecurityEvents"]["response"]> {
+    const requestPath = "/api/v1/auth/security-events";
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  verifyAccountActivation(args: operations["verifyAccountActivation"]["args"]): Promise<operations["verifyAccountActivation"]["response"]> {
+    const requestPath = "/api/v1/auth/activation/verify";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  completeAccountActivation(args: operations["completeAccountActivation"]["args"]): Promise<operations["completeAccountActivation"]["response"]> {
+    const requestPath = "/api/v1/auth/activation/complete";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  verifyCredentialRecovery(args: operations["verifyCredentialRecovery"]["args"]): Promise<operations["verifyCredentialRecovery"]["response"]> {
+    const requestPath = "/api/v1/auth/recovery/verify";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  completeCredentialRecovery(args: operations["completeCredentialRecovery"]["args"]): Promise<operations["completeCredentialRecovery"]["response"]> {
+    const requestPath = "/api/v1/auth/recovery/complete";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  createManagedUserCredentialRecovery(args: operations["createManagedUserCredentialRecovery"]["args"]): Promise<operations["createManagedUserCredentialRecovery"]["response"]> {
+    const requestPath = fillPath("/api/v1/users/{id}/credential-reset", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal });
+  }
+
+  reissueManagedUserActivation(args: operations["reissueManagedUserActivation"]["args"]): Promise<operations["reissueManagedUserActivation"]["response"]> {
+    const requestPath = fillPath("/api/v1/users/{id}/activation", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal });
+  }
 
   updateManagedUserStatus(args: operations["updateManagedUserStatus"]["args"]): Promise<operations["updateManagedUserStatus"]["response"]> {
     const requestPath = fillPath("/api/v1/users/{id}/status", args.path);
@@ -394,7 +645,7 @@ export class EduGradeApi {
 
   createCaptureBatch(args: operations["createCaptureBatch"]["args"]): Promise<operations["createCaptureBatch"]["response"]> {
     const requestPath = fillPath("/api/v1/exams/{examId}/capture-batches", args.path);
-    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 
   listExams(args: operations["listExams"]["args"] = {}): Promise<operations["listExams"]["response"]> {
@@ -1124,7 +1375,7 @@ export class EduGradeApi {
 
   createExamSession(args: operations["createExamSession"]["args"]): Promise<operations["createExamSession"]["response"]> {
     const requestPath = "/api/v1/exam-sessions";
-    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 
   recoverExamSessionCommand(args: operations["recoverExamSessionCommand"]["args"]): Promise<operations["recoverExamSessionCommand"]["response"]> {
@@ -1139,7 +1390,7 @@ export class EduGradeApi {
 
   createPaperImport(args: operations["createPaperImport"]["args"]): Promise<operations["createPaperImport"]["response"]> {
     const requestPath = fillPath("/api/v1/exams/{examId}/paper-imports", args.path);
-    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 
   getPaperImport(args: operations["getPaperImport"]["args"]): Promise<operations["getPaperImport"]["response"]> {
@@ -1149,12 +1400,12 @@ export class EduGradeApi {
 
   addPaperImportSources(args: operations["addPaperImportSources"]["args"]): Promise<operations["addPaperImportSources"]["response"]> {
     const requestPath = fillPath("/api/v1/paper-imports/{id}/sources", args.path);
-    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 
   replacePaperImportSources(args: operations["replacePaperImportSources"]["args"]): Promise<operations["replacePaperImportSources"]["response"]> {
     const requestPath = fillPath("/api/v1/paper-imports/{id}/sources", args.path);
-    return this.transport.request(requestPath, { method: "PUT", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+    return this.transport.request(requestPath, { method: "PUT", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 
   savePaperImportReview(args: operations["savePaperImportReview"]["args"]): Promise<operations["savePaperImportReview"]["response"]> {
@@ -1179,7 +1430,7 @@ export class EduGradeApi {
 
   startScoringRun(args: operations["startScoringRun"]["args"]): Promise<operations["startScoringRun"]["response"]> {
     const requestPath = fillPath("/api/v1/exams/{examId}/scoring-runs", args.path);
-    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 
   recoverScoringCommand(args: operations["recoverScoringCommand"]["args"]): Promise<operations["recoverScoringCommand"]["response"]> {
@@ -1189,7 +1440,7 @@ export class EduGradeApi {
 
   createSubjectiveGradingBatch(args: operations["createSubjectiveGradingBatch"]["args"]): Promise<operations["createSubjectiveGradingBatch"]["response"]> {
     const requestPath = "/api/v1/subjective-grading-batches";
-    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 
   recoverSubjectiveBatchCommand(args: operations["recoverSubjectiveBatchCommand"]["args"]): Promise<operations["recoverSubjectiveBatchCommand"]["response"]> {
@@ -1209,22 +1460,22 @@ export class EduGradeApi {
 
   submitHumanGrade(args: operations["submitHumanGrade"]["args"]): Promise<operations["submitHumanGrade"]["response"]> {
     const requestPath = fillPath("/api/v1/review-tasks/{id}/submit", args.path);
-    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 
   submitArbitration(args: operations["submitArbitration"]["args"]): Promise<operations["submitArbitration"]["response"]> {
     const requestPath = fillPath("/api/v1/arbitration-tasks/{id}/submit", args.path);
-    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 
   confirmExamGrades(args: operations["confirmExamGrades"]["args"]): Promise<operations["confirmExamGrades"]["response"]> {
     const requestPath = fillPath("/api/v1/exams/{examId}/confirm-grades", args.path);
-    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 
   publishExamGrades(args: operations["publishExamGrades"]["args"]): Promise<operations["publishExamGrades"]["response"]> {
     const requestPath = fillPath("/api/v1/exams/{examId}/publish", args.path);
-    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 
   recoverReviewCommand(args: operations["recoverReviewCommand"]["args"]): Promise<operations["recoverReviewCommand"]["response"]> {
@@ -1245,5 +1496,160 @@ export class EduGradeApi {
   exportLearningReport(args: operations["exportLearningReport"]["args"]): Promise<operations["exportLearningReport"]["response"]> {
     const requestPath = fillPath("/api/v1/exams/{examId}/reports/export", args.path);
     return this.transport.request(requestPath, { method: "POST", signal: args.signal, headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  listQuestionBanks(args: operations["listQuestionBanks"]["args"] = {}): Promise<operations["listQuestionBanks"]["response"]> {
+    const requestPath = appendQuery("/api/v1/question-banks", args.query);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  createQuestionBank(args: operations["createQuestionBank"]["args"]): Promise<operations["createQuestionBank"]["response"]> {
+    const requestPath = "/api/v1/question-banks";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  getQuestionBank(args: operations["getQuestionBank"]["args"]): Promise<operations["getQuestionBank"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-banks/{bankId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  updateQuestionBank(args: operations["updateQuestionBank"]["args"]): Promise<operations["updateQuestionBank"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-banks/{bankId}", args.path);
+    return this.transport.request(requestPath, { method: "PATCH", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  listQuestionBankItems(args: operations["listQuestionBankItems"]["args"]): Promise<operations["listQuestionBankItems"]["response"]> {
+    const requestPath = appendQuery(fillPath("/api/v1/question-banks/{bankId}/items", args.path), args.query);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  createQuestionBankItem(args: operations["createQuestionBankItem"]["args"]): Promise<operations["createQuestionBankItem"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-banks/{bankId}/items", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  getQuestionBankItem(args: operations["getQuestionBankItem"]["args"]): Promise<operations["getQuestionBankItem"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/items/{itemId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  listQuestionBankVersions(args: operations["listQuestionBankVersions"]["args"]): Promise<operations["listQuestionBankVersions"]["response"]> {
+    const requestPath = appendQuery(fillPath("/api/v1/question-bank/items/{itemId}/versions", args.path), args.query);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  createQuestionBankVersion(args: operations["createQuestionBankVersion"]["args"]): Promise<operations["createQuestionBankVersion"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/items/{itemId}/versions", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  getQuestionBankVersion(args: operations["getQuestionBankVersion"]["args"]): Promise<operations["getQuestionBankVersion"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/versions/{versionId}", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  updateQuestionBankVersion(args: operations["updateQuestionBankVersion"]["args"]): Promise<operations["updateQuestionBankVersion"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/versions/{versionId}", args.path);
+    return this.transport.request(requestPath, { method: "PATCH", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  updateQuestionBankScoring(args: operations["updateQuestionBankScoring"]["args"]): Promise<operations["updateQuestionBankScoring"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/versions/{versionId}/scoring", args.path);
+    return this.transport.request(requestPath, { method: "PUT", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  listQuestionBankReviews(args: operations["listQuestionBankReviews"]["args"]): Promise<operations["listQuestionBankReviews"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/versions/{versionId}/reviews", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  bindQuestionBankReviewers(args: operations["bindQuestionBankReviewers"]["args"]): Promise<operations["bindQuestionBankReviewers"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-banks/{bankId}/reviewers", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  listQuestionBankRubricTemplates(args: operations["listQuestionBankRubricTemplates"]["args"]): Promise<operations["listQuestionBankRubricTemplates"]["response"]> {
+    const requestPath = appendQuery("/api/v1/question-bank/rubric-templates", args.query);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  createQuestionBankRubricTemplate(args: operations["createQuestionBankRubricTemplate"]["args"]): Promise<operations["createQuestionBankRubricTemplate"]["response"]> {
+    const requestPath = "/api/v1/question-bank/rubric-templates";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  materializeQuestionBankVersions(args: operations["materializeQuestionBankVersions"]["args"]): Promise<operations["materializeQuestionBankVersions"]["response"]> {
+    const requestPath = fillPath("/api/v1/exams/{examId}/questions/materialize-from-bank", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  submitQuestionBankReview(args: operations["submitQuestionBankReview"]["args"]): Promise<operations["submitQuestionBankReview"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/versions/{versionId}/submit-review", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  approveQuestionBankVersion(args: operations["approveQuestionBankVersion"]["args"]): Promise<operations["approveQuestionBankVersion"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/versions/{versionId}/approve", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  returnQuestionBankVersionToDraft(args: operations["returnQuestionBankVersionToDraft"]["args"]): Promise<operations["returnQuestionBankVersionToDraft"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/versions/{versionId}/return-to-draft", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  publishQuestionBankVersion(args: operations["publishQuestionBankVersion"]["args"]): Promise<operations["publishQuestionBankVersion"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/versions/{versionId}/publish", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  getQuestionBankMetadataSchema(args: operations["getQuestionBankMetadataSchema"]["args"]): Promise<operations["getQuestionBankMetadataSchema"]["response"]> {
+    const requestPath = appendQuery(fillPath("/api/v1/question-banks/{bankId}/metadata-schema", args.path), args.query);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  updateQuestionBankMetadataSchema(args: operations["updateQuestionBankMetadataSchema"]["args"]): Promise<operations["updateQuestionBankMetadataSchema"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-banks/{bankId}/metadata-schema", args.path);
+    return this.transport.request(requestPath, { method: "PUT", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  validateQuestionBankMetadata(args: operations["validateQuestionBankMetadata"]["args"]): Promise<operations["validateQuestionBankMetadata"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-banks/{bankId}/metadata-schema/validate", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  getQuestionBankACL(args: operations["getQuestionBankACL"]["args"]): Promise<operations["getQuestionBankACL"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-banks/{bankId}/acl", args.path);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  updateQuestionBankACL(args: operations["updateQuestionBankACL"]["args"]): Promise<operations["updateQuestionBankACL"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-banks/{bankId}/acl", args.path);
+    return this.transport.request(requestPath, { method: "PUT", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  searchQuestionBankItems(args: operations["searchQuestionBankItems"]["args"] = {}): Promise<operations["searchQuestionBankItems"]["response"]> {
+    const requestPath = appendQuery("/api/v1/question-bank/items", args.query);
+    return this.transport.request(requestPath, { method: "GET", signal: args.signal });
+  }
+
+  retireQuestionBankItem(args: operations["retireQuestionBankItem"]["args"]): Promise<operations["retireQuestionBankItem"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/items/{itemId}/retire", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
+  }
+
+  previewQuestionBankImports(args: operations["previewQuestionBankImports"]["args"]): Promise<operations["previewQuestionBankImports"]["response"]> {
+    const requestPath = "/api/v1/question-bank/imports/preview";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  confirmQuestionBankImportBatch(args: operations["confirmQuestionBankImportBatch"]["args"]): Promise<operations["confirmQuestionBankImportBatch"]["response"]> {
+    const requestPath = "/api/v1/question-bank/imports/confirm";
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body) });
+  }
+
+  importQuestionBankItemFromExamQuestion(args: operations["importQuestionBankItemFromExamQuestion"]["args"]): Promise<operations["importQuestionBankItemFromExamQuestion"]["response"]> {
+    const requestPath = fillPath("/api/v1/question-bank/items/import-from-question/{questionId}", args.path);
+    return this.transport.request(requestPath, { method: "POST", signal: args.signal, body: args.body === undefined ? undefined : JSON.stringify(args.body), headers: Object.fromEntries(Object.entries(args.headers ?? {}).map(([name, value]) => [name, String(value)])) });
   }
 }

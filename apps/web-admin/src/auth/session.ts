@@ -11,6 +11,7 @@ export interface SessionUser {
   school: string;
   currentExam: string;
   permissions: string[];
+  publicComputer: boolean;
   organizationScope: {
     resolved: boolean;
     tenantWide: boolean;
@@ -57,6 +58,7 @@ export function sessionFromAuthUser(user: AuthUser): SessionUser {
     school: schoolLabelFromScope(user.data_scope, user.tenant_code),
     currentExam: "未选择考试",
     permissions: user.permissions,
+    publicComputer: user.current_session_type === "public_device",
     organizationScope: {
       resolved: Boolean(user.organization_scope),
       tenantWide: user.organization_scope?.tenant_wide ?? false,

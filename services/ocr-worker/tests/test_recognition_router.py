@@ -1,3 +1,7 @@
+import io
+
+from PIL import Image
+
 from ocr_worker.engine import OCRBlock
 from ocr_worker.recognition_router import (
     FormulaRecognitionResult,
@@ -30,6 +34,30 @@ class FormulaEngine:
     def recognize_formula(self, _image):
         return FormulaRecognitionResult(" x = 2 ", "x=2", 0.9, self.engine_name, self.model_version, "recognized")
 
+    def recognize_formulas(self, images, batch_size=4):
+        self.batch = (len(images), batch_size)
+        return [self.recognize_formula(image) for image in images]
+
+
+class FormulaDetector:
+    model_version = "layout-v1"
+    initialized = True
+
+    def initialize(self):
+        return None
+
+    def detect(self, _image, min_score):
+        assert min_score == 0.45
+        return [([60, 10, 40, 20], 0.92)]
+
+
+def png(width=100, height=40):
+    image = Image.new("RGB", (width, height), "white")
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    image.close()
+    return output.getvalue()
+
 
 def test_routes_regions_and_fails_closed():
     router = RecognitionRouter(text_engine=TextEngine(), formula_engine=FormulaEngine())
@@ -57,6 +85,39 @@ def test_humanities_never_invoke_formula_model():
         result = router.recognize(subject, RegionKind.FORMULA, b"image")
         assert result.reason_code == "formula_not_enabled_for_subject"
         assert result.preserve_image_evidence and result.requires_human_review
+
+
+def test_mixed_route_runs_full_ocr_and_batched_formula_rois_without_duplicate_text():
+    class MixedTextEngine(TextEngine):
+        def recognize(self, _image):
+            return [OCRBlock("解：由题意得x2=2", [0, 10, 100, 20], 0.9)]
+
+    formula_engine = FormulaEngine()
+    router = RecognitionRouter(
+        text_engine=MixedTextEngine(),
+        formula_engine=formula_engine,
+        formula_detector=FormulaDetector(),
+        formula_padding=0,
+        formula_batch_size=3,
+    )
+    result = router.recognize("mathematics", RegionKind.MIXED, png())
+
+    assert result.image_size == (100, 40)
+    assert [block.text for block in result.text_blocks] == ["解：由题意得"]
+    assert result.text_blocks[0].bbox == [0.0, 10.0, 60.0, 20.0]
+    assert result.formula_regions[0].bbox == (60.0, 10.0, 40.0, 20.0)
+    assert result.formula_regions[0].formula.canonical_latex == "x=2"
+    assert formula_engine.batch == (1, 3)
+    assert not result.requires_human_review
+
+
+def test_mixed_route_preserves_text_and_fails_closed_without_layout_detector():
+    result = RecognitionRouter(text_engine=TextEngine(), formula_engine=FormulaEngine()).recognize(
+        "physics", RegionKind.MIXED, png(),
+    )
+    assert result.text_blocks[0].text == "所以"
+    assert result.requires_human_review and result.preserve_image_evidence
+    assert result.reason_code == "formula_layout_detector_unavailable"
 
 
 def test_paddle_formula_result_and_unimernet_adapter():

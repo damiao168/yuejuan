@@ -15,7 +15,7 @@ func TestBootstrapInitialAdminCreatesFirstPlatformAdmin(t *testing.T) {
 	result, err := auth.BootstrapInitialAdmin(context.Background(), store, auth.BootstrapAdminInput{
 		Username:    "ops_admin",
 		DisplayName: "Ops Admin",
-		Password:    "StrongPass123!",
+		Password:    "StrongPass123!!",
 	})
 	if err != nil {
 		t.Fatalf("bootstrap returned error: %v", err)
@@ -26,8 +26,8 @@ func TestBootstrapInitialAdminCreatesFirstPlatformAdmin(t *testing.T) {
 	if store.upsertInput.Username != "ops_admin" || store.upsertInput.DisplayName != "Ops Admin" {
 		t.Fatalf("unexpected upsert input: %#v", store.upsertInput)
 	}
-	if store.passwordHash == "" || store.passwordHash == "StrongPass123!" || !strings.HasPrefix(store.passwordHash, "$2") {
-		t.Fatalf("bootstrap must pass bcrypt password hash, got %q", store.passwordHash)
+	if store.passwordHash == "" || store.passwordHash == "StrongPass123!!" || !strings.HasPrefix(store.passwordHash, "$argon2id$") {
+		t.Fatalf("bootstrap must pass Argon2id password hash, got %q", store.passwordHash)
 	}
 	if result.Username != "ops_admin" || result.RoleCode != "platform_admin" {
 		t.Fatalf("unexpected bootstrap result: %#v", result)
@@ -39,7 +39,7 @@ func TestBootstrapInitialAdminRejectsExistingActiveAdmin(t *testing.T) {
 
 	_, err := auth.BootstrapInitialAdmin(context.Background(), store, auth.BootstrapAdminInput{
 		Username: "ops_admin",
-		Password: "StrongPass123!",
+		Password: "StrongPass123!!",
 	})
 	if !errors.Is(err, auth.ErrBootstrapAlreadyCompleted) {
 		t.Fatalf("expected ErrBootstrapAlreadyCompleted, got %v", err)
@@ -86,7 +86,7 @@ func TestBootstrapInitialAdminRejectsOversizedInputBeforeStoreAccess(t *testing.
 
 	_, err := auth.BootstrapInitialAdmin(context.Background(), store, auth.BootstrapAdminInput{
 		Username: strings.Repeat("u", 257),
-		Password: "StrongPass123!",
+		Password: "StrongPass123!!",
 	})
 	if !errors.Is(err, auth.ErrInvalidBootstrapInput) {
 		t.Fatalf("expected ErrInvalidBootstrapInput, got %v", err)

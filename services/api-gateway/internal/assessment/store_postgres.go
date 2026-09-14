@@ -292,7 +292,7 @@ SELECT snapshot.id::text, snapshot.tenant_id::text, snapshot.exam_id::text,
        snapshot.allowed_evidence_types, snapshot.risk_tier,
        snapshot.profile_snapshot_json, snapshot.archetype_snapshot_json,
        snapshot.rubric_snapshot_json, snapshot.scoring_policy_snapshot_json,
-       snapshot.content_hash, snapshot.created_at
+       snapshot.content_hash, snapshot.created_at, snapshot.source_snapshot_json
 FROM exam_question_snapshot snapshot
 `
 
@@ -356,12 +356,12 @@ func scanQuestionConfig(row scanner) (QuestionAssessmentConfig, error) {
 
 func scanQuestionSnapshot(row scanner) (ExamQuestionSnapshot, error) {
 	var item ExamQuestionSnapshot
-	var evidenceJSON, profileJSON, archetypeJSON, rubricJSON, scoringJSON []byte
+	var evidenceJSON, profileJSON, archetypeJSON, rubricJSON, scoringJSON, sourceJSON []byte
 	if err := row.Scan(&item.ID, &item.TenantID, &item.ExamID, &item.QuestionID,
 		&item.SnapshotVersion, &item.SubjectProfileID, &item.SubjectProfileCode,
 		&item.SubjectProfileVersion, &item.EducationStage, &item.SubjectCode,
 		&item.ArchetypeCode, &evidenceJSON, &item.RiskTier, &profileJSON,
-		&archetypeJSON, &rubricJSON, &scoringJSON, &item.ContentHash, &item.CreatedAt); err != nil {
+		&archetypeJSON, &rubricJSON, &scoringJSON, &item.ContentHash, &item.CreatedAt, &sourceJSON); err != nil {
 		return ExamQuestionSnapshot{}, err
 	}
 	if err := json.Unmarshal(evidenceJSON, &item.AllowedEvidenceTypes); err != nil {
@@ -371,6 +371,7 @@ func scanQuestionSnapshot(row scanner) (ExamQuestionSnapshot, error) {
 		&profileJSON:   &item.ProfileSnapshot,
 		&archetypeJSON: &item.ArchetypeSnapshot,
 		&rubricJSON:    &item.RubricSnapshot,
+		&sourceJSON:    &item.SourceSnapshot,
 	} {
 		if err := json.Unmarshal(*raw, destination); err != nil {
 			return ExamQuestionSnapshot{}, err

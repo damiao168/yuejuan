@@ -15,6 +15,7 @@ import {
   saveReviewDraft,
   submitHumanGrade,
   verifyEvidence,
+  createSubjectiveAiGrade,
   type ReviewTask,
   type RubricSelection
 } from "../../../api/review";
@@ -59,6 +60,9 @@ import { hashQueryParam } from "../../../router/query";
 import { useGradingPrefetch } from "./hooks/useGradingPrefetch";
 import { useExamScoring } from "./hooks/useExamScoring";
 import { useAnswerViewer } from "./hooks/useAnswerViewer";
+import { useMathWorkbenchEvidence } from "./hooks/useMathWorkbenchEvidence";
+import { mathEvidenceBinding, mathSuggestionState, selectMathStep, type MathStepSelection } from "./mathWorkbenchEvidence";
+import { requiresExplicitSecondOpinion } from "./reviewContext";
 
 export interface GradingWorkbenchProps {
   canWork: boolean;
@@ -98,6 +102,14 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
   const [draft, setDraft] = useState<ScoreDraft>(() => createInitialDraft(null));
   const [quickSubmit, setQuickSubmit] = useState(false);
   const [actioning, setActioning] = useState<string | null>(null);
+  const [mathRequesting, setMathRequesting] = useState(false);
+  const [mathRequestNotice, setMathRequestNotice] = useState("");
+  const [mathSelection, setMathSelection] = useState<MathStepSelection | null>(null);
+  const mathActionLock = useRef(false);
+  const activeTask = useRef(selectedTaskId);
+  activeTask.current = selectedTaskId;
+  const liveDraft = useRef(draft);
+  liveDraft.current = draft;
   const [goldPaperManagerOpen, setGoldPaperManagerOpen] = useState(false);
   const [calibrationQuestionId, setCalibrationQuestionId] = useState("");
   const [goldPaperCandidate, setGoldPaperCandidate] = useState<GoldPaperNominationCandidate | null>(null);
@@ -215,6 +227,8 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
       .filter(actionable);
     return ordered.slice(0, 2);
   }, [filteredTasks, selectedIndex, selectedTaskId]);
+  const subjectCode = ctx?.reviewContext.subject_tool_hints.subject_code ?? "";
+  const math = useMathWorkbenchEvidence(ctx?.task.answer_segment_id ?? "", subjectCode, ctx?.reviewContext.question_snapshot.id ?? "");
   const { prefetchedTaskRef, prefetchedPreviewRef } = useGradingPrefetch({
     canWork,
     canViewOriginalImage,
@@ -245,12 +259,18 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     onPointerMove,
     onPointerUp,
     onImageLoad
-  } = useAnswerViewer({ context: ctx, canViewOriginalImage, prefetchedPreviewRef });
+  } = useAnswerViewer({ context: ctx, canViewOriginalImage, prefetchedPreviewRef, contentRevision: math.state.understanding?.artifact.input_hash });
   const nextTask = useMemo(() => {
     const actionable = (task: ReviewTask) => task.id !== selectedTaskId && !["submitted", "completed"].includes(task.status);
     return filteredTasks.slice(selectedIndex + 1).find(actionable) ?? filteredTasks.find(actionable);
   }, [filteredTasks, selectedIndex, selectedTaskId]);
-  const selectedGrade = useMemo(() => latestGrade(ctx?.aiGrades ?? []), [ctx?.aiGrades]);
+  const selectedGrade = useMemo(() => (subjectCode === "mathematics" ? latestGrade((ctx?.aiGrades ?? []).filter((grade) => mathSuggestionState(grade, math.state, math.dirty).current)) : undefined)
+    ?? latestGrade(ctx?.aiGrades ?? []), [ctx?.aiGrades, math.dirty, math.state, subjectCode]);
+  const canAdoptAiScore = Boolean(selectedGrade && selectedGrade.delivery_mode !== "shadow_only" && !mathRequesting
+    && !requiresExplicitSecondOpinion(ctx!.reviewContext) && (subjectCode !== "mathematics" || mathSuggestionState(selectedGrade, math.state, math.dirty).current));
+  const currentMathSelection = mathSelection && !math.dirty && !["conflict", "loading", "unavailable"].includes(math.state.phase)
+    && math.state.understanding && mathSelection.binding === mathEvidenceBinding(math.state.understanding) ? mathSelection : null;
+  useEffect(() => { setMathRequestNotice(""); setMathSelection(null); setMathRequesting(false); }, [selectedTaskId]);
   const maxScore = ctx?.question?.score ?? selectedGrade?.max_score ?? 0;
   const rubricPoints = ctx?.question?.rubric?.points ?? [];
   const ownsSelectedTask = Boolean(ctx?.task.assigned_to && ctx.task.assigned_to === currentUserId);
@@ -532,6 +552,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
       await appQueryClient.invalidateQueries({ queryKey: reviewTaskContextKeys.detail(selectedTaskId) });
       await loadContext(selectedTaskId);
       await loadTasks();
+      if (!math.dirty) await math.refresh();
     }
   };
 
@@ -706,7 +727,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     );
   };
 
-  const adoptAiScore = () => {
+  const adoptAiScore = async () => {
     if (!selectedGrade) {
       message.warning("当前任务没有 AI 建议分");
       return;
@@ -714,6 +735,32 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     if (selectedGrade.delivery_mode === "shadow_only") {
       message.warning("本场考试未开放 AI 建议，无法采纳");
       return;
+    }
+    if (!canEditDraft || !canAdoptAiScore) {
+      message.warning("当前建议未通过版本核对，请按原图人工判定或刷新证据。");
+      return;
+    }
+    if (subjectCode === "mathematics") {
+      if (mathActionLock.current) return;
+      const taskId = selectedTaskId;
+      const before = JSON.stringify({ score: draft.score, selections: draft.rubricSelections });
+      mathActionLock.current = true;
+      setMathRequesting(true);
+      try {
+        const evidence = await math.refresh();
+        if (activeTask.current !== taskId) return;
+        if (!evidence || !mathSuggestionState(selectedGrade, evidence, math.dirty).current) {
+          message.warning("数学证据或图片已更新，旧建议不可采纳。");
+          return;
+        }
+        if (before !== JSON.stringify({ score: liveDraft.current.score, selections: liveDraft.current.rubricSelections })) {
+          message.warning("评分草稿已变化，请再次确认后采纳。");
+          return;
+        }
+      } finally {
+        mathActionLock.current = false;
+        if (activeTask.current === taskId) setMathRequesting(false);
+      }
     }
     lastScoreDraftChange.current = {
       score: draft.score,
@@ -726,6 +773,46 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
       studentFeedback: current.studentFeedback || selectedGrade.student_feedback || "",
       privateNote: current.privateNote || selectedGrade.teacher_note || ""
     }));
+  };
+
+  const refreshMath = () => {
+    if (math.dirty) {
+      Modal.confirm({ title: "刷新并放弃未保存的数学校正？", content: "教师评分草稿不会被重置。", onOk: async () => { math.setDirty(false); await math.refresh(); } });
+    } else void math.refresh();
+  };
+
+  const selectMathEvidenceStep = (stepId: string) => {
+    if (!math.state.understanding || math.dirty || ["loading", "conflict", "unavailable"].includes(math.state.phase)) return;
+    const selection = selectMathStep(math.state.understanding, stepId);
+    if (!selection) { message.info("该步骤暂无可靠位置，请按原图核对。"); return; }
+    setMathSelection(selection);
+    if (viewerMode !== "segment") changeViewerMode("segment");
+  };
+
+  const requestMathSuggestion = async () => {
+    if (!ctx || !canGrade || !canEditDraft || requiresExplicitSecondOpinion(ctx.reviewContext) || math.dirty || math.state.phase !== "ready" || mathActionLock.current) return;
+    const taskId = ctx.task.id, segmentId = ctx.task.answer_segment_id;
+    mathActionLock.current = true;
+    setMathRequesting(true);
+    setMathRequestNotice("");
+    try {
+      const evidence = await math.refresh();
+      if (activeTask.current !== taskId || evidence?.phase !== "ready") return;
+      const result = await createSubjectiveAiGrade(segmentId);
+      if (activeTask.current !== taskId) return;
+      const latest = await math.refresh();
+      if (activeTask.current !== taskId) return;
+      setCtx((current) => current?.task.id === taskId ? { ...current, aiGrades: [result.grade, ...current.aiGrades.filter((grade) => grade.id !== result.grade.id)] } : current);
+      setMathRequestNotice(latest && mathSuggestionState(result.grade, latest).current ? "新版本数学建议已生成，仍需教师确认。" : "未生成可采纳的当前数学 v2 建议，请继续人工阅卷。");
+      void appQueryClient.invalidateQueries({ queryKey: reviewTaskContextKeys.detail(taskId) });
+    } catch (cause) {
+      if (activeTask.current !== taskId) return;
+      setMathRequestNotice(cause instanceof ApiClientError && cause.code === "math_human_review_required" ? "仍有未决评分点或风险，已转人工确认；未生成成功建议。" : cause instanceof ApiClientError && cause.status === 409 ? "数学证据已变化，本次建议未落库，请刷新后核对。" : "数学建议服务暂不可用或未开放，请继续人工阅卷。");
+      await math.refresh();
+    } finally {
+      mathActionLock.current = false;
+      if (activeTask.current === taskId) setMathRequesting(false);
+    }
   };
 
   const setScoreFromShortcut = (score: number) => {
@@ -785,13 +872,13 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
     canSubmit,
     canReturn,
     canUndoScoreChange,
-    hasAiSuggestion: Boolean(selectedGrade && selectedGrade.delivery_mode !== "shadow_only"),
+    hasAiSuggestion: canAdoptAiScore,
     maxScore,
     rubricPointCount: rubricPoints.length,
     onSubmit: () => void submitGrade(),
     onSetScore: setScoreFromShortcut,
     onToggleCriterion: toggleCriterionFromShortcut,
-    onAdoptAi: adoptAiScore,
+    onAdoptAi: () => void adoptAiScore(),
     onFlagException: () => confirmReturnTask(true),
     onReturnTask: () => confirmReturnTask(false),
     onUndoScoreChange: undoLastScoreDraftChange,
@@ -885,7 +972,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
         ) : (
           <main className="grading-main">
             {ctx.warnings.length > 0 ? <Alert type="warning" showIcon message="AI 辅助不可用" description={ctx.warnings.map((warning) => getSafeUserText(warning, "智能辅助暂时不可用")).join("；")} /> : null}
-            <section className="grading-reason-banner"><div><span>为什么需要我处理？</span><strong>{sourceLabels[ctx.task.source] ?? "本题需要人工确认"}</strong><p>{ctx.warnings[0] ? getSafeUserText(ctx.warnings[0], "智能辅助暂时不可用，请人工确认。") : sourceDescriptions[ctx.task.source] ?? "请结合学生原始答案和评分细则完成确认。"}</p></div>{selectedGrade ? <div><span>系统建议</span><strong>{selectedGrade.suggested_score} / {selectedGrade.max_score}</strong></div> : null}</section>
+            <section className="grading-reason-banner"><div><span>为什么需要我处理？</span><strong>{sourceLabels[ctx.task.source] ?? "本题需要人工确认"}</strong><p>{ctx.warnings[0] ? getSafeUserText(ctx.warnings[0], "智能辅助暂时不可用，请人工确认。") : sourceDescriptions[ctx.task.source] ?? "请结合学生原始答案和评分细则完成确认。"}</p></div>{selectedGrade && !requiresExplicitSecondOpinion(ctx.reviewContext) ? <div><span>系统建议</span><strong>{subjectCode === "mathematics" && !canAdoptAiScore ? "待核对 / 已失效" : `${selectedGrade.suggested_score} / ${selectedGrade.max_score}`}</strong></div> : null}</section>
 
             <section className="grading-panels">
               <AnswerEvidencePane
@@ -911,6 +998,7 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
                 onImageLoad={onImageLoad}
+                mathSelection={currentMathSelection}
               />
 
               <aside className="grading-inspector">
@@ -922,6 +1010,13 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
                   canEditDraft={canEditDraft}
                   canVerifyEvidence={canVerifyEvidence}
                   actioning={actioning}
+                  math={math}
+                  onRefreshMath={refreshMath}
+                  onSelectMathStep={selectMathEvidenceStep}
+                  canRequestMath={canGrade && canEditDraft && !requiresExplicitSecondOpinion(ctx.reviewContext)}
+                  requestingMath={mathRequesting}
+                  onRequestMath={() => void requestMathSuggestion()}
+                  mathRequestNotice={mathRequestNotice}
                   onVerifyEvidence={() => runAction(
                     "evidence",
                     async () => {
@@ -945,7 +1040,8 @@ export function GradingWorkbench({ canWork, canManageTasks, canViewOriginalImage
                   canReturn={canReturn}
                   canManageTasks={canManageTasks}
                   actioning={actioning}
-                  onAdoptAiScore={adoptAiScore}
+                  onAdoptAiScore={() => void adoptAiScore()}
+                  canAdoptAiScore={canAdoptAiScore}
                   onMarkDispute={markDispute}
                   onSubmit={submitGrade}
                 />

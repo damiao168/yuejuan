@@ -5,6 +5,7 @@ import threading
 import time
 from collections import OrderedDict
 
+from .app_v2 import ProductionMathV2Application
 from .capabilities import CapabilityMatrix
 from .contract import normalize_model_output, validate_request
 from .errors import AgentError
@@ -26,6 +27,10 @@ class GradingAgentApplication:
         self._cache = OrderedDict()
         self._cache_lock = threading.Lock()
         self._inflight = {}
+        self.math_v2 = ProductionMathV2Application(settings, self.model, clock=self.clock, logger=self.logger)
+
+    def grade_v2(self, payload, idempotency_key, *, body_size, content_encoding=""):
+        return self.math_v2.grade(payload, idempotency_key, body_size=body_size, content_encoding=content_encoding)
 
     def grade(self, payload, idempotency_key):
         request = copy.deepcopy(payload)

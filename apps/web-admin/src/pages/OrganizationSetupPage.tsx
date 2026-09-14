@@ -17,6 +17,7 @@ import type { TableColumnsType } from "antd";
 import { ArrowRight, CheckCircle2, Download, FileUp, RefreshCw } from "lucide-react";
 import Papa from "papaparse";
 import { getUserErrorMessage } from "../api/client";
+import { validateNewPassword } from "../auth/loginSecurity";
 import { createExam, listExams } from "../api/exams";
 import {
   createClass,
@@ -324,7 +325,7 @@ export function OrganizationSetupPage({ onNavigate }: { onNavigate: (path: strin
               <Form.Item name="username" label="登录账号" rules={[{ required: true }]}><Input autoComplete="off" /></Form.Item>
               <Form.Item name="display_name" label="姓名" rules={[{ required: true }]}><Input /></Form.Item>
               <Form.Item name="role_code" label="业务角色" rules={[{ required: true }]}><Select options={data.roles.filter((role) => !["platform_admin", "tenant_admin"].includes(role.code)).map((role) => ({ value: role.code, label: role.description || role.name }))} /></Form.Item>
-              <Form.Item name="password" label="初始密码" extra="至少 12 位，包含大小写字母、数字和符号" rules={[{ required: true }, { min: 12 }]}><Input.Password autoComplete="new-password" /></Form.Item>
+              <Form.Item name="password" label="初始密码" extra="建议使用至少 15 个字符的长密码短语" rules={[{ required: true }, { validator: validateNewPassword }]}><Input.Password autoComplete="new-password" /></Form.Item>
             </div>
             <Button type="primary" htmlType="submit" loading={saving}>创建并继续</Button>
           </Form>

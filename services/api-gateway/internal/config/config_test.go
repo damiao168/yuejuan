@@ -40,6 +40,12 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if len(cfg.ModelSecrets.MasterKey) < 32 {
 		t.Fatal("development must have an encryption key for managed model credentials")
 	}
+	if cfg.Auth.RecentAuthTTL != 10*time.Minute {
+		t.Fatalf("unexpected default recent authentication lifetime: %s", cfg.Auth.RecentAuthTTL)
+	}
+	if cfg.Auth.RiskMode != "shadow" || cfg.Auth.DeviceBindingTTL != 180*24*time.Hour || cfg.Auth.DeviceCookieName != "edugrade_device" {
+		t.Fatalf("unexpected default adaptive authentication config: %#v", cfg.Auth)
+	}
 	for _, extension := range []string{".tif", ".tiff"} {
 		if !containsString(cfg.Files.AllowedExtensions, extension) {
 			t.Fatalf("default file extensions must include %s: %v", extension, cfg.Files.AllowedExtensions)
@@ -67,6 +73,8 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv("EDUGRADE_POSTGRES_CONN_MAX_IDLE_TIME", "4m")
 	t.Setenv("EDUGRADE_POSTGRES_STATEMENT_TIMEOUT", "40s")
 	t.Setenv("EDUGRADE_POSTGRES_LOCK_TIMEOUT", "3s")
+	t.Setenv("EDUGRADE_PUBLIC_SESSION_TTL", "90m")
+	t.Setenv("EDUGRADE_RECENT_AUTH_TTL", "20m")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -92,6 +100,12 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	if cfg.Postgres.TenantRLSEnabled {
 		t.Fatal("development must not enable tenant RLS connection scoping unless explicitly requested")
 	}
+	if cfg.Auth.PublicSessionTTL != 90*time.Minute {
+		t.Fatalf("unexpected public session lifetime: %s", cfg.Auth.PublicSessionTTL)
+	}
+	if cfg.Auth.RecentAuthTTL != 20*time.Minute {
+		t.Fatalf("unexpected recent authentication lifetime: %s", cfg.Auth.RecentAuthTTL)
+	}
 }
 
 func TestLoadWarnsAndFallsBackForInvalidDevelopmentValues(t *testing.T) {
@@ -103,6 +117,22 @@ func TestLoadWarnsAndFallsBackForInvalidDevelopmentValues(t *testing.T) {
 	}
 	if cfg.Service.Port != 8080 {
 		t.Fatalf("development fallback port=%d want 8080", cfg.Service.Port)
+	}
+}
+
+func TestLoadRejectsRiskEnforcementBeforeStrongAuthenticatorExists(t *testing.T) {
+	t.Setenv("EDUGRADE_ENV", "development")
+	t.Setenv("EDUGRADE_AUTH_RISK_MODE", "enforce")
+	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "must be off or shadow") {
+		t.Fatalf("expected risk mode safety error, got %v", err)
+	}
+}
+
+func TestLoadRejectsUnboundedDeviceHistory(t *testing.T) {
+	t.Setenv("EDUGRADE_ENV", "development")
+	t.Setenv("EDUGRADE_DEVICE_BINDING_TTL", "9000h")
+	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "between 24h and 8760h") {
+		t.Fatalf("expected device retention safety error, got %v", err)
 	}
 }
 
@@ -144,6 +174,7 @@ func TestLoadRejectsUnsafePostgresCapacityConfiguration(t *testing.T) {
 
 func TestLoadReadsGovernedAIServiceConfiguration(t *testing.T) {
 	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
+	t.Setenv("EDUGRADE_MATH_GRADING_V2_ENABLED", "true")
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
 	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "test-service-token-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_AI_SERVICE_TIMEOUT", "240s")
@@ -161,7 +192,8 @@ func TestLoadReadsGovernedAIServiceConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AIService.URL != "http://grading-agent:8100" ||
+	if !cfg.AIService.MathGradingV2 ||
+		cfg.AIService.URL != "http://grading-agent:8100" ||
 		cfg.AIService.Timeout != 240*time.Second ||
 		cfg.AIService.MaxRetries != 0 ||
 		cfg.AIService.ModelVersion != "model-v1" ||
@@ -173,6 +205,15 @@ func TestLoadReadsGovernedAIServiceConfiguration(t *testing.T) {
 		cfg.AIService.DeploymentRegion != "on_premise" ||
 		cfg.AIService.CapabilityProfile != "local-pilot-v1" {
 		t.Fatalf("unexpected AI service configuration: %#v", cfg.AIService)
+	}
+}
+
+func TestLoadRejectsMathGradingV2WhenAIGradingIsDisabled(t *testing.T) {
+	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "false")
+	t.Setenv("EDUGRADE_MATH_GRADING_V2_ENABLED", "true")
+
+	if _, err := Load(""); err == nil {
+		t.Fatal("math grading v2 must not be enabled while AI grading is disabled")
 	}
 }
 

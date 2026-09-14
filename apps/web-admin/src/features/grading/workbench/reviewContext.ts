@@ -57,8 +57,9 @@ export function questionFromContext(context: ReviewTaskContext): Question {
 }
 
 export function requiresExplicitSecondOpinion(context: ReviewTaskContext): boolean {
-  return context.ai_second_opinion?.presentation === "explicit_second_opinion" &&
-    context.ai_second_opinion.score_prefill_allowed === false;
+  // The immutable policy applies even before an AI suggestion exists.
+  return (context.question_snapshot.risk_tier === "R3" && context.question_snapshot.scoring_policy_snapshot.mode === "HUMAN_PRIMARY")
+    || (context.ai_second_opinion?.presentation === "explicit_second_opinion" && context.ai_second_opinion.score_prefill_allowed === false);
 }
 
 export function secondOpinionMetadata(context: ReviewTaskContext, revealed: boolean): Record<string, unknown> | null {

@@ -58,6 +58,40 @@
     "allow_model_final_score": false,
     "final_score_authority": "server_rubric_or_human_confirmation"
   },
+  "math_evidence": {
+    "artifact_id": "math-artifact-001",
+    "artifact_version": 3,
+    "correction_revision": 0,
+    "exam_question_snapshot_id": "snapshot-001",
+    "scoring_version": "math-rubric-score-v1",
+    "overall_confidence": 0.94,
+    "quality": {
+      "recognition": 0.96,
+      "formula": 0.95,
+      "structure": 0.94,
+      "verification": 0.97,
+      "rubric_mapping": 0.93,
+      "critical": 0.93
+    },
+    "steps": [
+      {"id": "s1", "text": "12 + 8", "formula_ids": ["f1"], "confidence": 0.95},
+      {"id": "s2", "text": "20", "formula_ids": ["f2"], "confidence": 0.94}
+    ],
+    "formulas": [
+      {"id": "f1", "step_ids": ["s1"], "canonical_latex": "12+8", "parse_status": "parsed", "reason_codes": [], "bbox": {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.1}, "confidence": 0.95},
+      {"id": "f2", "step_ids": ["s2"], "canonical_latex": "20", "parse_status": "parsed", "reason_codes": [], "bbox": {"x": 0.5, "y": 0.2, "width": 0.2, "height": 0.1}, "confidence": 0.94}
+    ],
+    "verifications": [
+      {"id": "v1", "step_id": "s2", "formula_id": "f2", "kind": "arithmetic", "status": "verified", "reason_code": "exact_arithmetic", "confidence": 0.97}
+    ],
+    "rubric_evidence": [
+      {"id": "re1", "rubric_criterion_key": "p1", "evidence_type": "step_present", "source_artifact_ids": ["s1"], "verification_ids": [], "status": "supported", "explanation": "verified step", "confidence": 0.95},
+      {"id": "re2", "rubric_criterion_key": "p2", "evidence_type": "final_result", "source_artifact_ids": ["s2", "f2"], "verification_ids": ["v1"], "status": "supported", "explanation": "verified result", "confidence": 0.94}
+    ],
+    "has_diagram": false,
+    "graph_uncertain": false,
+    "required_rubric_uncertain": false
+  },
   "media_evidence": {
     "kind": "answer_segment_crop",
     "encoding": "base64",

@@ -28,7 +28,7 @@ type Infrastructure struct {
 	Checkers       []deps.Checker
 	Metrics        *observability.Registry
 	FileReconciler *files.Reconciler
-	LoginLimiter   auth.LoginLimiter
+	LoginGuard     auth.LoginAttemptGuard
 	cleanup        []func() error
 }
 
@@ -71,7 +71,7 @@ func newInfrastructure(cfg config.Config, logg *logger.Logger) (*Infrastructure,
 	redisChecker, closeRedis := deps.NewRedisChecker(cfg.Redis)
 	infra.Checkers = append(infra.Checkers, redisChecker)
 	infra.cleanup = append(infra.cleanup, closeRedis)
-	infra.LoginLimiter = auth.NewRedisLoginFailureLimiter(redisChecker.Client(), cfg.Auth.LoginFailureLimit, cfg.Auth.LoginFailureWindow)
+	infra.LoginGuard = auth.NewRedisLoginAttemptGuard(redisChecker.Client(), cfg.Auth.LoginFailureLimit, cfg.Auth.LoginFailureWindow)
 
 	minioChecker, err := deps.NewMinIOChecker(cfg.MinIO)
 	if err != nil {

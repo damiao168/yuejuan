@@ -22,6 +22,7 @@ export interface ScoreEditorProps {
   canManageTasks: boolean;
   actioning: string | null;
   onAdoptAiScore: () => void;
+  canAdoptAiScore?: boolean;
   onMarkDispute: () => Promise<void>;
   onSubmit: (nominateAsGold?: boolean) => Promise<void>;
   quickSubmit?: boolean;
@@ -41,6 +42,7 @@ export function ScoreEditor({
   canManageTasks,
   actioning,
   onAdoptAiScore,
+  canAdoptAiScore = true,
   onMarkDispute,
   onSubmit,
   quickSubmit = false,
@@ -54,7 +56,7 @@ export function ScoreEditor({
           <p>满分 {maxScore || "—"}</p>
         </div>
         {selectedGrade && !requiresExplicitSecondOpinion(context.reviewContext) ? (
-          <Button icon={<Check size={14} />} disabled={!canEditDraft} onClick={onAdoptAiScore}>采纳 AI 建议</Button>
+          <Button icon={<Check size={14} />} disabled={!canEditDraft || !canAdoptAiScore} onClick={onAdoptAiScore}>采纳 AI 建议</Button>
         ) : null}
       </div>
 

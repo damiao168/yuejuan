@@ -134,6 +134,7 @@ func TestHandlerRequiresSourceAdapterForManagedCompletion(t *testing.T) {
 		{name: "ocr", taskType: "ocr", queueName: "ocr", sourceType: "ocr_task"},
 		{name: "omr", taskType: "omr_extract", queueName: "page-processing", sourceType: "omr_run"},
 		{name: "subjective", taskType: "ai_grade", queueName: "subjective-grading", sourceType: "subjective_grading_run"},
+		{name: "math-verification", taskType: "evidence_verify", queueName: "math-verification", sourceType: "math_understanding_artifact"},
 	} {
 		t.Run(source.name, func(t *testing.T) {
 			store := workerruntime.NewMemoryStore()

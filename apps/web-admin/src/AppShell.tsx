@@ -1,21 +1,23 @@
 import { PendingBusinessCommands } from "./components/PendingBusinessCommands";
 import { setBusinessCommandScope } from "./api/businessCommand";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import { App as AntApp, ConfigProvider } from "antd";
 import "antd/dist/reset.css";
-import { getCurrentUser, login as loginWithPassword, logout as logoutSession } from "./api/auth";
+import { getCurrentUser, lockCurrentSession, login as loginWithPassword, logout as logoutSession, reauthenticate as reauthenticateSession } from "./api/auth";
 import { listSchools } from "./api/org";
 import { ApiClientError } from "./api/client";
 import { hasAnyPermission, hasEveryPermission, sessionFromAuthUser, type SessionUser } from "./auth/session";
 import { canWorkTeacherAppeals } from "./auth/capabilities";
 import { clearAllReviewDraftFallbacks, clearReviewDraftFallbacks } from "./auth/reviewDraftFallback";
-import { clearLegacyRememberedLogin } from "./auth/loginSecurity";
+import { clearLegacyRememberedLogin, clearPublicComputerData } from "./auth/loginSecurity";
 import { AppLayout } from "./components/AppLayout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ForbiddenState, LoadingState, NotFoundState } from "./components/PageState";
 import { LoginPage } from "./pages/LoginPage";
+import { ActivationPage } from "./pages/ActivationPage";
+import { RecoveryPage } from "./pages/RecoveryPage";
 import { examWorkspaceFromPath, hasExamWorkspaceSectionAccess, hasRouteAccess, notFoundRoute, routeFromPath } from "./router/routes";
 import {
   availableExperiences,
@@ -55,6 +57,7 @@ const ExamStudentScopePage = lazy(() => import("./pages/ExamPreparationPage").th
 const ExamReadinessPage = lazy(() => import("./pages/ExamPreparationPage").then((module) => ({ default: module.ExamReadinessPage })));
 const ModulePage = lazy(() => import("./pages/ModulePage").then((module) => ({ default: module.ModulePage })));
 const PaperRubricPage = lazy(() => import("./pages/PaperRubricPage").then((module) => ({ default: module.PaperRubricPage })));
+const QuestionBankPage = lazy(() => import("./features/question-bank/QuestionBankPage").then((module) => ({ default: module.QuestionBankPage })));
 const QualityDashboardPage = lazy(() => import("./pages/QualityDashboardPage").then((module) => ({ default: module.QualityDashboardPage })));
 const ScoreManagementPage = lazy(() => import("./pages/ScoreManagementPage").then((module) => ({ default: module.ScoreManagementPage })));
 const SubmissionCapturePage = lazy(() => import("./pages/SubmissionCapturePage").then((module) => ({ default: module.SubmissionCapturePage })));
@@ -159,7 +162,7 @@ export function AppShell() {
       setUser(nextUser);
       router.history.push(nextPath);
     } catch (error) {
-      setLoginError(error instanceof ApiClientError && error.code === "invalid_credentials" ? "学校代码、账号或密码不正确。" : "暂时无法登录，请检查网络连接后重试。");
+      setLoginError(error instanceof ApiClientError && error.code === "invalid_credentials" ? "学校或登录信息不正确。" : error instanceof ApiClientError && error.code === "login_rate_limited" ? `尝试次数过多，请${error.retryAfterSeconds ? `在 ${error.retryAfterSeconds} 秒后` : "稍后"}重试。` : "暂时无法登录，请检查网络连接后重试。");
     } finally {
       setLoginLoading(false);
     }
@@ -169,15 +172,43 @@ export function AppShell() {
     void logoutSession().catch(() => undefined);
     if (user?.id) {
       clearReviewDraftFallbacks(user.id);
+      if (user.publicComputer) clearPublicComputerData(user.tenant, user.id);
     }
+    queryClient.clear();
     setUser(null);
   };
+
+  const reauthenticate = useCallback(async (password: string) => {
+    await reauthenticateSession(password);
+  }, []);
+
+  const lockSession = useCallback(async () => {
+    await lockCurrentSession();
+  }, []);
 
   if (authLoading) {
     return (
       <ConfigProvider>
         <AntApp>
           <LoadingState label="正在恢复登录状态" />
+        </AntApp>
+      </ConfigProvider>
+    );
+  }
+
+  const activationPath = window.location.pathname === "/activate";
+  const recoveryPath = window.location.pathname === "/recover";
+  if (activationPath || recoveryPath) {
+    const returnToLogin = (tenantCode?: string) => {
+      if (user) logout();
+      const loginPath = tenantCode ? `/?tenant=${encodeURIComponent(tenantCode)}` : "/";
+      window.history.replaceState({}, "", loginPath);
+      router.history.replace(loginPath);
+    };
+    return (
+      <ConfigProvider>
+        <AntApp>
+          {activationPath ? <ActivationPage onComplete={returnToLogin} /> : <RecoveryPage onComplete={returnToLogin} />}
         </AntApp>
       </ConfigProvider>
     );
@@ -205,7 +236,7 @@ export function AppShell() {
         return <ExamStudentScopePage examId={examId} canManage={hasEveryPermission(user, ["exam:manage", "org:manage"])} onExamChanged={refreshWorkspace} />;
       case "paper":
       case "questions":
-        return <PaperRubricPage canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} canManageAssessment={experience === "admin" && hasEveryPermission(user, ["exam:manage"])} initialExamId={examId} onExamChanged={refreshWorkspace} onNavigate={navigate} />;
+        return <PaperRubricPage canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} canReadQuestionBank={hasEveryPermission(user,["question_bank:read"])} canImportQuestionBank={hasEveryPermission(user,["question_bank:read","question_bank:create","question_bank:edit"])} questionBankScope={`${user.tenant}:${user.id}`} canManageAssessment={experience === "admin" && hasEveryPermission(user, ["exam:manage"])} initialExamId={examId} onExamChanged={refreshWorkspace} onNavigate={navigate} />;
       case "template":
         return <AnswerSheetTemplatePage examId={examId} canManage={experience === "admin" && hasEveryPermission(user, ["exam:manage", "file:manage"])} canCalibrate={experience === "admin" && hasEveryPermission(user, ["grading:manage"])} onExamChanged={refreshWorkspace} />;
       case "settings":
@@ -266,7 +297,9 @@ export function AppShell() {
     ) : route.path === "/platform/model-config" ? (
       <PlatformModelConfigPage />
     ) : route.path === "/papers" ? (
-      <PaperRubricPage canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} canManageAssessment={experience === "admin" && hasEveryPermission(user, ["exam:manage"])} />
+      <PaperRubricPage canManage={hasEveryPermission(user, ["exam:manage", "file:manage"])} canReadQuestionBank={hasEveryPermission(user,["question_bank:read"])} canImportQuestionBank={hasEveryPermission(user,["question_bank:read","question_bank:create","question_bank:edit"])} questionBankScope={`${user.tenant}:${user.id}`} canManageAssessment={experience === "admin" && hasEveryPermission(user, ["exam:manage"])} />
+    ) : route.path === "/question-bank" ? (
+      <QuestionBankPage key={`${user.tenant}:${user.id}`} user={user} />
     ) : route.path === "/capture" ? (
       <SubmissionCapturePage
         canManage={hasEveryPermission(user, ["submission:manage", "file:manage", "ocr:manage", "segment:manage"])}
@@ -328,7 +361,7 @@ export function AppShell() {
         canManageDisagreements={hasEveryPermission(user, ["review:manage"])}
       />
     ) : route.path === "/account/sessions" ? (
-      <SessionManagementPage onLoggedOut={logout} />
+      <SessionManagementPage key={`${user.tenant}:${user.id}`} onLoggedOut={logout} accountLabel={`${user.tenant}/${user.username}`} />
     ) : route.path === "/grading/subjective-batches" ? (
       <SubjectiveGradingBatchPage key={`${user.tenant}:${user.id}`} scopeKey={`${user.tenant}:${user.id}`} />
     ) : (
@@ -345,6 +378,8 @@ export function AppShell() {
         onNavigate={navigate}
         onExperienceChange={changeExperience}
         onLogout={logout}
+        onLockSession={lockSession}
+        onReauthenticate={reauthenticate}
         immersive={experience === "teacher" && (route.path === "/grading" || examWorkspace?.section === "grading")}
       >
         <PendingBusinessCommands key={`${user.tenant}:${user.id}`} tenant={user.tenant} actor={user.id} />

@@ -52,8 +52,9 @@ func TestR3HumanPrimaryContextRemovesAllAIScoreFields(t *testing.T) {
 	contextValue.AssessmentSnapshot = taskContextSnapshot(assessment.RiskR3, assessment.ScoringHumanPrimary)
 	contextValue.AISuggestion = map[string]any{
 		"id": "ai-grade-1", "suggested_score": 4.0, "max_score": 5.0,
-		"confidence": 0.83,
-		"evidence":   []any{map[string]any{"label": "method", "score": 2.0}},
+		"confidence":         0.83,
+		"evidence":           []any{map[string]any{"label": "method", "score": 2.0}},
+		"suggestion_history": []any{map[string]any{"id": "old-ai", "math_artifact_version": 2.0, "suggested_score": 3.0, "evidence": []any{map[string]any{"score": 2.0}}}},
 	}
 	automationScore, automationMax := 4.0, 5.0
 	contextValue.AutomationResult = &AutomationResult{Decision: "review", Score: &automationScore, MaxScore: &automationMax}
@@ -81,6 +82,15 @@ func TestR3HumanPrimaryContextRemovesAllAIScoreFields(t *testing.T) {
 	}
 	if result.AISecondOpinion.Metadata["confidence"] != 0.83 {
 		t.Fatalf("non-score second-opinion metadata should remain available: %#v", result.AISecondOpinion.Metadata)
+	}
+	historyRaw, _ := json.Marshal(result.AISecondOpinion.History)
+	var historyDecoded any
+	_ = json.Unmarshal(historyRaw, &historyDecoded)
+	if len(result.AISecondOpinion.History) != 1 || containsScoreKey(historyDecoded) {
+		t.Fatalf("history bypassed R3 score guard: %s", historyRaw)
+	}
+	if _, exists := result.AISecondOpinion.Metadata["suggestion_history"]; exists {
+		t.Fatal("history remained in metadata")
 	}
 	if result.AutomationResult == nil || result.AutomationResult.Score != nil || result.AutomationResult.MaxScore != nil {
 		t.Fatalf("R3 human-primary automation metadata must not expose a prefillable score: %#v", result.AutomationResult)

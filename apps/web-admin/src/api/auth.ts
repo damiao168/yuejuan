@@ -16,15 +16,29 @@ export interface AuthUser {
     grade_ids: string[];
     class_ids: string[];
   };
+  current_session_type?: "standard" | "remembered_device" | "public_device" | "desktop_device" | "service";
 }
 
 export interface LoginRequest {
-  tenant_code: string;
-  username: string;
+  tenant_code?: string;
+  tenant_hint?: string;
+  username?: string;
+  identifier: string;
   password: string;
   remember_device?: boolean;
+  public_device?: boolean;
   device_name?: string;
 }
+
+export interface ActivationPreview {
+  display_name: string;
+  tenant_code: string;
+  school_id?: string;
+  phone_masked?: string;
+  expires_at: string;
+}
+
+export type RecoveryPreview = Omit<ActivationPreview, "school_id">;
 
 export interface LoginResponse {
   expires_at: string;
@@ -33,7 +47,7 @@ export interface LoginResponse {
 
 export interface DeviceSession {
   id: string;
-  session_type: "standard" | "remembered_device" | "desktop_device" | "service";
+  session_type: "standard" | "remembered_device" | "public_device" | "desktop_device" | "service";
   device_name: string;
   created_at: string;
   last_seen_at: string;
@@ -41,8 +55,44 @@ export interface DeviceSession {
   current: boolean;
 }
 
+export interface SecurityEvent {
+  id: string;
+  event_type: string;
+  risk_level: "low" | "medium" | "high";
+  device_summary: string;
+  occurred_at: string;
+}
+
 export async function login(input: LoginRequest) {
   return apiClient.request<LoginResponse>("/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function verifyActivation(token: string) {
+  return apiClient.request<{ activation: ActivationPreview }>("/api/v1/auth/activation/verify", {
+    method: "POST",
+    body: JSON.stringify({ token })
+  });
+}
+
+export function completeActivation(input: { token: string; password: string }) {
+  return apiClient.request<{ status: "activated" }>("/api/v1/auth/activation/complete", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function verifyRecovery(token: string) {
+  return apiClient.request<{ recovery: RecoveryPreview }>("/api/v1/auth/recovery/verify", {
+    method: "POST",
+    body: JSON.stringify({ token })
+  });
+}
+
+export function completeRecovery(input: { token: string; password: string }) {
+  return apiClient.request<{ status: "password_reset" }>("/api/v1/auth/recovery/complete", {
     method: "POST",
     body: JSON.stringify(input)
   });
@@ -58,8 +108,26 @@ export async function logout() {
   });
 }
 
+export function reauthenticate(password: string) {
+  return apiClient.request<{ status: "reauthenticated"; reauthenticated_at: string }>("/api/v1/auth/reauthenticate", {
+    method: "POST",
+    body: JSON.stringify({ password })
+  });
+}
+
+export function lockCurrentSession() {
+  return apiClient.request<{ status: "locked"; locked_at: string }>("/api/v1/auth/lock", {
+    method: "POST",
+    keepalive: true
+  });
+}
+
 export function listSessions() {
   return apiClient.request<{ sessions: DeviceSession[] }>("/api/v1/auth/sessions");
+}
+
+export function listSecurityEvents() {
+  return apiClient.request<{ events: SecurityEvent[] }>("/api/v1/auth/security-events");
 }
 
 export function revokeSession(id: string) {

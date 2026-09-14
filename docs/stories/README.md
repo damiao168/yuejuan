@@ -6,8 +6,8 @@
 
 ## 执行规则
 
-1. 每次只执行一个 Story。
-2. Story 未完成验收前，不进入下一个 Story。
+1. 每次只执行一个实施 Story；主 Story 有子 Story 时，以当前子 Story 为实施单位，主 Story 汇总阶段结果。
+2. 当前实施 Story 未完成验收前，不进入下一个实施 Story；规划文档可以先整理完整路线。
 3. 每个 Story 必须按固定闭环推进：规划 Story、审阅规划、实现、审阅实现、修改实现、自审审批。
 4. 每个 Story 完成后由 Codex 按验收标准自审自批，并留下审批记录。
 5. 每个 Story 必须包含范围、非范围、修改文件、测试方式和验收标准。
@@ -100,10 +100,42 @@
 | STORY-061 | 多厂商原生模型治理、影子评测与策略中心 | Foundation Complete / Expansion Paused（已完成至 061C2） |
 | STORY-062 | 阅卷主链可靠性与教师连续阅卷 | Software Accepted（不等于 Production Ready） |
 | STORY-063 | 主观题 AI 影子批处理与人工复核衔接 | In Progress（幂等基础切片已完成） |
-| STORY-064 | 阅卷质量中心与评分证据治理 | Planned |
-| STORY-065 | 学生成绩、申诉与重发布闭环 | Planned |
-| STORY-066 | 学校系统集成、离线采集与现场运维 | Planned |
-| STORY-067 | 限量学校试点与发布门禁 | Planned |
+| STORY-064 | [学校工作台可信聚合](STORY-064-trusted-school-dashboard.md) | Implemented |
+| STORY-065 | [真实角色工作区与访问边界](STORY-065-role-workspaces.md) | Implemented（首个生产切片） |
+| STORY-066 | [智能评分生产失败关闭](STORY-066-ai-fail-closed-runtime.md) | Implemented |
+| STORY-067 | [浏览器回归与真实系统黄金路径](STORY-067-browser-golden-paths.md) | Implemented（现场验收未完成） |
+| STORY-068 | [AI 阅卷准确率基准与错误归因](STORY-068-grading-accuracy-benchmark.md) | Implemented（第一阶段） |
+| STORY-069 | [版本化题库与 Rubric 库](STORY-069-versioned-question-bank-rubric-library.md) | In Progress / P0（069A～069D） |
+| STORY-070 | [考试蓝图与智能组卷](STORY-070-assessment-blueprint-smart-assembly.md) | Planned / P0 |
+| STORY-071 | [题目质量与曝光治理](STORY-071-question-quality-exposure-governance.md) | Planned / P0 |
+| STORY-072 | [通知与事件中心](STORY-072-notification-event-center.md) | Planned / P0 |
+| STORY-073 | [学校集成中心](STORY-073-integration-hub.md) | Planned / P0 |
+| STORY-074 | [企业身份与 MFA](STORY-074-enterprise-identity-mfa.md) | Planned / P1 |
+| STORY-075 | [跨考试纵向学情](STORY-075-assessment-series-longitudinal-analytics.md) | Planned / P1 |
+| STORY-076 | [考试运营中心](STORY-076-exam-operations-center.md) | Planned / P1 |
+| STORY-077 | [学习反馈与错因体系](STORY-077-learning-feedback-error-taxonomy.md) | Planned / P2 |
+| STORY-078 | [个性化练习](STORY-078-personalized-practice.md) | Planned / P2 |
+
+## Assessment Platform 后续路线
+
+规划与代码审阅基线见[STORY-069～078 总路线图](../prd/assessment-platform-roadmap.md)。069A 题库核心草稿、069B 评分 bundle/审核发布/指定版本进入考试、069C 受控 metadata/完整 ACL/组合检索，以及 069D 精选历史考试冻结题目入库已实现并完成定向验证，其他新增切片保持 Planned。第一阶段目标是 **069A～069F + 070A～070C**，逐切片实施、自审、修正和验收后推进；069～071 为内容资产与治理产品阶段。
+
+| 子 Story | 内容 | 阶段 | 状态 |
+| --- | --- | --- | --- |
+| [069A](STORY-069A-question-bank-core-item-version.md) | Bank、Item、draft Version、基础访问边界 | 第一阶段 | Approved（仅本切片） |
+| [069B](STORY-069B-answer-rubric-publish-workflow.md) | 答案/解析/Rubric 版本、审核发布、materialize | 第一阶段 | Approved（仅本切片） |
+| [069C](STORY-069C-metadata-acl-search.md) | 受控 metadata、完整 ACL、搜索 | 第一阶段 | Approved（仅本切片） |
+| [069D](STORY-069D-existing-exam-bank-import.md) | 精选历史考试题入库 | 第一阶段 | Approved（仅本切片） |
+| [069E](STORY-069E-paper-import-bank.md) | 已有解析候选人工对账入库 | 第一阶段 | Planned |
+| [069F](STORY-069F-usage-psychometric-feedback.md) | 使用历史与发布版本 CTT 回流 | 第一阶段 | Planned |
+| [070A](STORY-070A-blueprint-dsl.md) | 版本化考试蓝图 DSL | 第一阶段 | Planned |
+| [070B](STORY-070B-deterministic-assembly.md) | Go 确定性组卷与教师确认 | 第一阶段 | Planned |
+| [070C](STORY-070C-exposure-control.md) | 曝光策略、预留与并发确认 | 第一阶段出口 | Planned |
+| [070D](STORY-070D-parallel-forms.md) | 平行卷与跨卷重叠控制 | 后续 | Planned |
+| [070E](STORY-070E-milp-solver.md) | 外部优化求解器 | 后续 | Planned |
+| [070F](STORY-070F-qti-import-export.md) | QTI 边界导入导出 | 后续 | Planned |
+
+主 Story 是阶段汇总，不要求一次实现所有子 Story；当前子 Story 未验收前不进入下一个实施切片。073～078 的多步范围在正式实施前继续切小，不能以首个功能完成批准全部后续范围。
 
 ## A 系列研究型实施路线
 
@@ -149,8 +181,15 @@
 | STORY-MATH-06 | [Rubric 数学证据](STORY-MATH-06-rubric-evidence.md) | Implemented |
 | STORY-MATH-07 | [教师数学证据工作台](STORY-MATH-07-evidence-workbench.md) | Implemented |
 | STORY-MATH-08 | [分层试点门禁](STORY-MATH-08-pilot-gates.md) | Implemented / Real Gate Evidence Pending |
+| STORY-MATH-08A | [有效数学证据与教师校正投影](STORY-MATH-08A-effective-evidence.md) | Implemented / Reverification Pending |
 | STORY-MATH-09 | [Runtime Spatial / Solution Baseline Integration](STORY-MATH-09-runtime-spatial-integration.md) | Implemented |
+| STORY-MATH-09A | [Mixed Math Perception](STORY-MATH-09A-mixed-perception.md) | Implemented / Real-model Benchmark Pending |
 | STORY-MATH-10 | [Image Quality Geometry / Register Foundation](STORY-MATH-10-image-quality-geometry.md) | Implemented |
+| STORY-MATH-10A | [SolutionGraph v2](STORY-MATH-10A-solution-graph-v2.md) | Implemented / Real-layout Benchmark Pending |
+| STORY-MATH-11 | [两阶段数学符号验证](STORY-MATH-11-symbolic-verification-pipeline.md) | Implemented Baseline / Extended Mathematics and Real-answer Benchmark Pending |
+| STORY-MATH-12 | [冻结 Rubric 的确定性数学评分预览](STORY-MATH-12-deterministic-rubric-scorer.md) | Implemented Baseline / Semantic Mapping, Follow-through and Real-answer Benchmark Pending |
+| STORY-MATH-13 | [Grading Agent v2 数学生产接线](STORY-MATH-13-grading-agent-v2-production.md) | Implemented / Feature Flag Off / Real-model Shadow and Teacher UI Pending |
+| STORY-MATH-14 | [数学阅卷工作台证据闭环](STORY-MATH-14-grading-workbench-evidence-loop.md) | Implemented / Feature Flag Off / Real Teacher and Real-model Validation Pending |
 
 ## 编号语义说明（2026-07-26）
 
@@ -160,9 +199,9 @@ STORY-061 现用于多厂商原生模型治理、影子评测与策略中心；�
 
 STORY-053 之后按 V1.0 正式产品交付总控任务继续推进，不提前宣称 Production Ready。
 
-### 当前编号映射（2026-08-01）
+### 历史编号映射（2026-08-01，已被后续实施更新）
 
-为避免历史路线图与实际交付编号混淆，当前实施顺序固定为：
+以下保留当时规划语义，不再代表当前实施编号：
 
 - STORY-062：阅卷主链可靠性与教师连续阅卷（软件已验收）；
 - STORY-063：主观题 AI 影子批处理与人工复核衔接；
@@ -171,4 +210,12 @@ STORY-053 之后按 V1.0 正式产品交付总控任务继续推进，不提前�
 - STORY-066：学校系统集成、离线采集与现场运维；
 - STORY-067：限量学校试点与发布门禁。
 
-旧路线图中将上述能力标作 STORY-059～064 的内容属于历史编号，不代表当前 Story 状态；新增实现、验收和审批记录均以本表为准。
+旧路线图中将上述能力标作 STORY-059～064 的内容属于历史编号，不代表当前 Story 状态。
+
+### 当前编号映射（2026-09-13）
+
+以已存在的 Story 文件为当前编号事实源：064 为可信学校聚合、065 为角色工作区、066 为智能评分失败关闭、067 为浏览器与真实系统路径、068 为 AI 准确率基准。对应状态由各文件声明，`Implemented` 不等于 `Approved` 或 Production Ready；本轮没有重审或批准这些历史实现。
+
+旧计划中的质量中心、学生申诉与重发布已有 A 系列对应实施，具体能力与边界见[验证状态](../verification-status.md)，不能再以同一编号创建重复实现。学校标准集成扩展归新 073，现场试点与生产发布门禁继续属于预生产验收，不能因重排路线图视为完成。
+
+新增 069～078 和 069A～069F、070A～070F 按本索引与总路线图推进；未来引用旧映射必须明确其为历史计划。

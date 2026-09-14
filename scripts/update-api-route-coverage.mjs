@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const routePattern = /mux\.Handle\("(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) ([^" ]+)"/g;
+const routePattern = /\b(?:mux|[A-Za-z_]\w*Mux)\.Handle\("(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) ([^" ]+)"/g;
 
 function walk(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {

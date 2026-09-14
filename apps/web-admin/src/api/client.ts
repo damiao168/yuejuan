@@ -1,6 +1,8 @@
 import { getApiErrorMessage } from "./userError";
 export { getPaperImportUserMessage, getSafeUserText, getUserErrorMessage } from "./userError";
 
+export const RECENT_AUTH_REQUIRED_EVENT = "edugrade:recent-auth-required";
+
 export interface ApiErrorPayload {
   error?: {
     code?: string;
@@ -114,7 +116,10 @@ export class ApiClient {
     try {
       const payload = (await response.json()) as ApiErrorPayload;
       const code = payload.error?.code ?? payload.code ?? "request_failed";
-    return new ApiClientError(response.status, code, getApiErrorMessage(code, response.status), payload, retryAfterSeconds);
+      if (response.status === 428 && code === "recent_auth_required" && typeof window !== "undefined") {
+        window.dispatchEvent(new Event(RECENT_AUTH_REQUIRED_EVENT));
+      }
+      return new ApiClientError(response.status, code, getApiErrorMessage(code, response.status), payload, retryAfterSeconds);
     } catch {
       return new ApiClientError(response.status, "request_failed", getApiErrorMessage("request_failed", response.status), {}, retryAfterSeconds);
     }

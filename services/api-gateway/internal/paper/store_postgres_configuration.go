@@ -315,14 +315,17 @@ func (s *PostgresStore) Readiness(ctx context.Context, tenantID string, examID s
 	}
 	var confirmedAt time.Time
 	var confirmedBy string
+	var snapshotID string
+	var importSnapshotAvailable bool
 	err = tx.QueryRowContext(ctx, `
-SELECT confirmed_at, confirmed_by::text
+SELECT confirmed_at, confirmed_by::text, id::text, import_snapshot_json IS NOT NULL
 FROM exam_readiness_snapshot
 WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND status = 'passed' AND configuration_hash = $3
 ORDER BY confirmed_at DESC LIMIT 1
-`, tenantID, examID, result.ConfigurationHash).Scan(&confirmedAt, &confirmedBy)
+`, tenantID, examID, result.ConfigurationHash).Scan(&confirmedAt, &confirmedBy, &snapshotID, &importSnapshotAvailable)
 	if err == nil {
 		result.Confirmed, result.ConfirmedAt, result.ConfirmedBy = status == "ready" || status == "collecting", &confirmedAt, confirmedBy
+		result.SnapshotID, result.ImportSnapshotAvailable = snapshotID, importSnapshotAvailable
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return ReadinessResult{}, err
 	}
@@ -382,18 +385,14 @@ WHERE candidate.tenant_id=$1::uuid AND candidate.exam_id=$2::uuid
 		}
 	}
 	checks, _ := json.Marshal(result.Checks)
+	questions, err := listQuestions(ctx, tx, tenantID, examID)
+	if err != nil {
+		return ReadinessResult{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE exam_readiness_snapshot SET status = 'invalidated', invalidated_at = now(), invalidation_reason = 'superseded by new confirmation'
 WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND status = 'passed'
 `, tenantID, examID); err != nil {
-		return ReadinessResult{}, err
-	}
-	now := time.Now().UTC()
-	if err := tx.QueryRowContext(ctx, `
-INSERT INTO exam_readiness_snapshot (tenant_id, exam_id, configuration_hash, status, checks, confirmed_by, confirmed_at)
-VALUES ($1::uuid, $2::uuid, $3, 'passed', $4::jsonb, $5::uuid, $6)
-RETURNING confirmed_at
-	`, tenantID, examID, result.ConfigurationHash, checks, userID, now).Scan(&now); err != nil {
 		return ReadinessResult{}, err
 	}
 	updated, err := tx.ExecContext(ctx, `UPDATE exam SET status = 'ready', updated_at = now() WHERE tenant_id = $1::uuid AND id = $2::uuid AND status IN ('draft', 'configured', 'ready')`, tenantID, examID)
@@ -404,10 +403,37 @@ RETURNING confirmed_at
 	if count != 1 {
 		return result, ErrNotReady
 	}
+	// The ready transition freezes assessment facts in its database trigger.
+	// Bind those exact identities into the content companion before committing.
+	importSnapshot := newReadinessImportSnapshot(result.ConfigurationHash, questions)
+	for index := range importSnapshot.Questions {
+		question := &importSnapshot.Questions[index]
+		if err := tx.QueryRowContext(ctx, `SELECT id::text,content_hash FROM exam_question_snapshot WHERE tenant_id=$1::uuid AND exam_id=$2::uuid AND question_id=$3::uuid ORDER BY snapshot_version DESC LIMIT 1`, tenantID, examID, question.ID).Scan(&question.AssessmentSnapshotID, &question.AssessmentSnapshotHash); err != nil {
+			return ReadinessResult{}, err
+		}
+	}
+	importSnapshotJSON, err := json.Marshal(importSnapshot)
+	if err != nil {
+		return ReadinessResult{}, err
+	}
+	importSnapshotHash := stableContentHash(importSnapshot)
+	now := time.Now().UTC()
+	var snapshotID string
+	if err := tx.QueryRowContext(ctx, `
+	INSERT INTO exam_readiness_snapshot (
+	  tenant_id, exam_id, configuration_hash, status, checks, confirmed_by, confirmed_at,
+	  import_snapshot_schema_version, import_snapshot_hash, import_snapshot_json
+	)
+	VALUES ($1::uuid, $2::uuid, $3, 'passed', $4::jsonb, $5::uuid, $6, 1, $7, $8::jsonb)
+	RETURNING confirmed_at,id::text
+	`, tenantID, examID, result.ConfigurationHash, checks, userID, now, importSnapshotHash, importSnapshotJSON).Scan(&now, &snapshotID); err != nil {
+		return ReadinessResult{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return ReadinessResult{}, err
 	}
 	result.Confirmed, result.ConfirmedAt, result.ConfirmedBy = true, &now, userID
+	result.SnapshotID, result.ImportSnapshotAvailable = snapshotID, true
 	return result, nil
 }
 
@@ -439,11 +465,13 @@ func (s *PostgresStore) StartCollection(ctx context.Context, tenantID string, ex
 	}
 	var confirmedAt time.Time
 	var confirmedBy string
+	var snapshotID string
+	var importSnapshotAvailable bool
 	if err := tx.QueryRowContext(ctx, `
-SELECT confirmed_at, confirmed_by::text FROM exam_readiness_snapshot
+SELECT confirmed_at, confirmed_by::text, id::text, import_snapshot_json IS NOT NULL FROM exam_readiness_snapshot
 WHERE tenant_id = $1::uuid AND exam_id = $2::uuid AND status = 'passed' AND configuration_hash = $3
 ORDER BY confirmed_at DESC LIMIT 1
-`, tenantID, examID, result.ConfigurationHash).Scan(&confirmedAt, &confirmedBy); err != nil {
+`, tenantID, examID, result.ConfigurationHash).Scan(&confirmedAt, &confirmedBy, &snapshotID, &importSnapshotAvailable); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return result, ErrNotReady
 		}
@@ -461,6 +489,7 @@ ORDER BY confirmed_at DESC LIMIT 1
 		return ReadinessResult{}, err
 	}
 	result.Confirmed, result.ConfirmedAt, result.ConfirmedBy = true, &confirmedAt, confirmedBy
+	result.SnapshotID, result.ImportSnapshotAvailable = snapshotID, importSnapshotAvailable
 	return result, nil
 }
 

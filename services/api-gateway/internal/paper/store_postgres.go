@@ -1135,6 +1135,15 @@ ORDER BY sort_order, question_no
 		return nil, err
 	}
 	for index := range out {
+		var bankContent []byte
+		if err := queryer.QueryRowContext(ctx, `SELECT source_type,COALESCE(source_bank_item_id::text,''),COALESCE(source_bank_item_version_id::text,''),COALESCE(source_content_hash,''),bank_content FROM question WHERE tenant_id=$1 AND id=$2`, tenantID, out[index].ID).Scan(&out[index].SourceType, &out[index].SourceBankItemID, &out[index].SourceBankItemVersionID, &out[index].SourceContentHash, &bankContent); err != nil {
+			return nil, err
+		}
+		if len(bankContent) > 0 {
+			if err := json.Unmarshal(bankContent, &out[index].BankContent); err != nil {
+				return nil, err
+			}
+		}
 		if err := loadQuestionImportProvenance(ctx, queryer, tenantID, &out[index]); err != nil {
 			return nil, err
 		}
@@ -1457,7 +1466,7 @@ func loadQuestionImportProvenance(ctx context.Context, queryer postgresQueryer, 
 }
 
 func loadQuestionAssessmentArchetype(ctx context.Context, queryer postgresQueryer, tenantID string, question *Question) error {
-	return queryer.QueryRowContext(ctx, `SELECT COALESCE((SELECT archetype_code FROM question_assessment_config WHERE tenant_id=$1 AND question_id=$2::uuid),'')`, tenantID, question.ID).Scan(&question.AssessmentArchetype)
+	return queryer.QueryRowContext(ctx, `SELECT COALESCE((SELECT archetype_code FROM question_assessment_config WHERE tenant_id=$1 AND question_id=$2::uuid),(SELECT assessment_archetype FROM question WHERE tenant_id=$1 AND id=$2::uuid),'')`, tenantID, question.ID).Scan(&question.AssessmentArchetype)
 }
 
 func latestQuestionSolution(ctx context.Context, queryer postgresQueryer, tenantID string, questionID string) (QuestionSolution, bool, error) {

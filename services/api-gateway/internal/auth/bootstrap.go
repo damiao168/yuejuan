@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"unicode"
 )
 
 var (
@@ -84,21 +83,21 @@ func strongBootstrapPassword(password string) bool {
 }
 
 func StrongPassword(password string) bool {
-	if len([]rune(password)) < 12 {
+	if len([]rune(password)) < 15 {
 		return false
 	}
-	var hasUpper, hasLower, hasDigit, hasSymbol bool
-	for _, ch := range password {
-		switch {
-		case unicode.IsUpper(ch):
-			hasUpper = true
-		case unicode.IsLower(ch):
-			hasLower = true
-		case unicode.IsDigit(ch):
-			hasDigit = true
-		case unicode.IsPunct(ch) || unicode.IsSymbol(ch):
-			hasSymbol = true
-		}
+	normalized := strings.ToLower(strings.TrimSpace(password))
+	if normalized == "" {
+		return false
 	}
-	return hasUpper && hasLower && hasDigit && hasSymbol
+	_, blocked := commonPasswordBlocklist[normalized]
+	return !blocked
+}
+
+var commonPasswordBlocklist = map[string]struct{}{
+	"123456789012345":  {},
+	"passwordpassword": {},
+	"qwertyuiopasdfgh": {},
+	"adminadminadmin":  {},
+	"changemechangeme": {},
 }

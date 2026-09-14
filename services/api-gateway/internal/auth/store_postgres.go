@@ -24,7 +24,19 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 }
 
 func (s *PostgresStore) FindUserByLogin(ctx context.Context, tenantCode string, username string) (UserWithPassword, error) {
+	phone, _ := NormalizePhone(username)
 	row := s.db.QueryRowContext(ctx, `
+WITH candidates AS (
+  SELECT u.id
+  FROM app_user u
+  JOIN tenant t ON t.id = u.tenant_id
+  WHERE t.code = $1
+    AND (u.username = $2 OR u.employee_no = $2 OR ($3 <> '' AND u.phone_normalized = $3))
+    AND u.status = 'active'
+    AND u.deleted_at IS NULL
+    AND t.status = 'active'
+    AND t.deleted_at IS NULL
+)
 SELECT
   u.id::text,
   u.tenant_id::text,
@@ -33,6 +45,11 @@ SELECT
   u.display_name,
   u.status,
   u.password_hash,
+	COALESCE(u.phone_normalized, ''),
+	COALESCE(u.employee_no, ''),
+	u.security_epoch,
+	u.activated_at,
+	u.last_login_at,
   COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}') AS roles,
   COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}') AS permissions,
   COALESCE(jsonb_object_agg(r.code, ur.data_scope) FILTER (WHERE r.code IS NOT NULL), '{}') AS data_scope
@@ -43,22 +60,30 @@ LEFT JOIN role r ON r.tenant_id = u.tenant_id AND r.id = ur.role_id AND r.delete
 LEFT JOIN role_permission rp ON rp.tenant_id = u.tenant_id AND rp.role_id = r.id AND rp.deleted_at IS NULL
 LEFT JOIN permission p ON p.tenant_id = u.tenant_id AND p.id = rp.permission_id AND p.deleted_at IS NULL
 WHERE t.code = $1
-  AND u.username = $2
+  AND u.id = (SELECT id FROM candidates LIMIT 1)
+  AND (SELECT count(*) FROM candidates) = 1
   AND t.status = 'active'
   AND t.deleted_at IS NULL
   AND u.deleted_at IS NULL
 GROUP BY u.id, t.code
-`, tenantCode, username)
+`, tenantCode, username, phone)
 
 	var user UserWithPassword
 	var roles []string
 	var permissions []string
 	var dataScopeRaw []byte
-	if err := row.Scan(&user.ID, &user.TenantID, &user.TenantCode, &user.Username, &user.DisplayName, &user.Status, &user.PasswordHash, pqArray(&roles), pqArray(&permissions), &dataScopeRaw); err != nil {
+	var activatedAt, lastLoginAt sql.NullTime
+	if err := row.Scan(&user.ID, &user.TenantID, &user.TenantCode, &user.Username, &user.DisplayName, &user.Status, &user.PasswordHash, &user.PhoneNormalized, &user.EmployeeNo, &user.SecurityEpoch, &activatedAt, &lastLoginAt, pqArray(&roles), pqArray(&permissions), &dataScopeRaw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return UserWithPassword{}, ErrInvalidCredentials
 		}
 		return UserWithPassword{}, err
+	}
+	if activatedAt.Valid {
+		user.ActivatedAt = activatedAt.Time
+	}
+	if lastLoginAt.Valid {
+		user.LastLoginAt = lastLoginAt.Time
 	}
 	user.Roles = roles
 	user.Permissions = permissions
@@ -70,23 +95,85 @@ GROUP BY u.id, t.code
 	return user, nil
 }
 
+func (s *PostgresStore) FindPasswordHash(ctx context.Context, tenantID string, userID string) (string, error) {
+	var passwordHash string
+	err := s.db.QueryRowContext(ctx, `
+SELECT u.password_hash
+FROM app_user u
+JOIN tenant t ON t.id = u.tenant_id
+WHERE u.tenant_id = $1::uuid
+  AND u.id = $2::uuid
+  AND u.status = 'active'
+  AND u.deleted_at IS NULL
+  AND t.status = 'active'
+  AND t.deleted_at IS NULL
+`, tenantID, userID).Scan(&passwordHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrInvalidCredentials
+	}
+	return passwordHash, err
+}
+
+func (s *PostgresStore) RecordSuccessfulLogin(ctx context.Context, tenantID, userID, expectedPasswordHash, replacementPasswordHash string) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE app_user
+SET last_login_at = now(),
+    password_hash = CASE WHEN $4 <> '' AND password_hash = $3 THEN $4 ELSE password_hash END,
+    updated_at = CASE WHEN $4 <> '' AND password_hash = $3 THEN now() ELSE updated_at END
+WHERE tenant_id = $1::uuid AND id = $2::uuid AND password_hash = $3 AND status = 'active' AND deleted_at IS NULL
+`, tenantID, userID, expectedPasswordHash, replacementPasswordHash)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrInvalidCredentials
+	}
+	return nil
+}
+
 func (s *PostgresStore) CreateSession(ctx context.Context, input CreateSessionInput) (DeviceSession, error) {
 	var session DeviceSession
+	riskEvaluatedAt := input.RiskEvaluatedAt
+	if riskEvaluatedAt.IsZero() {
+		riskEvaluatedAt = time.Now().UTC()
+	}
 	err := s.db.QueryRowContext(ctx, `
 INSERT INTO auth_session (
   tenant_id, user_id, token_hash, session_type, device_id, device_name,
-  user_agent_hash, ip_prefix, expires_at, last_seen_at
+  user_agent_hash, ip_prefix, expires_at, last_seen_at, reauthenticated_at, security_epoch, auth_method, auth_level,
+  risk_level, risk_action, risk_score, risk_evaluated_at, risk_policy_version, risk_evidence_quality
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now(), security_epoch, 'password', 1,
+       $11, $12, $13, $14, $15, $16
+FROM app_user
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='active' AND deleted_at IS NULL
+  AND ($10::bigint <= 0 OR security_epoch=$10::bigint)
 RETURNING id::text, session_type, device_name, created_at, last_seen_at, expires_at
 `, input.TenantID, input.UserID, input.TokenHash, input.SessionType, input.DeviceID,
-		input.DeviceName, input.UserAgentHash, input.IPPrefix, input.ExpiresAt,
+		input.DeviceName, input.UserAgentHash, input.IPPrefix, input.ExpiresAt, input.SecurityEpoch,
+		normalizeRiskLevel(input.RiskLevel), normalizeRiskAction(input.RiskAction), max(0, min(input.RiskScore, 100)),
+		riskEvaluatedAt, normalizeRiskPolicyVersion(input.RiskPolicyVersion), normalizeRiskEvidenceQuality(input.RiskEvidenceQuality),
 	).Scan(&session.ID, &session.SessionType, &session.DeviceName, &session.CreatedAt, &session.LastSeenAt, &session.ExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DeviceSession{}, ErrInvalidCredentials
+	}
 	session.Current = true
 	return session, err
 }
 
 func (s *PostgresStore) FindUserBySession(ctx context.Context, tokenHash string, now time.Time) (User, error) {
+	return s.findUserBySession(ctx, tokenHash, now, false)
+}
+
+func (s *PostgresStore) FindUserBySessionForReauthentication(ctx context.Context, tokenHash string, now time.Time) (User, error) {
+	return s.findUserBySession(ctx, tokenHash, now, true)
+}
+
+func (s *PostgresStore) findUserBySession(ctx context.Context, tokenHash string, now time.Time, allowLocked bool) (User, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT
   u.id::text,
@@ -94,7 +181,13 @@ SELECT
   t.code,
   u.username,
   u.display_name,
-  u.status,
+	u.status,
+	s.session_type,
+	s.auth_level,
+	s.reauthenticated_at,
+	s.risk_level,
+	s.risk_action,
+	s.risk_policy_version,
   COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}') AS roles,
   COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}') AS permissions,
   COALESCE(jsonb_object_agg(r.code, ur.data_scope) FILTER (WHERE r.code IS NOT NULL), '{}') AS data_scope
@@ -111,14 +204,16 @@ WHERE s.token_hash = $1
   AND t.status = 'active'
   AND t.deleted_at IS NULL
   AND u.deleted_at IS NULL
-GROUP BY u.id, t.code
-`, tokenHash, now)
+  AND s.security_epoch = u.security_epoch
+	AND ($3 OR s.locked_at IS NULL)
+GROUP BY u.id, t.code, s.session_type, s.auth_level, s.reauthenticated_at, s.risk_level, s.risk_action, s.risk_policy_version
+`, tokenHash, now, allowLocked)
 
 	var user User
 	var roles []string
 	var permissions []string
 	var dataScopeRaw []byte
-	if err := row.Scan(&user.ID, &user.TenantID, &user.TenantCode, &user.Username, &user.DisplayName, &user.Status, pqArray(&roles), pqArray(&permissions), &dataScopeRaw); err != nil {
+	if err := row.Scan(&user.ID, &user.TenantID, &user.TenantCode, &user.Username, &user.DisplayName, &user.Status, &user.CurrentSessionType, &user.CurrentAuthLevel, &user.ReauthenticatedAt, &user.CurrentRiskLevel, &user.CurrentRiskAction, &user.RiskPolicyVersion, pqArray(&roles), pqArray(&permissions), &dataScopeRaw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, ErrUnauthenticated
 		}
@@ -141,6 +236,203 @@ WHERE token_hash = $1
 		sessionTouchFailureLogger.Warn(ctx, "auth_session_touch_failed", map[string]any{"error": err.Error()})
 	}
 	return user, nil
+}
+
+func (s *PostgresStore) LoadLoginRiskContext(ctx context.Context, request LoginRiskContextRequest) (LoginRiskContext, error) {
+	now := request.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	var result LoginRiskContext
+	var assuranceLevel int
+	err := s.db.QueryRowContext(ctx, `
+WITH recent_login AS (
+  SELECT user_agent_hash, ip_prefix
+  FROM auth_risk_event
+  WHERE tenant_id=$1::uuid
+    AND user_id=$2::uuid
+    AND purpose='login'
+    AND occurred_at >= $6::timestamptz - interval '180 days'
+  ORDER BY occurred_at DESC
+  LIMIT 20
+)
+SELECT
+  (SELECT count(*) FROM recent_login),
+  COALESCE((SELECT bool_or(user_agent_hash=$4 AND $4<>'') FROM recent_login), false),
+  COALESCE((SELECT bool_or(ip_prefix=$5 AND $5<>'') FROM recent_login), false),
+  (SELECT count(*) FROM audit_log
+   WHERE tenant_id=$1::uuid AND actor_id=$2::uuid
+     AND action IN ('auth.login_failed', 'auth.login_rate_limited')
+     AND created_at >= $6::timestamptz - interval '15 minutes'),
+  EXISTS (
+    SELECT 1 FROM auth_recovery
+    WHERE tenant_id=$1::uuid AND user_id=$2::uuid
+      AND used_at IS NOT NULL AND used_at >= $6::timestamptz - interval '24 hours'
+  ),
+  COALESCE((
+    SELECT assurance_level FROM auth_trusted_device
+    WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND token_hash=$3
+      AND revoked_at IS NULL AND expires_at>$6::timestamptz
+    LIMIT 1
+  ), 0)
+`, request.TenantID, request.UserID, request.DeviceTokenHash, request.UserAgentHash, request.IPPrefix, now).Scan(
+		&result.PriorSuccessfulLogins, &result.KnownUserAgent, &result.KnownNetwork,
+		&result.RecentFailures, &result.RecentRecovery, &assuranceLevel,
+	)
+	if err != nil {
+		return LoginRiskContext{}, err
+	}
+	result.KnownDevice = assuranceLevel >= 1
+	result.TrustedDevice = assuranceLevel >= 2
+	return result, nil
+}
+
+func (s *PostgresStore) RecordRiskEvent(ctx context.Context, event RiskEvent) error {
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = time.Now().UTC()
+	}
+	if event.ReasonCodes == nil {
+		event.ReasonCodes = []string{}
+	}
+	if event.FamilyScores == nil {
+		event.FamilyScores = map[string]int{}
+	}
+	reasonCodes, err := json.Marshal(event.ReasonCodes)
+	if err != nil {
+		return err
+	}
+	familyScores, err := json.Marshal(event.FamilyScores)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO auth_risk_event (
+  tenant_id, user_id, session_id, purpose, risk_level, decision_action, risk_score,
+  reason_codes, family_scores, evidence_quality, policy_version, user_agent_hash,
+  ip_prefix, device_recognized, device_trusted, occurred_at
+)
+VALUES ($1::uuid,$2::uuid,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14,$15,$16)
+`, event.TenantID, event.UserID, event.SessionID, event.Purpose, normalizeRiskLevel(event.Level), normalizeRiskAction(event.Action),
+		max(0, min(event.Score, 100)), string(reasonCodes), string(familyScores), event.EvidenceQuality, event.PolicyVersion,
+		event.UserAgentHash, event.IPPrefix, event.DeviceRecognized, event.DeviceTrusted, event.OccurredAt); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM auth_risk_event target
+WHERE (target.tenant_id=$1::uuid AND target.user_id=$2::uuid AND target.occurred_at < $3::timestamptz - interval '180 days')
+   OR target.id IN (
+     SELECT id FROM auth_risk_event
+     WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND purpose='login'
+     ORDER BY occurred_at DESC, id DESC
+     OFFSET 20
+   )
+`, event.TenantID, event.UserID, event.OccurredAt); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *PostgresStore) StoreObservedDevice(ctx context.Context, input ObservedDeviceInput) error {
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	assuranceLevel := max(1, min(input.AssuranceLevel, 3))
+	var id string
+	err := s.db.QueryRowContext(ctx, `
+INSERT INTO auth_trusted_device (
+  tenant_id, user_id, token_hash, assurance_level, trust_basis, user_agent_hash,
+  last_ip_prefix, last_seen_at, expires_at, trusted_at
+)
+VALUES (
+  $1::uuid,$2::uuid,$3,$4::smallint,$5,$6,$7,$8::timestamptz,$9::timestamptz,
+  CASE WHEN $4::smallint>=2 THEN $8::timestamptz ELSE NULL END
+)
+ON CONFLICT (token_hash) DO UPDATE SET
+  user_agent_hash=EXCLUDED.user_agent_hash,
+  last_ip_prefix=EXCLUDED.last_ip_prefix,
+  last_seen_at=EXCLUDED.last_seen_at,
+  expires_at=GREATEST(auth_trusted_device.expires_at, EXCLUDED.expires_at),
+  assurance_level=GREATEST(auth_trusted_device.assurance_level, EXCLUDED.assurance_level),
+  trust_basis=CASE WHEN EXCLUDED.assurance_level>auth_trusted_device.assurance_level THEN EXCLUDED.trust_basis ELSE auth_trusted_device.trust_basis END,
+  trusted_at=CASE WHEN EXCLUDED.assurance_level>=2 THEN COALESCE(auth_trusted_device.trusted_at, EXCLUDED.trusted_at) ELSE auth_trusted_device.trusted_at END,
+  updated_at=EXCLUDED.last_seen_at
+WHERE auth_trusted_device.tenant_id=EXCLUDED.tenant_id
+  AND auth_trusted_device.user_id=EXCLUDED.user_id
+  AND auth_trusted_device.revoked_at IS NULL
+RETURNING id::text
+`, input.TenantID, input.UserID, input.TokenHash, assuranceLevel, input.TrustBasis, input.UserAgentHash,
+		input.IPPrefix, now, input.ExpiresAt).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrForbidden
+	}
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+DELETE FROM auth_trusted_device
+WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND expires_at<=$3
+`, input.TenantID, input.UserID, now)
+	return err
+}
+
+func (s *PostgresStore) LockSession(ctx context.Context, tenantID string, userID string, tokenHash string, now time.Time) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE auth_session s
+SET locked_at = COALESCE(locked_at, $4), updated_at = $4
+FROM app_user u, tenant t
+WHERE s.tenant_id = $1::uuid
+  AND s.user_id = $2::uuid
+  AND s.token_hash = $3
+  AND s.session_type = 'public_device'
+  AND s.revoked_at IS NULL
+  AND s.expires_at > $4
+  AND u.tenant_id = s.tenant_id
+  AND u.id = s.user_id
+  AND u.status = 'active'
+  AND u.deleted_at IS NULL
+  AND u.security_epoch = s.security_epoch
+  AND t.id = u.tenant_id
+  AND t.status = 'active'
+  AND t.deleted_at IS NULL
+`, tenantID, userID, tokenHash, now)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func (s *PostgresStore) MarkSessionReauthenticated(ctx context.Context, tenantID string, userID string, tokenHash string, startedAt time.Time, now time.Time) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE auth_session s
+SET reauthenticated_at = $4, locked_at = NULL, last_seen_at = $4, updated_at = $4
+FROM app_user u, tenant t
+WHERE s.tenant_id = $1::uuid
+  AND s.user_id = $2::uuid
+  AND s.token_hash = $3
+  AND s.revoked_at IS NULL
+  AND s.expires_at > $4
+  AND (s.locked_at IS NULL OR s.locked_at <= $5)
+  AND u.tenant_id = s.tenant_id
+  AND u.id = s.user_id
+  AND u.status = 'active'
+  AND u.deleted_at IS NULL
+  AND u.security_epoch = s.security_epoch
+  AND t.id = u.tenant_id
+  AND t.status = 'active'
+  AND t.deleted_at IS NULL
+`, tenantID, userID, tokenHash, now, startedAt)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
 }
 
 func (s *PostgresStore) ResolveAccessScope(ctx context.Context, user User) (AccessScope, error) {
@@ -288,7 +580,12 @@ WHERE tenant_id = $1
 }
 
 func (s *PostgresStore) RevokeAllSessions(ctx context.Context, tenantID string, userID string, reason string) (int, error) {
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 UPDATE auth_session
 SET revoked_at = now(), revoke_reason = NULLIF($3, ''), updated_at = now()
 WHERE tenant_id = $1
@@ -299,7 +596,20 @@ WHERE tenant_id = $1
 		return 0, err
 	}
 	affected, err := result.RowsAffected()
-	return int(affected), err
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE auth_trusted_device
+SET revoked_at=now(), updated_at=now()
+WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND revoked_at IS NULL
+`, tenantID, userID); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(affected), nil
 }
 
 func (s *PostgresStore) UpdatePasswordAndRevokeSessions(ctx context.Context, tenantID, userID, expectedPasswordHash, newPasswordHash string) (bool, int, error) {
@@ -310,7 +620,7 @@ func (s *PostgresStore) UpdatePasswordAndRevokeSessions(ctx context.Context, ten
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `
 UPDATE app_user
-SET password_hash=$4, updated_at=now()
+SET password_hash=$4, password_changed_at=now(), security_epoch=security_epoch+1, updated_at=now()
 WHERE tenant_id=$1 AND id=$2 AND password_hash=$3 AND status='active' AND deleted_at IS NULL
 `, tenantID, userID, expectedPasswordHash, newPasswordHash)
 	if err != nil {
@@ -330,6 +640,13 @@ WHERE tenant_id=$1 AND user_id=$2 AND revoked_at IS NULL
 	}
 	revoked, err := result.RowsAffected()
 	if err != nil {
+		return false, 0, err
+	}
+	if _, err = tx.ExecContext(ctx, `
+UPDATE auth_trusted_device
+SET revoked_at=now(), updated_at=now()
+WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND revoked_at IS NULL
+`, tenantID, userID); err != nil {
 		return false, 0, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -557,14 +874,17 @@ func (s *PostgresStore) ListManagedUsers(ctx context.Context, tenantID string, f
 	rows, err := s.db.QueryContext(ctx, `
 SELECT u.id::text, u.username, u.display_name, u.status,
        COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}'),
-	   COALESCE(u.school_id::text, ''),
+	   COALESCE(u.school_id::text, ''), COALESCE(u.phone_normalized, ''), COALESCE(u.employee_no, ''),
+	   u.activated_at, u.last_login_at,
        u.created_at
 FROM app_user u
 LEFT JOIN user_role ur ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id AND ur.deleted_at IS NULL
 LEFT JOIN role r ON r.tenant_id = u.tenant_id AND r.id = ur.role_id AND r.deleted_at IS NULL
 WHERE u.tenant_id = $1::uuid AND u.deleted_at IS NULL
   AND ($2 = '' OR u.id::text = $2)
-  AND ($3 = '' OR u.username ILIKE '%' || $3 || '%' OR u.display_name ILIKE '%' || $3 || '%')
+  AND ($3 = '' OR u.username ILIKE '%' || $3 || '%' OR u.display_name ILIKE '%' || $3 || '%'
+       OR COALESCE(u.phone_normalized, '') ILIKE '%' || $3 || '%'
+       OR COALESCE(u.employee_no, '') ILIKE '%' || $3 || '%')
   AND ($4 = '' OR EXISTS (
     SELECT 1 FROM user_role fur JOIN role fr ON fr.tenant_id=fur.tenant_id AND fr.id=fur.role_id AND fr.deleted_at IS NULL
     WHERE fur.tenant_id=u.tenant_id AND fur.user_id=u.id AND fur.deleted_at IS NULL AND fr.code=$4
@@ -582,9 +902,11 @@ LIMIT NULLIF($7, 0)
 	out := []ManagedUser{}
 	for rows.Next() {
 		var user ManagedUser
-		if err := rows.Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, pqArray(&user.Roles), &user.SchoolID, &user.CreatedAt); err != nil {
+		var phone string
+		if err := rows.Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, pqArray(&user.Roles), &user.SchoolID, &phone, &user.EmployeeNo, &user.ActivatedAt, &user.LastLoginAt, &user.CreatedAt); err != nil {
 			return nil, err
 		}
+		user.PhoneMasked = MaskPhone(phone)
 		out = append(out, user)
 	}
 	return out, rows.Err()
@@ -684,13 +1006,23 @@ WHERE tenant_id=$1::uuid AND id::text=ANY(string_to_array($2, ',')) AND deleted_
 	}
 
 	var user ManagedUser
+	status := "active"
+	var activatedAt any = time.Now().UTC()
+	if input.ActivationTokenHash != "" {
+		status = "invited"
+		activatedAt = nil
+	}
 	err = tx.QueryRowContext(ctx, `
-INSERT INTO app_user (tenant_id, school_id, username, display_name, password_hash, status)
-VALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4, $5, 'active')
-RETURNING id::text, username, display_name, status, COALESCE(school_id::text,''), created_at
-`, actor.TenantID, schoolID, input.Username, input.DisplayName, passwordHash).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, &user.SchoolID, &user.CreatedAt)
+INSERT INTO app_user (tenant_id, school_id, username, display_name, password_hash, phone_normalized, employee_no, status, activated_at, password_changed_at)
+VALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), $8, $9, $9)
+RETURNING id::text, username, display_name, status, COALESCE(school_id::text,''), activated_at, created_at
+`, actor.TenantID, schoolID, input.Username, input.DisplayName, passwordHash, input.Phone, input.EmployeeNo, status, activatedAt).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, &user.SchoolID, &user.ActivatedAt, &user.CreatedAt)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "unique") || strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+		lowerError := strings.ToLower(err.Error())
+		if strings.Contains(lowerError, "uq_app_user_tenant_phone") || strings.Contains(lowerError, "uq_app_user_tenant_employee_no") {
+			return ManagedUser{}, ErrIdentityExists
+		}
+		if strings.Contains(lowerError, "unique") || strings.Contains(lowerError, "duplicate") {
 			return ManagedUser{}, ErrUsernameExists
 		}
 		return ManagedUser{}, err
@@ -710,11 +1042,331 @@ ON CONFLICT (tenant_id, teacher_id, class_id) DO UPDATE SET deleted_at=NULL, upd
 			return ManagedUser{}, err
 		}
 	}
+	if input.ActivationTokenHash != "" {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO auth_activation (tenant_id, user_id, token_hash, expires_at)
+VALUES ($1::uuid, $2::uuid, $3, $4)
+`, actor.TenantID, user.ID, input.ActivationTokenHash, input.ActivationExpiresAt); err != nil {
+			return ManagedUser{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return ManagedUser{}, err
 	}
 	user.Roles = []string{input.RoleCode}
+	user.PhoneMasked = MaskPhone(input.Phone)
+	user.EmployeeNo = input.EmployeeNo
 	return user, nil
+}
+
+func (s *PostgresStore) FindActivation(ctx context.Context, tokenHash string, now time.Time) (ActivationPreview, error) {
+	var preview ActivationPreview
+	var phone string
+	err := s.db.QueryRowContext(ctx, `
+SELECT u.display_name, t.code, COALESCE(u.school_id::text, ''), COALESCE(u.phone_normalized, ''), activation.expires_at
+FROM auth_activation activation
+JOIN app_user u ON u.tenant_id=activation.tenant_id AND u.id=activation.user_id
+JOIN tenant t ON t.id=activation.tenant_id
+WHERE activation.token_hash=$1
+  AND activation.used_at IS NULL
+  AND activation.expires_at>$2
+  AND u.status='invited'
+  AND u.deleted_at IS NULL
+  AND t.status='active'
+  AND t.deleted_at IS NULL
+`, tokenHash, now).Scan(&preview.DisplayName, &preview.TenantCode, &preview.SchoolID, &phone, &preview.ExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ActivationPreview{}, ErrActivationInvalid
+	}
+	if err != nil {
+		return ActivationPreview{}, err
+	}
+	preview.PhoneMasked = MaskPhone(phone)
+	return preview, nil
+}
+
+func (s *PostgresStore) CreateActivation(ctx context.Context, actor User, actorScope AccessScope, userID, tokenHash string, expiresAt time.Time) (ActivationPreview, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ActivationPreview{}, err
+	}
+	defer tx.Rollback()
+	var targetID, displayName, tenantCode, schoolID, phone string
+	err = tx.QueryRowContext(ctx, `
+SELECT u.id::text, u.display_name, t.code, COALESCE(u.school_id::text, ''), COALESCE(u.phone_normalized, '')
+FROM app_user u
+JOIN tenant t ON t.id=u.tenant_id
+WHERE u.tenant_id=$1::uuid AND u.id::text=$2 AND u.status='invited' AND u.deleted_at IS NULL
+FOR UPDATE OF u
+`, actor.TenantID, userID).Scan(&targetID, &displayName, &tenantCode, &schoolID, &phone)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ActivationPreview{}, ErrManagedUserNotFound
+	}
+	if err != nil {
+		return ActivationPreview{}, err
+	}
+	if targetID == actor.ID {
+		return ActivationPreview{}, ErrUserStatusForbidden
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT r.code
+FROM user_role ur
+JOIN role r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id AND r.deleted_at IS NULL
+WHERE ur.tenant_id=$1::uuid AND ur.user_id=$2::uuid AND ur.deleted_at IS NULL
+`, actor.TenantID, targetID)
+	if err != nil {
+		return ActivationPreview{}, err
+	}
+	roles := []string{}
+	for rows.Next() {
+		var role string
+		if err := rows.Scan(&role); err != nil {
+			rows.Close()
+			return ActivationPreview{}, err
+		}
+		roles = append(roles, role)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ActivationPreview{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return ActivationPreview{}, err
+	}
+	if !CanManageUserRoles(actor, roles) {
+		return ActivationPreview{}, ErrUserStatusForbidden
+	}
+	if !actorScope.TenantWide && (schoolID == "" || !actorScope.AllowsSchool(schoolID)) {
+		return ActivationPreview{}, ErrOrganizationScope
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE auth_activation SET used_at=now(), updated_at=now()
+WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND used_at IS NULL
+`, actor.TenantID, targetID); err != nil {
+		return ActivationPreview{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO auth_activation (tenant_id, user_id, token_hash, expires_at)
+VALUES ($1::uuid, $2::uuid, $3, $4)
+`, actor.TenantID, targetID, tokenHash, expiresAt); err != nil {
+		return ActivationPreview{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ActivationPreview{}, err
+	}
+	return ActivationPreview{DisplayName: displayName, TenantCode: tenantCode, SchoolID: schoolID, PhoneMasked: MaskPhone(phone), ExpiresAt: expiresAt}, nil
+}
+
+func (s *PostgresStore) ActivateUser(ctx context.Context, tokenHash string, passwordHash string, now time.Time) (ActivationResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ActivationResult{}, err
+	}
+	defer tx.Rollback()
+	var tenantID, userID string
+	err = tx.QueryRowContext(ctx, `
+SELECT activation.tenant_id::text, activation.user_id::text
+FROM auth_activation activation
+JOIN app_user u ON u.tenant_id=activation.tenant_id AND u.id=activation.user_id
+JOIN tenant t ON t.id=activation.tenant_id
+WHERE activation.token_hash=$1
+  AND activation.used_at IS NULL
+  AND activation.expires_at>$2
+  AND u.status='invited'
+  AND u.deleted_at IS NULL
+  AND t.status='active'
+  AND t.deleted_at IS NULL
+FOR UPDATE OF activation, u
+`, tokenHash, now).Scan(&tenantID, &userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ActivationResult{}, ErrActivationInvalid
+	}
+	if err != nil {
+		return ActivationResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE app_user
+SET status='active', password_hash=$3, activated_at=$4, password_changed_at=$4,
+    security_epoch=security_epoch+1, updated_at=$4
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='invited'
+`, tenantID, userID, passwordHash, now); err != nil {
+		return ActivationResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE auth_activation SET used_at=$2, updated_at=$2 WHERE token_hash=$1 AND used_at IS NULL
+`, tokenHash, now); err != nil {
+		return ActivationResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE auth_session
+SET revoked_at=$3, revoke_reason='account_activated', updated_at=$3
+WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND revoked_at IS NULL
+`, tenantID, userID, now); err != nil {
+		return ActivationResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ActivationResult{}, err
+	}
+	return ActivationResult{TenantID: tenantID, UserID: userID}, nil
+}
+
+func (s *PostgresStore) CreateRecovery(ctx context.Context, actor User, actorScope AccessScope, userID, tokenHash string, expiresAt time.Time) (RecoveryPreview, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RecoveryPreview{}, err
+	}
+	defer tx.Rollback()
+	var targetID, displayName, tenantCode, schoolID, phone string
+	var securityEpoch int64
+	err = tx.QueryRowContext(ctx, `
+SELECT u.id::text, u.display_name, t.code, COALESCE(u.school_id::text, ''), COALESCE(u.phone_normalized, ''), u.security_epoch
+FROM app_user u
+JOIN tenant t ON t.id=u.tenant_id
+WHERE u.tenant_id=$1::uuid AND u.id::text=$2 AND u.status='active' AND u.deleted_at IS NULL
+FOR UPDATE OF u
+`, actor.TenantID, userID).Scan(&targetID, &displayName, &tenantCode, &schoolID, &phone, &securityEpoch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RecoveryPreview{}, ErrManagedUserNotFound
+	}
+	if err != nil {
+		return RecoveryPreview{}, err
+	}
+	if targetID == actor.ID {
+		return RecoveryPreview{}, ErrUserStatusForbidden
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT r.code
+FROM user_role ur
+JOIN role r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id AND r.deleted_at IS NULL
+WHERE ur.tenant_id=$1::uuid AND ur.user_id=$2::uuid AND ur.deleted_at IS NULL
+`, actor.TenantID, targetID)
+	if err != nil {
+		return RecoveryPreview{}, err
+	}
+	roles := []string{}
+	for rows.Next() {
+		var role string
+		if err := rows.Scan(&role); err != nil {
+			rows.Close()
+			return RecoveryPreview{}, err
+		}
+		roles = append(roles, role)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return RecoveryPreview{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return RecoveryPreview{}, err
+	}
+	if !CanManageUserRoles(actor, roles) {
+		return RecoveryPreview{}, ErrUserStatusForbidden
+	}
+	if !actorScope.TenantWide && (schoolID == "" || !actorScope.AllowsSchool(schoolID)) {
+		return RecoveryPreview{}, ErrOrganizationScope
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE auth_recovery SET used_at=now(), updated_at=now()
+WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND used_at IS NULL
+`, actor.TenantID, targetID); err != nil {
+		return RecoveryPreview{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO auth_recovery (tenant_id, user_id, channel, token_hash, expires_at, created_by, security_epoch)
+VALUES ($1::uuid, $2::uuid, 'admin_assisted', $3, $4, $5::uuid, $6)
+`, actor.TenantID, targetID, tokenHash, expiresAt, actor.ID, securityEpoch); err != nil {
+		return RecoveryPreview{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return RecoveryPreview{}, err
+	}
+	return RecoveryPreview{DisplayName: displayName, TenantCode: tenantCode, PhoneMasked: MaskPhone(phone), ExpiresAt: expiresAt}, nil
+}
+
+func (s *PostgresStore) FindRecovery(ctx context.Context, tokenHash string, now time.Time) (RecoveryPreview, error) {
+	var preview RecoveryPreview
+	var phone string
+	err := s.db.QueryRowContext(ctx, `
+SELECT u.display_name, t.code, COALESCE(u.phone_normalized, ''), recovery.expires_at
+FROM auth_recovery recovery
+JOIN app_user u ON u.tenant_id=recovery.tenant_id AND u.id=recovery.user_id
+JOIN tenant t ON t.id=recovery.tenant_id
+WHERE recovery.token_hash=$1
+  AND recovery.used_at IS NULL
+  AND recovery.expires_at>$2
+  AND recovery.security_epoch=u.security_epoch
+  AND u.status='active'
+  AND u.deleted_at IS NULL
+  AND t.status='active'
+  AND t.deleted_at IS NULL
+`, tokenHash, now).Scan(&preview.DisplayName, &preview.TenantCode, &phone, &preview.ExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RecoveryPreview{}, ErrRecoveryInvalid
+	}
+	if err != nil {
+		return RecoveryPreview{}, err
+	}
+	preview.PhoneMasked = MaskPhone(phone)
+	return preview, nil
+}
+
+func (s *PostgresStore) CompleteRecovery(ctx context.Context, tokenHash string, passwordHash string, now time.Time) (RecoveryResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RecoveryResult{}, err
+	}
+	defer tx.Rollback()
+	var tenantID, userID string
+	err = tx.QueryRowContext(ctx, `
+SELECT recovery.tenant_id::text, recovery.user_id::text
+FROM auth_recovery recovery
+JOIN app_user u ON u.tenant_id=recovery.tenant_id AND u.id=recovery.user_id
+JOIN tenant t ON t.id=recovery.tenant_id
+WHERE recovery.token_hash=$1
+  AND recovery.used_at IS NULL
+  AND recovery.expires_at>$2
+  AND recovery.security_epoch=u.security_epoch
+  AND u.status='active'
+  AND u.deleted_at IS NULL
+  AND t.status='active'
+  AND t.deleted_at IS NULL
+FOR UPDATE OF recovery, u
+`, tokenHash, now).Scan(&tenantID, &userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RecoveryResult{}, ErrRecoveryInvalid
+	}
+	if err != nil {
+		return RecoveryResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE app_user
+SET password_hash=$3, password_changed_at=$4, security_epoch=security_epoch+1, updated_at=$4
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='active'
+`, tenantID, userID, passwordHash, now); err != nil {
+		return RecoveryResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE auth_recovery SET used_at=$2, updated_at=$2 WHERE token_hash=$1 AND used_at IS NULL`, tokenHash, now); err != nil {
+		return RecoveryResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE auth_session
+SET revoked_at=$3, revoke_reason='credential_recovery', updated_at=$3
+WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND revoked_at IS NULL
+	`, tenantID, userID, now); err != nil {
+		return RecoveryResult{}, err
+	}
+	scopedContext := WithUser(ctx, User{TenantID: tenantID})
+	if _, err := tx.ExecContext(scopedContext, `
+UPDATE auth_trusted_device
+SET revoked_at=$3, updated_at=$3
+WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND revoked_at IS NULL
+`, tenantID, userID, now); err != nil {
+		return RecoveryResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return RecoveryResult{}, err
+	}
+	return RecoveryResult{TenantID: tenantID, UserID: userID}, nil
 }
 
 func (s *PostgresStore) UpdateManagedUserStatus(ctx context.Context, actor User, actorScope AccessScope, userID string, status string) (ManagedUser, string, error) {
@@ -726,11 +1378,13 @@ func (s *PostgresStore) UpdateManagedUserStatus(ctx context.Context, actor User,
 
 	var user ManagedUser
 	err = tx.QueryRowContext(ctx, `
-SELECT id::text, username, display_name, status, COALESCE(school_id::text, ''), created_at
+SELECT id::text, username, display_name, status, COALESCE(school_id::text, ''),
+       COALESCE(phone_normalized, ''), COALESCE(employee_no, ''), activated_at, last_login_at, created_at
 FROM app_user
 WHERE tenant_id=$1::uuid AND id::text=$2 AND deleted_at IS NULL
 FOR UPDATE
-`, actor.TenantID, userID).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, &user.SchoolID, &user.CreatedAt)
+`, actor.TenantID, userID).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, &user.SchoolID, &user.PhoneMasked, &user.EmployeeNo, &user.ActivatedAt, &user.LastLoginAt, &user.CreatedAt)
+	user.PhoneMasked = MaskPhone(user.PhoneMasked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ManagedUser{}, "", ErrManagedUserNotFound
 	}
@@ -772,8 +1426,14 @@ ORDER BY r.code
 		return ManagedUser{}, "", ErrOrganizationScope
 	}
 	previousStatus := user.Status
+	if previousStatus == "invited" {
+		return ManagedUser{}, "", ErrUserStatusForbidden
+	}
 	if previousStatus == status {
 		return user, previousStatus, nil
+	}
+	if status == "active" && previousStatus != "disabled" {
+		return ManagedUser{}, "", ErrUserStatusForbidden
 	}
 	if status == "disabled" && slices.Contains(user.Roles, "school_admin") {
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, actor.TenantID+"|"+user.SchoolID+"|school-admin-status"); err != nil {
@@ -794,8 +1454,30 @@ WHERE u.tenant_id=$1::uuid AND COALESCE(u.school_id::text, '')=$2
 			return ManagedUser{}, "", ErrLastSchoolAdmin
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE app_user SET status=$3, updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`, actor.TenantID, user.ID, status); err != nil {
+	if _, err := tx.ExecContext(ctx, `
+UPDATE app_user
+SET status=$3,
+    security_epoch=CASE WHEN $3='disabled' THEN security_epoch+1 ELSE security_epoch END,
+    updated_at=now()
+WHERE tenant_id=$1::uuid AND id=$2::uuid
+`, actor.TenantID, user.ID, status); err != nil {
 		return ManagedUser{}, "", err
+	}
+	if status == "disabled" {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE auth_session
+SET revoked_at=now(), revoke_reason='user_disabled', updated_at=now()
+WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND revoked_at IS NULL
+`, actor.TenantID, user.ID); err != nil {
+			return ManagedUser{}, "", err
+		}
+		if _, err := tx.ExecContext(ctx, `
+UPDATE auth_trusted_device
+SET revoked_at=now(), updated_at=now()
+WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND revoked_at IS NULL
+`, actor.TenantID, user.ID); err != nil {
+			return ManagedUser{}, "", err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return ManagedUser{}, "", err

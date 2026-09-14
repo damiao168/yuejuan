@@ -440,25 +440,30 @@ type AnswerKeyInput struct {
 }
 
 type Question struct {
-	ID                     string                 `json:"id"`
-	TenantID               string                 `json:"tenant_id"`
-	ExamID                 string                 `json:"exam_id"`
-	ExamPaperID            string                 `json:"exam_paper_id,omitempty"`
-	QuestionNo             string                 `json:"question_no"`
-	QuestionType           string                 `json:"question_type"`
-	Score                  float64                `json:"score"`
-	Stem                   string                 `json:"stem,omitempty"`
-	KnowledgePoints        []string               `json:"knowledge_points"`
-	AnswerArea             map[string]any         `json:"answer_area,omitempty"`
-	SortOrder              int                    `json:"sort_order"`
-	Status                 string                 `json:"status"`
-	AssessmentArchetype    string                 `json:"assessment_archetype,omitempty"`
-	PaperImportID          string                 `json:"paper_import_id,omitempty"`
-	PaperImportCandidateID string                 `json:"paper_import_candidate_id,omitempty"`
-	PaperImportSourceRefs  []PaperImportSourceRef `json:"paper_import_source_refs,omitempty"`
-	AnswerKey              *AnswerKey             `json:"answer_key,omitempty"`
-	Solution               *QuestionSolution      `json:"solution,omitempty"`
-	Rubric                 *Rubric                `json:"rubric,omitempty"`
+	SourceType              string                 `json:"source_type,omitempty"`
+	SourceBankItemID        string                 `json:"source_bank_item_id,omitempty"`
+	SourceBankItemVersionID string                 `json:"source_bank_item_version_id,omitempty"`
+	SourceContentHash       string                 `json:"source_content_hash,omitempty"`
+	BankContent             map[string]any         `json:"bank_content,omitempty"`
+	ID                      string                 `json:"id"`
+	TenantID                string                 `json:"tenant_id"`
+	ExamID                  string                 `json:"exam_id"`
+	ExamPaperID             string                 `json:"exam_paper_id,omitempty"`
+	QuestionNo              string                 `json:"question_no"`
+	QuestionType            string                 `json:"question_type"`
+	Score                   float64                `json:"score"`
+	Stem                    string                 `json:"stem,omitempty"`
+	KnowledgePoints         []string               `json:"knowledge_points"`
+	AnswerArea              map[string]any         `json:"answer_area,omitempty"`
+	SortOrder               int                    `json:"sort_order"`
+	Status                  string                 `json:"status"`
+	AssessmentArchetype     string                 `json:"assessment_archetype,omitempty"`
+	PaperImportID           string                 `json:"paper_import_id,omitempty"`
+	PaperImportCandidateID  string                 `json:"paper_import_candidate_id,omitempty"`
+	PaperImportSourceRefs   []PaperImportSourceRef `json:"paper_import_source_refs,omitempty"`
+	AnswerKey               *AnswerKey             `json:"answer_key,omitempty"`
+	Solution                *QuestionSolution      `json:"solution,omitempty"`
+	Rubric                  *Rubric                `json:"rubric,omitempty"`
 }
 
 type QuestionSolution struct {
@@ -662,12 +667,14 @@ type ReadinessCheck struct {
 }
 
 type ReadinessResult struct {
-	Ready             bool             `json:"ready"`
-	Confirmed         bool             `json:"confirmed"`
-	ConfigurationHash string           `json:"configuration_hash"`
-	Checks            []ReadinessCheck `json:"checks"`
-	ConfirmedAt       *time.Time       `json:"confirmed_at,omitempty"`
-	ConfirmedBy       string           `json:"confirmed_by,omitempty"`
+	Ready                   bool             `json:"ready"`
+	Confirmed               bool             `json:"confirmed"`
+	ConfigurationHash       string           `json:"configuration_hash"`
+	SnapshotID              string           `json:"snapshot_id,omitempty"`
+	ImportSnapshotAvailable bool             `json:"import_snapshot_available"`
+	Checks                  []ReadinessCheck `json:"checks"`
+	ConfirmedAt             *time.Time       `json:"confirmed_at,omitempty"`
+	ConfirmedBy             string           `json:"confirmed_by,omitempty"`
 }
 
 type Store interface {

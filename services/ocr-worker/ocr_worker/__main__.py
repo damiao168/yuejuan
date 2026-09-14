@@ -7,10 +7,12 @@ from .api import APIError, AuthenticationError, EduGradeClient
 from .config import load_settings, resolve_formula_plan
 from .engine import PaddleOCREngine
 from .formula_validation import FormulaValidator
+from .math_layout import PaddleFormulaLayoutDetector
 from .math_runner import MathUnderstandingRunner, MathVerificationClient
-from .paper_formula import PaddleFormulaLayoutDetector, PaperFormulaRunner
+from .paper_formula import PaperFormulaRunner
 from .recognition_router import PaddleFormulaNetEngine, RecognitionRouter
 from .runner import OCRRunner, WorkerConfig
+from .symbolic_runner import SymbolicVerificationRunner
 
 
 def main() -> None:
@@ -63,21 +65,46 @@ def main() -> None:
     if getattr(settings, "ocr_runtime_enabled", True):
         runner = OCRRunner(api=client, engine=engine, config=worker_config)
     math_runner = None
+    symbolic_runner = None
     if getattr(settings, "math_runtime_enabled", False):
         formula_engine = None
+        formula_detector = None
         try:
             formula_engine = PaddleFormulaNetEngine(model_version=settings.formula_model_version, device=settings.device)
             formula_engine.initialize()
         except Exception:
             formula_engine = None
             log.exception("formula engine unavailable; mathematical formula regions will require human review")
+        try:
+            formula_detector = PaddleFormulaLayoutDetector(settings.formula_layout_model_version, settings.device)
+            formula_detector.initialize()
+        except Exception:
+            formula_detector = None
+            log.exception("formula layout detector unavailable; mixed mathematical regions will require human review")
         math_runner = MathUnderstandingRunner(
             api=client,
-            router=RecognitionRouter(text_engine=engine, formula_engine=formula_engine),
+            router=RecognitionRouter(
+                text_engine=engine,
+                formula_engine=formula_engine,
+                formula_detector=formula_detector,
+                formula_batch_size=getattr(settings, "formula_recognition_batch_size", None) or 4,
+                formula_max_padding=getattr(settings, "formula_max_padding_pixels", 96),
+                formula_max_padding_height_ratio=getattr(settings, "formula_max_padding_height_ratio", 0.75),
+            ),
             verifier=MathVerificationClient(settings.math_verify_base_url, settings.math_verify_token),
             config=worker_config,
         )
-        log.info("math understanding runtime ready: formula_model=%s available=%s", settings.formula_model_version, formula_engine is not None)
+        symbolic_runner = SymbolicVerificationRunner(
+            api=client, verifier=MathVerificationClient(settings.math_verify_base_url, settings.math_verify_token),
+            config=worker_config,
+        )
+        log.info(
+            "math understanding runtime ready: formula_model=%s formula_available=%s layout_model=%s layout_available=%s",
+            settings.formula_model_version,
+            formula_engine is not None,
+            settings.formula_layout_model_version,
+            formula_detector is not None,
+        )
     paper_formula_runner = None
     formula_model_lifecycle = "resident"
     formula_processed_since_start = False
@@ -142,6 +169,8 @@ def main() -> None:
             processed = runner.process_once() if runner is not None else 0
             if math_runner is not None:
                 processed += math_runner.process_once()
+            if symbolic_runner is not None:
+                processed += symbolic_runner.process_once()
             if paper_formula_runner is not None:
                 formula_processed = paper_formula_runner.process_once()
                 processed += formula_processed

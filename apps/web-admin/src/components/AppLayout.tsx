@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Avatar, Button, ConfigProvider, Drawer, Dropdown, Grid, Layout, Menu, Segmented, Space, theme, Tooltip } from "antd";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Alert, Avatar, Button, ConfigProvider, Drawer, Dropdown, Grid, Input, Layout, Menu, Modal, Segmented, Space, Tag, theme, Tooltip } from "antd";
 import { ArrowLeft, ChevronDown, Menu as MenuIcon, PanelLeft, UserRound } from "lucide-react";
 import { productIdentityLabel, type SessionUser } from "../auth/session";
 import type { AppRoute } from "../router/routes";
@@ -8,6 +8,8 @@ import { experienceLabel, type ProductExperience } from "../router/experience";
 import { workspaceLabel } from "../workspaces/registry";
 import { MockBadge } from "./MockBadge";
 import { applyReadingSize, readReadingSize } from "@edugrade/design-tokens";
+import { isPublicComputerIdle, PUBLIC_COMPUTER_IDLE_LOCK_MS } from "../auth/loginSecurity";
+import { getUserErrorMessage, RECENT_AUTH_REQUIRED_EVENT } from "../api/client";
 
 const { Header, Sider, Content } = Layout;
 const DESKTOP_NAVIGATION_WIDTH = 192;
@@ -24,6 +26,8 @@ export function AppLayout({
   onNavigate,
   onExperienceChange,
   onLogout,
+  onLockSession,
+  onReauthenticate,
   immersive = false
 }: {
   user: SessionUser;
@@ -34,6 +38,8 @@ export function AppLayout({
   onNavigate: (path: string) => void;
   onExperienceChange: (experience: ProductExperience) => void;
   onLogout: () => void;
+  onLockSession: () => Promise<void>;
+  onReauthenticate: (password: string) => Promise<void>;
   immersive?: boolean;
 }) {
   const screens = Grid.useBreakpoint();
@@ -47,6 +53,15 @@ export function AppLayout({
   const [workspaceScrollbarVisible, setWorkspaceScrollbarVisible] = useState(false);
   const [workspaceScrollbarFading, setWorkspaceScrollbarFading] = useState(false);
   const workspaceScrollbarHideTimer = useRef<number | null>(null);
+  const [workspaceLocked, setWorkspaceLocked] = useState(false);
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
+  const [lockingSession, setLockingSession] = useState(false);
+  const [unlockError, setUnlockError] = useState<string>();
+  const [stepUpOpen, setStepUpOpen] = useState(false);
+  const [stepUpPassword, setStepUpPassword] = useState("");
+  const [stepUpLoading, setStepUpLoading] = useState(false);
+  const [stepUpError, setStepUpError] = useState<string>();
   const [navigationCollapsed, setNavigationCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem(NAVIGATION_COLLAPSED_STORAGE_KEY) === "true";
@@ -65,6 +80,104 @@ export function AppLayout({
       window.clearTimeout(workspaceScrollbarHideTimer.current);
     }
   }, []);
+  useEffect(() => {
+    const requireRecentAuthentication = () => {
+      if (!stepUpOpen) {
+        setStepUpPassword("");
+        setStepUpError(undefined);
+      }
+      setStepUpOpen(true);
+    };
+    window.addEventListener(RECENT_AUTH_REQUIRED_EVENT, requireRecentAuthentication);
+    return () => window.removeEventListener(RECENT_AUTH_REQUIRED_EVENT, requireRecentAuthentication);
+  }, [stepUpOpen]);
+  useEffect(() => {
+    if (!user.publicComputer) {
+      setWorkspaceLocked(false);
+      return;
+    }
+    if (workspaceLocked) return;
+    let lastActivityAt = Date.now();
+    let timer = 0;
+    let lockTriggered = false;
+    const lockWorkspace = () => {
+      if (lockTriggered) return;
+      lockTriggered = true;
+      setStepUpOpen(false);
+      setStepUpPassword("");
+      setStepUpError(undefined);
+      setWorkspaceLocked(true);
+      setUnlockError(undefined);
+      setLockingSession(true);
+      void onLockSession()
+        .catch(() => setUnlockError("暂时无法确认服务端锁定状态，请恢复网络后重新验证或退出。"))
+        .finally(() => setLockingSession(false));
+    };
+    const checkIdle = () => {
+      if (isPublicComputerIdle(lastActivityAt)) {
+        lockWorkspace();
+        return;
+      }
+      timer = window.setTimeout(checkIdle, Math.max(1, PUBLIC_COMPUTER_IDLE_LOCK_MS - (Date.now() - lastActivityAt)));
+    };
+    const recordActivity = () => {
+      lastActivityAt = Date.now();
+      window.clearTimeout(timer);
+      timer = window.setTimeout(checkIdle, PUBLIC_COMPUTER_IDLE_LOCK_MS);
+    };
+    const checkOnReturn = () => {
+      if (document.visibilityState === "visible") checkIdle();
+    };
+    window.addEventListener("pointerdown", recordActivity);
+    window.addEventListener("keydown", recordActivity);
+    window.addEventListener("touchstart", recordActivity, { passive: true });
+    window.addEventListener("pagehide", lockWorkspace);
+    document.addEventListener("visibilitychange", checkOnReturn);
+    timer = window.setTimeout(checkIdle, PUBLIC_COMPUTER_IDLE_LOCK_MS);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pointerdown", recordActivity);
+      window.removeEventListener("keydown", recordActivity);
+      window.removeEventListener("touchstart", recordActivity);
+      window.removeEventListener("pagehide", lockWorkspace);
+      document.removeEventListener("visibilitychange", checkOnReturn);
+    };
+  }, [onLockSession, user.publicComputer, workspaceLocked]);
+  const unlockWorkspace = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!unlockPassword || unlocking || lockingSession) return;
+    setUnlocking(true);
+    setUnlockError(undefined);
+    try {
+      await onReauthenticate(unlockPassword);
+      setUnlockPassword("");
+      setWorkspaceLocked(false);
+    } catch (error) {
+      setUnlockError(getUserErrorMessage(error, "验证失败，请检查当前账号密码后重试。"));
+    } finally {
+      setUnlocking(false);
+    }
+  };
+  const completeStepUp = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!stepUpPassword || stepUpLoading) return;
+    setStepUpLoading(true);
+    setStepUpError(undefined);
+    try {
+      await onReauthenticate(stepUpPassword);
+      setStepUpPassword("");
+      setStepUpOpen(false);
+    } catch (error) {
+      setStepUpError(getUserErrorMessage(error, "验证失败，请检查当前账号密码后重试。"));
+    } finally {
+      setStepUpLoading(false);
+    }
+  };
+  const cancelStepUp = () => {
+    setStepUpOpen(false);
+    setStepUpPassword("");
+    setStepUpError(undefined);
+  };
   const showNavigationScrollbar = () => {
     if (navigationScrollbarHideTimer.current !== null) {
       window.clearTimeout(navigationScrollbarHideTimer.current);
@@ -278,6 +391,12 @@ export function AppLayout({
           </Drawer>
         ) : null}
         <Layout>
+          {user.publicComputer ? (
+            <div className="public-computer-banner" role="status">
+              <span><Tag color="orange">公共电脑</Tag>请勿让他人使用当前会话，离开前退出并清理本机数据。</span>
+              <Button danger size="small" onClick={onLogout}>立即退出</Button>
+            </div>
+          ) : null}
           {immersive ? (
             <Header className="topbar immersive-topbar">
               <div className="topbar-left">
@@ -315,6 +434,58 @@ export function AppLayout({
             {children}
           </Content>
         </Layout>
+        <Modal
+          rootClassName="public-computer-lock-modal"
+          open={user.publicComputer && workspaceLocked}
+          title="公共电脑已锁定"
+          closable={false}
+          keyboard={false}
+          maskClosable={false}
+          footer={null}
+          width={420}
+        >
+          <form className="public-computer-unlock" onSubmit={unlockWorkspace}>
+            <p>为保护未完成的阅卷内容，工作区已在 15 分钟无操作后锁定。请使用 <strong>{user.displayName || user.username}</strong> 的密码解锁。</p>
+            {unlockError ? <Alert type="error" showIcon message={unlockError} /> : null}
+            <Input.Password
+              value={unlockPassword}
+              onChange={(event) => setUnlockPassword(event.target.value)}
+              placeholder="当前账号密码"
+              autoComplete="current-password"
+              autoFocus
+            />
+            <div className="public-computer-unlock-actions">
+              <Button danger onClick={onLogout}>退出并清理</Button>
+              <Button type="primary" htmlType="submit" loading={unlocking || lockingSession} disabled={!unlockPassword || lockingSession}>解锁</Button>
+            </div>
+          </form>
+        </Modal>
+        <Modal
+          open={stepUpOpen && !workspaceLocked}
+          title="验证后继续敏感操作"
+          closable={!stepUpLoading}
+          keyboard={!stepUpLoading}
+          maskClosable={false}
+          footer={null}
+          width={420}
+          onCancel={cancelStepUp}
+        >
+          <form className="public-computer-unlock" onSubmit={completeStepUp}>
+            <p>本次操作会影响账号、成绩、审计数据或系统配置。请使用 <strong>{user.displayName || user.username}</strong> 的当前密码验证身份；验证成功后，再重新执行刚才的操作。</p>
+            {stepUpError ? <Alert type="error" showIcon message={stepUpError} /> : null}
+            <Input.Password
+              value={stepUpPassword}
+              onChange={(event) => setStepUpPassword(event.target.value)}
+              placeholder="当前账号密码"
+              autoComplete="current-password"
+              autoFocus
+            />
+            <div className="public-computer-unlock-actions">
+              <Button onClick={cancelStepUp} disabled={stepUpLoading}>取消</Button>
+              <Button type="primary" htmlType="submit" loading={stepUpLoading} disabled={!stepUpPassword}>验证</Button>
+            </div>
+          </form>
+        </Modal>
       </Layout>
     </ConfigProvider>
   );

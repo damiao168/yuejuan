@@ -1,0 +1,115 @@
+import copy
+import json
+import threading
+import unittest
+from contextlib import contextmanager
+from urllib import request as urlrequest
+
+from helpers import ROOT, settings
+
+from grading_agent.app import GradingAgentApplication
+from grading_agent.server import GradingAgentHTTPServer
+
+
+def valid_math_v2_request():
+    path = ROOT / "contracts" / "grading-agent" / "v2" / "fixtures" / "valid-request.json"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["model_policy"]["model_version"] = "Qwen/Qwen3-4B-GGUF:Q4_K_M"
+    value["prompt_version"] = "subjective-governed-cn-subject-routing-v5"
+    return value
+
+
+class FakeStructuredMathModel:
+    def __init__(self):
+        self.calls = []
+
+    @contextmanager
+    def session(self, request_id):
+        self.calls.append(("session", request_id))
+        yield
+
+    def request_structured(self, request_id, messages, schema, name):
+        self.calls.append(("request_structured", request_id, name))
+        assert name == "math_criterion_candidates"
+        assert "suggested_score" not in json.dumps(schema)
+        assert messages[-1]["content"][-1]["type"] == "image_url"
+        return {
+            "criterion_candidates": [
+                {
+                    "rubric_point_id": "p1",
+                    "status": "supported",
+                    "evidence_ids": ["s1", "f1"],
+                    "confidence": 0.91,
+                    "reason_code": "semantic_alignment",
+                }
+            ],
+            "alternative_solution_candidate": False,
+            "risk_flags": [],
+        }
+
+    def ready(self):
+        return True
+
+
+class ProductionMathV2Tests(unittest.TestCase):
+    def setUp(self):
+        self.model = FakeStructuredMathModel()
+        self.settings = settings()
+        self.app = GradingAgentApplication(self.settings, model=self.model)
+
+    def test_candidate_only_inference_is_idempotent_and_score_free(self):
+        payload = valid_math_v2_request()
+        body_size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        result, replayed = self.app.grade_v2(
+            copy.deepcopy(payload),
+            payload["request_id"],
+            body_size=body_size,
+        )
+        replay, replayed_again = self.app.grade_v2(
+            copy.deepcopy(payload),
+            payload["request_id"],
+            body_size=body_size,
+        )
+        self.assertFalse(replayed)
+        self.assertTrue(replayed_again)
+        self.assertEqual(result, replay)
+        self.assertEqual(result["status"], "candidate_mapping")
+        self.assertTrue(result["needs_human_review"])
+        self.assertNotIn("suggested_score", result)
+        self.assertNotIn("max_score", result)
+        self.assertEqual(
+            sum(call[0] == "request_structured" for call in self.model.calls),
+            1,
+        )
+
+    def test_http_v2_route_returns_candidate_mapping(self):
+        server = GradingAgentHTTPServer(("127.0.0.1", 0), self.app)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            payload = valid_math_v2_request()
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            request = urlrequest.Request(
+                f"http://127.0.0.1:{server.server_port}/grading/grade-v2",
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.settings.service_token}",
+                    "Idempotency-Key": payload["request_id"],
+                },
+                method="POST",
+            )
+            with urlrequest.urlopen(request, timeout=2) as response:
+                result = json.loads(response.read())
+                replayed = response.headers["Idempotent-Replay"]
+            self.assertEqual(result["status"], "candidate_mapping")
+            self.assertEqual(replayed, "false")
+            self.assertNotIn("suggested_score", result)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
+if __name__ == "__main__":
+    unittest.main()

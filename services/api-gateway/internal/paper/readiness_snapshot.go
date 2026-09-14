@@ -26,6 +26,8 @@ type readinessPaperSnapshot struct {
 }
 
 type readinessQuestionSnapshot struct {
+	BankContent         map[string]any             `json:"bank_content,omitempty"`
+	SourceContentHash   string                     `json:"source_content_hash,omitempty"`
 	ID                  string                     `json:"id"`
 	ExamPaperID         string                     `json:"exam_paper_id"`
 	QuestionNo          string                     `json:"question_no"`
@@ -40,6 +42,36 @@ type readinessQuestionSnapshot struct {
 	Answer              *readinessAnswerSnapshot   `json:"answer,omitempty"`
 	Solution            *readinessSolutionSnapshot `json:"solution,omitempty"`
 	Rubric              *readinessRubricSnapshot   `json:"rubric,omitempty"`
+}
+
+// readinessImportSnapshot is the content-only companion to a confirmed
+// readiness record. It intentionally omits candidates, papers and answer-area
+// coordinates: historical question imports need frozen authored facts, not
+// student identities or the old paper layout.
+type readinessImportSnapshot struct {
+	Version           int                               `json:"version"`
+	ConfigurationHash string                            `json:"configuration_hash"`
+	Questions         []readinessImportQuestionSnapshot `json:"questions"`
+}
+
+type readinessImportQuestionSnapshot struct {
+	ID                      string                     `json:"id"`
+	AssessmentSnapshotID    string                     `json:"assessment_snapshot_id"`
+	AssessmentSnapshotHash  string                     `json:"assessment_snapshot_hash"`
+	QuestionNo              string                     `json:"question_no"`
+	QuestionType            string                     `json:"question_type"`
+	AssessmentArchetype     string                     `json:"assessment_archetype"`
+	Score                   float64                    `json:"score"`
+	Stem                    string                     `json:"stem"`
+	KnowledgePoints         []string                   `json:"knowledge_points"`
+	SourceType              string                     `json:"source_type,omitempty"`
+	SourceBankItemID        string                     `json:"source_bank_item_id,omitempty"`
+	SourceBankItemVersionID string                     `json:"source_bank_item_version_id,omitempty"`
+	SourceContentHash       string                     `json:"source_content_hash,omitempty"`
+	BankContent             map[string]any             `json:"bank_content,omitempty"`
+	Answer                  *readinessAnswerSnapshot   `json:"answer,omitempty"`
+	Solution                *readinessSolutionSnapshot `json:"solution,omitempty"`
+	Rubric                  *readinessRubricSnapshot   `json:"rubric,omitempty"`
 }
 
 type readinessAnswerSnapshot struct {
@@ -118,7 +150,11 @@ func newReadinessConfigurationSnapshot(total float64, classIDs, candidateIDs []s
 		return snapshot.Papers[i].VersionNo < snapshot.Papers[j].VersionNo
 	})
 	for _, item := range questions {
+		if item.SourceType == "question_bank" {
+			snapshot.Version = 2
+		}
 		question := readinessQuestionSnapshot{
+			BankContent: item.BankContent, SourceContentHash: item.SourceContentHash,
 			ID: item.ID, ExamPaperID: item.ExamPaperID, QuestionNo: item.QuestionNo,
 			QuestionType: item.QuestionType, AssessmentArchetype: readinessAssessmentArchetype(item),
 			Score: item.Score, Stem: item.Stem, KnowledgePoints: append([]string(nil), item.KnowledgePoints...),
@@ -156,6 +192,33 @@ func newReadinessConfigurationSnapshot(total float64, classIDs, candidateIDs []s
 		sort.Slice(template.Pages, func(i, j int) bool { return template.Pages[i].PageNo < template.Pages[j].PageNo })
 		snapshot.Template = &template
 	}
+	return snapshot
+}
+
+func newReadinessImportSnapshot(configurationHash string, questions []Question) readinessImportSnapshot {
+	snapshot := readinessImportSnapshot{Version: 1, ConfigurationHash: configurationHash, Questions: []readinessImportQuestionSnapshot{}}
+	for _, item := range questions {
+		question := readinessImportQuestionSnapshot{
+			ID: item.ID, QuestionNo: item.QuestionNo, QuestionType: item.QuestionType,
+			AssessmentArchetype: readinessAssessmentArchetype(item), Score: item.Score,
+			Stem: item.Stem, KnowledgePoints: append([]string(nil), item.KnowledgePoints...),
+			SourceType: item.SourceType, SourceBankItemID: item.SourceBankItemID,
+			SourceBankItemVersionID: item.SourceBankItemVersionID,
+			SourceContentHash:       item.SourceContentHash, BankContent: item.BankContent,
+		}
+		sort.Strings(question.KnowledgePoints)
+		if item.AnswerKey != nil {
+			question.Answer = &readinessAnswerSnapshot{StandardAnswer: item.AnswerKey.StandardAnswer, EquivalentAnswers: item.AnswerKey.EquivalentAnswers, Tolerance: item.AnswerKey.Tolerance}
+		}
+		if item.Solution != nil {
+			question.Solution = &readinessSolutionSnapshot{RawText: item.Solution.RawText, Steps: item.Solution.Steps, VerificationStatus: item.Solution.VerificationStatus}
+		}
+		if item.Rubric != nil {
+			question.Rubric = &readinessRubricSnapshot{Status: item.Rubric.Status, MaxScore: item.Rubric.MaxScore, Points: item.Rubric.Points, Deductions: item.Rubric.Deductions, Examples: item.Rubric.Examples}
+		}
+		snapshot.Questions = append(snapshot.Questions, question)
+	}
+	sort.Slice(snapshot.Questions, func(i, j int) bool { return snapshot.Questions[i].ID < snapshot.Questions[j].ID })
 	return snapshot
 }
 

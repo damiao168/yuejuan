@@ -26,6 +26,9 @@ function fixture(overrides: Partial<ReviewTaskContext> = {}): ReviewTaskContext 
 }
 
 describe("review task context presentation", () => {
+  it("keeps immutable R3 human-primary policy active before any AI suggestion exists", () => {
+    expect(requiresExplicitSecondOpinion(fixture({ ai_second_opinion: undefined }))).toBe(true);
+  });
   it("keeps R3 HUMAN_PRIMARY AI material behind an explicit second-opinion action", () => {
     const context = fixture();
     expect(requiresExplicitSecondOpinion(context)).toBe(true);

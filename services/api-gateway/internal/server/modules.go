@@ -37,6 +37,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/paper"
 	"edugrade-enterprise/services/api-gateway/internal/processing"
 	"edugrade-enterprise/services/api-gateway/internal/qualitydashboard"
+	"edugrade-enterprise/services/api-gateway/internal/questionbank"
 	"edugrade-enterprise/services/api-gateway/internal/regrade"
 	"edugrade-enterprise/services/api-gateway/internal/regraderelease"
 	"edugrade-enterprise/services/api-gateway/internal/releasegate"
@@ -65,16 +66,22 @@ type IdentityModule struct {
 	OrgHandler  *org.Handler
 }
 
-func NewIdentityModule(cfg config.Config, stores IdentityStores, limiter auth.LoginLimiter) *IdentityModule {
+func NewIdentityModule(cfg config.Config, stores IdentityStores, loginGuard auth.LoginAttemptGuard) *IdentityModule {
 	return &IdentityModule{
 		AuthStore: stores.Auth,
 		AuthHandler: auth.NewHandler(stores.Auth, cfg.Auth.SessionTTL, auth.HandlerOptions{
 			LoginFailureLimit:    cfg.Auth.LoginFailureLimit,
 			LoginFailureWindow:   cfg.Auth.LoginFailureWindow,
 			RememberedSessionTTL: cfg.Auth.RememberedSessionTTL,
+			PublicSessionTTL:     cfg.Auth.PublicSessionTTL,
 			CookieName:           cfg.Auth.SessionCookieName,
+			DeviceCookieName:     cfg.Auth.DeviceCookieName,
 			CookieSecure:         cfg.Auth.SessionCookieSecure,
-			LoginLimiter:         limiter,
+			RiskMode:             cfg.Auth.RiskMode,
+			DeviceBindingTTL:     cfg.Auth.DeviceBindingTTL,
+			MFAEnabled:           cfg.Auth.MFAEnabled,
+			MFAMasterKey:         cfg.Auth.MFAMasterKey,
+			LoginGuard:           loginGuard,
 			TrustedProxyCIDRs:    cfg.Security.TrustedProxyCIDRs,
 		}),
 		OrgHandler: org.NewHandler(stores.Org, stores.Auth),
@@ -88,6 +95,7 @@ type ExamPreparationStores struct {
 	Submissions            submission.Store
 	Segments               segment.Store
 	Assessments            assessment.Store
+	QuestionBank           questionbank.Store
 	DashboardOrganizations dashboard.OrganizationSummaryStore
 	DashboardActivities    dashboard.ActivityStore
 }
@@ -102,14 +110,15 @@ type ExamPreparationModule struct {
 	AssessmentStore    assessment.Store
 	PaperImportService *paper.DocumentImportService
 
-	ExamHandler       *exam.Handler
-	PaperHandler      *paper.Handler
-	FileHandler       *files.Handler
-	SubmissionHandler *submission.Handler
-	SegmentHandler    *segment.Handler
-	AssessmentHandler *assessment.Handler
-	WorkspaceHandler  *workspace.Handler
-	DashboardHandler  *dashboard.Handler
+	ExamHandler         *exam.Handler
+	PaperHandler        *paper.Handler
+	FileHandler         *files.Handler
+	SubmissionHandler   *submission.Handler
+	SegmentHandler      *segment.Handler
+	AssessmentHandler   *assessment.Handler
+	QuestionBankHandler *questionbank.Handler
+	WorkspaceHandler    *workspace.Handler
+	DashboardHandler    *dashboard.Handler
 
 	authStore              auth.Store
 	dashboardOrganizations dashboard.OrganizationSummaryStore
@@ -127,20 +136,21 @@ func NewExamPreparationModule(cfg config.Config, stores ExamPreparationStores, d
 	segmentHandler := segment.NewHandler(stores.Segments, stores.Paper, stores.Submissions, dependencies.AuthStore, stores.Files, dependencies.ObjectStore)
 	paperImportService := paper.NewDocumentImportService(stores.Paper, stores.Files, dependencies.ObjectStore, cfg.AIService.URL, cfg.AIService.Token, cfg.AIService.Timeout)
 	return &ExamPreparationModule{
-		ExamStore:          stores.Exam,
-		PaperStore:         stores.Paper,
-		FileStore:          stores.Files,
-		ObjectStore:        dependencies.ObjectStore,
-		SubmissionStore:    stores.Submissions,
-		SegmentStore:       stores.Segments,
-		AssessmentStore:    stores.Assessments,
-		PaperImportService: paperImportService,
-		ExamHandler:        exam.NewHandler(stores.Exam, dependencies.AuthStore),
-		PaperHandler:       paper.NewHandler(stores.Paper, dependencies.AuthStore).WithDocumentImport(paperImportService),
-		FileHandler:        fileHandler,
-		SubmissionHandler:  submission.NewHandler(stores.Submissions, stores.Files, dependencies.AuthStore),
-		SegmentHandler:     segmentHandler,
-		AssessmentHandler:  assessment.NewHandler(stores.Assessments, dependencies.AuthStore),
+		ExamStore:           stores.Exam,
+		PaperStore:          stores.Paper,
+		FileStore:           stores.Files,
+		ObjectStore:         dependencies.ObjectStore,
+		SubmissionStore:     stores.Submissions,
+		SegmentStore:        stores.Segments,
+		AssessmentStore:     stores.Assessments,
+		PaperImportService:  paperImportService,
+		ExamHandler:         exam.NewHandler(stores.Exam, dependencies.AuthStore),
+		PaperHandler:        paper.NewHandler(stores.Paper, dependencies.AuthStore).WithDocumentImport(paperImportService),
+		FileHandler:         fileHandler,
+		SubmissionHandler:   submission.NewHandler(stores.Submissions, stores.Files, dependencies.AuthStore),
+		SegmentHandler:      segmentHandler,
+		AssessmentHandler:   assessment.NewHandler(stores.Assessments, dependencies.AuthStore),
+		QuestionBankHandler: questionbank.NewHandler(stores.QuestionBank),
 		WorkspaceHandler: workspace.NewHandler(workspace.Dependencies{
 			Exams: stores.Exam, Papers: stores.Paper, PaperImports: stores.Paper, Submissions: stores.Submissions, Assessments: stores.Assessments,
 		}),
@@ -314,11 +324,13 @@ type GradingQualityModule struct {
 }
 
 type GradingQualityDependencies struct {
-	DB       *sql.DB
-	Identity *IdentityModule
-	Exam     *ExamPreparationModule
-	Capture  *CaptureProcessingModule
-	AI       *AIFoundation
+	DB                *sql.DB
+	Identity          *IdentityModule
+	Exam              *ExamPreparationModule
+	Capture           *CaptureProcessingModule
+	AI                *AIFoundation
+	MathUnderstanding mathunderstanding.Store
+	MathCorrections   mathunderstanding.CorrectionStore
 }
 
 func NewGradingQualityModule(cfg config.Config, stores GradingQualityStores, dependencies GradingQualityDependencies) *GradingQualityModule {
@@ -332,6 +344,12 @@ func NewGradingQualityModule(cfg config.Config, stores GradingQualityStores, dep
 		WithParserQuality(dependencies.Capture.ProcessingService)
 	if dependencies.AI.EligibilityService != nil {
 		subjectiveHandler.WithEligibilityGate(dependencies.AI.EligibilityService)
+	}
+	if cfg.AIService.MathGradingV2 {
+		cropEvidence, _ := dependencies.Exam.SegmentStore.(subjective.ActiveCropEvidenceStore)
+		subjectiveHandler.WithMathGradingV2(true, newSubjectiveAdapterV2(cfg), subjective.MathEvidenceSource{
+			Artifacts: dependencies.MathUnderstanding, Corrections: dependencies.MathCorrections,
+		}, subjective.NewActiveCropResolver(cropEvidence, dependencies.Exam.FileStore, dependencies.Exam.ObjectStore))
 	}
 
 	calibrationService := calibration.NewService(stores.Calibration, stores.GoldPaper)
@@ -418,6 +436,18 @@ func newSubjectiveAdapter(cfg config.Config) subjective.LLMGradingAdapter {
 		return subjective.NewMockLLMAdapter()
 	}
 	return subjective.NewDisabledAdapter("ai_grading_disabled", cfg.AIService.ModelVersion, cfg.AIService.PromptVersion)
+}
+
+func newSubjectiveAdapterV2(cfg config.Config) subjective.LLMGradingAdapter {
+	if !useRealAIService(cfg) {
+		return subjective.NewDisabledAdapter("math_grading_v2_not_configured", cfg.AIService.ModelVersion, cfg.AIService.PromptVersion)
+	}
+	return subjective.NewHTTPAdapterV2(subjective.HTTPAdapterConfig{
+		BaseURL: cfg.AIService.URL, Token: cfg.AIService.Token, Timeout: cfg.AIService.Timeout, MaxRetries: cfg.AIService.MaxRetries,
+		ModelVersion: cfg.AIService.ModelVersion, PromptVersion: cfg.AIService.PromptVersion, MinConfidence: cfg.AIService.MinConfidence,
+		ProviderKey: cfg.AIService.ProviderKey, DeploymentKey: cfg.AIService.DeploymentKey, AdapterType: cfg.AIService.AdapterType,
+		DeploymentRegion: cfg.AIService.DeploymentRegion, CapabilityProfile: cfg.AIService.CapabilityProfile,
+	})
 }
 
 type ReleaseStores struct {
@@ -528,6 +558,7 @@ func NewMemoryApplicationStores() ApplicationStores {
 		Exam: ExamPreparationStores{
 			Exam: exam.NewMemoryStore(), Paper: paper.NewMemoryStore(), Files: files.NewMemoryStore(),
 			Submissions: submission.NewMemoryStore(), Segments: segment.NewMemoryStore(), Assessments: assessment.NewMemoryStore(),
+			QuestionBank: questionbank.NewMemoryStore(),
 		},
 		Capture: CaptureProcessingStores{
 			ImageQuality: imagequality.NewMemoryStore(), WorkerRuntime: workerruntime.NewMemoryStore(),
@@ -600,6 +631,7 @@ func NewPostgresApplicationStores(infra *Infrastructure) (ApplicationStores, err
 		Exam: ExamPreparationStores{
 			Exam: exam.NewPostgresStore(infra.DB), Paper: paper.NewPostgresStore(infra.DB), Files: files.NewPostgresStore(infra.DB),
 			Submissions: submission.NewPostgresStore(infra.DB), Segments: segment.NewPostgresStore(infra.DB), Assessments: assessmentStore,
+			QuestionBank:           questionbank.NewPostgresStore(infra.DB),
 			DashboardOrganizations: dashboard.NewPostgresOrganizationSummaryStore(infra.DB), DashboardActivities: dashboard.NewPostgresActivityStore(infra.DB),
 		},
 		Capture: CaptureProcessingStores{
@@ -683,7 +715,7 @@ type ApplicationDependencies struct {
 	Config         config.Config
 	ObjectStore    files.ObjectStorage
 	Reconciliation files.ReconciliationReader
-	LoginLimiter   auth.LoginLimiter
+	LoginGuard     auth.LoginAttemptGuard
 	DB             *sql.DB
 }
 
@@ -700,7 +732,7 @@ func NewTransactionalApplicationModules(dependencies ApplicationDependencies, st
 }
 
 func newApplicationModules(dependencies ApplicationDependencies, stores ApplicationStores, transactional bool) (ApplicationModules, error) {
-	identity := NewIdentityModule(dependencies.Config, stores.Identity, dependencies.LoginLimiter)
+	identity := NewIdentityModule(dependencies.Config, stores.Identity, dependencies.LoginGuard)
 	examModule := NewExamPreparationModule(dependencies.Config, stores.Exam, ExamPreparationDependencies{
 		AuthStore: identity.AuthStore, ObjectStore: dependencies.ObjectStore, Reconciliation: dependencies.Reconciliation,
 	})
@@ -717,6 +749,7 @@ func newApplicationModules(dependencies ApplicationDependencies, stores Applicat
 	aiFoundation := NewAIFoundation(stores.AIFoundation)
 	gradingQuality := NewGradingQualityModule(dependencies.Config, stores.Grading, GradingQualityDependencies{
 		DB: dependencies.DB, Identity: identity, Exam: examModule, Capture: captureModule, AI: aiFoundation,
+		MathUnderstanding: stores.AIGovernance.MathUnderstanding, MathCorrections: stores.AIGovernance.MathCorrections,
 	})
 	examModule.ConnectOperations(gradingQuality.ReviewStore, captureModule.ProcessingService)
 	releaseModule := NewReleaseModule(stores.Release, identity, examModule, gradingQuality)
@@ -735,7 +768,7 @@ func NewPostgresApplicationModules(infra *Infrastructure) (ApplicationModules, e
 	}
 	return NewTransactionalApplicationModules(ApplicationDependencies{
 		Config: infra.Config, ObjectStore: infra.ObjectStore, Reconciliation: infra.FileReconciler,
-		LoginLimiter: infra.LoginLimiter, DB: infra.DB,
+		LoginGuard: infra.LoginGuard, DB: infra.DB,
 	}, stores)
 }
 

@@ -72,6 +72,33 @@ func TestRecoverableCommandPersistsImmutableRequestBody(t *testing.T) {
 	}
 }
 
+func TestRecentAuthenticationChallengeDoesNotConsumeCommandKey(t *testing.T) {
+	store := NewMemoryStore()
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/exams/{examId}/publish", Middleware(store, Options{Enforce: true})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusPreconditionRequired)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/exams/exam-1/publish", strings.NewReader(`{"expected_revision":1}`))
+		req.Header.Set(Header, "publish-after-step-up")
+		req = req.WithContext(auth.WithUser(context.Background(), auth.User{ID: "actor-1", TenantID: "tenant-1"}))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	first := request()
+	second := request()
+	if first.Code != http.StatusPreconditionRequired || second.Code != http.StatusNoContent || calls.Load() != 2 {
+		t.Fatalf("recent-auth challenge must release the command key: first=%d second=%d calls=%d", first.Code, second.Code, calls.Load())
+	}
+}
+
 func TestMemoryStoreAllowsOnlyExplicitStaleTakeover(t *testing.T) {
 	store := NewMemoryStore()
 	input := BeginInput{

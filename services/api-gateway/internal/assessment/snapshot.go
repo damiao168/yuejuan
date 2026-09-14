@@ -34,6 +34,7 @@ type QuestionAssessmentConfig struct {
 }
 
 type ExamQuestionSnapshot struct {
+	SourceSnapshot        map[string]any `json:"source_snapshot,omitempty"`
 	ID                    string         `json:"id"`
 	TenantID              string         `json:"tenant_id"`
 	ExamID                string         `json:"exam_id"`
@@ -67,11 +68,15 @@ func (s *ExamQuestionSnapshot) UnmarshalJSON(data []byte) error {
 		ArchetypeSnapshotJSON     json.RawMessage `json:"archetype_snapshot_json"`
 		RubricSnapshotJSON        json.RawMessage `json:"rubric_snapshot_json"`
 		ScoringPolicySnapshotJSON json.RawMessage `json:"scoring_policy_snapshot_json"`
+		SourceSnapshotJSON        json.RawMessage `json:"source_snapshot_json"`
 	}{snapshotAlias: (*snapshotAlias)(s)}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 	if err := unmarshalOptionalObject(aux.ProfileSnapshotJSON, &s.ProfileSnapshot); err != nil {
+		return err
+	}
+	if err := unmarshalOptionalObject(aux.SourceSnapshotJSON, &s.SourceSnapshot); err != nil {
 		return err
 	}
 	if err := unmarshalOptionalObject(aux.ArchetypeSnapshotJSON, &s.ArchetypeSnapshot); err != nil {

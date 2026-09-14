@@ -36,6 +36,7 @@ export interface PreviewState {
   url: string;
   contentType: string;
   filename?: string;
+  contentRevision?: string;
 }
 
 export interface ScoringImagePreview extends PreviewState {

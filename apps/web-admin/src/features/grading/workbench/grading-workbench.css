@@ -1395,3 +1395,27 @@
 .math-evidence-summary > span { color: var(--text-muted); font-size: var(--eg-font-caption); }
 .math-evidence-summary > strong { grid-column: 1; font-size: var(--eg-font-body); }
 .math-evidence-summary > .ant-btn { grid-column: 2; grid-row: 1 / span 2; }
+
+.math-rubric-matrix { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-bottom: 1px solid var(--border); min-width: 0; }
+.math-rubric-matrix h3, .math-rubric-matrix p { margin: 0; }
+.math-score-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 8px 0; }
+.math-score-summary span, .math-suggestion-note, .math-decision-table small, .math-suggestion-history small { display: block; color: var(--text-muted); font-size: var(--eg-font-caption); }
+.math-score-summary strong { display: block; font-size: var(--eg-font-section); font-variant-numeric: tabular-nums; }
+.math-score-summary strong small { font-weight: 400; font-size: var(--eg-font-caption); color: var(--text-muted); }
+.math-matrix-scroll { overflow-x: auto; max-width: 100%; }
+.math-decision-table { border-collapse: collapse; width: 100%; font-size: var(--eg-font-caption); text-align: left; }
+.math-decision-table caption { color: var(--text-muted); text-align: left; padding-bottom: 8px; }
+.math-decision-table td, .math-decision-table th { padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.math-decision-table thead { color: var(--text-muted); }
+.math-decision-table tbody th { font-weight: 500; width: 38%; }
+.math-decision-table tbody th > span { display: block; margin-bottom: 4px; overflow-wrap: anywhere; }
+.math-decision-table td:nth-child(2) { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.math-matrix-steps { display: flex; flex-wrap: wrap; gap: 3px; }
+.math-matrix-steps .ant-btn { padding-inline: 0; height: auto; }
+.math-suggestion-history summary { cursor: pointer; font-size: var(--eg-font-caption); }
+.math-suggestion-history ul { list-style: none; padding: 0; margin: 6px 0 0; }
+.math-suggestion-history li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; border-bottom: 1px solid var(--border); padding: 8px 0; font-size: var(--eg-font-caption); }
+.math-step-highlight { position: absolute; pointer-events: none; box-sizing: border-box; border: 2px solid var(--primary); background: color-mix(in srgb, var(--primary) 12%, transparent); transition: left 140ms ease, top 140ms ease, width 140ms ease, height 140ms ease; }
+.math-step-highlight > span { position: absolute; top: 0; left: 0; background: var(--primary); color: var(--surface); padding: 2px 5px; font-size: var(--eg-font-caption); }
+.math-image-selection { margin: 0; padding: 6px 12px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: var(--eg-font-caption); overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { .math-step-highlight { transition: none; } }

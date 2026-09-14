@@ -1,0 +1,16 @@
+.history-import-loading { display: flex; align-items: center; gap: 10px; padding: 24px 0; color: var(--color-text-secondary, #64748b); }
+.history-import-controls { display: grid; grid-template-columns: 1.1fr 1fr 0.8fr; gap: 14px; margin: 18px 0; }
+.history-import-controls label, .history-import-row label, .history-import-options { display: grid; gap: 6px; min-width: 0; }
+.history-import-controls label > span, .history-import-row label > span, .history-import-options > span { color: var(--color-text-secondary, #64748b); font-size: 13px; }
+.history-import-selector { display: grid; gap: 10px; margin: 18px 0; }
+.history-import-selector .ant-checkbox-group { display: grid; max-height: 220px; overflow: auto; gap: 8px; padding: 12px; border: 1px solid var(--color-border, #e2e8f0); border-radius: 10px; }
+.history-import-selector .ant-checkbox-wrapper { min-width: 0; overflow-wrap: anywhere; }
+.history-import-previews { margin-top: 14px; }
+.history-import-preview { width: 100%; min-width: 0; }
+.history-import-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.history-import-preview > p { line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-import-row { display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; margin: 12px 0; }
+.history-import-options { margin: 12px 0; }
+.history-import-issues { margin: 10px 0; color: var(--color-warning-text, #92400e); }
+.history-import-facts { display: grid; gap: 7px; margin-top: 10px; padding: 12px; border-radius: 8px; background: var(--color-bg-subtle, #f8fafc); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .history-import-controls, .history-import-row { grid-template-columns: 1fr; } }

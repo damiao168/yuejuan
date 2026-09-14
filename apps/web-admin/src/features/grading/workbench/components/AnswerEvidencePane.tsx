@@ -6,6 +6,7 @@ import { EmptyState, LoadingState } from "../../../../components/PageState";
 import { ReviewAnnotationWorkspace } from "../../../../components/features/review-annotation";
 import { pointLabel, sourceLabels, taskStatusLabels } from "../gradingWorkbench.model";
 import type { PreviewState, ViewerMode, WorkbenchContext } from "../gradingWorkbench.types";
+import type { MathStepSelection } from "../mathWorkbenchEvidence";
 
 export interface AnswerEvidencePaneProps {
   context: WorkbenchContext;
@@ -30,6 +31,7 @@ export interface AnswerEvidencePaneProps {
   onPointerMove: (event: PointerEvent<HTMLDivElement>) => void;
   onPointerUp: (event: PointerEvent<HTMLDivElement>) => void;
   onImageLoad: (size: { width: number; height: number }) => void;
+  mathSelection?: MathStepSelection | null;
 }
 
 export function AnswerEvidencePane({
@@ -54,7 +56,8 @@ export function AnswerEvidencePane({
   onPointerDown,
   onPointerMove,
   onPointerUp,
-  onImageLoad
+  onImageLoad,
+  mathSelection
 }: AnswerEvidencePaneProps) {
   const viewer = () => {
     if (previewLoading) return <LoadingState label="正在读取答卷页面" />;
@@ -109,6 +112,7 @@ export function AnswerEvidencePane({
                 ) : null
               )
             : null}
+          {viewerMode === "segment" && isImage && mathSelection?.segmentId === context.task.answer_segment_id ? <span className="math-step-highlight" role="img" aria-label={`步骤 ${mathSelection.stepId} 的答题位置`} style={{ left: `${mathSelection.bbox.x * 100}%`, top: `${mathSelection.bbox.y * 100}%`, width: `${mathSelection.bbox.width * 100}%`, height: `${mathSelection.bbox.height * 100}%` }}><span>{mathSelection.stepId}</span></span> : null}
         </div>
       </div>
     );
@@ -137,6 +141,7 @@ export function AnswerEvidencePane({
           <Tooltip title="适配窗口"><Button type={autoFit ? "primary" : "default"} icon={<Maximize2 size={14} />} onClick={onFit} aria-label="适配窗口" /></Tooltip>
         </Space>
       </div>
+      {mathSelection?.segmentId === context.task.answer_segment_id && viewerMode === "segment" ? <p className="math-image-selection" role="status">已定位 {mathSelection.stepId} · {mathSelection.label}</p> : null}
       {viewer()}
       {context.segmentImageUrl ? (
         <details className="grading-more-fields">

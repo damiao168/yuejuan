@@ -1,9 +1,12 @@
 package auth
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
@@ -59,6 +62,7 @@ func (h *Handler) ListAssignableRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CreateManagedUser(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	actor, _ := UserFromContext(r.Context())
 	var input CreateManagedUserInput
 	if err := decodeAuthJSON(w, r, &input, true); err != nil {
@@ -70,37 +74,66 @@ func (h *Handler) CreateManagedUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Username = strings.TrimSpace(input.Username)
+	input.Phone = strings.TrimSpace(input.Phone)
+	input.EmployeeNo = strings.TrimSpace(input.EmployeeNo)
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
 	input.RoleCode = strings.TrimSpace(input.RoleCode)
 	input.SchoolID = strings.TrimSpace(input.SchoolID)
 	input.ClassIDs = uniqueSortedIDs(input.ClassIDs)
-	if input.Username == "" || input.DisplayName == "" || input.RoleCode == "" || input.Password == "" {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "username, display_name, password and role_code are required")
+	if input.Phone != "" {
+		normalizedPhone, err := NormalizePhone(input.Phone)
+		if err != nil {
+			httpx.Error(w, r, http.StatusBadRequest, "invalid_phone", "phone must be a valid mobile number")
+			return
+		}
+		input.Phone = normalizedPhone
+	}
+	invited := input.Password == ""
+	if input.DisplayName == "" || input.RoleCode == "" || (invited && input.Phone == "" && input.EmployeeNo == "") || (!invited && input.Username == "") {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "display_name, role_code and a login identity are required")
 		return
+	}
+	if input.Username == "" {
+		input.Username = generatedManagedUsername(actor.TenantID, input.Phone, input.EmployeeNo)
 	}
 	if !managedUserFieldsWithinLimits(input) {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "user fields exceed supported size limits")
 		return
 	}
-	if !strongBootstrapPassword(input.Password) {
-		httpx.Error(w, r, http.StatusBadRequest, "weak_password", "password must contain upper, lower, number and symbol and be at least 12 characters")
-		return
-	}
-	hash, err := HashPassword(input.Password)
-	if err != nil {
-		httpx.Error(w, r, http.StatusInternalServerError, "password_hash_failed", "failed to create user")
-		return
+	passwordHash := "!activation-required"
+	activationToken := ""
+	if invited {
+		var err error
+		activationToken, input.ActivationTokenHash, err = NewToken()
+		if err != nil {
+			httpx.Error(w, r, http.StatusInternalServerError, "token_generation_failed", "failed to create invitation")
+			return
+		}
+		input.ActivationExpiresAt = time.Now().UTC().Add(48 * time.Hour)
+	} else {
+		if !strongBootstrapPassword(input.Password) {
+			httpx.Error(w, r, http.StatusBadRequest, "weak_password", "password must be a long passphrase of at least 15 characters")
+			return
+		}
+		var err error
+		passwordHash, err = HashPassword(input.Password)
+		if err != nil {
+			httpx.Error(w, r, http.StatusInternalServerError, "password_hash_failed", "failed to create user")
+			return
+		}
 	}
 	actorScope, ok := AccessScopeFromContext(r.Context())
 	if !ok {
 		httpx.Error(w, r, http.StatusForbidden, "access_scope_missing", "no valid data access scope is assigned")
 		return
 	}
-	created, err := h.store.CreateManagedUser(r.Context(), actor, actorScope, input, hash)
+	created, err := h.store.CreateManagedUser(r.Context(), actor, actorScope, input, passwordHash)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrUsernameExists):
 			httpx.Error(w, r, http.StatusConflict, "username_exists", "username already exists")
+		case errors.Is(err, ErrIdentityExists):
+			httpx.Error(w, r, http.StatusConflict, "identity_exists", "phone or employee number is already in use")
 		case errors.Is(err, ErrRoleNotFound):
 			httpx.Error(w, r, http.StatusBadRequest, "role_not_assignable", "role is not assignable in the current organization")
 		case errors.Is(err, ErrRoleAssignment):
@@ -117,10 +150,26 @@ func (h *Handler) CreateManagedUser(w http.ResponseWriter, r *http.Request) {
 	RecordAudit(r.Context(), h.store, AuditEvent{
 		TenantID: actor.TenantID, ActorID: actor.ID, Action: "auth.user_created",
 		TargetType: "user", TargetID: created.ID,
-		AfterValue: map[string]any{"username": created.Username, "display_name": created.DisplayName, "role_code": input.RoleCode, "school_id": created.SchoolID, "class_ids": input.ClassIDs, "status": created.Status},
+		AfterValue: map[string]any{"username": created.Username, "display_name": created.DisplayName, "phone": created.PhoneMasked, "employee_no": created.EmployeeNo, "role_code": input.RoleCode, "school_id": created.SchoolID, "class_ids": input.ClassIDs, "status": created.Status},
 		Reason:     "create organization user", IPAddress: h.remoteIP(r), UserAgent: r.UserAgent(), RequestID: logger.RequestID(r.Context()),
 	})
-	httpx.JSON(w, http.StatusCreated, map[string]any{"user": created})
+	response := map[string]any{"user": created}
+	if invited {
+		response["activation"] = map[string]any{
+			"token": activationToken, "expires_at": input.ActivationExpiresAt,
+			"path": "/activate?token=" + activationToken,
+		}
+	}
+	httpx.JSON(w, http.StatusCreated, response)
+}
+
+func generatedManagedUsername(tenantID, phone, employeeNo string) string {
+	identity := phone
+	if identity == "" {
+		identity = employeeNo
+	}
+	sum := sha256.Sum256([]byte(tenantID + "|" + identity))
+	return "member_" + hex.EncodeToString(sum[:8])
 }
 
 func (h *Handler) UpdateManagedUserStatus(w http.ResponseWriter, r *http.Request) {

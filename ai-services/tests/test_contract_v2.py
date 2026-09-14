@@ -3,6 +3,8 @@ import json
 import unittest
 from pathlib import Path
 
+from helpers import FakeModel, settings
+
 from grading_agent.app import GradingAgentApplication
 from grading_agent.contract_v2 import (
     compute_media_binding_hash,
@@ -10,7 +12,6 @@ from grading_agent.contract_v2 import (
     validate_response_v2,
 )
 from grading_agent.errors import AgentError
-from helpers import FakeModel, settings
 
 FIXTURES = Path(__file__).resolve().parents[2] / "contracts" / "grading-agent" / "v2" / "fixtures"
 
@@ -75,19 +76,19 @@ class ContractV2Tests(unittest.TestCase):
         changed["media_evidence"]["normalized_bbox"]["width"] = 0.5
         self.assertNotEqual(compute_media_binding_hash(changed), original_hash)
 
-    def test_crop_evidence_must_match_request_media(self):
+    def test_candidate_evidence_must_reference_known_math_artifact(self):
         request = fixture("valid-request.json")
         invalid = fixture("invalid-response-crop-hash-mismatch.json")
         with self.assertRaises(AgentError) as caught:
             validate_response_v2(invalid, request)
         self.assertEqual(caught.exception.code, "evidence_verification_failed")
-        self.assertIn("hash does not match", caught.exception.message)
+        self.assertIn("evidence link is invalid", caught.exception.message)
 
-    def test_crop_evidence_bbox_must_stay_within_crop(self):
+    def test_model_response_cannot_reintroduce_a_score(self):
         request = fixture("valid-request.json")
         response = fixture("valid-response.json")
-        response["evidence"][1]["normalized_bbox"]["width"] = 1
-        with self.assertRaisesRegex(AgentError, "stay within the crop"):
+        response["suggested_score"] = 4
+        with self.assertRaisesRegex(AgentError, "fields"):
             validate_response_v2(response, request)
 
     def test_v2_remains_unreachable_from_the_v1_application(self):

@@ -149,6 +149,9 @@ func NewMemoryRouter(cfg config.Config, logg *logger.Logger, checkers []deps.Che
 
 func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	cfg := dependencies.Config
+	if strings.TrimSpace(cfg.Auth.SessionCookieName) == "" {
+		cfg.Auth.SessionCookieName = auth.DefaultSessionCookieName
+	}
 	logg := dependencies.Logger
 	modules := dependencies.Modules
 	metricsRegistry := dependencies.Metrics
@@ -157,6 +160,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	}
 
 	mux := http.NewServeMux()
+	questionBankImportMux := http.NewServeMux()
 	h := handlers.New(cfg, dependencies.Checkers)
 	h.WithWorkerRuntimeStore(modules.Capture.WorkerRuntimeStore)
 
@@ -169,6 +173,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	submissionHandler := modules.Exam.SubmissionHandler
 	segmentHandler := modules.Exam.SegmentHandler
 	assessmentHandler := modules.Exam.AssessmentHandler
+	questionBankHandler := modules.Exam.QuestionBankHandler
 	workspaceHandler := modules.Exam.WorkspaceHandler
 	dashboardHandler := modules.Exam.DashboardHandler
 
@@ -213,17 +218,38 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	idempotencyStore := modules.Idempotency
 
 	authenticate := auth.AuthMiddleware(authStore, auth.HandlerOptions{CookieName: cfg.Auth.SessionCookieName})
+	authenticateAccount := auth.AccountAuthMiddleware(authStore, auth.HandlerOptions{CookieName: cfg.Auth.SessionCookieName})
+	authenticateLockedAccount := auth.ReauthenticationAuthMiddleware(authStore, auth.HandlerOptions{CookieName: cfg.Auth.SessionCookieName})
 	resourceResolver, _ := authStore.(auth.ResourceBoundaryResolver)
 	environment := strings.ToLower(strings.TrimSpace(cfg.Service.Environment))
 	idempotent := idempotency.Middleware(idempotencyStore, idempotency.Options{Enforce: environment == "production" || environment == "staging"})
 	requireAuth := func(handler http.Handler) http.Handler {
 		return authenticate(idempotent(auth.RequireRequestResourceBoundary(resourceResolver)(handler)))
 	}
+	requireAccount := func(handler http.HandlerFunc) http.Handler {
+		return authenticateAccount(idempotent(handler))
+	}
+	// One-time enrollment secrets, recovery codes and scoped grants must never
+	// be persisted or replayed by generic idempotency receipts, even if a
+	// client supplies Idempotency-Key. MFAStore owns atomic consumption.
+	requireMFAAccount := func(handler http.HandlerFunc) http.Handler {
+		return authenticateAccount(handler)
+	}
+	requireLockedAccount := func(handler http.HandlerFunc) http.Handler {
+		return authenticateLockedAccount(idempotent(handler))
+	}
+	requireRecentPermission := func(permission string, handler http.HandlerFunc) http.Handler {
+		// Check current authorization and authentication freshness before serving
+		// a cached command receipt, not only before executing a new command.
+		return authenticate(auth.RequireRequestResourceBoundary(resourceResolver)(
+			auth.RequirePermission(permission)(auth.RequireRecentAuth(cfg.Auth.RecentAuthTTL)(idempotent(handler)))))
+	}
+	requireSensitiveMutation := func(permission string, handler http.HandlerFunc) http.Handler {
+		return authenticate(auth.RequireRequestResourceBoundary(resourceResolver)(
+			auth.RequirePermission(permission)(auth.RequireRecentAuthForMutations(cfg.Auth.RecentAuthTTL)(idempotent(handler)))))
+	}
 	requireOrgManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("org:manage")(handler))
-	}
-	requireTenantManage := func(handler http.HandlerFunc) http.Handler {
-		return requireAuth(auth.RequirePermission("tenant:manage")(handler))
 	}
 	requireStudentImport := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("student:import")(handler))
@@ -237,6 +263,56 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	requireDashboardRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("dashboard:read")(handler))
 	}
+	requireQuestionBank := func(permission string, handler http.HandlerFunc) http.Handler {
+		return authenticate(auth.RequirePermission("question_bank:" + permission)(idempotency.CommandIdentity(handler)))
+	}
+	requireQuestionBankAny := func(handler http.HandlerFunc, permissions ...string) http.Handler {
+		actions := make([]string, 0, len(permissions))
+		for _, permission := range permissions {
+			actions = append(actions, "question_bank:"+permission)
+		}
+		return authenticate(auth.RequireAnyPermission(actions...)(idempotency.CommandIdentity(handler)))
+	}
+	requireQuestionBankImport := func(command bool, handler http.HandlerFunc) http.Handler {
+		var guarded http.Handler = handler
+		if command {
+			guarded = idempotency.CommandIdentity(guarded)
+		}
+		guarded = auth.RequireAnyPermission("exam:manage", "review:manage", "review:work")(guarded)
+		guarded = auth.RequirePermission("question_bank:edit")(guarded)
+		guarded = auth.RequirePermission("question_bank:create")(guarded)
+		return authenticate(guarded)
+	}
+	mux.Handle("GET /api/v1/question-banks", requireQuestionBankAny(questionBankHandler.ListBanks, "read", "manage"))
+	mux.Handle("POST /api/v1/question-banks", requireQuestionBank("create", questionBankHandler.CreateBank))
+	mux.Handle("GET /api/v1/question-banks/{bankId}", requireQuestionBankAny(questionBankHandler.GetBank, "read", "manage"))
+	mux.Handle("PATCH /api/v1/question-banks/{bankId}", requireQuestionBank("manage", questionBankHandler.UpdateBank))
+	mux.Handle("GET /api/v1/question-banks/{bankId}/items", requireQuestionBank("read", questionBankHandler.ListItems))
+	mux.Handle("POST /api/v1/question-banks/{bankId}/items", requireQuestionBank("create", questionBankHandler.CreateItem))
+	mux.Handle("GET /api/v1/question-bank/items/{itemId}", requireQuestionBank("read", questionBankHandler.GetItem))
+	mux.Handle("GET /api/v1/question-bank/items/{itemId}/versions", requireQuestionBank("read", questionBankHandler.ListVersions))
+	mux.Handle("POST /api/v1/question-bank/items/{itemId}/versions", requireQuestionBank("edit", questionBankHandler.CreateVersion))
+	mux.Handle("GET /api/v1/question-bank/versions/{versionId}", requireQuestionBank("read", questionBankHandler.GetVersion))
+	mux.Handle("PATCH /api/v1/question-bank/versions/{versionId}", requireQuestionBank("edit", questionBankHandler.UpdateVersion))
+	mux.Handle("PUT /api/v1/question-bank/versions/{versionId}/scoring", requireQuestionBank("edit", questionBankHandler.UpdateScoring))
+	mux.Handle("GET /api/v1/question-bank/versions/{versionId}/reviews", requireQuestionBank("read", questionBankHandler.ListReviews))
+	mux.Handle("POST /api/v1/question-bank/versions/{versionId}/submit-review", requireQuestionBank("edit", questionBankHandler.Transition("submit-review")))
+	mux.Handle("POST /api/v1/question-bank/versions/{versionId}/approve", requireQuestionBank("review", questionBankHandler.Transition("approve")))
+	mux.Handle("POST /api/v1/question-bank/versions/{versionId}/return-to-draft", requireQuestionBankAny(questionBankHandler.Transition("return-to-draft"), "edit", "review"))
+	mux.Handle("POST /api/v1/question-bank/versions/{versionId}/publish", requireQuestionBank("publish", questionBankHandler.Transition("publish")))
+	mux.Handle("POST /api/v1/question-banks/{bankId}/reviewers", requireQuestionBank("manage", questionBankHandler.BindReviewers))
+	mux.Handle("GET /api/v1/question-banks/{bankId}/metadata-schema", requireQuestionBankAny(questionBankHandler.GetMetadataSchema, "read", "manage"))
+	mux.Handle("PUT /api/v1/question-banks/{bankId}/metadata-schema", requireQuestionBank("manage", questionBankHandler.UpdateMetadataSchema))
+	mux.Handle("POST /api/v1/question-banks/{bankId}/metadata-schema/validate", requireQuestionBankAny(questionBankHandler.ValidateMetadata, "read", "manage"))
+	mux.Handle("GET /api/v1/question-banks/{bankId}/acl", requireQuestionBank("manage", questionBankHandler.GetACL))
+	mux.Handle("PUT /api/v1/question-banks/{bankId}/acl", requireQuestionBank("manage", questionBankHandler.UpdateACL))
+	mux.Handle("GET /api/v1/question-bank/items", requireQuestionBank("read", questionBankHandler.SearchItems))
+	mux.Handle("POST /api/v1/question-bank/items/{itemId}/retire", requireQuestionBank("retire", questionBankHandler.RetireItem))
+	mux.Handle("GET /api/v1/question-bank/rubric-templates", requireQuestionBank("read", questionBankHandler.ListTemplates))
+	mux.Handle("POST /api/v1/question-bank/rubric-templates", requireQuestionBank("create", questionBankHandler.CreateTemplate))
+	mux.Handle("POST /api/v1/question-bank/imports/preview", requireQuestionBankImport(false, questionBankHandler.PreviewImports))
+	mux.Handle("POST /api/v1/question-bank/imports/confirm", requireQuestionBankImport(false, questionBankHandler.ConfirmImportBatch))
+	questionBankImportMux.Handle("POST /api/v1/question-bank/items/import-from-question/{questionId}", requireQuestionBankImport(true, questionBankHandler.ImportQuestion))
 	requireFileManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("file:manage")(handler))
 	}
@@ -320,14 +396,8 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	requireAuditRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("audit:read")(handler))
 	}
-	requireAuditExport := func(handler http.HandlerFunc) http.Handler {
-		return requireAuth(auth.RequirePermission("audit:export")(handler))
-	}
 	requireReportRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("report:read")(handler))
-	}
-	requireReportExport := func(handler http.HandlerFunc) http.Handler {
-		return requireAuth(auth.RequirePermission("report:export")(handler))
 	}
 	requireSystemRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("system:read")(handler))
@@ -335,16 +405,13 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	requireModelRead := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("model:read")(handler))
 	}
-	requireModelProviderManage := func(handler http.HandlerFunc) http.Handler {
-		return requireAuth(auth.RequirePermission("model:provider:manage")(handler))
-	}
 	requirePlatformModelManage := func(handler http.HandlerFunc) http.Handler {
-		return requireAuth(auth.RequireAnyRole("platform_admin")(
-			auth.RequirePermission("model:provider:manage")(handler),
-		))
+		return authenticate(auth.RequireRequestResourceBoundary(resourceResolver)(auth.RequireAnyRole("platform_admin")(
+			auth.RequirePermission("model:provider:manage")(auth.RequireRecentAuthForMutations(cfg.Auth.RecentAuthTTL)(idempotent(handler))),
+		)))
 	}
 	requireModelPolicyManage := func(handler http.HandlerFunc) http.Handler {
-		return requireAuth(auth.RequirePermission("model:policy:manage")(handler))
+		return requireRecentPermission("model:policy:manage", handler)
 	}
 	requireModelEvaluationManage := func(handler http.HandlerFunc) http.Handler {
 		return requireAuth(auth.RequirePermission("model:evaluation:manage")(handler))
@@ -390,33 +457,49 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	mux.Handle("GET /api/v1/system/info", requireSystemRead(h.SystemInfo))
 	mux.Handle("GET /api/v1/system/status", requireSystemRead(h.SystemStatus))
 	mux.Handle("GET /api/v1/ocr/availability", requireOCRAvailabilityRead(h.OCRAvailability))
-	mux.HandleFunc("POST /api/v1/auth/login", authHandler.Login)
-	mux.HandleFunc("POST /api/v1/auth/token", authHandler.TokenLogin)
-	mux.Handle("POST /api/v1/auth/logout", requireAuth(http.HandlerFunc(authHandler.Logout)))
-	mux.Handle("POST /api/v1/auth/password", requireAuth(http.HandlerFunc(authHandler.ChangePassword)))
-	mux.Handle("GET /api/v1/auth/me", requireAuth(http.HandlerFunc(authHandler.Me)))
-	mux.Handle("GET /api/v1/auth/sessions", requireAuth(http.HandlerFunc(authHandler.ListSessions)))
-	mux.Handle("DELETE /api/v1/auth/sessions/{id}", requireAuth(http.HandlerFunc(authHandler.RevokeSession)))
-	mux.Handle("POST /api/v1/auth/logout-all", requireAuth(http.HandlerFunc(authHandler.LogoutAll)))
-	mux.Handle("DELETE /api/v1/users/{id}/sessions", requireAuth(auth.RequirePermission("session:revoke")(http.HandlerFunc(authHandler.AdminRevokeUserSessions))))
+	mux.Handle("POST /api/v1/auth/login", http.HandlerFunc(authHandler.Login))
+	mux.Handle("POST /api/v1/auth/token", http.HandlerFunc(authHandler.TokenLogin))
+	mux.Handle("POST /api/v1/auth/activation/verify", http.HandlerFunc(authHandler.VerifyActivation))
+	mux.Handle("POST /api/v1/auth/activation/complete", http.HandlerFunc(authHandler.CompleteActivation))
+	mux.Handle("POST /api/v1/auth/recovery/verify", http.HandlerFunc(authHandler.VerifyRecovery))
+	mux.Handle("POST /api/v1/auth/recovery/complete", http.HandlerFunc(authHandler.CompleteRecovery))
+	mux.Handle("POST /api/v1/auth/logout", requireLockedAccount(authHandler.Logout))
+	mux.Handle("POST /api/v1/auth/password", requireAccount(authHandler.ChangePassword))
+	mux.Handle("POST /api/v1/auth/lock", requireAccount(authHandler.LockSession))
+	mux.Handle("POST /api/v1/auth/reauthenticate", requireLockedAccount(authHandler.Reauthenticate))
+	mux.Handle("GET /api/v1/auth/mfa", requireMFAAccount(authHandler.MFAStatus))
+	mux.Handle("POST /api/v1/auth/mfa/totp/enroll", requireMFAAccount(authHandler.EnrollTOTP))
+	mux.Handle("POST /api/v1/auth/mfa/totp/confirm", requireMFAAccount(authHandler.ConfirmTOTP))
+	mux.Handle("POST /api/v1/auth/step-up/start", requireMFAAccount(authHandler.StartMFAChallenge))
+	mux.Handle("POST /api/v1/auth/step-up/verify", requireMFAAccount(authHandler.VerifyMFAChallenge))
+	mux.Handle("POST /api/v1/auth/mfa/totp/disable", requireMFAAccount(authHandler.DisableTOTP))
+	mux.Handle("POST /api/v1/auth/mfa/recovery-codes/rotate", requireMFAAccount(authHandler.RotateMFARecoveryCodes))
+	mux.Handle("GET /api/v1/auth/me", requireAccount(authHandler.Me))
+	mux.Handle("GET /api/v1/auth/sessions", requireAccount(authHandler.ListSessions))
+	mux.Handle("GET /api/v1/auth/security-events", requireAccount(authHandler.ListSecurityEvents))
+	mux.Handle("DELETE /api/v1/auth/sessions/{id}", requireAccount(authHandler.RevokeSession))
+	mux.Handle("POST /api/v1/auth/logout-all", requireAccount(authHandler.LogoutAll))
+	mux.Handle("DELETE /api/v1/users/{id}/sessions", requireRecentPermission("session:revoke", authHandler.AdminRevokeUserSessions))
 	dashboard.RegisterRoutes(mux, dashboardHandler, requireDashboardRead)
 	mux.Handle("GET /api/v1/ai-grading/status", requireAuth(auth.RequireAnyPermission("grading:manage", "review:work", "review:manage", "model:read", "system:read")(http.HandlerFunc(subjectiveHandler.Availability))))
 	mux.Handle("GET /api/v1/users", requireOrgManage(authHandler.ListManagedUsers))
-	mux.Handle("POST /api/v1/users", requireOrgManage(authHandler.CreateManagedUser))
-	mux.Handle("PATCH /api/v1/users/{id}/status", requireOrgManage(authHandler.UpdateManagedUserStatus))
+	mux.Handle("POST /api/v1/users", requireRecentPermission("org:manage", authHandler.CreateManagedUser))
+	mux.Handle("POST /api/v1/users/{id}/activation", requireRecentPermission("org:manage", authHandler.AdminCreateActivation))
+	mux.Handle("PATCH /api/v1/users/{id}/status", requireRecentPermission("org:manage", authHandler.UpdateManagedUserStatus))
+	mux.Handle("POST /api/v1/users/{id}/credential-reset", requireRecentPermission("org:manage", authHandler.AdminCreateRecovery))
 	mux.Handle("GET /api/v1/roles", requireOrgManage(authHandler.ListAssignableRoles))
 	mux.Handle("GET /api/v1/audit-logs", requireAuditRead(authHandler.ListAudits))
-	mux.Handle("POST /api/v1/audit-logs/export", requireAuditExport(authHandler.ExportAudits))
+	mux.Handle("POST /api/v1/audit-logs/export", requireRecentPermission("audit:export", authHandler.ExportAudits))
 	mux.Handle("GET /api/v1/model-providers", requireModelRead(modelGovernanceHandler.ListProviders))
-	mux.Handle("POST /api/v1/model-providers", requireModelProviderManage(modelGovernanceHandler.CreateProvider))
-	mux.Handle("PATCH /api/v1/model-providers/{id}/status", requireModelProviderManage(modelGovernanceHandler.UpdateProviderStatus))
+	mux.Handle("POST /api/v1/model-providers", requireRecentPermission("model:provider:manage", modelGovernanceHandler.CreateProvider))
+	mux.Handle("PATCH /api/v1/model-providers/{id}/status", requireRecentPermission("model:provider:manage", modelGovernanceHandler.UpdateProviderStatus))
 	mux.Handle("GET /api/v1/model-deployments", requireModelRead(modelGovernanceHandler.ListDeployments))
-	mux.Handle("POST /api/v1/model-deployments", requireModelProviderManage(modelGovernanceHandler.CreateDeployment))
-	mux.Handle("PATCH /api/v1/model-deployments/{id}/state", requireModelProviderManage(modelGovernanceHandler.UpdateDeploymentState))
+	mux.Handle("POST /api/v1/model-deployments", requireRecentPermission("model:provider:manage", modelGovernanceHandler.CreateDeployment))
+	mux.Handle("PATCH /api/v1/model-deployments/{id}/state", requireRecentPermission("model:provider:manage", modelGovernanceHandler.UpdateDeploymentState))
 	mux.Handle("GET /api/v1/model-policy", requireModelRead(modelGovernanceHandler.GetPolicy))
 	mux.Handle("GET /api/v1/model-prompts/current", requireModelRead(modelGovernanceHandler.GetCurrentPrompt))
-	mux.Handle("PUT /api/v1/model-policy", requireModelPolicyManage(modelGovernanceHandler.UpdatePolicy))
-	mux.Handle("POST /api/v1/model-secrets/probe", requireModelProviderManage(modelGovernanceHandler.ProbeSecret))
+	mux.Handle("PUT /api/v1/model-policy", requireRecentPermission("model:policy:manage", modelGovernanceHandler.UpdatePolicy))
+	mux.Handle("POST /api/v1/model-secrets/probe", requireRecentPermission("model:provider:manage", modelGovernanceHandler.ProbeSecret))
 	mux.Handle("GET /api/v1/platform/model-api-configs", requirePlatformModelManage(modelGovernanceHandler.ListManagedAPIConfigs))
 	mux.Handle("POST /api/v1/platform/model-api-configs", requirePlatformModelManage(modelGovernanceHandler.CreateManagedAPIConfig))
 	mux.Handle("POST /api/v1/platform/model-api-configs/resolve", requirePlatformModelManage(modelGovernanceHandler.ResolveManagedAPIProvider))
@@ -427,8 +510,8 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	mux.Handle("DELETE /api/v1/platform/model-api-configs/{id}", requirePlatformModelManage(modelGovernanceHandler.DeleteManagedAPIConfig))
 	mux.Handle("POST /api/v1/platform/model-api-configs/{id}/probe", requirePlatformModelManage(modelGovernanceHandler.ProbeManagedAPIConfig))
 	mux.Handle("GET /api/v1/model-sandbox-approvals", requireModelRead(modelGovernanceHandler.ListSandboxApprovals))
-	mux.Handle("POST /api/v1/model-sandbox-approvals", requireModelProviderManage(modelGovernanceHandler.CreateSandboxApproval))
-	mux.Handle("POST /api/v1/model-sandbox-approvals/{id}/revoke", requireModelProviderManage(modelGovernanceHandler.RevokeSandboxApproval))
+	mux.Handle("POST /api/v1/model-sandbox-approvals", requireRecentPermission("model:provider:manage", modelGovernanceHandler.CreateSandboxApproval))
+	mux.Handle("POST /api/v1/model-sandbox-approvals/{id}/revoke", requireRecentPermission("model:provider:manage", modelGovernanceHandler.RevokeSandboxApproval))
 	mux.Handle("GET /api/v1/model-evaluation-runs", requireModelRead(modelGovernanceHandler.ListEvaluationRuns))
 	mux.Handle("POST /api/v1/model-evaluation-runs", requireModelEvaluationManage(modelGovernanceHandler.CreateEvaluationRun))
 	mux.Handle("POST /api/v1/model-evaluation-runs/{id}/candidates", requireModelEvaluationManage(modelGovernanceHandler.AddEvaluationCandidate))
@@ -444,9 +527,9 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	modelcalibration.RegisterRoutes(mux, modelCalibrationHandler, requireModelEvaluationManage)
 	aidisagreement.RegisterRoutes(mux, aiDisagreementHandler, requireReviewWork, requireReviewManage)
 
-	mux.Handle("POST /api/v1/tenants", requireTenantManage(orgHandler.CreateTenant))
+	mux.Handle("POST /api/v1/tenants", requireRecentPermission("tenant:manage", orgHandler.CreateTenant))
 	mux.Handle("GET /api/v1/tenants", requireAuth(http.HandlerFunc(orgHandler.ListTenants)))
-	mux.Handle("PATCH /api/v1/tenants/{id}", requireTenantManage(orgHandler.UpdateTenant))
+	mux.Handle("PATCH /api/v1/tenants/{id}", requireRecentPermission("tenant:manage", orgHandler.UpdateTenant))
 	mux.Handle("POST /api/v1/schools", requireOrgManage(orgHandler.CreateSchool))
 	mux.Handle("GET /api/v1/schools", requireOrgManage(orgHandler.ListSchools))
 	mux.Handle("GET /api/v1/academic-years", requireOrgManage(orgHandler.ListAcademicYears))
@@ -513,6 +596,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	mux.Handle("POST /api/v1/paper-imports/{id}/cancel", requireExamManage(paperHandler.CancelPaperImport))
 	mux.Handle("POST /api/v1/paper-imports/{id}/retry-parse", requireExamManage(paperHandler.RetryPaperImportParse))
 	mux.Handle("POST /api/v1/exams/{examId}/questions", requireExamManage(withScopedExam(paperHandler.CreateQuestion)))
+	mux.Handle("POST /api/v1/exams/{examId}/questions/materialize-from-bank", authenticate(auth.RequirePermission("exam:manage")(auth.RequirePermission("question_bank:read")(idempotency.CommandIdentity(withScopedExam(questionBankHandler.Materialize))))))
 	mux.Handle("GET /api/v1/exams/{examId}/questions", requireExamManage(withScopedExam(paperHandler.ListQuestions)))
 	mux.Handle("PATCH /api/v1/questions/{id}", requireExamManage(paperHandler.UpdateQuestion))
 	mux.Handle("DELETE /api/v1/questions/{id}", requireExamManage(paperHandler.DeleteQuestion))
@@ -670,20 +754,23 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	mux.Handle("GET /api/v1/arbitration-tasks/{id}", requireArbitrationWork(reviewHandler.GetArbitrationTask))
 	mux.Handle("POST /api/v1/arbitration-tasks/{id}/assign", requireArbitrationManage(reviewHandler.AssignArbitrationTask))
 	mux.Handle("POST /api/v1/arbitration-tasks/{id}/submit", requireArbitrationWork(reviewHandler.SubmitArbitration))
-	mux.Handle("POST /api/v1/exams/{examId}/finalize", requireScoreManage(withScopedExam(scoreHandler.FinalizeExam)))
+	mux.Handle("POST /api/v1/exams/{examId}/finalize", requireRecentPermission("score:manage", withScopedExam(scoreHandler.FinalizeExam)))
 	mux.Handle("GET /api/v1/exams/{examId}/grades", requireScoreManage(withScopedExam(scoreHandler.ListExamGrades)))
 	mux.Handle("GET /api/v1/exams/{examId}/grades/quality", requireScoreManage(withScopedExam(scoreHandler.CheckQuality)))
 	mux.Handle("GET /api/v1/exams/{examId}/roster", requireRosterManage(withScopedExam(scoreHandler.ListRoster)))
 	mux.Handle("PUT /api/v1/exams/{examId}/roster/{studentId}/attendance", requireRosterManage(withScopedExam(scoreHandler.SetAttendance)))
-	mux.Handle("POST /api/v1/exams/{examId}/confirm-grades", requireScoreManage(withScopedExam(scoreHandler.ConfirmGrades)))
-	mux.Handle("POST /api/v1/exams/{examId}/publish", requireScoreManage(withScopedExam(scoreHandler.PublishGrades)))
+	mux.Handle("POST /api/v1/exams/{examId}/confirm-grades", requireRecentPermission("score:manage", withScopedExam(scoreHandler.ConfirmGrades)))
+	mux.Handle("POST /api/v1/exams/{examId}/publish", requireRecentPermission("score:manage", withScopedExam(scoreHandler.PublishGrades)))
 	scoreReleaseExamManage := func(handler http.HandlerFunc) http.Handler {
-		return requireScoreManage(withScopedExam(handler))
+		return requireSensitiveMutation("score:manage", withScopedExam(handler))
 	}
-	scorerelease.RegisterRoutes(mux, scoreReleaseHandler, scoreReleaseExamManage, requireScoreManage, requireStudentGradeAccess)
+	scoreReleaseManage := func(handler http.HandlerFunc) http.Handler {
+		return requireSensitiveMutation("score:manage", handler)
+	}
+	scorerelease.RegisterRoutes(mux, scoreReleaseHandler, scoreReleaseExamManage, scoreReleaseManage, requireStudentGradeAccess)
 	releasegate.RegisterRoutes(mux, releaseGateHandler, scoreReleaseExamManage)
 	studentportal.RegisterRoutes(mux, studentPortalHandler, requireStudentGradeAccess)
-	mux.Handle("GET /api/v1/exams/{examId}/grades/export", requireScoreManage(withScopedExam(scoreHandler.ExportGrades)))
+	mux.Handle("GET /api/v1/exams/{examId}/grades/export", requireRecentPermission("score:manage", withScopedExam(scoreHandler.ExportGrades)))
 	mux.Handle("GET /api/v1/students/{studentId}/exams/{examId}/grade", requireStudentGradeAccess(withScopedExam(scoreHandler.GetStudentGrade)))
 	mux.Handle("POST /api/v1/appeals", requireAppealCreate(appealHandler.CreateAppeal))
 	mux.Handle("GET /api/v1/appeals", requireAppealRead(appealHandler.ListAppeals))
@@ -708,7 +795,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	mux.Handle("GET /api/v1/exams/{examId}/reports/questions", requireReportRead(withScopedExam(reportHandler.Questions)))
 	mux.Handle("GET /api/v1/exams/{examId}/reports/grading-quality", requireReportRead(withScopedExam(reportHandler.GradingQuality)))
 	mux.Handle("GET /api/v1/students/{studentId}/reports/{examId}", requireAuth(http.HandlerFunc(reportHandler.StudentReport)))
-	mux.Handle("POST /api/v1/exams/{examId}/reports/export", requireReportExport(withScopedExam(reportHandler.Export)))
+	mux.Handle("POST /api/v1/exams/{examId}/reports/export", requireRecentPermission("report:export", withScopedExam(reportHandler.Export)))
 	// Gold sets, answer-group reference cases, Seed observations and drift
 	// evidence are quality-management facts.  A grader receives only the
 	// current calibration/Seed task through the ordinary review flow; exposing
@@ -721,7 +808,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	graderdrift.RegisterRoutes(mux, graderDriftHandler, requireReviewManage, requireReviewManage)
 	backmark.RegisterRoutes(mux, backmarkHandler, requireReviewManage, requireReviewWork)
 	regrade.RegisterRoutes(mux, regradeHandler, requireReviewManage, requireReviewWork)
-	regraderelease.RegisterRoutes(mux, regradeReleaseHandler, requireScoreManage)
+	regraderelease.RegisterRoutes(mux, regradeReleaseHandler, scoreReleaseManage)
 	if qualityDashboardHandler != nil {
 		qualitydashboard.RegisterRoutes(mux, qualityDashboardHandler, requireReviewManage)
 	}
@@ -739,7 +826,7 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	mux.Handle("POST /api/v1/review-tasks/{id}/assign", requireReviewManage(reviewHandler.AssignTask))
 	mux.Handle("GET /api/v1/review-commands/{commandId}", requireAuth(auth.RequireAnyPermission("review:manage", "review:work", "arbitration:manage", "arbitration:work")(http.HandlerFunc(reviewHandler.RecoverCommand))))
 	mux.Handle("GET /api/v1/score-commands/{commandId}", requireScoreManage(scoreHandler.RecoverCommand))
-	mux.Handle("GET /api/v1/report-commands/{commandId}", requireReportExport(reportHandler.RecoverCommand))
+	mux.Handle("GET /api/v1/report-commands/{commandId}", requireRecentPermission("report:export", reportHandler.RecoverCommand))
 	mux.Handle("POST /api/v1/review-tasks/{id}/submit", requireReviewWork(reviewHandler.SubmitGrade))
 	mux.Handle("POST /api/v1/review-tasks/{id}/return", requireReviewWork(reviewHandler.ReturnTask))
 	mux.Handle("GET /api/v1/review-tasks/{id}/draft", requireReviewWork(reviewHandler.GetDraft))
@@ -758,8 +845,15 @@ func NewRouterComplete(dependencies RouterDependencies) http.Handler {
 	mux.Handle("POST /api/v1/review/comment-templates/{shortcut}/use", requireReviewWork(reviewAnnotationHandler.UseCommentTemplate))
 	mux.HandleFunc("/", h.NotFound)
 
+	rootHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/question-bank/items/import-from-question/") {
+			questionBankImportMux.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 	return middleware.Chain(
-		mux,
+		rootHandler,
 		middleware.Recover(logg),
 		middleware.RequestID(),
 		middleware.AccessLog(logg, cfg.Observability.SlowRequestThreshold),

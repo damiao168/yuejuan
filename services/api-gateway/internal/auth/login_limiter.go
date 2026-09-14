@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,114 @@ type LoginLimiter interface {
 	IsBlocked(ctx context.Context, key string, now time.Time) (time.Duration, bool)
 	RegisterFailure(ctx context.Context, key string, now time.Time) (int, time.Duration, bool)
 	Clear(ctx context.Context, key string)
+}
+
+type LoginAttempt struct {
+	TenantCode string
+	Identifier string
+	IPAddress  string
+	// AccountID is resolved by the server, never accepted from login JSON.
+	// It joins username, phone and employee-number aliases into one bucket.
+	AccountID string
+}
+
+type LoginLimit struct {
+	Bucket     string
+	RetryAfter time.Duration
+}
+
+type LoginAttemptGuard interface {
+	Check(ctx context.Context, attempt LoginAttempt, now time.Time) (LoginLimit, bool)
+	RegisterFailure(ctx context.Context, attempt LoginAttempt, now time.Time) (LoginLimit, bool)
+	RegisterSuccess(ctx context.Context, attempt LoginAttempt)
+}
+
+type LayeredLoginAttemptGuard struct {
+	account LoginLimiter
+	source  LoginLimiter
+	pair    LoginLimiter
+}
+
+func NewLayeredLoginAttemptGuard(account, source, pair LoginLimiter) *LayeredLoginAttemptGuard {
+	return &LayeredLoginAttemptGuard{account: account, source: source, pair: pair}
+}
+
+func NewMemoryLoginAttemptGuard(limit int, window time.Duration) *LayeredLoginAttemptGuard {
+	if limit <= 0 {
+		limit = 5
+	}
+	sourceLimit := limit * 10
+	if sourceLimit < 50 {
+		sourceLimit = 50
+	}
+	return NewLayeredLoginAttemptGuard(
+		NewLoginFailureLimiter(limit, window),
+		NewLoginFailureLimiter(sourceLimit, window),
+		NewLoginFailureLimiter(limit, window),
+	)
+}
+
+func (l *LayeredLoginAttemptGuard) Check(ctx context.Context, attempt LoginAttempt, now time.Time) (LoginLimit, bool) {
+	for _, bucket := range l.buckets(attempt) {
+		if bucket.limiter == nil {
+			continue
+		}
+		if retryAfter, blocked := bucket.limiter.IsBlocked(ctx, bucket.key, now); blocked {
+			return LoginLimit{Bucket: bucket.name, RetryAfter: retryAfter}, true
+		}
+	}
+	return LoginLimit{}, false
+}
+
+func (l *LayeredLoginAttemptGuard) RegisterFailure(ctx context.Context, attempt LoginAttempt, now time.Time) (LoginLimit, bool) {
+	var result LoginLimit
+	blocked := false
+	for _, bucket := range l.buckets(attempt) {
+		if bucket.limiter == nil {
+			continue
+		}
+		_, retryAfter, currentBlocked := bucket.limiter.RegisterFailure(ctx, bucket.key, now)
+		if currentBlocked && (!blocked || retryAfter > result.RetryAfter) {
+			result = LoginLimit{Bucket: bucket.name, RetryAfter: retryAfter}
+			blocked = true
+		}
+	}
+	return result, blocked
+}
+
+func (l *LayeredLoginAttemptGuard) RegisterSuccess(ctx context.Context, attempt LoginAttempt) {
+	// A valid credential proves control of the account and pair. A successful
+	// login must not erase the source-IP history for every other account.
+	if l.account != nil {
+		l.account.Clear(ctx, loginAttemptAccountKey(attempt))
+		if attempt.AccountID != "" {
+			l.account.Clear(ctx, LoginAccountFailureKey(attempt.TenantCode, attempt.Identifier))
+		}
+	}
+	if l.pair != nil {
+		l.pair.Clear(ctx, LoginPairFailureKey(attempt.TenantCode, attempt.Identifier, attempt.IPAddress))
+	}
+}
+
+type loginBucket struct {
+	name    string
+	key     string
+	limiter LoginLimiter
+}
+
+func (l *LayeredLoginAttemptGuard) buckets(attempt LoginAttempt) []loginBucket {
+	return []loginBucket{
+		{name: "account", key: loginAttemptAccountKey(attempt), limiter: l.account},
+		{name: "pair", key: LoginPairFailureKey(attempt.TenantCode, attempt.Identifier, attempt.IPAddress), limiter: l.pair},
+		{name: "source", key: LoginSourceFailureKey(attempt.IPAddress), limiter: l.source},
+	}
+}
+
+func loginAttemptAccountKey(attempt LoginAttempt) string {
+	if attempt.AccountID != "" {
+		return "account-id|" + normalizeLoginKeyPart(attempt.TenantCode) + "|" + attempt.AccountID
+	}
+	return LoginAccountFailureKey(attempt.TenantCode, attempt.Identifier)
 }
 
 type LoginFailureLimiter struct {
@@ -38,7 +147,38 @@ func NewLoginFailureLimiter(limit int, window time.Duration) *LoginFailureLimite
 }
 
 func LoginFailureKey(tenantCode string, username string, ipAddress string) string {
-	return strings.ToLower(strings.TrimSpace(tenantCode)) + "|" + strings.ToLower(strings.TrimSpace(username)) + "|" + strings.TrimSpace(ipAddress)
+	return LoginPairFailureKey(tenantCode, username, ipAddress)
+}
+
+func LoginAccountFailureKey(tenantCode string, identifier string) string {
+	return "account|" + normalizeLoginKeyPart(tenantCode) + "|" + normalizeLoginIdentifier(identifier)
+}
+
+func LoginSourceFailureKey(ipAddress string) string {
+	return "source|" + normalizeLoginSource(ipAddress)
+}
+
+func LoginPairFailureKey(tenantCode string, identifier string, ipAddress string) string {
+	return "pair|" + normalizeLoginKeyPart(tenantCode) + "|" + normalizeLoginIdentifier(identifier) + "|" + normalizeLoginSource(ipAddress)
+}
+
+func normalizeLoginKeyPart(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func normalizeLoginIdentifier(value string) string {
+	if phone, err := NormalizePhone(value); err == nil {
+		return phone
+	}
+	return normalizeLoginKeyPart(value)
+}
+
+func normalizeLoginSource(value string) string {
+	value = strings.TrimSpace(value)
+	if ip := net.ParseIP(value); ip != nil {
+		return ip.String()
+	}
+	return value
 }
 
 func (l *LoginFailureLimiter) IsBlocked(_ context.Context, key string, now time.Time) (time.Duration, bool) {

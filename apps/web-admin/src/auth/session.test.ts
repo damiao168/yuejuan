@@ -8,6 +8,7 @@ describe("session organization scope", () => {
       username: "grade_admin", display_name: "高二管理员", status: "active",
       roles: ["school_admin"], permissions: ["exam:manage"],
       data_scope: { school_admin: { scope: "grade", school_name: "示例中学" } },
+      current_session_type: "public_device",
       organization_scope: {
         tenant_wide: false, school_ids: ["school-1"],
         grade_ids: ["grade-2"], class_ids: ["class-1", "class-2"]
@@ -19,5 +20,6 @@ describe("session organization scope", () => {
       resolved: true, tenantWide: false, schoolIds: ["school-1"],
       gradeIds: ["grade-2"], classIds: ["class-1", "class-2"]
     });
+    expect(session.publicComputer).toBe(true);
   });
 });

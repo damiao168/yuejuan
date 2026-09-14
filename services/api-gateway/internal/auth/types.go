@@ -11,6 +11,7 @@ var (
 	ErrUnauthenticated     = errors.New("unauthenticated")
 	ErrForbidden           = errors.New("forbidden")
 	ErrUsernameExists      = errors.New("username already exists")
+	ErrIdentityExists      = errors.New("login identity already exists")
 	ErrRoleNotFound        = errors.New("role not found")
 	ErrRoleAssignment      = errors.New("role assignment is not allowed")
 	ErrOrganizationScope   = errors.New("organization scope is not allowed")
@@ -18,6 +19,8 @@ var (
 	ErrManagedUserNotFound = errors.New("managed user not found")
 	ErrUserStatusForbidden = errors.New("managed user status change is not allowed")
 	ErrLastSchoolAdmin     = errors.New("last active school administrator cannot be disabled")
+	ErrActivationInvalid   = errors.New("activation token is invalid or expired")
+	ErrRecoveryInvalid     = errors.New("recovery token is invalid or expired")
 )
 
 const PlatformTenantID = "00000000-0000-0000-0000-000000000001"
@@ -35,7 +38,13 @@ type User struct {
 	// OrganizationScope is the resolved, server-trusted organization boundary.
 	// DataScope remains the persisted RBAC declaration; clients should use this
 	// projection when deciding which schools, grades and classes are selectable.
-	OrganizationScope *OrganizationScope `json:"organization_scope,omitempty"`
+	OrganizationScope  *OrganizationScope `json:"organization_scope,omitempty"`
+	CurrentSessionType string             `json:"current_session_type,omitempty"`
+	CurrentAuthLevel   int                `json:"-"`
+	ReauthenticatedAt  *time.Time         `json:"-"`
+	CurrentRiskLevel   RiskLevel          `json:"-"`
+	CurrentRiskAction  RiskAction         `json:"-"`
+	RiskPolicyVersion  string             `json:"-"`
 }
 
 type OrganizationScope struct {
@@ -47,17 +56,28 @@ type OrganizationScope struct {
 
 type UserWithPassword struct {
 	User
-	PasswordHash string
+	PasswordHash    string
+	SchoolID        string
+	PhoneNormalized string
+	EmployeeNo      string
+	SecurityEpoch   int64
+	ActivatedAt     time.Time
+	LastLoginAt     time.Time
+	CreatedAt       time.Time
 }
 
 type ManagedUser struct {
-	ID          string    `json:"id"`
-	Username    string    `json:"username"`
-	DisplayName string    `json:"display_name"`
-	Status      string    `json:"status"`
-	Roles       []string  `json:"roles"`
-	SchoolID    string    `json:"school_id,omitempty"`
-	CreatedAt   time.Time `json:"created_at,omitempty"`
+	ID          string     `json:"id"`
+	Username    string     `json:"username"`
+	DisplayName string     `json:"display_name"`
+	PhoneMasked string     `json:"phone_masked,omitempty"`
+	EmployeeNo  string     `json:"employee_no,omitempty"`
+	Status      string     `json:"status"`
+	Roles       []string   `json:"roles"`
+	SchoolID    string     `json:"school_id,omitempty"`
+	ActivatedAt *time.Time `json:"activated_at,omitempty"`
+	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at,omitempty"`
 }
 
 type ManagedUserFilter struct {
@@ -80,12 +100,41 @@ type AssignableRole struct {
 }
 
 type CreateManagedUserInput struct {
-	Username    string   `json:"username"`
-	DisplayName string   `json:"display_name"`
-	Password    string   `json:"password"`
-	RoleCode    string   `json:"role_code"`
-	SchoolID    string   `json:"school_id,omitempty"`
-	ClassIDs    []string `json:"class_ids,omitempty"`
+	Username            string    `json:"username"`
+	Phone               string    `json:"phone,omitempty"`
+	EmployeeNo          string    `json:"employee_no,omitempty"`
+	DisplayName         string    `json:"display_name"`
+	Password            string    `json:"password"`
+	RoleCode            string    `json:"role_code"`
+	SchoolID            string    `json:"school_id,omitempty"`
+	ClassIDs            []string  `json:"class_ids,omitempty"`
+	ActivationTokenHash string    `json:"-"`
+	ActivationExpiresAt time.Time `json:"-"`
+}
+
+type ActivationPreview struct {
+	DisplayName string    `json:"display_name"`
+	TenantCode  string    `json:"tenant_code"`
+	SchoolID    string    `json:"school_id,omitempty"`
+	PhoneMasked string    `json:"phone_masked,omitempty"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+type ActivationResult struct {
+	TenantID string
+	UserID   string
+}
+
+type RecoveryPreview struct {
+	DisplayName string    `json:"display_name"`
+	TenantCode  string    `json:"tenant_code"`
+	PhoneMasked string    `json:"phone_masked,omitempty"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+type RecoveryResult struct {
+	TenantID string
+	UserID   string
 }
 
 type UpdateManagedUserStatusInput struct {
@@ -102,20 +151,30 @@ type Session struct {
 const (
 	SessionTypeStandard         = "standard"
 	SessionTypeRememberedDevice = "remembered_device"
+	SessionTypePublicDevice     = "public_device"
 	SessionTypeDesktopDevice    = "desktop_device"
 	SessionTypeService          = "service"
 )
 
 type CreateSessionInput struct {
-	TenantID      string
-	UserID        string
-	TokenHash     string
-	SessionType   string
-	DeviceID      string
-	DeviceName    string
-	UserAgentHash string
-	IPPrefix      string
-	ExpiresAt     time.Time
+	TenantID            string
+	UserID              string
+	TokenHash           string
+	SessionType         string
+	DeviceID            string
+	DeviceName          string
+	UserAgentHash       string
+	IPPrefix            string
+	ExpiresAt           time.Time
+	RiskLevel           RiskLevel
+	RiskAction          RiskAction
+	RiskScore           int
+	RiskEvaluatedAt     time.Time
+	RiskPolicyVersion   string
+	RiskEvidenceQuality RiskEvidenceQuality
+	// SecurityEpoch is the credential snapshot verified during login. A
+	// positive value must still match when the session is created.
+	SecurityEpoch int64
 }
 
 type DeviceSession struct {
@@ -177,8 +236,13 @@ type AuditFilter struct {
 
 type Store interface {
 	FindUserByLogin(ctx context.Context, tenantCode string, username string) (UserWithPassword, error)
+	FindPasswordHash(ctx context.Context, tenantID string, userID string) (string, error)
+	RecordSuccessfulLogin(ctx context.Context, tenantID string, userID string, expectedPasswordHash string, replacementPasswordHash string) error
 	CreateSession(ctx context.Context, input CreateSessionInput) (DeviceSession, error)
 	FindUserBySession(ctx context.Context, tokenHash string, now time.Time) (User, error)
+	FindUserBySessionForReauthentication(ctx context.Context, tokenHash string, now time.Time) (User, error)
+	LockSession(ctx context.Context, tenantID string, userID string, tokenHash string, now time.Time) (bool, error)
+	MarkSessionReauthenticated(ctx context.Context, tenantID string, userID string, tokenHash string, startedAt time.Time, now time.Time) (bool, error)
 	ResolveAccessScope(ctx context.Context, user User) (AccessScope, error)
 	DeleteSession(ctx context.Context, tokenHash string, reason string) error
 	ListSessions(ctx context.Context, tenantID string, userID string, currentTokenHash string, now time.Time) ([]DeviceSession, error)
@@ -190,5 +254,11 @@ type Store interface {
 	ListManagedUsers(ctx context.Context, tenantID string, filter ManagedUserFilter) ([]ManagedUser, error)
 	ListAssignableRoles(ctx context.Context, actor User) ([]AssignableRole, error)
 	CreateManagedUser(ctx context.Context, actor User, actorScope AccessScope, input CreateManagedUserInput, passwordHash string) (ManagedUser, error)
+	CreateActivation(ctx context.Context, actor User, actorScope AccessScope, userID string, tokenHash string, expiresAt time.Time) (ActivationPreview, error)
+	FindActivation(ctx context.Context, tokenHash string, now time.Time) (ActivationPreview, error)
+	ActivateUser(ctx context.Context, tokenHash string, passwordHash string, now time.Time) (ActivationResult, error)
+	CreateRecovery(ctx context.Context, actor User, actorScope AccessScope, userID string, tokenHash string, expiresAt time.Time) (RecoveryPreview, error)
+	FindRecovery(ctx context.Context, tokenHash string, now time.Time) (RecoveryPreview, error)
+	CompleteRecovery(ctx context.Context, tokenHash string, passwordHash string, now time.Time) (RecoveryResult, error)
 	UpdateManagedUserStatus(ctx context.Context, actor User, actorScope AccessScope, userID string, status string) (ManagedUser, string, error)
 }

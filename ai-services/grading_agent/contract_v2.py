@@ -5,19 +5,16 @@ import math
 import re
 
 from .contract import (
-    CANONICAL_RISK_FLAGS,
     _exact_fields,
     _fail,
     _fail_evidence,
     _fail_model,
     _is_number,
-    _number_evidence,
     _number_model,
     _string,
     validate_request,
 )
 from .errors import AgentError
-from .guardrails import normalize_evidence_text
 
 SCHEMA_VERSION = "grading-agent-v2"
 MAX_MEDIA_BYTES = 5 * 1024 * 1024
@@ -48,6 +45,7 @@ _REQUEST_FIELDS = {
     "prompt_guard",
     "output_constraint",
     "media_evidence",
+    "math_evidence",
 }
 _MEDIA_FIELDS = {
     "kind",
@@ -67,17 +65,10 @@ _RESPONSE_FIELDS = {
     "request_id",
     "status",
     "delivery",
-    "suggested_score",
-    "max_score",
-    "confidence",
-    "matched_points",
-    "missing_points",
-    "deductions",
-    "evidence",
+    "criterion_candidates",
+    "alternative_solution_candidate",
     "risk_flags",
     "needs_human_review",
-    "student_feedback",
-    "teacher_note",
     "model_version",
     "prompt_version",
     "rubric_version",
@@ -85,6 +76,8 @@ _RESPONSE_FIELDS = {
     "mock",
     "telemetry",
 }
+_MATH_FIELDS = {"artifact_id", "artifact_version", "correction_revision", "exam_question_snapshot_id", "scoring_version", "overall_confidence", "quality", "steps", "formulas", "verifications", "rubric_evidence", "has_diagram", "graph_uncertain", "required_rubric_uncertain"}
+_QUALITY_FIELDS = {"recognition", "formula", "structure", "verification", "rubric_mapping", "critical"}
 _FORBIDDEN_FIELDS = {
     "tenant_id",
     "school_id",
@@ -216,11 +209,65 @@ def validate_request_v2(payload):
     # Reuse the already-parsed values without duplicating the bounded Base64
     # string. The v1 validator is read-only, so a shallow inherited envelope is
     # sufficient and keeps peak memory predictable for the future v2 seam.
-    inherited = {key: value for key, value in payload.items() if key != "media_evidence"}
+    inherited = {key: value for key, value in payload.items() if key not in {"media_evidence", "math_evidence"}}
     inherited["schema_version"] = "grading-agent-v1"
     validate_request(inherited)
     validate_media_evidence(payload["media_evidence"], payload)
+    validate_math_evidence(payload["math_evidence"], request_id)
     return payload
+
+
+def validate_math_evidence(evidence, request_id):
+    if not isinstance(evidence, dict):
+        _fail("math_evidence must be an object", request_id)
+    _exact_fields(evidence, _MATH_FIELDS, "math_evidence", request_id)
+    _string(evidence["artifact_id"], "math_evidence.artifact_id", request_id, 1, 128)
+    _string(evidence["exam_question_snapshot_id"], "math_evidence.exam_question_snapshot_id", request_id, 1, 128)
+    if isinstance(evidence["artifact_version"], bool) or not isinstance(evidence["artifact_version"], int) or evidence["artifact_version"] <= 0:
+        _fail("math_evidence.artifact_version must be positive", request_id)
+    if isinstance(evidence["correction_revision"], bool) or not isinstance(evidence["correction_revision"], int) or evidence["correction_revision"] < 0:
+        _fail("math_evidence.correction_revision is invalid", request_id)
+    if evidence["scoring_version"] != "math-rubric-score-v1":
+        _fail("math_evidence.scoring_version is unsupported", request_id)
+    _number_model(evidence["overall_confidence"], "math evidence confidence", request_id, 0, 1)
+    quality = evidence["quality"]
+    _exact_fields(quality, _QUALITY_FIELDS, "math_evidence.quality", request_id)
+    for key in _QUALITY_FIELDS:
+        _number_model(quality[key], f"math_evidence.quality.{key}", request_id, 0, 1)
+    if not math.isclose(quality["critical"], min(quality[key] for key in _QUALITY_FIELDS if key != "critical"), abs_tol=1e-9):
+        _fail("math_evidence.quality.critical must be the minimum dimension", request_id)
+    known = set()
+    steps = evidence["steps"]
+    if not isinstance(steps, list) or not 1 <= len(steps) <= 512:
+        _fail("math_evidence.steps must be a bounded non-empty array", request_id)
+    for index, step in enumerate(steps):
+        expected = {"id", "formula_ids", "confidence"} | ({"text"} if "text" in step else set())
+        _exact_fields(step, expected, f"math_evidence.steps[{index}]", request_id)
+        _string(step["id"], f"math_evidence.steps[{index}].id", request_id, 1, 128)
+        if step["id"] in known or not isinstance(step["formula_ids"], list):
+            _fail("math_evidence step identity is invalid", request_id)
+        known.add(step["id"])
+        _number_model(step["confidence"], "math step confidence", request_id, 0, 1)
+    formulas = evidence["formulas"]
+    if not isinstance(formulas, list) or len(formulas) > 512:
+        _fail("math_evidence.formulas must be bounded", request_id)
+    for index, formula in enumerate(formulas):
+        expected = {"id", "step_ids", "parse_status", "reason_codes", "bbox", "confidence"} | ({"canonical_latex"} if "canonical_latex" in formula else set())
+        _exact_fields(formula, expected, f"math_evidence.formulas[{index}]", request_id)
+        _string(formula["id"], f"math_evidence.formulas[{index}].id", request_id, 1, 128)
+        if formula["id"] in known or formula["parse_status"] not in {"parsed", "ambiguous", "unsupported", "failed"}:
+            _fail("math_evidence formula identity or status is invalid", request_id)
+        known.add(formula["id"])
+        _number_model(formula["confidence"], "math formula confidence", request_id, 0, 1)
+        _bbox_units(formula["bbox"], request_id)
+    if not isinstance(evidence["verifications"], list) or len(evidence["verifications"]) > 2048:
+        _fail("math_evidence.verifications must be bounded", request_id)
+    if not isinstance(evidence["rubric_evidence"], list) or len(evidence["rubric_evidence"]) > 512:
+        _fail("math_evidence.rubric_evidence must be bounded", request_id)
+    for flag in ("has_diagram", "graph_uncertain", "required_rubric_uncertain"):
+        if not isinstance(evidence[flag], bool):
+            _fail(f"math_evidence.{flag} must be boolean", request_id)
+    return known
 
 
 def _validate_crop_bbox(bbox, request_id):
@@ -234,96 +281,50 @@ def _validate_crop_bbox(bbox, request_id):
 
 
 def validate_response_v2(suggestion, request):
-    """Validate an already-normalized v2 suggestion without enabling a v2 route."""
+    """Validate a score-free semantic mapping returned by the model."""
 
     request_id = request["request_id"]
     if not isinstance(suggestion, dict):
         _fail_model("suggestion must be an object", request_id)
     _exact_fields(suggestion, _RESPONSE_FIELDS, "suggestion", request_id)
-    if suggestion["schema_version"] != SCHEMA_VERSION:
-        _fail_model("suggestion schema version mismatch", request_id)
-    if suggestion["request_id"] != request_id:
-        _fail_model("suggestion request id mismatch", request_id)
-    if suggestion["status"] != "suggestion":
-        _fail_model("suggestion status is invalid", request_id)
-    if suggestion["delivery"] not in {"teacher_suggestion", "shadow_only"}:
-        _fail_model("suggestion delivery is invalid", request_id)
+    if suggestion["schema_version"] != SCHEMA_VERSION or suggestion["request_id"] != request_id:
+        _fail_model("suggestion contract binding mismatch", request_id)
+    if suggestion["status"] != "candidate_mapping" or suggestion["delivery"] != "teacher_suggestion":
+        _fail_model("suggestion route is invalid", request_id)
     if suggestion["needs_human_review"] is not True or suggestion["mock"] is not False:
         _fail_model("suggestion governance flags are invalid", request_id)
     if suggestion["rubric_version"] != request["rubric_version"] or suggestion["prompt_version"] != request["prompt_version"]:
         _fail_model("suggestion version mismatch", request_id)
-    if suggestion["max_score"] != request["max_score"]:
-        _fail_model("suggestion max score mismatch", request_id)
-    _number_model(suggestion["confidence"], "confidence", request_id, 0, 1)
-    if suggestion["deductions"] != []:
-        _fail_model("suggestion deductions are not enabled", request_id)
-    risk_flags = suggestion["risk_flags"]
-    if (
-        not isinstance(risk_flags, list)
-        or len(risk_flags) > 20
-        or any(not isinstance(flag, str) for flag in risk_flags)
-        or len(set(risk_flags)) != len(risk_flags)
-        or not set(risk_flags).issubset(CANONICAL_RISK_FLAGS)
-    ):
+    if not isinstance(suggestion["alternative_solution_candidate"], bool):
+        _fail_model("alternative solution candidate flag is invalid", request_id)
+    allowed_risks = {"alternative_solution_candidate", "schema_repaired", "prompt_injection_suspected", "human_review_required"}
+    risks = suggestion["risk_flags"]
+    if not isinstance(risks, list) or len(risks) > 20 or len(risks) != len(set(risks)) or not set(risks).issubset(allowed_risks):
         _fail_model("suggestion contains an unsupported risk flag", request_id)
+    if suggestion["alternative_solution_candidate"] and "alternative_solution_candidate" not in risks:
+        _fail_model("alternative solution candidate must carry its risk flag", request_id)
 
     rubric_points = {point["id"] for point in request["rubric"]["points"]}
-    evidence_by_id = {}
-    evidence = suggestion["evidence"]
-    if not isinstance(evidence, list) or len(evidence) > 200:
-        _fail_evidence("evidence must be a bounded array", request_id)
-    for index, item in enumerate(evidence):
-        if not isinstance(item, dict):
-            _fail_evidence(f"evidence[{index}] must be an object", request_id)
-        common = {"evidence_id", "rubric_point_id", "location", "confidence"}
-        location = item.get("location")
-        expected = common | ({"text_excerpt"} if location == "answer_text" else {"crop_sha256", "normalized_bbox"})
-        if set(item) != expected:
-            _fail_evidence(f"evidence[{index}] fields are invalid", request_id)
-        evidence_id = item["evidence_id"]
-        point_id = item["rubric_point_id"]
-        _string(evidence_id, f"evidence[{index}].evidence_id", request_id)
-        _string(point_id, f"evidence[{index}].rubric_point_id", request_id)
-        if evidence_id in evidence_by_id:
-            _fail_evidence("suggestion emitted duplicate evidence ids", request_id)
-        if point_id not in rubric_points:
-            _fail_evidence("suggestion evidence references an unknown rubric point", request_id)
-        _number_evidence(item["confidence"], "evidence confidence", request_id, 0, 1)
-        if location == "answer_text":
-            _string(item["text_excerpt"], f"evidence[{index}].text_excerpt", request_id, 1, 4000)
-            excerpt = normalize_evidence_text(item["text_excerpt"])
-            if not excerpt or excerpt not in normalize_evidence_text(request["answer_text"]):
-                _fail_evidence("evidence excerpt does not occur in the answer", request_id)
-        elif location == "answer_crop":
-            if item["crop_sha256"] != request["media_evidence"]["sha256"]:
-                _fail_evidence("answer_crop hash does not match request media", request_id)
-            _validate_crop_bbox(item["normalized_bbox"], request_id)
-        else:
-            _fail_evidence("evidence location is unsupported", request_id)
-        evidence_by_id[evidence_id] = item
-
-    matched = suggestion["matched_points"]
-    if not isinstance(matched, list) or len(matched) > 100:
-        _fail_model("matched_points must be a bounded array", request_id)
-    score = 0
-    matched_ids = set()
-    for index, point in enumerate(matched):
-        expected = {"rubric_point_id", "label", "score", "evidence_ids"}
-        if not isinstance(point, dict) or set(point) != expected:
-            _fail_model(f"matched_points[{index}] is invalid", request_id)
-        point_id = point["rubric_point_id"]
-        if point_id not in rubric_points or point_id in matched_ids:
-            _fail_model("matched point is unknown or duplicated", request_id)
-        matched_ids.add(point_id)
-        _number_model(point["score"], "matched point score", request_id, 0, request["max_score"])
-        if not isinstance(point["evidence_ids"], list) or not point["evidence_ids"]:
-            _fail_evidence("matched point must link evidence", request_id)
-        for evidence_id in point["evidence_ids"]:
-            linked = evidence_by_id.get(evidence_id)
-            if not linked or linked["rubric_point_id"] != point_id:
-                _fail_evidence("matched point evidence link is invalid", request_id)
-        score += point["score"]
-    _number_model(suggestion["suggested_score"], "suggested score", request_id, 0, request["max_score"])
-    if not math.isclose(score, suggestion["suggested_score"], abs_tol=1e-6):
-        _fail_model("suggested score was not code-recomputed", request_id)
+    known_evidence = {step["id"] for step in request["math_evidence"]["steps"]} | {formula["id"] for formula in request["math_evidence"]["formulas"]}
+    candidates = suggestion["criterion_candidates"]
+    if not isinstance(candidates, list) or len(candidates) > 100:
+        _fail_model("criterion_candidates must be a bounded array", request_id)
+    seen = set()
+    for index, candidate in enumerate(candidates):
+        expected = {"rubric_point_id", "status", "evidence_ids", "confidence", "reason_code"}
+        if not isinstance(candidate, dict) or set(candidate) != expected:
+            _fail_model(f"criterion_candidates[{index}] is invalid", request_id)
+        point_id = candidate["rubric_point_id"]
+        if point_id not in rubric_points or point_id in seen:
+            _fail_model("criterion candidate is unknown or duplicated", request_id)
+        seen.add(point_id)
+        if candidate["status"] not in {"supported", "contradicted", "uncertain"}:
+            _fail_model("criterion candidate status is invalid", request_id)
+        _number_model(candidate["confidence"], "criterion candidate confidence", request_id, 0, 1)
+        _string(candidate["reason_code"], "criterion candidate reason", request_id, 1, 256)
+        ids = candidate["evidence_ids"]
+        if not isinstance(ids, list) or len(ids) > 100 or len(ids) != len(set(ids)) or any(item not in known_evidence for item in ids):
+            _fail_evidence("criterion candidate evidence link is invalid", request_id)
+        if candidate["status"] in {"supported", "contradicted"} and not ids:
+            _fail_evidence("supported or contradicted candidate requires evidence", request_id)
     return suggestion

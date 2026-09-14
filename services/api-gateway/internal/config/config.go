@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"math"
@@ -59,10 +60,17 @@ type PostgresConfig struct {
 type AuthConfig struct {
 	SessionTTL           time.Duration
 	RememberedSessionTTL time.Duration
+	PublicSessionTTL     time.Duration
+	RecentAuthTTL        time.Duration
 	LoginFailureLimit    int
 	LoginFailureWindow   time.Duration
 	SessionCookieName    string
+	DeviceCookieName     string
 	SessionCookieSecure  bool
+	RiskMode             string
+	DeviceBindingTTL     time.Duration
+	MFAEnabled           bool
+	MFAMasterKey         string
 }
 
 type SecurityConfig struct {
@@ -102,6 +110,7 @@ type QdrantConfig struct {
 
 type AIServiceConfig struct {
 	Enabled           bool
+	MathGradingV2     bool
 	AllowMock         bool
 	URL               string
 	Token             string
@@ -155,6 +164,7 @@ func Load(envFile string) (Config, error) {
 		"EDUGRADE_AI_SERVICE_TOKEN":            "",
 		"EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY": localModelCredentialMasterKey,
 		"EDUGRADE_BARCODE_HMAC_KEYS":           "",
+		"EDUGRADE_MFA_MASTER_KEY":              "",
 	}
 	secretValues := make(map[string]string, len(secretDefaults))
 	for key, fallback := range secretDefaults {
@@ -183,10 +193,17 @@ func Load(envFile string) (Config, error) {
 		Auth: AuthConfig{
 			SessionTTL:           parser.Duration("EDUGRADE_SESSION_TTL", 8*time.Hour),
 			RememberedSessionTTL: parser.Duration("EDUGRADE_REMEMBERED_SESSION_TTL", 30*24*time.Hour),
+			PublicSessionTTL:     parser.Duration("EDUGRADE_PUBLIC_SESSION_TTL", 4*time.Hour),
+			RecentAuthTTL:        parser.Duration("EDUGRADE_RECENT_AUTH_TTL", 10*time.Minute),
 			LoginFailureLimit:    parser.Int("EDUGRADE_LOGIN_FAILURE_LIMIT", 5),
 			LoginFailureWindow:   parser.Duration("EDUGRADE_LOGIN_FAILURE_WINDOW", 15*time.Minute),
 			SessionCookieName:    getEnv("EDUGRADE_SESSION_COOKIE_NAME", "edugrade_session"),
+			DeviceCookieName:     getEnv("EDUGRADE_DEVICE_COOKIE_NAME", "edugrade_device"),
 			SessionCookieSecure:  sessionCookieSecure,
+			RiskMode:             strings.ToLower(strings.TrimSpace(getEnv("EDUGRADE_AUTH_RISK_MODE", "shadow"))),
+			DeviceBindingTTL:     parser.Duration("EDUGRADE_DEVICE_BINDING_TTL", 180*24*time.Hour),
+			MFAEnabled:           parser.Bool("EDUGRADE_MFA_ENABLED", false),
+			MFAMasterKey:         secretValues["EDUGRADE_MFA_MASTER_KEY"],
 		},
 		Security: SecurityConfig{
 			MaxHeaderBytes:      parser.Int("EDUGRADE_HTTP_MAX_HEADER_BYTES", 1<<20),
@@ -226,6 +243,7 @@ func Load(envFile string) (Config, error) {
 		},
 		AIService: AIServiceConfig{
 			Enabled:           parser.Bool("EDUGRADE_AI_GRADING_ENABLED", false),
+			MathGradingV2:     parser.Bool("EDUGRADE_MATH_GRADING_V2_ENABLED", false),
 			AllowMock:         parser.Bool("EDUGRADE_ALLOW_MOCK_AI", false),
 			URL:               getEnv("EDUGRADE_AI_SERVICE_URL", ""),
 			Token:             secretValues["EDUGRADE_AI_SERVICE_TOKEN"],
@@ -279,6 +297,21 @@ func parseBarcodeKeys(raw string) map[string][]byte {
 }
 
 func validateProductionConfig(cfg Config) error {
+	if cfg.Auth.MFAEnabled {
+		key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(cfg.Auth.MFAMasterKey))
+		if err != nil || len(key) != 32 {
+			return fmt.Errorf("EDUGRADE_MFA_MASTER_KEY must be a base64-encoded 32-byte independent key when MFA is enabled")
+		}
+		if strings.TrimSpace(cfg.Auth.MFAMasterKey) == strings.TrimSpace(cfg.ModelSecrets.MasterKey) {
+			return fmt.Errorf("EDUGRADE_MFA_MASTER_KEY must not reuse EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY")
+		}
+	}
+	if cfg.Auth.RiskMode != "off" && cfg.Auth.RiskMode != "shadow" {
+		return fmt.Errorf("EDUGRADE_AUTH_RISK_MODE must be off or shadow until business step-up and recovery policies are complete")
+	}
+	if cfg.Auth.DeviceBindingTTL < 24*time.Hour || cfg.Auth.DeviceBindingTTL > 365*24*time.Hour {
+		return fmt.Errorf("EDUGRADE_DEVICE_BINDING_TTL must be between 24h and 8760h")
+	}
 	if err := validatePostgresCapacity(cfg.Postgres); err != nil {
 		return err
 	}
@@ -286,6 +319,9 @@ func validateProductionConfig(cfg Config) error {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			return fmt.Errorf("invalid EDUGRADE_TRUSTED_PROXY_CIDRS entry %q", cidr)
 		}
+	}
+	if cfg.AIService.MathGradingV2 && !cfg.AIService.Enabled {
+		return fmt.Errorf("EDUGRADE_MATH_GRADING_V2_ENABLED requires EDUGRADE_AI_GRADING_ENABLED")
 	}
 	if cfg.AIService.Enabled && strings.TrimSpace(cfg.AIService.URL) != "" {
 		if len(cfg.AIService.Token) < 32 {

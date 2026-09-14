@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { ApiClient, ApiClientError, parseRetryAfterSeconds } from "./client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiClient, ApiClientError, parseRetryAfterSeconds, RECENT_AUTH_REQUIRED_EVENT } from "./client";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("web API diagnostics", () => {
   it("preserves request, trace and field context from the shared error envelope", async () => {
@@ -21,6 +25,21 @@ describe("web API diagnostics", () => {
       traceId: "trace-web-1",
       fieldErrors: { name: ["required"] }
     });
+  });
+
+  it("announces that a sensitive action needs recent authentication", async () => {
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { code: "recent_auth_required", message: "internal detail" }
+    }), { status: 428, headers: { "Content-Type": "application/json" } })));
+    const client = new ApiClient({ baseUrl: "https://grading.example.edu" });
+
+    const error = await client.request("/api/v1/users/user-1/status", { method: "PATCH", body: "{}" }).catch((value) => value);
+
+    expect(error).toMatchObject({ status: 428, code: "recent_auth_required" });
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent.mock.calls[0]?.[0]).toMatchObject({ type: RECENT_AUTH_REQUIRED_EVENT });
   });
 });
 

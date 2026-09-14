@@ -22,7 +22,8 @@
     "model_policy",
     "prompt_guard",
     "output_constraint",
-    "media_evidence"
+    "media_evidence",
+    "math_evidence"
   ],
   "properties": {
     "schema_version": {"const": "grading-agent-v2"},
@@ -95,9 +96,62 @@
           "pattern": "^[A-Za-z0-9+/]+={0,2}$"
         }
       }
-    }
+    },
+    "math_evidence": {"$ref": "#/$defs/mathEvidence"}
   },
   "$defs": {
+    "mathEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "artifact_version", "correction_revision", "exam_question_snapshot_id", "scoring_version", "overall_confidence", "quality", "steps", "formulas", "verifications", "rubric_evidence", "has_diagram", "graph_uncertain", "required_rubric_uncertain"],
+      "properties": {
+        "artifact_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "artifact_version": {"type": "integer", "minimum": 1},
+        "correction_revision": {"type": "integer", "minimum": 0},
+        "exam_question_snapshot_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "scoring_version": {"const": "math-rubric-score-v1"},
+        "overall_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "quality": {
+          "type": "object", "additionalProperties": false,
+          "required": ["recognition", "formula", "structure", "verification", "rubric_mapping", "critical"],
+          "properties": {
+            "recognition": {"type": "number", "minimum": 0, "maximum": 1},
+            "formula": {"type": "number", "minimum": 0, "maximum": 1},
+            "structure": {"type": "number", "minimum": 0, "maximum": 1},
+            "verification": {"type": "number", "minimum": 0, "maximum": 1},
+            "rubric_mapping": {"type": "number", "minimum": 0, "maximum": 1},
+            "critical": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        },
+        "steps": {"type": "array", "minItems": 1, "maxItems": 512, "items": {"$ref": "#/$defs/mathStep"}},
+        "formulas": {"type": "array", "maxItems": 512, "items": {"$ref": "#/$defs/mathFormula"}},
+        "verifications": {"type": "array", "maxItems": 2048, "items": {"$ref": "#/$defs/mathVerification"}},
+        "rubric_evidence": {"type": "array", "maxItems": 512, "items": {"$ref": "#/$defs/rubricEvidence"}},
+        "has_diagram": {"type": "boolean"},
+        "graph_uncertain": {"type": "boolean"},
+        "required_rubric_uncertain": {"type": "boolean"}
+      }
+    },
+    "mathStep": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "formula_ids", "confidence"],
+      "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 128}, "text": {"type": "string", "maxLength": 4000}, "formula_ids": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128}}, "confidence": {"type": "number", "minimum": 0, "maximum": 1}}
+    },
+    "mathFormula": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "step_ids", "parse_status", "reason_codes", "bbox", "confidence"],
+      "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 128}, "step_ids": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128}}, "canonical_latex": {"type": "string", "maxLength": 4000}, "parse_status": {"type": "string", "enum": ["parsed", "ambiguous", "unsupported", "failed"]}, "reason_codes": {"type": "array", "items": {"type": "string", "maxLength": 256}}, "bbox": {"$ref": "#/$defs/normalizedBbox"}, "confidence": {"type": "number", "minimum": 0, "maximum": 1}}
+    },
+    "mathVerification": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "status", "reason_code", "confidence"],
+      "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 128}, "step_id": {"type": "string", "maxLength": 128}, "formula_id": {"type": "string", "maxLength": 128}, "kind": {"type": "string", "maxLength": 64}, "status": {"type": "string", "enum": ["verified", "contradicted", "uncertain", "not_applicable"]}, "reason_code": {"type": "string", "maxLength": 256}, "confidence": {"type": "number", "minimum": 0, "maximum": 1}}
+    },
+    "rubricEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "rubric_criterion_key", "evidence_type", "source_artifact_ids", "status", "confidence"],
+      "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 128}, "rubric_criterion_key": {"type": "string", "minLength": 1, "maxLength": 128}, "evidence_type": {"type": "string", "maxLength": 128}, "source_artifact_ids": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128}}, "verification_ids": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128}}, "status": {"type": "string", "enum": ["supported", "contradicted", "uncertain", "not_applicable", "unsupported"]}, "explanation": {"type": "string", "maxLength": 2000}, "confidence": {"type": "number", "minimum": 0, "maximum": 1}}
+    },
     "normalizedBbox": {
       "type": "object",
       "additionalProperties": false,

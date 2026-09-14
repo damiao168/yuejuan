@@ -53,6 +53,67 @@ func TestPrepareRuntimeArtifactPreservesWorkerRelations(t *testing.T) {
 	}
 }
 
+func TestVerificationRuntimeCreatesImmutableDerivedArtifact(t *testing.T) {
+	ctx := context.Background()
+	artifacts := NewMemoryStore()
+	corrections := NewMemoryCorrectionStore(artifacts)
+	runtime := workerruntime.NewMemoryStore()
+	handler := NewHandler(artifacts, corrections, NewMemoryPilotGateStore(), nil, nil).WithRuntime(runtime)
+	base, err := artifacts.CreateArtifact(ctx, "tenant-a", validInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := handler.enqueueVerificationTask(ctx, "worker-user", base, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := runtime.Claim(ctx, "tenant-a", workerruntime.ClaimInput{
+		QueueName: "math-verification", WorkerService: "ocr-worker", WorkerInstanceID: "worker-1", Limit: 1, LeaseSeconds: 300,
+	})
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim verification: items=%d err=%v", len(claimed), err)
+	}
+
+	inputRequest := httptest.NewRequest(http.MethodGet, "/api/v1/internal/math-verification/tasks/"+task.ID+"/input", nil)
+	inputRequest.SetPathValue("taskId", task.ID)
+	inputRequest = inputRequest.WithContext(auth.WithUser(inputRequest.Context(), auth.User{ID: "worker-user", TenantID: "tenant-a"}))
+	inputResponse := httptest.NewRecorder()
+	handler.GetVerificationRuntimeInput(inputResponse, inputRequest)
+	if inputResponse.Code != http.StatusOK || !bytes.Contains(inputResponse.Body.Bytes(), []byte(`"correction_revision":0`)) {
+		t.Fatalf("verification input code=%d body=%s", inputResponse.Code, inputResponse.Body.String())
+	}
+
+	check := MathVerification{
+		ID: "sympy-solve-1", StepID: "step-1", FormulaID: "formula-1", Kind: "constraint",
+		Status: "verified", ReasonCode: "solution_set_computed", Domain: "real",
+		Engine: "sympy", EngineVersion: "1.14.0", RulesetVersion: "yuejuan-math-rules-v1", Confidence: 1,
+	}
+	body, _ := json.Marshal(completeVerificationRuntimeRequest{
+		LeaseToken: claimed[0].LeaseToken, DurationMS: 18, ArtifactID: base.ID,
+		ArtifactVersion: base.Version, CorrectionRevision: 0, Verifications: []MathVerification{check},
+	})
+	completeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/internal/math-verification/tasks/"+task.ID+"/complete", bytes.NewReader(body))
+	completeRequest.SetPathValue("taskId", task.ID)
+	completeRequest = completeRequest.WithContext(auth.WithUser(completeRequest.Context(), auth.User{ID: "worker-user", TenantID: "tenant-a"}))
+	completeResponse := httptest.NewRecorder()
+	handler.CompleteVerificationRuntimeTask(completeResponse, completeRequest)
+	if completeResponse.Code != http.StatusOK {
+		t.Fatalf("complete verification code=%d body=%s", completeResponse.Code, completeResponse.Body.String())
+	}
+	derived, err := artifacts.GetLatestArtifact(ctx, "tenant-a", base.AnswerSegmentID)
+	if err != nil || derived.Stage != "verified" || derived.ParentArtifactID != base.ID || len(derived.Verifications) != 2 {
+		t.Fatalf("derived artifact=%#v err=%v", derived, err)
+	}
+	storedBase, _ := artifacts.GetArtifact(ctx, "tenant-a", base.ID)
+	if storedBase.IsCurrent || storedBase.Stage != "recognition" || len(storedBase.Verifications) != 1 {
+		t.Fatalf("recognition artifact was mutated: %#v", storedBase)
+	}
+	completed, err := runtime.Get(ctx, "tenant-a", task.ID)
+	if err != nil || completed.Status != workerruntime.StatusSucceeded || completed.Result["artifact_id"] != derived.ID {
+		t.Fatalf("verification runtime=%#v err=%v", completed, err)
+	}
+}
+
 func runtimeSpatialInput(requiresHumanReview bool) CreateArtifactInput {
 	input := validInput()
 	input.InputHash = "hash-1"

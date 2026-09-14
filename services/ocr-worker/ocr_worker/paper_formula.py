@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import math
-import tempfile
 import time
-from pathlib import Path
 from typing import Any
 
 from .formula_validation import (
@@ -14,64 +11,19 @@ from .formula_validation import (
     FormulaValidator,
     validate_latex_structure,
 )
+from .math_layout import (
+    FORMULA_DETECTOR_ACCEPT_SCORE,
+    FORMULA_EDGE_INK_THRESHOLD,
+    PaddleFormulaLayoutDetector,
+    _adaptive_crop_formula,
+)
+from .math_layout import (
+    open_image as _open_image,
+)
 from .recognition_router import PaddleFormulaNetEngine, canonicalize_latex
 from .runner import WorkerConfig, _LeaseHeartbeat
 
-FORMULA_DETECTOR_ACCEPT_SCORE = 0.65
-FORMULA_EDGE_INK_THRESHOLD = 0.08
 FORMULA_VALIDATION_VERSION = "latex-structure-render-v1"
-
-
-class PaddleFormulaLayoutDetector:
-    def __init__(self, model_version: str, device: str) -> None:
-        self.model_version, self.device, self._model = model_version, device, None
-
-    def initialize(self) -> None:
-        if self._model is None:
-            from paddleocr import LayoutDetection
-
-            self._model = LayoutDetection(model_name=self.model_version, device=self.device, enable_mkldnn=False)
-
-    @property
-    def initialized(self) -> bool:
-        return self._model is not None
-
-    def detect(self, image: bytes, min_score: float) -> list[tuple[list[float], float]]:
-        self.initialize()
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            tmp.write(image)
-            path = tmp.name
-        try:
-            raw = self._model.predict(input=path)
-            outputs = list(raw) if not isinstance(raw, (dict, list)) else (raw if isinstance(raw, list) else [raw])
-        finally:
-            Path(path).unlink(missing_ok=True)
-        boxes: list[tuple[list[float], float]] = []
-        for output in outputs:
-            payload = getattr(output, "json", output)
-            payload = payload() if callable(payload) else payload
-            if not isinstance(payload, dict):
-                continue
-            payload = payload.get("res", payload)
-            items = payload.get("boxes", payload.get("layout_det_res", [])) if isinstance(payload, dict) else []
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                label = str(item.get("label", item.get("category_name", ""))).lower().replace("_", " ")
-                # Formula numbers are ordinary text anchors; recognizing them
-                # as standalone formulas adds calls and harms reading order.
-                if label != "formula":
-                    continue
-                score = float(item.get("score", item.get("confidence", 0)) or 0)
-                coords = item.get("coordinate", item.get("bbox"))
-                if score < min_score or not isinstance(coords, (list, tuple)) or len(coords) != 4:
-                    continue
-                x1, y1, a, b = map(float, coords)
-                # Paddle layout coordinates are x1,y1,x2,y2. Accept xywh from adapters too.
-                width, height = (a - x1, b - y1) if a > x1 and b > y1 else (a, b)
-                if width > 1 and height > 1:
-                    boxes.append(([x1, y1, width, height], score))
-        return _merge_formula_boxes(boxes)
 
 
 class PaperFormulaRunner:
@@ -627,101 +579,3 @@ def _bucketed_batches(crops: list[dict[str, Any]], indices: list[int], batch_siz
         for offset in range(0, len(items), batch_size):
             batches.append(items[offset : offset + batch_size])
     return batches
-
-
-def _open_image(data: bytes) -> Any:
-    from PIL import Image
-
-    with Image.open(io.BytesIO(data)) as source:
-        source.load()
-        return source.convert("RGB")
-
-
-def _adaptive_crop_formula(
-    image: Any,
-    bbox: list[float],
-    padding: int,
-    *,
-    max_padding: int = 96,
-    max_padding_height_ratio: float = 0.75,
-    edge_threshold: float = FORMULA_EDGE_INK_THRESHOLD,
-) -> tuple[bytes, list[float], float, int, bool]:
-    current_padding = max(0, padding)
-    # An absolute 96 px allowance is safe for a large display equation but is
-    # destructive for a 25 px-high inline expression: it pulls neighbouring
-    # Chinese text and even adjacent lines into FormulaNet. Bound expansion by
-    # the detector box height as well as the configured absolute ceiling.
-    detected_height = max(1.0, abs(float(bbox[3])))
-    proportional_limit = math.ceil(detected_height * max(0.25, max_padding_height_ratio))
-    max_padding = max(current_padding, min(max_padding, proportional_limit))
-    recrop_count = 0
-    while True:
-        crop, padded_bbox, edge_ink = _crop_formula(image, bbox, current_padding)
-        if edge_ink <= edge_threshold:
-            return crop, padded_bbox, edge_ink, recrop_count, True
-        left, top, width, height = padded_bbox
-        has_room = left > 0 or top > 0 or left + width < image.width or top + height < image.height
-        if not has_room or current_padding >= max_padding:
-            return crop, padded_bbox, edge_ink, recrop_count, False
-        next_padding = min(max_padding, max(current_padding + 8, current_padding * 2, 16))
-        if next_padding == current_padding:
-            return crop, padded_bbox, edge_ink, recrop_count, False
-        current_padding = next_padding
-        recrop_count += 1
-
-
-def _crop_formula(image: Any, bbox: list[float], padding: int) -> tuple[bytes, list[float], float]:
-    x, y, width, height = bbox
-    left, top = max(0, math.floor(x - padding)), max(0, math.floor(y - padding))
-    right, bottom = min(image.width, math.ceil(x + width + padding)), min(image.height, math.ceil(y + height + padding))
-    crop = image.crop((left, top, right, bottom))
-    gray = crop.convert("L")
-    pixels = gray.load()
-    band = max(1, min(3, crop.width // 8, crop.height // 8))
-    sides = [
-        [pixels[xx, yy] < 200 for yy in range(crop.height) for xx in range(band)],
-        [pixels[xx, yy] < 200 for yy in range(crop.height) for xx in range(max(0, crop.width - band), crop.width)],
-        [pixels[xx, yy] < 200 for yy in range(band) for xx in range(crop.width)],
-        [pixels[xx, yy] < 200 for yy in range(max(0, crop.height - band), crop.height) for xx in range(crop.width)],
-    ]
-    # A clipped radical or fraction may touch only one edge. Averaging the
-    # entire perimeter hid those cases on wide formulas.
-    edge_ink = max((sum(side) / len(side) for side in sides if side), default=1.0)
-    output = io.BytesIO()
-    crop.save(output, format="PNG")
-    crop.close()
-    gray.close()
-    return output.getvalue(), [float(left), float(top), float(right - left), float(bottom - top)], edge_ink
-
-
-def _merge_formula_boxes(boxes: list[tuple[list[float], float]]) -> list[tuple[list[float], float]]:
-    pending = sorted(boxes, key=lambda item: (item[0][1], item[0][0]))
-    merged: list[tuple[list[float], float]] = []
-    for box, score in pending:
-        merged_into_existing = False
-        for existing_index, (previous, previous_score) in enumerate(merged):
-            intersection = _intersection_area(previous, box)
-            smaller_area = min(previous[2] * previous[3], box[2] * box[3])
-            vertical_overlap = max(
-                0,
-                min(previous[1] + previous[3], box[1] + box[3]) - max(previous[1], box[1]),
-            )
-            gap = box[0] - (previous[0] + previous[2])
-            duplicate = smaller_area > 0 and intersection / smaller_area >= 0.70
-            adjacent_fragment = vertical_overlap >= min(previous[3], box[3]) * 0.6 and -4 <= gap <= 16
-            if duplicate or adjacent_fragment:
-                x1, y1 = min(previous[0], box[0]), min(previous[1], box[1])
-                x2 = max(previous[0] + previous[2], box[0] + box[2])
-                y2 = max(previous[1] + previous[3], box[1] + box[3])
-                merged[existing_index] = ([x1, y1, x2 - x1, y2 - y1], max(score, previous_score))
-                merged_into_existing = True
-                break
-        if not merged_into_existing:
-            merged.append((box, score))
-    return sorted(merged, key=lambda item: (item[0][1], item[0][0]))
-
-
-def _intersection_area(left: list[float], right: list[float]) -> float:
-    width = min(left[0] + left[2], right[0] + right[2]) - max(left[0], right[0])
-    height = min(left[1] + left[3], right[1] + right[3]) - max(left[1], right[1])
-    return max(0.0, width) * max(0.0, height)

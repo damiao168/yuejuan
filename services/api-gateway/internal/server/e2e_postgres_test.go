@@ -58,7 +58,7 @@ func TestCoreWorkflowE2EWithPostgresTestDatabase(t *testing.T) {
 	appealReviewerToken := teacherToken
 
 	provisionedAdminUsername := "story041_admin_" + strings.ReplaceAll(suffix, ".", "_")
-	tenant := e2ePostJSON(t, router, http.MethodPost, "/api/v1/tenants", platformToken, `{"name":"Story 041 Synthetic Tenant `+suffix+`","code":"story041-`+suffix+`","admin_username":"`+provisionedAdminUsername+`","admin_display_name":"Story 041 School Admin","admin_password":"Story041Admin!"}`, http.StatusCreated)["tenant"].(map[string]any)
+	tenant := e2ePostJSON(t, router, http.MethodPost, "/api/v1/tenants", platformToken, `{"name":"Story 041 Synthetic Tenant `+suffix+`","code":"story041-`+suffix+`","admin_username":"`+provisionedAdminUsername+`","admin_display_name":"Story 041 School Admin","admin_password":"Story041AdminPassphrase!"}`, http.StatusCreated)["tenant"].(map[string]any)
 	if tenant["status"] != "active" {
 		t.Fatalf("test database tenant should be active: %#v", tenant)
 	}
@@ -417,9 +417,31 @@ WHERE n.nspname='public' AND c.relname='student'
 
 	runtimeRouter := e2ePostgresRouter(scopedDB)
 	runtimeToken := e2eLoginWithTenant(t, runtimeRouter, "demo", "tenant_admin", "ChangeMe123!")
+	_, runtimeDeviceCookie := e2eBrowserLogin(t, runtimeRouter, "demo", "tenant_admin", "ChangeMe123!", nil)
+	if runtimeDeviceCookie == nil {
+		t.Fatal("tenant-scoped browser login did not persist a device binding")
+	}
 	runtimeStudents := e2eGetJSON(t, runtimeRouter, "/api/v1/students?ids="+studentID, runtimeToken, http.StatusOK)["students"].([]any)
 	if len(runtimeStudents) != 1 || e2eString(t, runtimeStudents[0].(map[string]any), "id") != studentID {
 		t.Fatalf("authenticated API tenant context did not expose the owning tenant's student: %#v", runtimeStudents)
+	}
+	if err = scopedDB.QueryRowContext(context.Background(), `SELECT count(*) FROM auth_risk_event`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("unscoped context exposed login risk events: count=%d err=%v", count, err)
+	}
+	if err = scopedDB.QueryRowContext(database.WithTenant(context.Background(), uuid.NewString()), `SELECT count(*) FROM auth_risk_event`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("RLS exposed login risk events to another tenant: count=%d err=%v", count, err)
+	}
+	if err = scopedDB.QueryRowContext(database.WithTenant(context.Background(), tenantID), `SELECT count(*) FROM auth_risk_event`).Scan(&count); err != nil || count == 0 {
+		t.Fatalf("RLS hid login risk events from their tenant: count=%d err=%v", count, err)
+	}
+	if err = scopedDB.QueryRowContext(context.Background(), `SELECT count(*) FROM auth_trusted_device`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("unscoped context exposed device bindings: count=%d err=%v", count, err)
+	}
+	if err = scopedDB.QueryRowContext(database.WithTenant(context.Background(), uuid.NewString()), `SELECT count(*) FROM auth_trusted_device`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("RLS exposed device bindings to another tenant: count=%d err=%v", count, err)
+	}
+	if err = scopedDB.QueryRowContext(database.WithTenant(context.Background(), tenantID), `SELECT count(*) FROM auth_trusted_device`).Scan(&count); err != nil || count == 0 {
+		t.Fatalf("RLS hid device bindings from their tenant: count=%d err=%v", count, err)
 	}
 }
 
@@ -618,7 +640,7 @@ WHERE tenant.code = $1
 	}
 }
 
-func e2ePostgresRouter(db *sql.DB) http.Handler {
+func e2ePostgresRouter(db *sql.DB, authOptions ...config.AuthConfig) http.Handler {
 	cfg := config.Config{
 		Service: config.ServiceConfig{Name: "api-gateway-postgres-e2e-test", Environment: "test", ReadinessTimeout: time.Millisecond},
 		Auth:    config.AuthConfig{SessionTTL: time.Hour},
@@ -639,6 +661,9 @@ func e2ePostgresRouter(db *sql.DB) http.Handler {
 		ModelSecrets: config.ModelSecretConfig{
 			MasterKey: "postgres-e2e-model-credential-master-key",
 		},
+	}
+	if len(authOptions) > 0 {
+		cfg.Auth = authOptions[0]
 	}
 	objectStore := files.NewMemoryObjectStorage()
 	stores, err := NewPostgresApplicationStores(&Infrastructure{Config: cfg, DB: db, ObjectStore: objectStore})

@@ -57,7 +57,10 @@ LEFT JOIN LATERAL (
   LIMIT 1
 ) ans ON true
 LEFT JOIN LATERAL (
-  SELECT jsonb_build_object(
+  SELECT (array_agg(ai_suggestion ORDER BY created_at DESC, id DESC))[1]
+    || jsonb_build_object('suggestion_history',jsonb_agg(ai_suggestion ORDER BY created_at DESC, id DESC)) AS ai_suggestion
+  FROM (
+  SELECT id,created_at,jsonb_build_object(
     'id', id::text,
     'ai_grade_id', id::text,
     'tenant_id', tenant_id::text,
@@ -71,6 +74,10 @@ LEFT JOIN LATERAL (
     'model_version', model_version,
     'prompt_version', prompt_version,
     'rubric_version', rubric_version,
+    'math_artifact_id', COALESCE(math_artifact_id::text,''),
+    'math_artifact_version', math_artifact_version,
+    'math_correction_revision', math_correction_revision,
+    'math_scoring_version', math_scoring_version,
     'delivery_mode', delivery_mode,
     'suggested_score', suggested_score,
     'max_score', max_score,
@@ -92,7 +99,8 @@ LEFT JOIN LATERAL (
   FROM ai_grade
   WHERE tenant_id = seg.tenant_id AND answer_segment_id = seg.id AND deleted_at IS NULL
   ORDER BY created_at DESC
-  LIMIT 1
+  LIMIT 20
+  ) suggestions
 ) ag ON true
 WHERE seg.tenant_id = $1 AND seg.id::text = $2 AND seg.deleted_at IS NULL AND sub.deleted_at IS NULL
 `, tenantID, segmentID)

@@ -20,6 +20,21 @@ func NewRedisLoginFailureLimiter(client redis.UniversalClient, limit int, window
 	return &RedisLoginFailureLimiter{client: client, limit: limit, window: window, fallback: NewLoginFailureLimiter(limit, window)}
 }
 
+func NewRedisLoginAttemptGuard(client redis.UniversalClient, limit int, window time.Duration) *LayeredLoginAttemptGuard {
+	if limit <= 0 {
+		limit = 5
+	}
+	sourceLimit := limit * 10
+	if sourceLimit < 50 {
+		sourceLimit = 50
+	}
+	return NewLayeredLoginAttemptGuard(
+		NewRedisLoginFailureLimiter(client, limit, window),
+		NewRedisLoginFailureLimiter(client, sourceLimit, window),
+		NewRedisLoginFailureLimiter(client, limit, window),
+	)
+}
+
 func (l *RedisLoginFailureLimiter) IsBlocked(ctx context.Context, key string, now time.Time) (time.Duration, bool) {
 	if l == nil || l.client == nil || l.limit <= 0 {
 		return 0, false
@@ -64,11 +79,13 @@ func (l *RedisLoginFailureLimiter) Clear(ctx context.Context, key string) {
 	if l == nil || l.client == nil {
 		return
 	}
+	// The fallback may contain failures recorded during an earlier Redis
+	// outage. Clear it even when Redis has recovered so a later outage cannot
+	// resurrect stale lockout state after a successful login.
+	l.fallback.Clear(ctx, key)
 	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
-	if err := l.client.Del(ctx, l.redisKey(key)).Err(); err != nil {
-		l.fallback.Clear(ctx, key)
-	}
+	_ = l.client.Del(ctx, l.redisKey(key)).Err()
 }
 
 func (l *RedisLoginFailureLimiter) redisKey(raw string) string {

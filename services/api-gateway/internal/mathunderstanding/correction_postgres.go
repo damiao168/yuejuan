@@ -23,23 +23,31 @@ func (s *PostgresCorrectionStore) CreateCorrection(ctx context.Context, tenantID
 		return Correction{}, err
 	}
 	defer tx.Rollback()
-	var answerSegmentID, snapshotID string
-	var version int64
-	err = tx.QueryRowContext(ctx, `SELECT answer_segment_id::text,exam_question_snapshot_id::text,version FROM math_understanding_artifact WHERE tenant_id=$1::uuid AND id=$2::uuid FOR UPDATE`, tenantID, artifactID).Scan(&answerSegmentID, &snapshotID, &version)
+	var artifact Artifact
+	err = tx.QueryRowContext(ctx, `SELECT answer_segment_id::text,exam_question_snapshot_id::text,version,is_current,subject_code,input_hash,engine_version FROM math_understanding_artifact WHERE tenant_id=$1::uuid AND id=$2::uuid FOR UPDATE`, tenantID, artifactID).Scan(&artifact.AnswerSegmentID, &artifact.ExamQuestionSnapshotID, &artifact.Version, &artifact.IsCurrent, &artifact.SubjectCode, &artifact.InputHash, &artifact.EngineVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Correction{}, ErrNotFound
 	}
 	if err != nil {
 		return Correction{}, err
 	}
-	if version != input.ExpectedArtifactVersion || input.CorrectedContract.AnswerSegmentID != answerSegmentID || input.CorrectedContract.ExamQuestionSnapshotID != snapshotID {
+	if !artifact.IsCurrent || artifact.Version != input.ExpectedArtifactVersion || !correctionMatchesArtifact(input.CorrectedContract, artifact) {
+		return Correction{}, ErrRevisionConflict
+	}
+	// Read the revision after acquiring the artifact lock: a waiter must see a
+	// correction committed by the previous lock holder, not an earlier snapshot.
+	var revision int64
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(revision),0) FROM math_understanding_correction WHERE tenant_id=$1::uuid AND artifact_id=$2::uuid`, tenantID, artifactID).Scan(&revision); err != nil {
+		return Correction{}, err
+	}
+	if input.ExpectedCorrectionRevision != nil && *input.ExpectedCorrectionRevision != revision {
 		return Correction{}, ErrRevisionConflict
 	}
 	operations, _ := json.Marshal(input.Operations)
 	contract, _ := json.Marshal(input.CorrectedContract)
 	var item Correction
 	var opRaw, contractRaw []byte
-	err = tx.QueryRowContext(ctx, `INSERT INTO math_understanding_correction(tenant_id,artifact_id,answer_segment_id,revision,operations_json,corrected_contract_json,reason,created_by) VALUES($1::uuid,$2::uuid,$3::uuid,COALESCE((SELECT max(revision)+1 FROM math_understanding_correction WHERE tenant_id=$1::uuid AND artifact_id=$2::uuid),1),$4::jsonb,$5::jsonb,$6,$7::uuid) RETURNING id::text,tenant_id::text,artifact_id::text,answer_segment_id::text,revision,operations_json,corrected_contract_json,reason,created_by::text,created_at`, tenantID, artifactID, answerSegmentID, operations, contract, input.Reason, actorID).Scan(&item.ID, &item.TenantID, &item.ArtifactID, &item.AnswerSegmentID, &item.Revision, &opRaw, &contractRaw, &item.Reason, &item.CreatedBy, &item.CreatedAt)
+	err = tx.QueryRowContext(ctx, `INSERT INTO math_understanding_correction(tenant_id,artifact_id,answer_segment_id,revision,operations_json,corrected_contract_json,reason,created_by) VALUES($1::uuid,$2::uuid,$3::uuid,$8,$4::jsonb,$5::jsonb,$6,$7::uuid) RETURNING id::text,tenant_id::text,artifact_id::text,answer_segment_id::text,revision,operations_json,corrected_contract_json,reason,created_by::text,created_at`, tenantID, artifactID, artifact.AnswerSegmentID, operations, contract, input.Reason, actorID, revision+1).Scan(&item.ID, &item.TenantID, &item.ArtifactID, &item.AnswerSegmentID, &item.Revision, &opRaw, &contractRaw, &item.Reason, &item.CreatedBy, &item.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Correction{}, ErrRevisionConflict
 	}
@@ -56,6 +64,38 @@ func (s *PostgresCorrectionStore) CreateCorrection(ctx context.Context, tenantID
 }
 func (s *PostgresCorrectionStore) ListCorrections(ctx context.Context, tenantID, artifactID string) ([]Correction, error) {
 	return s.list(ctx, tenantID, "artifact_id=$2::uuid", artifactID, 500)
+}
+func (s *PostgresCorrectionStore) GetLatestCorrection(ctx context.Context, tenantID, artifactID string) (Correction, error) {
+	return s.getCorrection(ctx, tenantID, artifactID, 0)
+}
+func (s *PostgresCorrectionStore) GetCorrection(ctx context.Context, tenantID, artifactID string, revision int64) (Correction, error) {
+	if revision <= 0 {
+		return Correction{}, ErrNotFound
+	}
+	return s.getCorrection(ctx, tenantID, artifactID, revision)
+}
+func (s *PostgresCorrectionStore) getCorrection(ctx context.Context, tenantID, artifactID string, revision int64) (Correction, error) {
+	var item Correction
+	var operations, contract []byte
+	query := `SELECT id::text,tenant_id::text,artifact_id::text,answer_segment_id::text,revision,operations_json,corrected_contract_json,reason,created_by::text,created_at FROM math_understanding_correction WHERE tenant_id=$1::uuid AND artifact_id=$2::uuid`
+	args := []any{tenantID, artifactID}
+	if revision > 0 {
+		query += ` AND revision=$3`
+		args = append(args, revision)
+	} else {
+		query += ` ORDER BY revision DESC LIMIT 1`
+	}
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&item.ID, &item.TenantID, &item.ArtifactID, &item.AnswerSegmentID, &item.Revision, &operations, &contract, &item.Reason, &item.CreatedBy, &item.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Correction{}, ErrNotFound
+	}
+	if err != nil {
+		return Correction{}, err
+	}
+	if json.Unmarshal(operations, &item.Operations) != nil || json.Unmarshal(contract, &item.CorrectedContract) != nil {
+		return Correction{}, errors.New("decode math correction")
+	}
+	return item, nil
 }
 func (s *PostgresCorrectionStore) ExportCorrections(ctx context.Context, tenantID, subject string, limit int) ([]Correction, error) {
 	if limit <= 0 || limit > 5000 {
