@@ -147,7 +147,7 @@ class ApplicationV2Tests(unittest.TestCase):
 
     def test_invalid_fixture_output_fails_without_caching_a_suggestion(self):
         request = fixture("valid-request.json")
-        response = fixture("invalid-response-crop-hash-mismatch.json")
+        response = fixture("invalid-response-unknown-evidence-id.json")
         adapter = OfflineV2FixtureAdapter(response)
         events = []
         app = GradingAgentV2ApplicationSeam(adapter, logger=events.append)

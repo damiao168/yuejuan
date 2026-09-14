@@ -78,7 +78,7 @@ class ContractV2Tests(unittest.TestCase):
 
     def test_candidate_evidence_must_reference_known_math_artifact(self):
         request = fixture("valid-request.json")
-        invalid = fixture("invalid-response-crop-hash-mismatch.json")
+        invalid = fixture("invalid-response-unknown-evidence-id.json")
         with self.assertRaises(AgentError) as caught:
             validate_response_v2(invalid, request)
         self.assertEqual(caught.exception.code, "evidence_verification_failed")

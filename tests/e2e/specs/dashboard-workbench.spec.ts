@@ -1,18 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { installApiMocks } from "../fixtures/apiMocks";
-
-async function login(page: import("@playwright/test").Page) {
-  await page.goto("/");
-  await page.getByLabel("学校代码").fill("demo-school");
-  await page.getByLabel("账号").fill("school_admin");
-  await page.getByRole("textbox", { name: /密码/ }).fill("password");
-  await page.getByRole("button", { name: "登录" }).click();
-  await expect(page.getByRole("heading", { name: "考试工作台" })).toBeVisible({ timeout: 30_000 });
-}
+import { loginAsSchoolAdmin } from "../fixtures/schoolAdminLogin";
 
 test("学校工作台按成员、考试、阅卷与成绩组织真实业务工作", async ({ page }) => {
   await installApiMocks(page);
-  await login(page);
+  await loginAsSchoolAdmin(page);
 
   await expect(page.getByRole("heading", { name: "成员管理" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "考试管理" })).toBeVisible();
@@ -68,7 +60,7 @@ test("移动端只保留导航触发条，账户位于抽屉底部", async ({ pa
 test("首页主动作完成分步骤表单新建考试并进入考试准备", async ({ page }) => {
   test.setTimeout(90_000);
   await installApiMocks(page);
-  await login(page);
+  await loginAsSchoolAdmin(page);
 
   await page.getByRole("button", { name: "新建考试" }).click();
   await expect(page).toHaveURL(/#\/admin\/exams\/new/);
@@ -101,7 +93,7 @@ test("首页主动作完成分步骤表单新建考试并进入考试准备", as
 
 test("没有待办时使用紧凑空状态", async ({ page }) => {
   await installApiMocks(page, { dashboardMode: "empty" });
-  await login(page);
+  await loginAsSchoolAdmin(page);
 
   await expect(page.getByText("当前没有需要处理的事项")).toBeVisible();
   await expect(page.getByText("暂无进行中考试")).toBeVisible();
@@ -111,7 +103,7 @@ test("没有待办时使用紧凑空状态", async ({ page }) => {
 test("成员管理入口进入正式班级和教师页面", async ({ page }) => {
   test.setTimeout(60_000);
   await installApiMocks(page);
-  await login(page);
+  await loginAsSchoolAdmin(page);
 
   await page.getByRole("button", { name: /年级与班级/ }).click();
   await expect(page).toHaveURL(/#\/admin\/members\/classes/);
@@ -121,6 +113,6 @@ test("成员管理入口进入正式班级和教师页面", async ({ page }) => 
   await page.goto("/#/admin/dashboard");
   await page.getByRole("button", { name: /阅卷教师/ }).click();
   await expect(page).toHaveURL(/#\/admin\/members\/teachers/);
-  await expect(page.getByRole("heading", { name: "阅卷教师" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "人员与访问管理" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("数学阅卷老师")).toBeVisible();
 });

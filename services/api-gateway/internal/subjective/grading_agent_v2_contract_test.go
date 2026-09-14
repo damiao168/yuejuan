@@ -48,7 +48,7 @@ func TestGradingAgentV2ResponseFixturesBindKnownMathEvidenceWithoutScores(t *tes
 	if err := validateGradingAgentV2ResponseFixture(response, request); err != nil {
 		t.Fatal(err)
 	}
-	invalid := loadGradingAgentV2Fixture(t, "invalid-response-crop-hash-mismatch.json")
+	invalid := loadGradingAgentV2Fixture(t, "invalid-response-unknown-evidence-id.json")
 	if err := validateGradingAgentV2ResponseFixture(invalid, request); err == nil {
 		t.Fatal("unknown math evidence fixture unexpectedly passed validation")
 	}

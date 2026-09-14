@@ -60,7 +60,7 @@ const requestV2 = loadV2("fixtures/valid-request.json");
 const responseV2 = loadV2("fixtures/valid-response.json");
 const invalidURLV2 = loadV2("fixtures/invalid-request-remote-url.json");
 const invalidWholePageV2 = loadV2("fixtures/invalid-request-whole-page.json");
-const invalidResponseV2 = loadV2("fixtures/invalid-response-crop-hash-mismatch.json");
+const invalidResponseV2 = loadV2("fixtures/invalid-response-unknown-evidence-id.json");
 const errorV2 = loadV2("fixtures/valid-error.json");
 
 assert.equal(contractV2.deployment_mode, "unreachable_fixture_only");
@@ -109,11 +109,23 @@ assert.ok(
 assert.equal(responseV2.request_id, requestV2.request_id);
 assert.equal(responseV2.needs_human_review, true);
 assert.equal(responseV2.mock, false);
-const cropEvidence = responseV2.evidence.find((item) => item.location === "answer_crop");
-assert.equal(cropEvidence.crop_sha256, requestV2.media_evidence.sha256);
-assert.notEqual(
-  invalidResponseV2.evidence.find((item) => item.location === "answer_crop").crop_sha256,
-  requestV2.media_evidence.sha256,
+const knownEvidenceIds = new Set([
+  ...requestV2.math_evidence.steps.map((item) => item.id),
+  ...requestV2.math_evidence.formulas.map((item) => item.id),
+]);
+const rubricPointIds = new Set(requestV2.rubric.points.map((item) => item.id));
+for (const candidate of responseV2.criterion_candidates) {
+  assert.ok(rubricPointIds.has(candidate.rubric_point_id), `unknown rubric point: ${candidate.rubric_point_id}`);
+  assert.ok(
+    candidate.evidence_ids.every((id) => knownEvidenceIds.has(id)),
+    `candidate references unknown math evidence: ${candidate.evidence_ids.join(", ")}`,
+  );
+}
+assert.ok(
+  invalidResponseV2.criterion_candidates.some((candidate) =>
+    candidate.evidence_ids.some((id) => !knownEvidenceIds.has(id)),
+  ),
+  "invalid fixture must reference unknown math evidence",
 );
 assert.equal(errorV2.schema_version, "grading-agent-v2");
 assert.equal(errorV2.error.retryable, false);
