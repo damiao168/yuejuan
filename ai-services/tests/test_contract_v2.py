@@ -3,8 +3,6 @@ import json
 import unittest
 from pathlib import Path
 
-from helpers import FakeModel, settings
-
 from grading_agent.app import GradingAgentApplication
 from grading_agent.contract_v2 import (
     compute_media_binding_hash,
@@ -12,6 +10,7 @@ from grading_agent.contract_v2 import (
     validate_response_v2,
 )
 from grading_agent.errors import AgentError
+from helpers import FakeModel, settings
 
 FIXTURES = Path(__file__).resolve().parents[2] / "contracts" / "grading-agent" / "v2" / "fixtures"
 

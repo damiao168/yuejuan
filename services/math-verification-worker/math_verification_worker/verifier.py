@@ -51,19 +51,18 @@ def verify_equivalence(left_ast: dict[str, Any], right_ast: dict[str, Any], doma
         if left_domain != right_domain:
             return VerificationResult("contradicted", "defined_domain_changed", domain_name, constraints, (str(left_domain), str(right_domain)))
         return VerificationResult("verified", "exact_ast_equivalent", domain_name, constraints, ("exact_sympy_match",))
-    if isinstance(left, sympy.Equality) and isinstance(right, sympy.Equality):
-        if len(variables) == 1:
-            left_set = sympy.solveset(left, variables[0], domain=left_domain)
-            right_set = sympy.solveset(right, variables[0], domain=right_domain)
-            if left_set.has(sympy.ConditionSet) or right_set.has(sympy.ConditionSet):
-                return VerificationResult("uncertain", "solution_set_not_resolved", domain_name, constraints, (str(left_set), str(right_set)))
-            if left_set == right_set:
-                return VerificationResult("verified", "solution_set_equivalent", domain_name, constraints, (str(left_set),))
-            if left_set.is_subset(right_set) is True:
-                return VerificationResult("contradicted", "extra_solutions_introduced", domain_name, constraints, (str(left_set), str(right_set)))
-            if right_set.is_subset(left_set) is True:
-                return VerificationResult("contradicted", "solutions_lost", domain_name, constraints, (str(left_set), str(right_set)))
-            return VerificationResult("contradicted", "different_solution_set", domain_name, constraints, (str(left_set), str(right_set)))
+    if isinstance(left, sympy.Equality) and isinstance(right, sympy.Equality) and len(variables) == 1:
+        left_set = sympy.solveset(left, variables[0], domain=left_domain)
+        right_set = sympy.solveset(right, variables[0], domain=right_domain)
+        if left_set.has(sympy.ConditionSet) or right_set.has(sympy.ConditionSet):
+            return VerificationResult("uncertain", "solution_set_not_resolved", domain_name, constraints, (str(left_set), str(right_set)))
+        if left_set == right_set:
+            return VerificationResult("verified", "solution_set_equivalent", domain_name, constraints, (str(left_set),))
+        if left_set.is_subset(right_set) is True:
+            return VerificationResult("contradicted", "extra_solutions_introduced", domain_name, constraints, (str(left_set), str(right_set)))
+        if right_set.is_subset(left_set) is True:
+            return VerificationResult("contradicted", "solutions_lost", domain_name, constraints, (str(left_set), str(right_set)))
+        return VerificationResult("contradicted", "different_solution_set", domain_name, constraints, (str(left_set), str(right_set)))
     if not isinstance(left, Relational) and not isinstance(right, Relational):
         if left_domain != right_domain:
             return VerificationResult("contradicted", "defined_domain_changed", domain_name, constraints, (str(left_domain), str(right_domain)))

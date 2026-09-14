@@ -3,7 +3,6 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
-
 from ocr_worker.api import APIError
 from ocr_worker.math_runner import MathVerificationClient
 from ocr_worker.runner import WorkerConfig

@@ -1,7 +1,5 @@
 import io
 
-from PIL import Image
-
 from ocr_worker.engine import OCRBlock
 from ocr_worker.recognition_router import (
     FormulaRecognitionResult,
@@ -11,6 +9,7 @@ from ocr_worker.recognition_router import (
     UniMERNetEngine,
     _parse_formula_prediction,
 )
+from PIL import Image
 
 
 class TextEngine:

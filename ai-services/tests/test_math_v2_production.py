@@ -5,10 +5,9 @@ import unittest
 from contextlib import contextmanager
 from urllib import request as urlrequest
 
-from helpers import ROOT, settings
-
 from grading_agent.app import GradingAgentApplication
 from grading_agent.server import GradingAgentHTTPServer
+from helpers import ROOT, settings
 
 
 def valid_math_v2_request():
