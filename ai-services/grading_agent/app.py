@@ -27,6 +27,8 @@ class GradingAgentApplication:
         self._cache = OrderedDict()
         self._cache_lock = threading.Lock()
         self._inflight = {}
+        self._readiness_lock = threading.Lock()
+        self._readiness_ready = False
         self.math_v2 = ProductionMathV2Application(settings, self.model, clock=self.clock, logger=self.logger)
 
     def grade_v2(self, payload, idempotency_key, *, body_size, content_encoding=""):
@@ -222,7 +224,17 @@ class GradingAgentApplication:
             del self._cache[key]
 
     def readiness(self):
-        return self.model.ready()
+        with self._readiness_lock:
+            return self._readiness_ready
+
+    def refresh_readiness(self):
+        try:
+            ready = bool(self.model.ready())
+        except Exception:  # noqa: BLE001 - dependency probes fail closed.
+            ready = False
+        with self._readiness_lock:
+            self._readiness_ready = ready
+        return ready
 
     def prompt_snapshot(self):
         return self.prompt_registry.snapshot()

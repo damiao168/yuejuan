@@ -33,7 +33,7 @@ func (s *MemoryStore) SeedSource(source SourceTask) {
 	s.sources[source.ReviewTaskID] = source
 }
 
-func (s *MemoryStore) SelectSourceTasks(_ context.Context, _ string, _, _ string, selector Selector) ([]SourceTask, error) {
+func (s *MemoryStore) SelectSourceTasks(_ context.Context, _ string, _, _ string, selector Selector, limit int) ([]SourceTask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	selected := make([]SourceTask, 0, len(s.sources))
@@ -43,11 +43,14 @@ func (s *MemoryStore) SelectSourceTasks(_ context.Context, _ string, _, _ string
 		}
 	}
 	sort.Slice(selected, func(i, j int) bool { return selected[i].ReviewTaskID < selected[j].ReviewTaskID })
+	if limit > 0 && len(selected) > limit {
+		selected = selected[:limit]
+	}
 	return selected, nil
 }
 
 func (s *MemoryStore) Preview(ctx context.Context, tenantID, examID, questionID string, selector Selector) (Preview, error) {
-	items, err := s.SelectSourceTasks(ctx, tenantID, examID, questionID, selector)
+	items, err := s.SelectSourceTasks(ctx, tenantID, examID, questionID, selector, 0)
 	if err != nil {
 		return Preview{}, err
 	}
@@ -92,18 +95,36 @@ func (s *MemoryStore) CreateBatch(_ context.Context, _ string, examID, questionI
 	return cloneBatch(batch), items, nil
 }
 
-func (s *MemoryStore) GetSummary(_ context.Context, _ string, batchID string) (Summary, error) {
+func (s *MemoryStore) GetBatch(_ context.Context, _ string, batchID string) (Batch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	batch, ok := s.batches[batchID]
 	if !ok {
-		return Summary{}, ErrNotFound
+		return Batch{}, ErrNotFound
 	}
-	items := s.itemsForBatchLocked(batchID)
-	return Summary{Batch: cloneBatch(batch), Items: items}, nil
+	return cloneBatch(batch), nil
 }
 
-func (s *MemoryStore) ListBatches(_ context.Context, _ string, examID, questionID string) ([]Batch, error) {
+func (s *MemoryStore) ListBatchItems(_ context.Context, _ string, batchID string, page PageOptions) ([]Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.batches[batchID]; !ok {
+		return nil, ErrNotFound
+	}
+	items := s.itemsForBatchLocked(batchID)
+	return pageItems(items, page, false), nil
+}
+
+func (s *MemoryStore) GetHistogram(_ context.Context, _ string, batchID string) ([]Histogram, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.batches[batchID]; !ok {
+		return nil, ErrNotFound
+	}
+	return histogram(s.itemsForBatchLocked(batchID)), nil
+}
+
+func (s *MemoryStore) ListBatches(_ context.Context, _ string, examID, questionID string, page PageOptions) ([]Batch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []Batch{}
@@ -112,11 +133,25 @@ func (s *MemoryStore) ListBatches(_ context.Context, _ string, examID, questionI
 			out = append(out, cloneBatch(batch))
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt) || (out[i].CreatedAt.Equal(out[j].CreatedAt) && out[i].ID > out[j].ID)
+	})
+	if !page.CursorCreatedAt.IsZero() {
+		filtered := out[:0]
+		for _, batch := range out {
+			if batch.CreatedAt.Before(page.CursorCreatedAt) || (batch.CreatedAt.Equal(page.CursorCreatedAt) && batch.ID < page.CursorID) {
+				filtered = append(filtered, batch)
+			}
+		}
+		out = filtered
+	}
+	if len(out) > page.Limit {
+		out = out[:page.Limit]
+	}
 	return out, nil
 }
 
-func (s *MemoryStore) ListAssigned(_ context.Context, _ string, graderID string) ([]Item, error) {
+func (s *MemoryStore) ListAssigned(_ context.Context, _ string, graderID string, page PageOptions) ([]Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []Item{}
@@ -125,8 +160,10 @@ func (s *MemoryStore) ListAssigned(_ context.Context, _ string, graderID string)
 			out = append(out, cloneItem(item))
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-	return out, nil
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt) || (out[i].CreatedAt.Equal(out[j].CreatedAt) && out[i].ID < out[j].ID)
+	})
+	return pageItems(out, page, false), nil
 }
 
 func (s *MemoryStore) GetAssigned(_ context.Context, _ string, itemID, graderID string) (Item, error) {
@@ -234,7 +271,27 @@ func (s *MemoryStore) itemsForBatchLocked(batchID string) []Item {
 			out = append(out, cloneItem(item))
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt) || (out[i].CreatedAt.Equal(out[j].CreatedAt) && out[i].ID < out[j].ID)
+	})
+	return out
+}
+
+func pageItems(items []Item, page PageOptions, descending bool) []Item {
+	out := make([]Item, 0, min(len(items), page.Limit))
+	for _, item := range items {
+		if !page.CursorCreatedAt.IsZero() {
+			before := item.CreatedAt.Before(page.CursorCreatedAt) || (item.CreatedAt.Equal(page.CursorCreatedAt) && item.ID < page.CursorID)
+			after := item.CreatedAt.After(page.CursorCreatedAt) || (item.CreatedAt.Equal(page.CursorCreatedAt) && item.ID > page.CursorID)
+			if (!descending && !after) || (descending && !before) {
+				continue
+			}
+		}
+		out = append(out, item)
+		if len(out) == page.Limit {
+			break
+		}
+	}
 	return out
 }
 

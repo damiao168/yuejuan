@@ -6,15 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
+	"time"
 )
 
 type PostgresStore struct{ db *sql.DB }
 
 func NewPostgresStore(db *sql.DB) *PostgresStore { return &PostgresStore{db: db} }
 
-func (s *PostgresStore) SelectSourceTasks(ctx context.Context, tenantID, examID, questionID string, selector Selector) ([]SourceTask, error) {
+func sourceTaskQuery(tenantID, examID, questionID string, selector Selector) (string, []any) {
 	query := `
 WITH latest_grade AS (
   SELECT rt.id::text AS review_task_id, hg.id::text AS original_grade_id,
@@ -60,7 +60,16 @@ FROM latest_grade WHERE rank=1`
 		}
 		query += " AND review_task_id IN (" + strings.Join(placeholders, ",") + ")"
 	}
+	return query, args
+}
+
+func (s *PostgresStore) SelectSourceTasks(ctx context.Context, tenantID, examID, questionID string, selector Selector, limit int) ([]SourceTask, error) {
+	query, args := sourceTaskQuery(tenantID, examID, questionID, selector)
 	query += " ORDER BY graded_at ASC, review_task_id ASC"
+	if limit > 0 {
+		args = append(args, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -79,11 +88,35 @@ FROM latest_grade WHERE rank=1`
 }
 
 func (s *PostgresStore) Preview(ctx context.Context, tenantID, examID, questionID string, selector Selector) (Preview, error) {
-	sources, err := s.SelectSourceTasks(ctx, tenantID, examID, questionID, selector)
+	query, args := sourceTaskQuery(tenantID, examID, questionID, selector)
+	rows, err := s.db.QueryContext(ctx, `WITH selected AS (`+query+`)
+SELECT original_score,count(*)::int,min(graded_at),max(graded_at)
+FROM selected GROUP BY original_score ORDER BY original_score`, args...)
 	if err != nil {
 		return Preview{}, err
 	}
-	return previewSources(sources), nil
+	defer rows.Close()
+	preview := Preview{ScoreBands: []Band{}}
+	var first, last time.Time
+	for rows.Next() {
+		var band Band
+		var from, to time.Time
+		if err := rows.Scan(&band.Score, &band.Count, &from, &to); err != nil {
+			return Preview{}, err
+		}
+		preview.AffectedCount += band.Count
+		preview.ScoreBands = append(preview.ScoreBands, band)
+		if first.IsZero() || from.Before(first) {
+			first = from.UTC()
+		}
+		if last.IsZero() || to.After(last) {
+			last = to.UTC()
+		}
+	}
+	if !first.IsZero() {
+		preview.TimeRange = TimeRange{From: &first, To: &last}
+	}
+	return preview, rows.Err()
 }
 
 func (s *PostgresStore) CreateBatch(ctx context.Context, tenantID, examID, questionID, actorID string, input CreateInput, sources []SourceTask) (Batch, []Item, error) {
@@ -124,34 +157,58 @@ RETURNING `+itemColumns, tenantID, batch.ID, source.ReviewTaskID, source.Origina
 	return batch, items, nil
 }
 
-func (s *PostgresStore) GetSummary(ctx context.Context, tenantID, batchID string) (Summary, error) {
-	batch, err := scanBatch(s.db.QueryRowContext(ctx, `SELECT `+batchColumns+` FROM backmark_batch WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, batchID))
+func (s *PostgresStore) GetBatch(ctx context.Context, tenantID, batchID string) (Batch, error) {
+	return scanBatch(s.db.QueryRowContext(ctx, `SELECT `+batchColumns+` FROM backmark_batch WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, batchID))
+}
+
+func (s *PostgresStore) ListBatchItems(ctx context.Context, tenantID, batchID string, page PageOptions) ([]Item, error) {
+	cursorTime := nullableCursorTime(page.CursorCreatedAt)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+itemColumns+` FROM backmark_item
+WHERE tenant_id=$1::uuid AND batch_id=$2::uuid
+  AND ($3::timestamptz IS NULL OR (created_at,id) > ($3::timestamptz,$4::uuid))
+ORDER BY created_at ASC,id ASC LIMIT $5`, tenantID, batchID, cursorTime, nullableCursorID(page.CursorID), page.Limit)
 	if err != nil {
-		return Summary{}, err
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+itemColumns+` FROM backmark_item WHERE tenant_id=$1::uuid AND batch_id=$2::uuid ORDER BY created_at,id`, tenantID, batchID)
-	if err != nil {
-		return Summary{}, err
+		return nil, err
 	}
 	defer rows.Close()
 	items := []Item{}
 	for rows.Next() {
 		item, scanErr := scanItem(rows)
 		if scanErr != nil {
-			return Summary{}, scanErr
+			return nil, scanErr
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return Summary{}, err
+		return nil, err
 	}
-	return Summary{Batch: batch, Items: items}, nil
+	return items, nil
 }
 
-func (s *PostgresStore) ListBatches(ctx context.Context, tenantID, examID, questionID string) ([]Batch, error) {
+func (s *PostgresStore) GetHistogram(ctx context.Context, tenantID, batchID string) ([]Histogram, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT diff::float8,count(*)::int FROM backmark_item
+WHERE tenant_id=$1::uuid AND batch_id=$2::uuid AND diff IS NOT NULL
+GROUP BY diff ORDER BY diff`, tenantID, batchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Histogram{}
+	for rows.Next() {
+		var value Histogram
+		if err := rows.Scan(&value.Delta, &value.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) ListBatches(ctx context.Context, tenantID, examID, questionID string, page PageOptions) ([]Batch, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+batchColumns+` FROM backmark_batch
 WHERE tenant_id=$1::uuid AND ($2='' OR exam_id::text=$2) AND ($3='' OR question_id::text=$3)
-ORDER BY created_at DESC,id DESC`, tenantID, examID, questionID)
+  AND ($4::timestamptz IS NULL OR (created_at,id) < ($4::timestamptz,$5::uuid))
+ORDER BY created_at DESC,id DESC LIMIT $6`, tenantID, examID, questionID, nullableCursorTime(page.CursorCreatedAt), nullableCursorID(page.CursorID), page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -167,10 +224,11 @@ ORDER BY created_at DESC,id DESC`, tenantID, examID, questionID)
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) ListAssigned(ctx context.Context, tenantID, graderID string) ([]Item, error) {
+func (s *PostgresStore) ListAssigned(ctx context.Context, tenantID, graderID string, page PageOptions) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+itemColumns+` FROM backmark_item
 WHERE tenant_id=$1::uuid AND reassigned_to=$2::uuid AND status IN ('pending','in_progress')
-ORDER BY created_at ASC,id ASC`, tenantID, graderID)
+  AND ($3::timestamptz IS NULL OR (created_at,id) > ($3::timestamptz,$4::uuid))
+ORDER BY created_at ASC,id ASC LIMIT $5`, tenantID, graderID, nullableCursorTime(page.CursorCreatedAt), nullableCursorID(page.CursorID), page.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -316,28 +374,18 @@ func refreshBatchTx(ctx context.Context, tx *sql.Tx, tenantID, batchID string) e
 	return err
 }
 
-func previewSources(sources []SourceTask) Preview {
-	preview := Preview{AffectedCount: len(sources)}
-	if len(sources) == 0 {
-		return preview
+func nullableCursorTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
 	}
-	counts := map[float64]int{}
-	first, last := sources[0].GradedAt, sources[0].GradedAt
-	for _, source := range sources {
-		counts[source.OriginalScore]++
-		if source.GradedAt.Before(first) {
-			first = source.GradedAt
-		}
-		if source.GradedAt.After(last) {
-			last = source.GradedAt
-		}
+	return value.UTC()
+}
+
+func nullableCursorID(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
 	}
-	preview.TimeRange = TimeRange{From: &first, To: &last}
-	for score, count := range counts {
-		preview.ScoreBands = append(preview.ScoreBands, Band{Score: score, Count: count})
-	}
-	sort.Slice(preview.ScoreBands, func(i, j int) bool { return preview.ScoreBands[i].Score < preview.ScoreBands[j].Score })
-	return preview
+	return value
 }
 
 const batchColumns = `id::text,exam_id::text,question_id::text,source_incident_id,selector_json,policy_json,affected_count,status,created_by::text,created_at,updated_at`

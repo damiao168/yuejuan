@@ -5,7 +5,7 @@ import os
 import socket
 from dataclasses import dataclass
 
-from edugrade_worker_runtime import validate_lease_timing
+from edugrade_worker_runtime import validate_lease_timing, validate_service_url
 
 
 @dataclass
@@ -38,8 +38,7 @@ class APIConfig:
     password: str
 
     def __post_init__(self) -> None:
-        if not self.base_url.startswith(("http://", "https://")):
-            raise ValueError("EDUGRADE_API_BASE_URL must use http or https")
+        validate_service_url("EDUGRADE_API_BASE_URL", self.base_url, os.getenv("EDUGRADE_ENV", "development"))
         for name, value in (
             ("EDUGRADE_IMAGE_QUALITY_TENANT_CODE", self.tenant_code),
             ("EDUGRADE_IMAGE_QUALITY_USERNAME", self.username),

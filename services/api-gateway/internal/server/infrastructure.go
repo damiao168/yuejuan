@@ -68,12 +68,24 @@ func newInfrastructure(cfg config.Config, logg *logger.Logger) (*Infrastructure,
 	})
 	infra.Checkers = append(infra.Checkers, deps.NewPostgresChecker(postgresDB))
 
-	redisChecker, closeRedis := deps.NewRedisChecker(cfg.Redis)
+	redisChecker, closeRedis, err := deps.NewRedisChecker(cfg.Redis)
+	if err != nil {
+		infra.Close()
+		return nil, err
+	}
 	infra.Checkers = append(infra.Checkers, redisChecker)
 	infra.cleanup = append(infra.cleanup, closeRedis)
 	infra.LoginGuard = auth.NewRedisLoginAttemptGuard(redisChecker.Client(), cfg.Auth.LoginFailureLimit, cfg.Auth.LoginFailureWindow)
+	if status, ok := infra.LoginGuard.(auth.LoginLimiterStatus); ok {
+		infra.Metrics.SetAuthRateLimiterDegraded(status.Degraded)
+		checker := deps.NewAuthRateLimiterChecker(status.Degraded)
+		if prober, ok := infra.LoginGuard.(auth.LoginLimiterProber); ok {
+			checker = checker.WithProbe(prober.Probe)
+		}
+		infra.Checkers = append(infra.Checkers, checker)
+	}
 
-	minioChecker, err := deps.NewMinIOChecker(cfg.MinIO)
+	minioChecker, err := deps.NewMinIOChecker(cfg.MinIO, cfg.Files.Bucket)
 	if err != nil {
 		infra.Close()
 		return nil, err

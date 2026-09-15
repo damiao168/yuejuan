@@ -2,9 +2,11 @@ package middleware
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -16,6 +18,11 @@ import (
 type Middleware func(http.Handler) http.Handler
 
 const CSRFHeaderName = "X-EduGrade-CSRF"
+
+var (
+	requestIDPattern = regexp.MustCompile(`^(?:[0-9a-fA-F]{16,64}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9A-HJKMNP-TV-Z]{26})$`)
+	traceIDPattern   = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
+)
 
 func Chain(handler http.Handler, middlewares ...Middleware) http.Handler {
 	for i := len(middlewares) - 1; i >= 0; i-- {
@@ -131,12 +138,12 @@ func BrowserCSRF(sessionCookieName string) Middleware {
 func RequestID() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			requestID := r.Header.Get("X-Request-ID")
-			if requestID == "" {
+			requestID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+			if !requestIDPattern.MatchString(requestID) {
 				requestID = newRequestID()
 			}
-			traceID := r.Header.Get("X-Trace-ID")
-			if traceID == "" {
+			traceID := strings.TrimSpace(r.Header.Get("X-Trace-ID"))
+			if !validTraceID(traceID) {
 				traceID = traceIDFromTraceparent(r.Header.Get("Traceparent"))
 			}
 			if traceID == "" {
@@ -273,21 +280,21 @@ func traceIDFromTraceparent(header string) string {
 		return ""
 	}
 	traceID := parts[1]
-	if len(traceID) != 32 {
+	if !validTraceID(traceID) {
 		return ""
 	}
-	for _, ch := range traceID {
-		if !((ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || (ch >= '0' && ch <= '9')) {
-			return ""
-		}
-	}
 	return strings.ToLower(traceID)
+}
+
+func validTraceID(value string) bool {
+	return traceIDPattern.MatchString(value) && value != "00000000000000000000000000000000"
 }
 
 func newRequestID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return time.Now().UTC().Format("20060102150405.000000000")
+		fallback := sha256.Sum256([]byte(time.Now().UTC().Format(time.RFC3339Nano)))
+		return hex.EncodeToString(fallback[:16])
 	}
 	return hex.EncodeToString(b[:])
 }

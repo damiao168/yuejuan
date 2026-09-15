@@ -10,6 +10,7 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/auth"
 	"edugrade-enterprise/services/api-gateway/internal/httpx"
 	"edugrade-enterprise/services/api-gateway/internal/logger"
+	"edugrade-enterprise/services/api-gateway/internal/pagination"
 	"edugrade-enterprise/services/api-gateway/internal/regrade"
 )
 
@@ -91,7 +92,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		"incident_id": summary.Batch.SourceIncidentID, "affected_count": summary.Batch.AffectedCount,
 		"disposition": summary.Batch.Policy.Disposition,
 	})
-	httpx.JSON(w, http.StatusCreated, map[string]any{"backmark": summary})
+	httpx.JSON(w, http.StatusCreated, map[string]any{"backmark": summary, "next_cursor": "", "has_more": false})
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
@@ -99,12 +100,25 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	batches, err := h.service.List(r.Context(), user.TenantID, strings.TrimSpace(r.URL.Query().Get("exam_id")), strings.TrimSpace(r.URL.Query().Get("question_id")))
+	page, limit, ok := backmarkPage(w, r)
+	if !ok {
+		return
+	}
+	batches, err := h.service.ListPage(r.Context(), user.TenantID, strings.TrimSpace(r.URL.Query().Get("exam_id")), strings.TrimSpace(r.URL.Query().Get("question_id")), page)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"backmark_batches": batches})
+	hasMore := len(batches) > limit
+	if hasMore {
+		batches = batches[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(batches) > 0 {
+		last := batches[len(batches)-1]
+		nextCursor = pagination.Encode(last.CreatedAt, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"backmark_batches": batches, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -112,12 +126,25 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	summary, err := h.service.Get(r.Context(), user.TenantID, r.PathValue("batchId"))
+	page, limit, ok := backmarkPage(w, r)
+	if !ok {
+		return
+	}
+	summary, err := h.service.GetPage(r.Context(), user.TenantID, r.PathValue("batchId"), page)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"backmark": summary})
+	hasMore := len(summary.Items) > limit
+	if hasMore {
+		summary.Items = summary.Items[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(summary.Items) > 0 {
+		last := summary.Items[len(summary.Items)-1]
+		nextCursor = pagination.Encode(last.CreatedAt, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"backmark": summary, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 type backmarkRegradeInput struct {
@@ -203,12 +230,39 @@ func (h *Handler) ListMine(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := h.service.ListAssigned(r.Context(), user.TenantID, user.ID)
+	page, limit, ok := backmarkPage(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.service.ListAssignedPage(r.Context(), user.TenantID, user.ID, page)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"backmark_items": items})
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		nextCursor = pagination.Encode(last.CreatedAt, last.ID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"backmark_items": items, "next_cursor": nextCursor, "has_more": hasMore})
+}
+
+func backmarkPage(w http.ResponseWriter, r *http.Request) (PageOptions, int, bool) {
+	limit, err := pagination.Limit(r.URL.Query().Get("limit"), DefaultPageSize, MaxPageSize)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 200")
+		return PageOptions{}, 0, false
+	}
+	cursor, err := pagination.Decode(r.URL.Query().Get("cursor"))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return PageOptions{}, 0, false
+	}
+	return PageOptions{Limit: limit + 1, CursorCreatedAt: cursor.CreatedAt, CursorID: cursor.ID}, limit, true
 }
 
 func (h *Handler) Claim(w http.ResponseWriter, r *http.Request) {
@@ -312,6 +366,8 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusUnprocessableEntity, "backmark_no_affected_tasks", "selector matched no completed review tasks")
 	case errors.Is(err, ErrNoRegradeItems):
 		httpx.Error(w, r, http.StatusUnprocessableEntity, "backmark_no_regrade_items", "backmark batch has no completed items requiring regrade")
+	case errors.Is(err, ErrTooManyItems):
+		httpx.Error(w, r, http.StatusUnprocessableEntity, "backmark_async_required", "affected population exceeds the synchronous backmark limit")
 	case errors.Is(err, ErrOriginalGrader), errors.Is(err, ErrAssigneeForbidden):
 		httpx.Error(w, r, http.StatusForbidden, "backmark_assignee_forbidden", "backmark must be completed by its assigned non-original grader")
 	case errors.Is(err, ErrRevisionConflict):

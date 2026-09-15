@@ -19,14 +19,17 @@ def test_heartbeat_renews_runtime_and_source_lease(monkeypatch) -> None:
     captured: dict = {}
 
     class Response:
+        def __init__(self):
+            self.headers = {"Content-Type": "application/json"}
+
         def __enter__(self):
             return self
 
         def __exit__(self, *_args):
             return None
 
-        def read(self) -> bytes:
-            return b"{}"
+        def read(self, amount=-1) -> bytes:
+            return b"{}"[:amount]
 
     def urlopen(req, timeout):
         captured.update(url=req.full_url, timeout=timeout, payload=json.loads(req.data))

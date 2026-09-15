@@ -2,17 +2,20 @@ package deps
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/config"
+	"edugrade-enterprise/services/api-gateway/internal/minioadapter"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -53,13 +56,75 @@ type RedisChecker struct {
 	client *redis.Client
 }
 
-func NewRedisChecker(cfg config.RedisConfig) (*RedisChecker, func() error) {
-	client := redis.NewClient(&redis.Options{
+type AuthRateLimiterChecker struct {
+	degraded func() bool
+	probe    func(context.Context) error
+}
+
+func NewAuthRateLimiterChecker(degraded func() bool) AuthRateLimiterChecker {
+	return AuthRateLimiterChecker{degraded: degraded}
+}
+
+func (c AuthRateLimiterChecker) Name() string { return "auth_rate_limiter" }
+
+func (c AuthRateLimiterChecker) WithProbe(probe func(context.Context) error) AuthRateLimiterChecker {
+	c.probe = probe
+	return c
+}
+
+func (c AuthRateLimiterChecker) Check(ctx context.Context) error {
+	if c.probe != nil {
+		if err := c.probe(ctx); err != nil {
+			return err
+		}
+	}
+	if c.degraded != nil && c.degraded() {
+		return errors.New("distributed authentication rate limiter is degraded")
+	}
+	return nil
+}
+
+func NewRedisChecker(cfg config.RedisConfig) (*RedisChecker, func() error, error) {
+	options := &redis.Options{
 		Addr:     cfg.Addr,
+		Username: cfg.Username,
 		Password: cfg.Password,
 		DB:       cfg.DB,
-	})
-	return &RedisChecker{client: client}, client.Close
+	}
+	if cfg.TLSEnabled {
+		tlsConfig, err := newRedisTLSConfig(cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		options.TLSConfig = tlsConfig
+	}
+	client := redis.NewClient(options)
+	return &RedisChecker{client: client}, client.Close, nil
+}
+
+func newRedisTLSConfig(cfg config.RedisConfig) (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ServerName: strings.TrimSpace(cfg.TLSServerName),
+	}
+	caFile := strings.TrimSpace(cfg.TLSCAFile)
+	if caFile == "" {
+		return tlsConfig, nil
+	}
+
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("read Redis TLS CA file: %w", err)
+	}
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil || rootCAs == nil {
+		rootCAs = x509.NewCertPool()
+	}
+	if ok := rootCAs.AppendCertsFromPEM(caPEM); !ok {
+		return nil, fmt.Errorf("Redis TLS CA file %q contains no valid certificates", caFile)
+	}
+	tlsConfig.RootCAs = rootCAs
+	return tlsConfig, nil
 }
 
 func (c *RedisChecker) Name() string {
@@ -76,17 +141,15 @@ func (c *RedisChecker) Client() redis.UniversalClient {
 
 type MinIOChecker struct {
 	client *minio.Client
+	bucket string
 }
 
-func NewMinIOChecker(cfg config.MinIOConfig) (*MinIOChecker, error) {
-	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: cfg.UseSSL,
-	})
+func NewMinIOChecker(cfg config.MinIOConfig, bucket string) (*MinIOChecker, error) {
+	client, err := minioadapter.NewClient(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return &MinIOChecker{client: client}, nil
+	return &MinIOChecker{client: client, bucket: strings.TrimSpace(bucket)}, nil
 }
 
 func (c *MinIOChecker) Name() string {
@@ -94,8 +157,17 @@ func (c *MinIOChecker) Name() string {
 }
 
 func (c *MinIOChecker) Check(ctx context.Context) error {
-	_, err := c.client.ListBuckets(ctx)
-	return err
+	if c.bucket == "" {
+		return errors.New("MinIO bucket is not configured")
+	}
+	exists, err := c.client.BucketExists(ctx, c.bucket)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("MinIO bucket %q is missing; restore it before accepting traffic", c.bucket)
+	}
+	return nil
 }
 
 type HTTPChecker struct {

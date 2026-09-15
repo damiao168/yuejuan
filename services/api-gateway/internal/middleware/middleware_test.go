@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -110,5 +111,43 @@ func TestBrowserCSRFLeavesBearerAndReadRequestsCompatible(t *testing.T) {
 
 	if bearerRec.Code != http.StatusNoContent || readRec.Code != http.StatusNoContent || called != 2 {
 		t.Fatalf("bearer and read requests must remain compatible: bearer=%d read=%d called=%d", bearerRec.Code, readRec.Code, called)
+	}
+}
+
+func TestRequestIDReplacesInvalidCorrelationHeaders(t *testing.T) {
+	handler := RequestID()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/health/live", nil)
+	request.Header.Set("X-Request-ID", strings.Repeat("x", 4096))
+	request.Header.Set("X-Trace-ID", "not-a-trace-id")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if got := response.Header().Get("X-Request-ID"); !requestIDPattern.MatchString(got) || got == request.Header.Get("X-Request-ID") {
+		t.Fatalf("invalid request id was not replaced: %q", got)
+	}
+	if got := response.Header().Get("X-Trace-ID"); !validTraceID(got) {
+		t.Fatalf("invalid trace id was not replaced: %q", got)
+	}
+}
+
+func TestRequestIDAcceptsBoundedRequestAndTraceIdentifiers(t *testing.T) {
+	handler := RequestID()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/health/live", nil)
+	request.Header.Set("X-Request-ID", "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+	request.Header.Set("X-Trace-ID", "4bf92f3577b34da6a3ce929d0e0e4736")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Header().Get("X-Request-ID") != "01ARZ3NDEKTSV4RRFFQ69G5FAV" {
+		t.Fatalf("valid request id was not propagated: %q", response.Header().Get("X-Request-ID"))
+	}
+	if response.Header().Get("X-Trace-ID") != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("valid trace id was not propagated: %q", response.Header().Get("X-Trace-ID"))
 	}
 }

@@ -718,17 +718,17 @@ export type BackmarkHistogram = { "delta": number; "count": number; };
 
 export type BackmarkSummary = { "batch": BackmarkBatch; "items": Array<BackmarkItem>; "diff_histogram": Array<BackmarkHistogram>; };
 
-export type BackmarkSummaryResponse = { "backmark": BackmarkSummary; };
+export type BackmarkSummaryResponse = { "backmark": BackmarkSummary; "next_cursor": string; "has_more": boolean; };
 
 export type BackmarkRegradeInput = { "source_release_id": string; "assignee_id": string; };
 
-export type BackmarkBatchListResponse = { "backmark_batches": Array<BackmarkBatch>; };
+export type BackmarkBatchListResponse = { "backmark_batches": Array<BackmarkBatch>; "next_cursor": string; "has_more": boolean; };
 
 export type BackmarkGraderItem = { "id": string; "status": "pending" | "in_progress"; "max_score": number; "revision": number; "created_at": string; };
 
 export type BackmarkGraderItemResponse = { "backmark_item": BackmarkGraderItem; };
 
-export type BackmarkGraderItemListResponse = { "backmark_items": Array<BackmarkGraderItem>; };
+export type BackmarkGraderItemListResponse = { "backmark_items": Array<BackmarkGraderItem>; "next_cursor": string; "has_more": boolean; };
 
 export type BackmarkQuestion = { "id": string; "question_no": string; "question_type": string; "score": number; "stem"?: string; "knowledge_points"?: Array<string>; };
 

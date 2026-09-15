@@ -87,7 +87,7 @@ try {
     $minioPath = (Resolve-Path -LiteralPath $MinioBackupDirectory).Path
     $backupMount = Split-Path -Parent $minioPath
     $backupName = Split-Path -Leaf $minioPath
-    $minioScript = 'mc alias set edugrade http://minio:9000 "$EDUGRADE_MINIO_ACCESS_KEY" "$EDUGRADE_MINIO_SECRET_KEY"; mc mb --ignore-existing "edugrade/{1}"; mc mirror --overwrite "/backup/{0}" "edugrade/{1}"' -f $backupName, $TargetBucket
+    $minioScript = 'scheme=http; if [ "$EDUGRADE_MINIO_USE_SSL" = "true" ]; then scheme=https; fi; mc alias set edugrade "$scheme://minio:9000" "$EDUGRADE_MINIO_ROOT_USER" "$EDUGRADE_MINIO_ROOT_PASSWORD"; mc mb --ignore-existing "edugrade/{1}"; mc mirror --overwrite "/backup/{0}" "edugrade/{1}"' -f $backupName, $TargetBucket
     & docker compose --env-file $envPath -f $composePath --profile tools run --rm -v "${backupMount}:/backup:ro" --entrypoint /bin/sh minio-init -ec $minioScript
     if ($LASTEXITCODE -ne 0) { throw "MinIO restore failed." }
   }

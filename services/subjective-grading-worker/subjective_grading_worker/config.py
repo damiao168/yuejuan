@@ -4,7 +4,7 @@ import math
 import os
 from dataclasses import dataclass
 
-from edugrade_worker_runtime import validate_lease_timing
+from edugrade_worker_runtime import validate_lease_timing, validate_service_url
 
 
 @dataclass(frozen=True)
@@ -45,8 +45,7 @@ def load_settings() -> Settings:
 
 
 def validate_settings(settings: Settings) -> None:
-    if not settings.api_base_url.startswith(("http://", "https://")):
-        raise ValueError("EDUGRADE_API_BASE_URL must use http or https")
+    validate_service_url("EDUGRADE_API_BASE_URL", settings.api_base_url, os.getenv("EDUGRADE_ENV", "development"))
     for name, value in (("tenant_code", settings.tenant_code), ("username", settings.username), ("password", settings.password), ("worker_id", settings.worker_id)):
         if not value.strip():
             raise ValueError(f"{name} must not be empty")

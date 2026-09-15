@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -29,21 +30,28 @@ type Config struct {
 }
 
 type ServiceConfig struct {
-	Name              string
-	Environment       string
-	Host              string
-	Port              int
-	LogLevel          string
-	ReadinessTimeout  time.Duration
-	ShutdownTimeout   time.Duration
-	ReadHeaderTimeout time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	IdleTimeout       time.Duration
+	Name                string
+	Environment         string
+	Host                string
+	Port                int
+	LogLevel            string
+	ReadinessTimeout    time.Duration
+	ShutdownTimeout     time.Duration
+	ReadHeaderTimeout   time.Duration
+	ReadTimeout         time.Duration
+	WriteTimeout        time.Duration
+	IdleTimeout         time.Duration
+	InternalTLSPort     int
+	InternalTLSCertFile string
+	InternalTLSKeyFile  string
 }
 
 func (c ServiceConfig) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
+}
+
+func (c ServiceConfig) InternalTLSAddr() string {
+	return fmt.Sprintf("%s:%d", c.Host, c.InternalTLSPort)
 }
 
 type PostgresConfig struct {
@@ -58,19 +66,20 @@ type PostgresConfig struct {
 }
 
 type AuthConfig struct {
-	SessionTTL           time.Duration
-	RememberedSessionTTL time.Duration
-	PublicSessionTTL     time.Duration
-	RecentAuthTTL        time.Duration
-	LoginFailureLimit    int
-	LoginFailureWindow   time.Duration
-	SessionCookieName    string
-	DeviceCookieName     string
-	SessionCookieSecure  bool
-	RiskMode             string
-	DeviceBindingTTL     time.Duration
-	MFAEnabled           bool
-	MFAMasterKey         string
+	SessionTTL             time.Duration
+	RememberedSessionTTL   time.Duration
+	PublicSessionTTL       time.Duration
+	RecentAuthTTL          time.Duration
+	LoginFailureLimit      int
+	LoginFailureWindow     time.Duration
+	LoginLimiterFailClosed bool
+	SessionCookieName      string
+	DeviceCookieName       string
+	SessionCookieSecure    bool
+	RiskMode               string
+	DeviceBindingTTL       time.Duration
+	MFAEnabled             bool
+	MFAMasterKey           string
 }
 
 type SecurityConfig struct {
@@ -91,16 +100,22 @@ const localModelCredentialMasterKey = "edugrade-local-model-credential-key-chang
 const defaultAllowedFileExtensions = ".pdf,.png,.jpg,.jpeg,.tif,.tiff,.csv,.docx"
 
 type RedisConfig struct {
-	Addr     string
-	Password string
-	DB       int
+	Addr          string
+	Username      string
+	Password      string
+	DB            int
+	TLSEnabled    bool
+	TLSCAFile     string
+	TLSServerName string
 }
 
 type MinIOConfig struct {
-	Endpoint  string
-	AccessKey string
-	SecretKey string
-	UseSSL    bool
+	Endpoint      string
+	AccessKey     string
+	SecretKey     string
+	UseSSL        bool
+	TLSCAFile     string
+	TLSServerName string
 }
 
 type QdrantConfig struct {
@@ -158,10 +173,10 @@ func Load(envFile string) (Config, error) {
 	secretDefaults := map[string]string{
 		"EDUGRADE_POSTGRES_DSN":                "postgres://edugrade:edugrade_dev@127.0.0.1:5432/edugrade?sslmode=disable",
 		"EDUGRADE_REDIS_PASSWORD":              "",
-		"EDUGRADE_MINIO_ACCESS_KEY":            "edugrade",
-		"EDUGRADE_MINIO_SECRET_KEY":            "edugrade_dev_secret",
+		"EDUGRADE_MINIO_APP_ACCESS_KEY":        "edugrade-app",
+		"EDUGRADE_MINIO_APP_SECRET_KEY":        "edugrade_app_dev_secret",
 		"EDUGRADE_QDRANT_API_KEY":              "",
-		"EDUGRADE_AI_SERVICE_TOKEN":            "",
+		"EDUGRADE_GRADING_AGENT_TOKEN":         "",
 		"EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY": localModelCredentialMasterKey,
 		"EDUGRADE_BARCODE_HMAC_KEYS":           "",
 		"EDUGRADE_MFA_MASTER_KEY":              "",
@@ -178,32 +193,36 @@ func Load(envFile string) (Config, error) {
 
 	cfg := Config{
 		Service: ServiceConfig{
-			Name:              getEnv("EDUGRADE_SERVICE_NAME", "api-gateway"),
-			Environment:       environment,
-			Host:              getEnv("EDUGRADE_HTTP_HOST", "127.0.0.1"),
-			Port:              parser.Int("EDUGRADE_HTTP_PORT", 8080),
-			LogLevel:          getEnv("EDUGRADE_LOG_LEVEL", "info"),
-			ReadinessTimeout:  parser.Duration("EDUGRADE_READINESS_TIMEOUT", 2*time.Second),
-			ShutdownTimeout:   parser.Duration("EDUGRADE_SHUTDOWN_TIMEOUT", 10*time.Second),
-			ReadHeaderTimeout: parser.Duration("EDUGRADE_HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
-			ReadTimeout:       parser.Duration("EDUGRADE_HTTP_READ_TIMEOUT", 15*time.Second),
-			WriteTimeout:      parser.Duration("EDUGRADE_HTTP_WRITE_TIMEOUT", 780*time.Second),
-			IdleTimeout:       parser.Duration("EDUGRADE_HTTP_IDLE_TIMEOUT", 60*time.Second),
+			Name:                getEnv("EDUGRADE_SERVICE_NAME", "api-gateway"),
+			Environment:         environment,
+			Host:                getEnv("EDUGRADE_HTTP_HOST", "127.0.0.1"),
+			Port:                parser.Int("EDUGRADE_HTTP_PORT", 8080),
+			LogLevel:            getEnv("EDUGRADE_LOG_LEVEL", "info"),
+			ReadinessTimeout:    parser.Duration("EDUGRADE_READINESS_TIMEOUT", 2*time.Second),
+			ShutdownTimeout:     parser.Duration("EDUGRADE_SHUTDOWN_TIMEOUT", 10*time.Second),
+			ReadHeaderTimeout:   parser.Duration("EDUGRADE_HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+			ReadTimeout:         parser.Duration("EDUGRADE_HTTP_READ_TIMEOUT", 15*time.Second),
+			WriteTimeout:        parser.Duration("EDUGRADE_HTTP_WRITE_TIMEOUT", 780*time.Second),
+			IdleTimeout:         parser.Duration("EDUGRADE_HTTP_IDLE_TIMEOUT", 60*time.Second),
+			InternalTLSPort:     parser.Int("EDUGRADE_INTERNAL_TLS_PORT", 0),
+			InternalTLSCertFile: strings.TrimSpace(os.Getenv("EDUGRADE_INTERNAL_TLS_CERT_FILE")),
+			InternalTLSKeyFile:  strings.TrimSpace(os.Getenv("EDUGRADE_INTERNAL_TLS_KEY_FILE")),
 		},
 		Auth: AuthConfig{
-			SessionTTL:           parser.Duration("EDUGRADE_SESSION_TTL", 8*time.Hour),
-			RememberedSessionTTL: parser.Duration("EDUGRADE_REMEMBERED_SESSION_TTL", 30*24*time.Hour),
-			PublicSessionTTL:     parser.Duration("EDUGRADE_PUBLIC_SESSION_TTL", 4*time.Hour),
-			RecentAuthTTL:        parser.Duration("EDUGRADE_RECENT_AUTH_TTL", 10*time.Minute),
-			LoginFailureLimit:    parser.Int("EDUGRADE_LOGIN_FAILURE_LIMIT", 5),
-			LoginFailureWindow:   parser.Duration("EDUGRADE_LOGIN_FAILURE_WINDOW", 15*time.Minute),
-			SessionCookieName:    getEnv("EDUGRADE_SESSION_COOKIE_NAME", "edugrade_session"),
-			DeviceCookieName:     getEnv("EDUGRADE_DEVICE_COOKIE_NAME", "edugrade_device"),
-			SessionCookieSecure:  sessionCookieSecure,
-			RiskMode:             strings.ToLower(strings.TrimSpace(getEnv("EDUGRADE_AUTH_RISK_MODE", "shadow"))),
-			DeviceBindingTTL:     parser.Duration("EDUGRADE_DEVICE_BINDING_TTL", 180*24*time.Hour),
-			MFAEnabled:           parser.Bool("EDUGRADE_MFA_ENABLED", false),
-			MFAMasterKey:         secretValues["EDUGRADE_MFA_MASTER_KEY"],
+			SessionTTL:             parser.Duration("EDUGRADE_SESSION_TTL", 8*time.Hour),
+			RememberedSessionTTL:   parser.Duration("EDUGRADE_REMEMBERED_SESSION_TTL", 30*24*time.Hour),
+			PublicSessionTTL:       parser.Duration("EDUGRADE_PUBLIC_SESSION_TTL", 4*time.Hour),
+			RecentAuthTTL:          parser.Duration("EDUGRADE_RECENT_AUTH_TTL", 10*time.Minute),
+			LoginFailureLimit:      parser.Int("EDUGRADE_LOGIN_FAILURE_LIMIT", 5),
+			LoginFailureWindow:     parser.Duration("EDUGRADE_LOGIN_FAILURE_WINDOW", 15*time.Minute),
+			LoginLimiterFailClosed: parser.Bool("EDUGRADE_AUTH_LIMITER_FAIL_CLOSED", isProductionLike(environment)),
+			SessionCookieName:      getEnv("EDUGRADE_SESSION_COOKIE_NAME", "edugrade_session"),
+			DeviceCookieName:       getEnv("EDUGRADE_DEVICE_COOKIE_NAME", "edugrade_device"),
+			SessionCookieSecure:    sessionCookieSecure,
+			RiskMode:               strings.ToLower(strings.TrimSpace(getEnv("EDUGRADE_AUTH_RISK_MODE", "shadow"))),
+			DeviceBindingTTL:       parser.Duration("EDUGRADE_DEVICE_BINDING_TTL", 180*24*time.Hour),
+			MFAEnabled:             parser.Bool("EDUGRADE_MFA_ENABLED", false),
+			MFAMasterKey:           secretValues["EDUGRADE_MFA_MASTER_KEY"],
 		},
 		Security: SecurityConfig{
 			MaxHeaderBytes:      parser.Int("EDUGRADE_HTTP_MAX_HEADER_BYTES", 1<<20),
@@ -227,15 +246,21 @@ func Load(envFile string) (Config, error) {
 			LockTimeout:      parser.Duration("EDUGRADE_POSTGRES_LOCK_TIMEOUT", 5*time.Second),
 		},
 		Redis: RedisConfig{
-			Addr:     getEnv("EDUGRADE_REDIS_ADDR", "127.0.0.1:6379"),
-			Password: secretValues["EDUGRADE_REDIS_PASSWORD"],
-			DB:       parser.Int("EDUGRADE_REDIS_DB", 0),
+			Addr:          getEnv("EDUGRADE_REDIS_ADDR", "127.0.0.1:6379"),
+			Username:      strings.TrimSpace(os.Getenv("EDUGRADE_REDIS_USERNAME")),
+			Password:      secretValues["EDUGRADE_REDIS_PASSWORD"],
+			DB:            parser.Int("EDUGRADE_REDIS_DB", 0),
+			TLSEnabled:    parser.Bool("EDUGRADE_REDIS_TLS_ENABLED", false),
+			TLSCAFile:     strings.TrimSpace(os.Getenv("EDUGRADE_REDIS_TLS_CA_FILE")),
+			TLSServerName: strings.TrimSpace(os.Getenv("EDUGRADE_REDIS_TLS_SERVER_NAME")),
 		},
 		MinIO: MinIOConfig{
-			Endpoint:  getEnv("EDUGRADE_MINIO_ENDPOINT", "127.0.0.1:9000"),
-			AccessKey: secretValues["EDUGRADE_MINIO_ACCESS_KEY"],
-			SecretKey: secretValues["EDUGRADE_MINIO_SECRET_KEY"],
-			UseSSL:    parser.Bool("EDUGRADE_MINIO_USE_SSL", false),
+			Endpoint:      getEnv("EDUGRADE_MINIO_ENDPOINT", "127.0.0.1:9000"),
+			AccessKey:     secretValues["EDUGRADE_MINIO_APP_ACCESS_KEY"],
+			SecretKey:     secretValues["EDUGRADE_MINIO_APP_SECRET_KEY"],
+			UseSSL:        parser.Bool("EDUGRADE_MINIO_USE_SSL", false),
+			TLSCAFile:     getEnv("EDUGRADE_MINIO_TLS_CA_FILE", ""),
+			TLSServerName: getEnv("EDUGRADE_MINIO_TLS_SERVER_NAME", ""),
 		},
 		Qdrant: QdrantConfig{
 			URL:    getEnv("EDUGRADE_QDRANT_URL", ""),
@@ -246,7 +271,7 @@ func Load(envFile string) (Config, error) {
 			MathGradingV2:     parser.Bool("EDUGRADE_MATH_GRADING_V2_ENABLED", false),
 			AllowMock:         parser.Bool("EDUGRADE_ALLOW_MOCK_AI", false),
 			URL:               getEnv("EDUGRADE_AI_SERVICE_URL", ""),
-			Token:             secretValues["EDUGRADE_AI_SERVICE_TOKEN"],
+			Token:             secretValues["EDUGRADE_GRADING_AGENT_TOKEN"],
 			Timeout:           parser.Duration("EDUGRADE_AI_SERVICE_TIMEOUT", 750*time.Second),
 			MaxRetries:        parser.Int("EDUGRADE_AI_SERVICE_MAX_RETRIES", 0),
 			ModelVersion:      getEnv("EDUGRADE_AI_MODEL_VERSION", "Qwen/Qwen3-4B-GGUF:Q4_K_M"),
@@ -315,6 +340,13 @@ func validateProductionConfig(cfg Config) error {
 	if err := validatePostgresCapacity(cfg.Postgres); err != nil {
 		return err
 	}
+	internalTLSConfigured := cfg.Service.InternalTLSPort > 0 || cfg.Service.InternalTLSCertFile != "" || cfg.Service.InternalTLSKeyFile != ""
+	if internalTLSConfigured && (cfg.Service.InternalTLSPort <= 0 || cfg.Service.InternalTLSCertFile == "" || cfg.Service.InternalTLSKeyFile == "") {
+		return fmt.Errorf("EDUGRADE_INTERNAL_TLS_PORT, EDUGRADE_INTERNAL_TLS_CERT_FILE, and EDUGRADE_INTERNAL_TLS_KEY_FILE must be configured together")
+	}
+	if cfg.Service.InternalTLSPort < 0 || cfg.Service.InternalTLSPort > 65535 || cfg.Service.InternalTLSPort == cfg.Service.Port {
+		return fmt.Errorf("EDUGRADE_INTERNAL_TLS_PORT must be 0 or a distinct port between 1 and 65535")
+	}
 	for _, cidr := range cfg.Security.TrustedProxyCIDRs {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			return fmt.Errorf("invalid EDUGRADE_TRUSTED_PROXY_CIDRS entry %q", cidr)
@@ -325,7 +357,7 @@ func validateProductionConfig(cfg Config) error {
 	}
 	if cfg.AIService.Enabled && strings.TrimSpace(cfg.AIService.URL) != "" {
 		if len(cfg.AIService.Token) < 32 {
-			return fmt.Errorf("unsafe AI service configuration: EDUGRADE_AI_SERVICE_TOKEN must contain at least 32 characters")
+			return fmt.Errorf("unsafe AI service configuration: EDUGRADE_GRADING_AGENT_TOKEN must contain at least 32 characters")
 		}
 		if cfg.AIService.Timeout <= 0 || cfg.AIService.MaxRetries < 0 || cfg.AIService.MaxRetries > 1 || cfg.AIService.MinConfidence < 0 || cfg.AIService.MinConfidence > 1 {
 			return fmt.Errorf("invalid AI service timeout, retry, or confidence configuration")
@@ -360,8 +392,19 @@ func validateProductionConfig(cfg Config) error {
 	if cfg.AIService.AllowMock {
 		problems = append(problems, "EDUGRADE_ALLOW_MOCK_AI must be false in production-like environments")
 	}
+	if !cfg.Auth.LoginLimiterFailClosed {
+		problems = append(problems, "EDUGRADE_AUTH_LIMITER_FAIL_CLOSED must be true")
+	}
 	if cfg.AIService.Enabled && strings.TrimSpace(cfg.AIService.URL) == "" {
 		problems = append(problems, "EDUGRADE_AI_SERVICE_URL must be configured when AI grading is enabled")
+	}
+	if cfg.Service.InternalTLSPort <= 0 {
+		problems = append(problems, "internal API TLS listener must be configured")
+	}
+	if cfg.AIService.Enabled {
+		if err := validateServiceURL("EDUGRADE_AI_SERVICE_URL", cfg.AIService.URL, cfg.Service.Environment); err != nil {
+			problems = append(problems, err.Error())
+		}
 	}
 	if !cfg.Auth.SessionCookieSecure {
 		problems = append(problems, "EDUGRADE_SESSION_COOKIE_SECURE must be true")
@@ -372,8 +415,20 @@ func validateProductionConfig(cfg Config) error {
 	if !cfg.Postgres.TenantRLSEnabled {
 		problems = append(problems, "EDUGRADE_POSTGRES_TENANT_RLS must be true")
 	}
-	if cfg.MinIO.AccessKey == "edugrade" || cfg.MinIO.SecretKey == "edugrade_dev_secret" {
-		problems = append(problems, "MinIO development credentials must be replaced")
+	if strings.TrimSpace(cfg.Redis.Username) == "" {
+		problems = append(problems, "EDUGRADE_REDIS_USERNAME must be configured")
+	}
+	if strings.TrimSpace(cfg.Redis.Password) == "" {
+		problems = append(problems, "EDUGRADE_REDIS_PASSWORD must be configured")
+	}
+	if !cfg.Redis.TLSEnabled {
+		problems = append(problems, "EDUGRADE_REDIS_TLS_ENABLED must be true")
+	}
+	if cfg.MinIO.AccessKey == "edugrade-app" || cfg.MinIO.SecretKey == "edugrade_app_dev_secret" {
+		problems = append(problems, "MinIO application development credentials must be replaced")
+	}
+	if !cfg.MinIO.UseSSL {
+		problems = append(problems, "EDUGRADE_MINIO_USE_SSL must be true")
 	}
 	if len(cfg.Barcode.HMACKeys[cfg.Barcode.ActiveKeyID]) < 32 {
 		problems = append(problems, "EDUGRADE_BARCODE_HMAC_KEYS must contain the active key with at least 32 characters")
@@ -422,6 +477,24 @@ func isProductionLike(environment string) bool {
 	default:
 		return true
 	}
+}
+
+func validateServiceURL(name, value, environment string) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("%s must be a valid HTTP(S) URL", name)
+	}
+	if !isProductionLike(environment) || parsed.Scheme == "https" {
+		return nil
+	}
+	host := parsed.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("%s must use https outside loopback in production-like environments", name)
 }
 
 func defaultSessionCookieSecure(environment string) bool {

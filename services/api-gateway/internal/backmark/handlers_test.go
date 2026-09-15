@@ -3,6 +3,7 @@ package backmark
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,94 @@ import (
 	"edugrade-enterprise/services/api-gateway/internal/paper"
 	"edugrade-enterprise/services/api-gateway/internal/review"
 )
+
+func TestBackmarkHandlersReturnBoundedCursorPages(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, 9, 15, 1, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	for index := 0; index < 3; index++ {
+		id := fmt.Sprintf("task-%d", index)
+		store.SeedSource(SourceTask{ReviewTaskID: id, OriginalGradeID: "grade-" + id, OriginalReviewer: "grader-a", OriginalScore: 1, MaxScore: 2, GradedAt: now})
+	}
+	handler := NewHandler(NewService(store), nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/exams/exam-1/questions/question-1/backmark-batches", strings.NewReader(`{"source_incident_id":"incident-1","reassigned_to":"grader-b","policy":{"disposition":"confirm"}}`))
+	request.SetPathValue("examId", "exam-1")
+	request.SetPathValue("questionId", "question-1")
+	request = request.WithContext(auth.WithUser(request.Context(), auth.User{ID: "manager-1", TenantID: "tenant-1"}))
+	response := httptest.NewRecorder()
+	handler.Create(response, request)
+	var created struct {
+		Summary Summary `json:"backmark"`
+		Next    *string `json:"next_cursor"`
+		More    *bool   `json:"has_more"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusCreated || created.Next == nil || *created.Next != "" || created.More == nil || *created.More {
+		t.Fatalf("create response does not match pagination contract: %s", response.Body.String())
+	}
+	for _, test := range []struct {
+		name   string
+		path   string
+		userID string
+		handle http.HandlerFunc
+	}{
+		{"batch items", "/api/v1/backmark-batches/" + created.Summary.Batch.ID, "manager-1", handler.Get},
+		{"assigned items", "/api/v1/backmark-items/mine", "grader-b", handler.ListMine},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cursor := ""
+			seen := map[string]bool{}
+			for page := 0; page < 2; page++ {
+				request := httptest.NewRequest(http.MethodGet, test.path+"?limit=2&cursor="+cursor, nil)
+				request.SetPathValue("batchId", created.Summary.Batch.ID)
+				request = request.WithContext(auth.WithUser(request.Context(), auth.User{ID: test.userID, TenantID: "tenant-1"}))
+				response := httptest.NewRecorder()
+				test.handle(response, request)
+				var decoded struct {
+					Summary Summary      `json:"backmark"`
+					Items   []GraderItem `json:"backmark_items"`
+					Next    string       `json:"next_cursor"`
+					More    bool         `json:"has_more"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+					t.Fatal(err)
+				}
+				ids := []string{}
+				for _, item := range decoded.Summary.Items {
+					ids = append(ids, item.ID)
+				}
+				for _, item := range decoded.Items {
+					ids = append(ids, item.ID)
+				}
+				if response.Code != http.StatusOK || len(ids) != 2-page || decoded.More != (page == 0) || (decoded.Next != "") != decoded.More {
+					t.Fatalf("invalid page %d: %s", page, response.Body.String())
+				}
+				for _, id := range ids {
+					if seen[id] {
+						t.Fatalf("cursor repeated item %s", id)
+					}
+					seen[id] = true
+				}
+				cursor = decoded.Next
+			}
+		})
+	}
+}
+
+func TestBackmarkHandlersRejectInvalidPagination(t *testing.T) {
+	handler := NewHandler(NewService(NewMemoryStore()), nil)
+	for _, query := range []string{"limit=0", "limit=201", "cursor=invalid"} {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/backmark-batches?"+query, nil)
+		request = request.WithContext(auth.WithUser(request.Context(), auth.User{ID: "manager-1", TenantID: "tenant-1"}))
+		response := httptest.NewRecorder()
+		handler.List(response, request)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid_pagination") {
+			t.Fatalf("query %s: status=%d body=%s", query, response.Code, response.Body.String())
+		}
+	}
+}
 
 func TestGetContextReturnsBlindBackmarkSurface(t *testing.T) {
 	store := NewMemoryStore()

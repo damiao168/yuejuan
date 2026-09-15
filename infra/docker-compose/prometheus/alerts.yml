@@ -1,0 +1,11 @@
+groups:
+  - name: edugrade-authentication
+    rules:
+      - alert: EduGradeAuthRateLimiterDegraded
+        expr: edugrade_auth_rate_limiter_degraded == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Distributed authentication rate limiting is degraded
+          description: Production login and MFA verification fail closed until Redis-backed rate limiting recovers.

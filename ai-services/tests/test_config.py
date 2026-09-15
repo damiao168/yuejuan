@@ -42,6 +42,34 @@ class SettingsTests(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
+            "EDUGRADE_ENV": "production",
+            "EDUGRADE_GRADING_AGENT_TOKEN": "test-service-token-with-at-least-32-characters",
+            "EDUGRADE_GRADING_MODEL_BASE_URL": "http://model.internal:8087/v1",
+            "EDUGRADE_GRADING_AGENT_TLS_CERT_FILE": "/run/secrets/tls/server.crt",
+            "EDUGRADE_GRADING_AGENT_TLS_KEY_FILE": "/run/secrets/tls/server.key",
+        },
+        clear=True,
+    )
+    def test_production_rejects_plaintext_remote_model(self):
+        with self.assertRaisesRegex(ValueError, "must use https"):
+            Settings.from_env()
+
+    @patch.dict(
+        os.environ,
+        {
+            "EDUGRADE_ENV": "production",
+            "EDUGRADE_GRADING_AGENT_TOKEN": "test-service-token-with-at-least-32-characters",
+            "EDUGRADE_GRADING_MODEL_BASE_URL": "https://model.internal/v1",
+        },
+        clear=True,
+    )
+    def test_production_requires_server_tls_certificate(self):
+        with self.assertRaisesRegex(ValueError, "TLS certificate"):
+            Settings.from_env()
+
+    @patch.dict(
+        os.environ,
+        {
             "EDUGRADE_GRADING_AGENT_TOKEN": "test-service-token-with-at-least-32-characters",
             "EDUGRADE_GRADING_ADAPTER_TYPE": "dashscope_native",
             "EDUGRADE_GRADING_MODEL_BASE_URL": "https://dashscope.aliyuncs.com/api/v1",

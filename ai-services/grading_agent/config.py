@@ -3,6 +3,8 @@ import os
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from edugrade_worker_runtime import validate_service_url
+
 
 def _integer(name, default, minimum, maximum):
     raw = os.getenv(name, str(default))
@@ -28,6 +30,7 @@ def _float(name, default, minimum, maximum):
 
 @dataclass(frozen=True)
 class Settings:
+    environment: str = "development"
     host: str = "0.0.0.0"
     port: int = 8100
     service_token: str = ""
@@ -43,6 +46,7 @@ class Settings:
     prompt_version: str = "subjective-governed-cn-subject-routing-v5"
     model_timeout_seconds: int = 230
     model_ready_timeout_seconds: int = 3
+    model_readiness_cache_seconds: int = 10
     model_queue_timeout_seconds: int = 5
     model_max_retries: int = 1
     model_context_tokens: int = 4096
@@ -54,10 +58,13 @@ class Settings:
     idempotency_max_entries: int = 256
     contract_root: str = "/app/contracts/grading-agent/v1"
     prompt_root: str = "/app/prompts"
+    tls_cert_file: str = ""
+    tls_key_file: str = ""
 
     @classmethod
     def from_env(cls):
         settings = cls(
+            environment=os.getenv("EDUGRADE_ENV", "development").strip().lower(),
             host=os.getenv("EDUGRADE_GRADING_AGENT_HOST", "0.0.0.0").strip(),
             port=_integer("EDUGRADE_GRADING_AGENT_PORT", 8100, 1, 65535),
             service_token=os.getenv("EDUGRADE_GRADING_AGENT_TOKEN", ""),
@@ -77,6 +84,7 @@ class Settings:
             prompt_version=os.getenv("EDUGRADE_GRADING_PROMPT_VERSION", "subjective-governed-cn-subject-routing-v5").strip(),
             model_timeout_seconds=_integer("EDUGRADE_GRADING_MODEL_TIMEOUT_SECONDS", 230, 1, 600),
             model_ready_timeout_seconds=_integer("EDUGRADE_GRADING_MODEL_READY_TIMEOUT_SECONDS", 3, 1, 30),
+            model_readiness_cache_seconds=_integer("EDUGRADE_GRADING_MODEL_READINESS_CACHE_SECONDS", 10, 5, 60),
             model_queue_timeout_seconds=_integer("EDUGRADE_GRADING_MODEL_QUEUE_TIMEOUT_SECONDS", 5, 0, 120),
             model_max_retries=_integer("EDUGRADE_GRADING_MODEL_MAX_RETRIES", 1, 0, 1),
             model_context_tokens=_integer("EDUGRADE_GRADING_MODEL_CONTEXT_TOKENS", 4096, 1024, 32768),
@@ -88,6 +96,8 @@ class Settings:
             idempotency_max_entries=_integer("EDUGRADE_GRADING_IDEMPOTENCY_MAX_ENTRIES", 256, 1, 10000),
             contract_root=os.getenv("EDUGRADE_GRADING_CONTRACT_ROOT", "/app/contracts/grading-agent/v1"),
             prompt_root=os.getenv("EDUGRADE_GRADING_PROMPT_ROOT", "/app/prompts"),
+            tls_cert_file=os.getenv("EDUGRADE_GRADING_AGENT_TLS_CERT_FILE", "").strip(),
+            tls_key_file=os.getenv("EDUGRADE_GRADING_AGENT_TLS_KEY_FILE", "").strip(),
         )
         if (
             len(settings.service_token) < 32
@@ -97,6 +107,10 @@ class Settings:
             raise ValueError("EDUGRADE_GRADING_AGENT_TOKEN must contain at least 32 non-whitespace characters")
         if not settings.host:
             raise ValueError("EDUGRADE_GRADING_AGENT_HOST must not be empty")
+        if bool(settings.tls_cert_file) != bool(settings.tls_key_file):
+            raise ValueError("grading-agent TLS certificate and key must be configured together")
+        if settings.environment not in {"", "local", "development", "dev", "test"} and not settings.tls_cert_file:
+            raise ValueError("grading-agent TLS certificate and key are required in production-like environments")
         try:
             model_url = urlsplit(settings.model_base_url)
             _ = model_url.port
@@ -111,6 +125,7 @@ class Settings:
             or model_url.fragment
         ):
             raise ValueError("EDUGRADE_GRADING_MODEL_BASE_URL must be a valid HTTP(S) URL")
+        validate_service_url("EDUGRADE_GRADING_MODEL_BASE_URL", settings.model_base_url, settings.environment)
         identity = {
             "EDUGRADE_GRADING_PROVIDER_KEY": settings.provider_key,
             "EDUGRADE_GRADING_DEPLOYMENT_KEY": settings.deployment_key,

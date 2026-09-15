@@ -56,12 +56,15 @@ func (s *Service) Create(ctx context.Context, tenantID, examID, questionID, acto
 	input.ReassignedTo = strings.TrimSpace(input.ReassignedTo)
 	input.Selector = normalizeSelector(input.Selector)
 	input.Policy = normalizePolicy(input.Policy)
-	sources, err := s.store.SelectSourceTasks(ctx, tenantID, examID, questionID, input.Selector)
+	sources, err := s.store.SelectSourceTasks(ctx, tenantID, examID, questionID, input.Selector, MaxSynchronousItems+1)
 	if err != nil {
 		return Summary{}, err
 	}
 	if len(sources) == 0 {
 		return Summary{}, ErrNoAffectedTasks
+	}
+	if len(sources) > MaxSynchronousItems {
+		return Summary{}, ErrTooManyItems
 	}
 	for _, source := range sources {
 		if source.OriginalReviewer == input.ReassignedTo {
@@ -76,15 +79,29 @@ func (s *Service) Create(ctx context.Context, tenantID, examID, questionID, acto
 }
 
 func (s *Service) Get(ctx context.Context, tenantID, batchID string) (Summary, error) {
+	return s.GetPage(ctx, tenantID, batchID, PageOptions{Limit: DefaultPageSize})
+}
+
+func (s *Service) GetPage(ctx context.Context, tenantID, batchID string, page PageOptions) (Summary, error) {
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(batchID) == "" {
 		return Summary{}, ErrInvalidInput
 	}
-	summary, err := s.store.GetSummary(ctx, tenantID, batchID)
+	if !validPage(page) {
+		return Summary{}, ErrInvalidInput
+	}
+	batch, err := s.store.GetBatch(ctx, tenantID, batchID)
 	if err != nil {
 		return Summary{}, err
 	}
-	summary.Histogram = histogram(summary.Items)
-	return summary, nil
+	items, err := s.store.ListBatchItems(ctx, tenantID, batchID, page)
+	if err != nil {
+		return Summary{}, err
+	}
+	histogram, err := s.store.GetHistogram(ctx, tenantID, batchID)
+	if err != nil {
+		return Summary{}, err
+	}
+	return Summary{Batch: batch, Items: items, Histogram: histogram}, nil
 }
 
 // RegradeSelection returns exactly the submissions whose independently
@@ -95,47 +112,66 @@ func (s *Service) RegradeSelection(ctx context.Context, tenantID, batchID string
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(batchID) == "" || s.tasks == nil {
 		return Batch{}, nil, ErrInvalidInput
 	}
-	summary, err := s.store.GetSummary(ctx, strings.TrimSpace(tenantID), strings.TrimSpace(batchID))
+	batch, err := s.store.GetBatch(ctx, strings.TrimSpace(tenantID), strings.TrimSpace(batchID))
 	if err != nil {
 		return Batch{}, nil, err
 	}
 	// A partial batch cannot be a stable correction population.  Managers may
 	// inspect its current diff, but must wait until every assigned item has
 	// completed before entering the formal regrade workflow.
-	if summary.Batch.Status != BatchReadyForConfirmation {
+	if batch.Status != BatchReadyForConfirmation {
 		return Batch{}, nil, ErrStateConflict
 	}
 	seen := make(map[string]struct{})
 	submissionIDs := make([]string, 0)
-	for _, item := range summary.Items {
-		if item.Status != ItemRegradeRequired {
-			continue
+	page := PageOptions{Limit: MaxPageSize}
+	for {
+		items, listErr := s.store.ListBatchItems(ctx, tenantID, batchID, page)
+		if listErr != nil {
+			return Batch{}, nil, listErr
 		}
-		task, getErr := s.tasks.GetTask(ctx, tenantID, item.ReviewTaskID)
-		if getErr != nil {
-			return Batch{}, nil, getErr
+		for _, item := range items {
+			if item.Status != ItemRegradeRequired {
+				continue
+			}
+			task, getErr := s.tasks.GetTask(ctx, tenantID, item.ReviewTaskID)
+			if getErr != nil {
+				return Batch{}, nil, getErr
+			}
+			if strings.TrimSpace(task.SubmissionID) == "" {
+				return Batch{}, nil, ErrStateConflict
+			}
+			if _, exists := seen[task.SubmissionID]; exists {
+				continue
+			}
+			seen[task.SubmissionID] = struct{}{}
+			submissionIDs = append(submissionIDs, task.SubmissionID)
 		}
-		if strings.TrimSpace(task.SubmissionID) == "" {
-			return Batch{}, nil, ErrStateConflict
+		if len(items) < page.Limit {
+			break
 		}
-		if _, exists := seen[task.SubmissionID]; exists {
-			continue
-		}
-		seen[task.SubmissionID] = struct{}{}
-		submissionIDs = append(submissionIDs, task.SubmissionID)
+		last := items[len(items)-1]
+		page.CursorCreatedAt, page.CursorID = last.CreatedAt, last.ID
 	}
 	if len(submissionIDs) == 0 {
 		return Batch{}, nil, ErrNoRegradeItems
 	}
 	sort.Strings(submissionIDs)
-	return summary.Batch, submissionIDs, nil
+	return batch, submissionIDs, nil
 }
 
 func (s *Service) List(ctx context.Context, tenantID, examID, questionID string) ([]Batch, error) {
+	return s.ListPage(ctx, tenantID, examID, questionID, PageOptions{Limit: DefaultPageSize})
+}
+
+func (s *Service) ListPage(ctx context.Context, tenantID, examID, questionID string, page PageOptions) ([]Batch, error) {
 	if strings.TrimSpace(tenantID) == "" {
 		return nil, ErrInvalidInput
 	}
-	return s.store.ListBatches(ctx, tenantID, strings.TrimSpace(examID), strings.TrimSpace(questionID))
+	if !validPage(page) {
+		return nil, ErrInvalidInput
+	}
+	return s.store.ListBatches(ctx, tenantID, strings.TrimSpace(examID), strings.TrimSpace(questionID), page)
 }
 
 func (s *Service) Claim(ctx context.Context, tenantID, itemID, graderID string) (Item, error) {
@@ -146,10 +182,17 @@ func (s *Service) Claim(ctx context.Context, tenantID, itemID, graderID string) 
 }
 
 func (s *Service) ListAssigned(ctx context.Context, tenantID, graderID string) ([]GraderItem, error) {
+	return s.ListAssignedPage(ctx, tenantID, graderID, PageOptions{Limit: DefaultPageSize})
+}
+
+func (s *Service) ListAssignedPage(ctx context.Context, tenantID, graderID string, page PageOptions) ([]GraderItem, error) {
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(graderID) == "" {
 		return nil, ErrInvalidInput
 	}
-	items, err := s.store.ListAssigned(ctx, tenantID, graderID)
+	if !validPage(page) {
+		return nil, ErrInvalidInput
+	}
+	items, err := s.store.ListAssigned(ctx, tenantID, graderID, page)
 	if err != nil {
 		return nil, err
 	}
@@ -246,6 +289,9 @@ func validCreate(input CreateInput) bool {
 }
 
 func validSelector(value Selector) bool {
+	if len(value.TaskIDs) > MaxSelectorTaskIDs {
+		return false
+	}
 	if value.TimeRange != nil {
 		if value.TimeRange.From != nil && value.TimeRange.To != nil && value.TimeRange.To.Before(*value.TimeRange.From) {
 			return false
@@ -268,6 +314,11 @@ func validSelector(value Selector) bool {
 		}
 	}
 	return true
+}
+
+func validPage(page PageOptions) bool {
+	return page.Limit > 0 && page.Limit <= MaxPageSize+1 &&
+		(page.CursorCreatedAt.IsZero() == (strings.TrimSpace(page.CursorID) == ""))
 }
 
 func validPolicy(value Policy) bool {

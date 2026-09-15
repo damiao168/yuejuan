@@ -20,36 +20,38 @@ import (
 )
 
 type Handler struct {
-	store            Store
-	sessionTTL       time.Duration
-	rememberedTTL    time.Duration
-	publicTTL        time.Duration
-	loginGuard       LoginAttemptGuard
-	cookieName       string
-	deviceCookieName string
-	cookieSecure     bool
-	riskMode         string
-	deviceBindingTTL time.Duration
-	trustedProxies   []*net.IPNet
-	mfaEnabled       bool
-	mfaCipher        *mfaCipher
+	store                  Store
+	sessionTTL             time.Duration
+	rememberedTTL          time.Duration
+	publicTTL              time.Duration
+	loginGuard             LoginAttemptGuard
+	loginLimiterFailClosed bool
+	cookieName             string
+	deviceCookieName       string
+	cookieSecure           bool
+	riskMode               string
+	deviceBindingTTL       time.Duration
+	trustedProxies         []*net.IPNet
+	mfaEnabled             bool
+	mfaCipher              *mfaCipher
 }
 
 type HandlerOptions struct {
-	LoginFailureLimit    int
-	LoginFailureWindow   time.Duration
-	RememberedSessionTTL time.Duration
-	PublicSessionTTL     time.Duration
-	CookieName           string
-	DeviceCookieName     string
-	CookieSecure         bool
-	RiskMode             string
-	DeviceBindingTTL     time.Duration
-	LoginLimiter         LoginLimiter
-	LoginGuard           LoginAttemptGuard
-	TrustedProxyCIDRs    []string
-	MFAEnabled           bool
-	MFAMasterKey         string
+	LoginFailureLimit      int
+	LoginFailureWindow     time.Duration
+	RememberedSessionTTL   time.Duration
+	PublicSessionTTL       time.Duration
+	CookieName             string
+	DeviceCookieName       string
+	CookieSecure           bool
+	RiskMode               string
+	DeviceBindingTTL       time.Duration
+	LoginLimiter           LoginLimiter
+	LoginGuard             LoginAttemptGuard
+	LoginLimiterFailClosed bool
+	TrustedProxyCIDRs      []string
+	MFAEnabled             bool
+	MFAMasterKey           string
 }
 
 const DefaultSessionCookieName = "edugrade_session"
@@ -87,6 +89,7 @@ func NewHandler(store Store, sessionTTL time.Duration, options ...HandlerOptions
 		}
 		cfg.LoginLimiter = options[0].LoginLimiter
 		cfg.LoginGuard = options[0].LoginGuard
+		cfg.LoginLimiterFailClosed = options[0].LoginLimiterFailClosed
 		cfg.TrustedProxyCIDRs = options[0].TrustedProxyCIDRs
 		cfg.MFAEnabled = options[0].MFAEnabled
 		cfg.MFAMasterKey = options[0].MFAMasterKey
@@ -119,19 +122,20 @@ func NewHandler(store Store, sessionTTL time.Duration, options ...HandlerOptions
 		credentialCipher, _ = newMFACipher(cfg.MFAMasterKey) // Invalid configuration fails closed.
 	}
 	return &Handler{
-		store:            store,
-		sessionTTL:       sessionTTL,
-		rememberedTTL:    cfg.RememberedSessionTTL,
-		publicTTL:        cfg.PublicSessionTTL,
-		loginGuard:       cfg.LoginGuard,
-		cookieName:       cfg.CookieName,
-		deviceCookieName: cfg.DeviceCookieName,
-		cookieSecure:     cfg.CookieSecure,
-		riskMode:         normalizeRiskMode(cfg.RiskMode),
-		deviceBindingTTL: cfg.DeviceBindingTTL,
-		trustedProxies:   parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs),
-		mfaEnabled:       cfg.MFAEnabled,
-		mfaCipher:        credentialCipher,
+		store:                  store,
+		sessionTTL:             sessionTTL,
+		rememberedTTL:          cfg.RememberedSessionTTL,
+		publicTTL:              cfg.PublicSessionTTL,
+		loginGuard:             cfg.LoginGuard,
+		loginLimiterFailClosed: cfg.LoginLimiterFailClosed,
+		cookieName:             cfg.CookieName,
+		deviceCookieName:       cfg.DeviceCookieName,
+		cookieSecure:           cfg.CookieSecure,
+		riskMode:               normalizeRiskMode(cfg.RiskMode),
+		deviceBindingTTL:       cfg.DeviceBindingTTL,
+		trustedProxies:         parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs),
+		mfaEnabled:             cfg.MFAEnabled,
+		mfaCipher:              credentialCipher,
 	}
 }
 
@@ -207,7 +211,11 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request, tokenResponse bo
 	}
 	clientIP := h.remoteIP(r)
 	attempt := LoginAttempt{TenantCode: tenantCode, Identifier: identifier, IPAddress: clientIP}
-	if limit, blocked := h.loginGuard.Check(r.Context(), attempt, time.Now().UTC()); blocked {
+	limit, blocked := h.loginGuard.Check(r.Context(), attempt, time.Now().UTC())
+	if !h.loginLimiterAvailable(w, r) {
+		return
+	}
+	if blocked {
 		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(limit.RetryAfter.Seconds()))))
 		RecordAudit(r.Context(), h.store, AuditEvent{
 			TenantID:   PlatformTenantID,
@@ -236,7 +244,11 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request, tokenResponse bo
 		// The cheap pre-lookup guard protects the source and submitted pair.
 		// Recheck the server-resolved account before password work so changing
 		// aliases or source addresses cannot bypass the account threshold.
-		if limit, blocked := h.loginGuard.Check(r.Context(), attempt, time.Now().UTC()); blocked {
+		limit, blocked := h.loginGuard.Check(r.Context(), attempt, time.Now().UTC())
+		if !h.loginLimiterAvailable(w, r) {
+			return
+		}
+		if blocked {
 			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(limit.RetryAfter.Seconds()))))
 			RecordAudit(r.Context(), h.store, AuditEvent{
 				TenantID: user.TenantID, ActorID: user.ID, Action: "auth.login_rate_limited",
@@ -269,6 +281,9 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request, tokenResponse bo
 			UserAgent:  r.UserAgent(),
 			RequestID:  logger.RequestID(r.Context()),
 		})
+		if !h.loginLimiterAvailable(w, r) {
+			return
+		}
 		if blocked {
 			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(limit.RetryAfter.Seconds()))))
 			RecordAudit(r.Context(), h.store, AuditEvent{
@@ -774,7 +789,11 @@ func (h *Handler) Reauthenticate(w http.ResponseWriter, r *http.Request) {
 	}
 	clientIP := h.remoteIP(r)
 	attempt := LoginAttempt{TenantCode: user.TenantCode, Identifier: user.Username, AccountID: user.ID, IPAddress: clientIP}
-	if limit, blocked := h.loginGuard.Check(r.Context(), attempt, time.Now().UTC()); blocked {
+	limit, blocked := h.loginGuard.Check(r.Context(), attempt, time.Now().UTC())
+	if !h.loginLimiterAvailable(w, r) {
+		return
+	}
+	if blocked {
 		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(limit.RetryAfter.Seconds()))))
 		httpx.Error(w, r, http.StatusTooManyRequests, "login_rate_limited", "too many failed authentication attempts; retry later")
 		return
@@ -792,6 +811,9 @@ func (h *Handler) Reauthenticate(w http.ResponseWriter, r *http.Request) {
 			TargetType: "user", TargetID: user.ID, Reason: "invalid current credential",
 			IPAddress: clientIP, UserAgent: r.UserAgent(), RequestID: logger.RequestID(r.Context()),
 		})
+		if !h.loginLimiterAvailable(w, r) {
+			return
+		}
 		if blocked {
 			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(limit.RetryAfter.Seconds()))))
 			httpx.Error(w, r, http.StatusTooManyRequests, "login_rate_limited", "too many failed authentication attempts; retry later")
@@ -1081,8 +1103,9 @@ func (h *Handler) clearDeviceCookie() *http.Cookie {
 
 func normalizedDeviceName(value string, sessionType string) string {
 	value = strings.TrimSpace(value)
-	if len(value) > 128 {
-		value = value[:128]
+	runes := []rune(value)
+	if len(runes) > 128 {
+		value = string(runes[:128])
 	}
 	if value != "" {
 		return value
@@ -1095,6 +1118,15 @@ func normalizedDeviceName(value string, sessionType string) string {
 	default:
 		return "浏览器"
 	}
+}
+
+func (h *Handler) loginLimiterAvailable(w http.ResponseWriter, r *http.Request) bool {
+	status, ok := h.loginGuard.(LoginLimiterStatus)
+	if !h.loginLimiterFailClosed || !ok || !status.Degraded() {
+		return true
+	}
+	httpx.Error(w, r, http.StatusServiceUnavailable, "auth_rate_limiter_unavailable", "authentication rate limiter is temporarily unavailable")
+	return false
 }
 
 func hashUserAgent(value string) string {

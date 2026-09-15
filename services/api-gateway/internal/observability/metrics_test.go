@@ -53,3 +53,14 @@ func TestRegistryExportsErrorCodesAndRecoveryOutcomes(t *testing.T) {
 		t.Fatalf("metrics must not contain resource identifiers: %s", body)
 	}
 }
+
+func TestRegistryExportsAuthRateLimiterDegradedGauge(t *testing.T) {
+	registry := NewRegistry()
+	degraded := true
+	registry.SetAuthRateLimiterDegraded(func() bool { return degraded })
+	recorder := httptest.NewRecorder()
+	registry.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(recorder.Body.String(), "edugrade_auth_rate_limiter_degraded 1") {
+		t.Fatalf("degraded gauge missing: %s", recorder.Body.String())
+	}
+}

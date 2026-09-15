@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import ssl
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -115,4 +116,17 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     port = int(os.environ.get("EDUGRADE_MATH_VERIFY_PORT", "8092"))
-    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    cert_file = os.environ.get("EDUGRADE_MATH_VERIFY_TLS_CERT_FILE", "").strip()
+    key_file = os.environ.get("EDUGRADE_MATH_VERIFY_TLS_KEY_FILE", "").strip()
+    if bool(cert_file) != bool(key_file):
+        raise ValueError("math verifier TLS certificate and key must be configured together")
+    environment = os.environ.get("EDUGRADE_ENV", "development").strip().lower()
+    if environment not in {"", "local", "development", "dev", "test"} and not cert_file:
+        raise ValueError("math verifier TLS certificate and key are required in production-like environments")
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    if cert_file:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(cert_file, key_file)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    server.serve_forever()

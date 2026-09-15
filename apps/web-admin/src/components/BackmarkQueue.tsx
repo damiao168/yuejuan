@@ -33,6 +33,7 @@ export function BackmarkQueue({ canWork }: { canWork: boolean }) {
   const { message } = App.useApp();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<BackmarkGraderItem[]>([]);
+  const [nextCursor, setNextCursor] = useState("");
   const [loading, setLoading] = useState(false);
   const [activeItem, setActiveItem] = useState<BackmarkGraderItem>();
   const [context, setContext] = useState<BackmarkGraderContext>();
@@ -41,12 +42,13 @@ export function BackmarkQueue({ canWork }: { canWork: boolean }) {
   const [comments, setComments] = useState("");
   const [actioning, setActioning] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (cursor?: string) => {
     if (!canWork) return;
     setLoading(true);
     try {
-      const response = await listMyBackmarkItems();
-      setItems(response.backmark_items);
+      const response = await listMyBackmarkItems({ limit: 50, cursor });
+      setItems((current) => cursor ? [...current, ...response.backmark_items] : response.backmark_items);
+      setNextCursor(response.has_more ? response.next_cursor : "");
     } catch (error) {
       message.error(errorMessage(error));
     } finally {
@@ -147,7 +149,7 @@ export function BackmarkQueue({ canWork }: { canWork: boolean }) {
           </div>
         ) : (
           <Spin spinning={loading}>
-            {items.length ? <List dataSource={items} renderItem={(item) => <List.Item actions={[<Button key="open" type="primary" loading={actioning} onClick={() => void openItem(item)}>开始回标</Button>]}><List.Item.Meta title={`独立回标 · 满分 ${item.max_score}`} description={`任务创建于 ${new Date(item.created_at).toLocaleString("zh-CN", { hour12: false })}`} /><Tag>{item.status === "in_progress" ? "处理中" : "待处理"}</Tag></List.Item>} /> : <Empty description="暂无分配给你的回标任务" />}
+            {items.length ? <List loadMore={nextCursor ? <div style={{ textAlign: "center", marginTop: 16 }}><Button loading={loading} onClick={() => void load(nextCursor)}>加载更多</Button></div> : undefined} dataSource={items} renderItem={(item) => <List.Item actions={[<Button key="open" type="primary" loading={actioning} onClick={() => void openItem(item)}>开始回标</Button>]}><List.Item.Meta title={`独立回标 · 满分 ${item.max_score}`} description={`任务创建于 ${new Date(item.created_at).toLocaleString("zh-CN", { hour12: false })}`} /><Tag>{item.status === "in_progress" ? "处理中" : "待处理"}</Tag></List.Item>} /> : <Empty description="暂无分配给你的回标任务" />}
           </Spin>
         )}
       </Drawer>

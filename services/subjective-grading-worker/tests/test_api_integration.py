@@ -13,14 +13,17 @@ from subjective_grading_worker.runner import Runner
 
 
 class _Response:
+    def __init__(self):
+        self.headers = {"Content-Type": "application/json"}
+
     def __enter__(self):
         return self
 
     def __exit__(self, _exc_type, _exc, _traceback):
         return None
 
-    def read(self) -> bytes:
-        return b'{"output":{"request_id":"request-1"}}'
+    def read(self, amount=-1) -> bytes:
+        return b'{"output":{"request_id":"request-1"}}'[:amount]
 
 
 def test_execute_uses_the_long_running_request_budget() -> None:

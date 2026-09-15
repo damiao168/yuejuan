@@ -24,6 +24,17 @@ function Read-EnvFile([string]$Path) {
   return $values
 }
 
+function Test-SecureOrLoopbackUrl([string]$Value) {
+  try { $uri = [Uri]$Value } catch { return $false }
+  if (-not $uri.IsAbsoluteUri) { return $false }
+  if ($uri.Scheme -eq "https") { return $true }
+  if ($uri.Scheme -ne "http") { return $false }
+  if ($uri.Host -eq "localhost") { return $true }
+  $address = $null
+  if ([Net.IPAddress]::TryParse($uri.Host, [ref]$address)) { return [Net.IPAddress]::IsLoopback($address) }
+  return $false
+}
+
 $composePath = Resolve-DeploymentPath $ComposeFile
 $envPath = Resolve-DeploymentPath $EnvFile
 $composeDir = Split-Path -Parent $composePath
@@ -40,14 +51,26 @@ $requiredKeys = @(
   "EDUGRADE_POSTGRES_APP_PASSWORD",
   "EDUGRADE_POSTGRES_ADMIN_DSN",
   "EDUGRADE_POSTGRES_DSN",
+  "EDUGRADE_REDIS_USERNAME",
   "EDUGRADE_REDIS_PASSWORD",
-  "EDUGRADE_MINIO_ACCESS_KEY",
-  "EDUGRADE_MINIO_SECRET_KEY",
+  "EDUGRADE_REDIS_TLS_ENABLED",
+  "EDUGRADE_AUTH_LIMITER_FAIL_CLOSED",
+  "EDUGRADE_INTERNAL_API_BASE_URL",
+  "EDUGRADE_INTERNAL_MATH_VERIFY_BASE_URL",
+  "EDUGRADE_INTERNAL_TLS_PORT",
+  "EDUGRADE_GRADING_AGENT_HEALTH_URL",
+  "EDUGRADE_MATH_VERIFY_HEALTH_URL",
+  "EDUGRADE_MINIO_ROOT_USER",
+  "EDUGRADE_MINIO_ROOT_PASSWORD",
+  "EDUGRADE_MINIO_APP_ACCESS_KEY",
+  "EDUGRADE_MINIO_APP_SECRET_KEY",
+  "EDUGRADE_MINIO_USE_SSL",
   "EDUGRADE_FILE_BUCKET",
   "EDUGRADE_BARCODE_HMAC_KEYS",
   "EDUGRADE_QDRANT_API_KEY",
   "EDUGRADE_AI_SERVICE_URL",
-  "EDUGRADE_AI_SERVICE_TOKEN",
+  "EDUGRADE_GRADING_AGENT_TOKEN",
+  "EDUGRADE_MATH_VERIFY_TOKEN",
   "EDUGRADE_AI_MODEL_VERSION",
   "EDUGRADE_AI_PROMPT_VERSION",
   "EDUGRADE_GRADING_MODEL_BASE_URL",
@@ -58,8 +81,14 @@ foreach ($key in $requiredKeys) {
     throw "Required deployment setting is missing: $key"
   }
 }
-if ($envValues["EDUGRADE_AI_SERVICE_TOKEN"].Length -lt 32) {
-  throw "EDUGRADE_AI_SERVICE_TOKEN must contain at least 32 characters."
+if ($envValues["EDUGRADE_GRADING_AGENT_TOKEN"].Length -lt 32) {
+  throw "EDUGRADE_GRADING_AGENT_TOKEN must contain at least 32 characters."
+}
+if ($envValues["EDUGRADE_MATH_VERIFY_TOKEN"].Length -lt 32) {
+  throw "EDUGRADE_MATH_VERIFY_TOKEN must contain at least 32 characters."
+}
+if ($envValues["EDUGRADE_GRADING_AGENT_TOKEN"] -eq $envValues["EDUGRADE_MATH_VERIFY_TOKEN"]) {
+  throw "Grading Agent and math verification tokens must be different."
 }
 if ($envValues["EDUGRADE_QDRANT_API_KEY"].Length -lt 32) {
   throw "EDUGRADE_QDRANT_API_KEY must contain at least 32 characters."
@@ -78,10 +107,26 @@ if ($productionLike) {
   if ($envValues["EDUGRADE_POSTGRES_ADMIN_DSN"] -match "sslmode=disable|change_me|edugrade_dev") { $problems += "PostgreSQL admin DSN is not production-safe" }
   if ($envValues["EDUGRADE_POSTGRES_DSN"] -match "sslmode=disable|change_me|edugrade_dev") { $problems += "PostgreSQL DSN is not production-safe" }
   if ($envValues["EDUGRADE_REDIS_PASSWORD"] -match "change_me|edugrade_dev") { $problems += "Redis example password must be replaced" }
-  if ($envValues["EDUGRADE_MINIO_ACCESS_KEY"] -eq "edugrade" -or $envValues["EDUGRADE_MINIO_SECRET_KEY"] -match "change_me|edugrade_dev") { $problems += "MinIO example credentials must be replaced" }
+  if ($envValues["EDUGRADE_REDIS_TLS_ENABLED"] -ne "true") { $problems += "Redis TLS must be enabled" }
+  if ($envValues["EDUGRADE_AUTH_LIMITER_FAIL_CLOSED"] -ne "true") { $problems += "authentication rate limiting must fail closed when Redis is degraded" }
+  if ($envValues["EDUGRADE_INTERNAL_API_BASE_URL"] -notmatch "^https://") { $problems += "worker-to-API transport must use HTTPS" }
+  if ($envValues["EDUGRADE_INTERNAL_MATH_VERIFY_BASE_URL"] -notmatch "^https://") { $problems += "OCR-to-math-verifier transport must use HTTPS" }
+  if ($envValues["EDUGRADE_AI_SERVICE_URL"] -notmatch "^https://") { $problems += "API-to-grading-agent transport must use HTTPS" }
+  if ($envValues["EDUGRADE_GRADING_AGENT_HEALTH_URL"] -notmatch "^https://") { $problems += "grading-agent health probe must use HTTPS" }
+  if ($envValues["EDUGRADE_MATH_VERIFY_HEALTH_URL"] -notmatch "^https://") { $problems += "math-verifier health probe must use HTTPS" }
+  if (-not (Test-SecureOrLoopbackUrl $envValues["EDUGRADE_GRADING_MODEL_BASE_URL"])) { $problems += "grading-agent-to-model transport must use HTTPS outside loopback" }
+  if ($envValues["EDUGRADE_INTERNAL_TLS_PORT"] -eq "0") { $problems += "internal API TLS listener must be enabled" }
+  foreach ($key in @("EDUGRADE_INTERNAL_CA_FILE", "EDUGRADE_INTERNAL_TLS_CERT_FILE", "EDUGRADE_INTERNAL_TLS_KEY_FILE", "EDUGRADE_GRADING_AGENT_TLS_CERT_FILE", "EDUGRADE_GRADING_AGENT_TLS_KEY_FILE", "EDUGRADE_MATH_VERIFY_TLS_CERT_FILE", "EDUGRADE_MATH_VERIFY_TLS_KEY_FILE")) {
+    if (-not $envValues.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($envValues[$key])) { $problems += "$key must be configured for internal TLS" }
+  }
+  if ($envValues["EDUGRADE_MINIO_ROOT_USER"] -match "edugrade-root" -or $envValues["EDUGRADE_MINIO_ROOT_PASSWORD"] -match "change_me|edugrade_dev") { $problems += "MinIO Root example credentials must be replaced" }
+  if ($envValues["EDUGRADE_MINIO_APP_ACCESS_KEY"] -match "edugrade-app" -or $envValues["EDUGRADE_MINIO_APP_SECRET_KEY"] -match "change_me|edugrade_dev") { $problems += "MinIO application example credentials must be replaced" }
+  if ($envValues["EDUGRADE_MINIO_ROOT_USER"] -eq $envValues["EDUGRADE_MINIO_APP_ACCESS_KEY"] -or $envValues["EDUGRADE_MINIO_ROOT_PASSWORD"] -eq $envValues["EDUGRADE_MINIO_APP_SECRET_KEY"]) { $problems += "MinIO Root and application credentials must be different" }
+  if ($envValues["EDUGRADE_MINIO_USE_SSL"] -ne "true") { $problems += "MinIO TLS must be enabled" }
   if ($envValues["EDUGRADE_CORS_ALLOWED_ORIGINS"] -match "localhost|127\.0\.0\.1") { $problems += "local CORS origins are not allowed" }
   if ($envValues["EDUGRADE_QDRANT_API_KEY"] -match "change_me") { $problems += "Qdrant example API key must be replaced" }
-  if ($envValues["EDUGRADE_AI_SERVICE_TOKEN"] -match "replace_with|change_me") { $problems += "AI service example token must be replaced" }
+  if ($envValues["EDUGRADE_GRADING_AGENT_TOKEN"] -match "replace_with|change_me") { $problems += "Grading Agent example token must be replaced" }
+  if ($envValues["EDUGRADE_MATH_VERIFY_TOKEN"] -match "replace_with|change_me") { $problems += "math verification example token must be replaced" }
   if ($envValues["EDUGRADE_GRADING_MODEL_API_KEY"] -match "replace_with|change_me") { $problems += "grading model example API key must be replaced" }
   if ($envValues["EDUGRADE_BARCODE_HMAC_KEYS"] -match "replace_with|change_me") { $problems += "barcode example HMAC key must be replaced" }
   if ($envValues["EDUGRADE_GRAFANA_ADMIN_PASSWORD"] -match "change_me" -or $envValues["EDUGRADE_GRAFANA_ADMIN_PASSWORD"] -eq "admin") { $problems += "Grafana example password must be replaced" }
@@ -131,7 +176,8 @@ if ($productionLike) {
   $envValues["EDUGRADE_POSTGRES_PASSWORD"] -match "change_me" -or
   $envValues["EDUGRADE_POSTGRES_APP_PASSWORD"] -match "change_me" -or
   $envValues["EDUGRADE_REDIS_PASSWORD"] -match "change_me" -or
-  $envValues["EDUGRADE_MINIO_SECRET_KEY"] -match "change_me"
+  $envValues["EDUGRADE_MINIO_ROOT_PASSWORD"] -match "change_me" -or
+  $envValues["EDUGRADE_MINIO_APP_SECRET_KEY"] -match "change_me"
 ) {
   Write-Warning "Local example credentials are still configured. Use only on an isolated development host."
 }

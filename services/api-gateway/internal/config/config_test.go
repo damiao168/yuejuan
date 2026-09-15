@@ -65,7 +65,16 @@ func containsString(values []string, target string) bool {
 func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv("EDUGRADE_SERVICE_NAME", "test-service")
 	t.Setenv("EDUGRADE_HTTP_PORT", "18080")
+	t.Setenv("EDUGRADE_INTERNAL_TLS_PORT", "18443")
+	t.Setenv("EDUGRADE_INTERNAL_TLS_CERT_FILE", "/run/secrets/api-tls/server.crt")
+	t.Setenv("EDUGRADE_INTERNAL_TLS_KEY_FILE", "/run/secrets/api-tls/server.key")
 	t.Setenv("EDUGRADE_MINIO_USE_SSL", "true")
+	t.Setenv("EDUGRADE_MINIO_TLS_CA_FILE", "/run/secrets/minio-ca/ca.crt")
+	t.Setenv("EDUGRADE_MINIO_TLS_SERVER_NAME", "minio.internal")
+	t.Setenv("EDUGRADE_REDIS_USERNAME", "edugrade-api")
+	t.Setenv("EDUGRADE_REDIS_TLS_ENABLED", "true")
+	t.Setenv("EDUGRADE_REDIS_TLS_CA_FILE", "/run/secrets/redis-ca/ca.crt")
+	t.Setenv("EDUGRADE_REDIS_TLS_SERVER_NAME", "redis.internal")
 	t.Setenv("EDUGRADE_WORKER_HEARTBEAT_STALE_AFTER", "45s")
 	t.Setenv("EDUGRADE_POSTGRES_MAX_OPEN_CONNS", "24")
 	t.Setenv("EDUGRADE_POSTGRES_MAX_IDLE_CONNS", "8")
@@ -86,8 +95,14 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	if cfg.Service.Port != 18080 {
 		t.Fatalf("unexpected port: %d", cfg.Service.Port)
 	}
+	if cfg.Service.InternalTLSPort != 18443 || cfg.Service.InternalTLSCertFile == "" || cfg.Service.InternalTLSKeyFile == "" {
+		t.Fatalf("unexpected internal TLS listener: %#v", cfg.Service)
+	}
 	if !cfg.MinIO.UseSSL {
 		t.Fatal("expected MinIO SSL to be true")
+	}
+	if cfg.MinIO.TLSCAFile != "/run/secrets/minio-ca/ca.crt" || cfg.MinIO.TLSServerName != "minio.internal" {
+		t.Fatalf("unexpected MinIO TLS settings: %#v", cfg.MinIO)
 	}
 	if cfg.Observability.WorkerHeartbeatStaleAfter != 45*time.Second {
 		t.Fatalf("unexpected worker heartbeat stale threshold: %s", cfg.Observability.WorkerHeartbeatStaleAfter)
@@ -100,11 +115,31 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	if cfg.Postgres.TenantRLSEnabled {
 		t.Fatal("development must not enable tenant RLS connection scoping unless explicitly requested")
 	}
+	if cfg.Redis.Username != "edugrade-api" || !cfg.Redis.TLSEnabled ||
+		cfg.Redis.TLSCAFile != "/run/secrets/redis-ca/ca.crt" || cfg.Redis.TLSServerName != "redis.internal" {
+		t.Fatalf("unexpected Redis TLS/ACL configuration: %#v", cfg.Redis)
+	}
 	if cfg.Auth.PublicSessionTTL != 90*time.Minute {
 		t.Fatalf("unexpected public session lifetime: %s", cfg.Auth.PublicSessionTTL)
 	}
 	if cfg.Auth.RecentAuthTTL != 20*time.Minute {
 		t.Fatalf("unexpected recent authentication lifetime: %s", cfg.Auth.RecentAuthTTL)
+	}
+}
+
+func TestLoadRejectsPartialInternalTLSConfiguration(t *testing.T) {
+	for _, test := range []struct{ port, cert, key string }{
+		{"0", "server.crt", ""}, {"0", "", "server.key"}, {"8443", "server.crt", ""}, {"0", "server.crt", "server.key"},
+	} {
+		t.Run(test.port+"/"+test.cert+"/"+test.key, func(t *testing.T) {
+			t.Setenv("EDUGRADE_ENV", "development")
+			t.Setenv("EDUGRADE_INTERNAL_TLS_PORT", test.port)
+			t.Setenv("EDUGRADE_INTERNAL_TLS_CERT_FILE", test.cert)
+			t.Setenv("EDUGRADE_INTERNAL_TLS_KEY_FILE", test.key)
+			if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "must be configured together") {
+				t.Fatalf("partial internal TLS config accepted: %v", err)
+			}
+		})
 	}
 }
 
@@ -176,7 +211,7 @@ func TestLoadReadsGovernedAIServiceConfiguration(t *testing.T) {
 	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
 	t.Setenv("EDUGRADE_MATH_GRADING_V2_ENABLED", "true")
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
-	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "test-service-token-with-at-least-32-characters")
+	t.Setenv("EDUGRADE_GRADING_AGENT_TOKEN", "test-service-token-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_AI_SERVICE_TIMEOUT", "240s")
 	t.Setenv("EDUGRADE_AI_SERVICE_MAX_RETRIES", "0")
 	t.Setenv("EDUGRADE_AI_MODEL_VERSION", "model-v1")
@@ -220,7 +255,7 @@ func TestLoadRejectsMathGradingV2WhenAIGradingIsDisabled(t *testing.T) {
 func TestLoadRejectsIncompleteAIServiceIdentity(t *testing.T) {
 	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
-	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "test-service-token-with-at-least-32-characters")
+	t.Setenv("EDUGRADE_GRADING_AGENT_TOKEN", "test-service-token-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_AI_PROVIDER_KEY", "contains whitespace")
 	if _, err := Load(""); err == nil {
 		t.Fatal("configured AI service must use bounded provider identity values")
@@ -230,7 +265,7 @@ func TestLoadRejectsIncompleteAIServiceIdentity(t *testing.T) {
 func TestLoadRejectsAIServiceWithoutStrongServiceToken(t *testing.T) {
 	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
-	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "short")
+	t.Setenv("EDUGRADE_GRADING_AGENT_TOKEN", "short")
 	if _, err := Load(""); err == nil {
 		t.Fatal("configured AI service must require a strong service token")
 	}
@@ -239,7 +274,7 @@ func TestLoadRejectsAIServiceWithoutStrongServiceToken(t *testing.T) {
 func TestLoadRejectsHTTPWriteTimeoutShorterThanAIRequest(t *testing.T) {
 	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
-	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "test-service-token-with-at-least-32-characters")
+	t.Setenv("EDUGRADE_GRADING_AGENT_TOKEN", "test-service-token-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_AI_SERVICE_TIMEOUT", "250s")
 	t.Setenv("EDUGRADE_HTTP_WRITE_TIMEOUT", "15s")
 	if _, err := Load(""); err == nil {
@@ -287,11 +322,51 @@ func TestLoadRejectsDevelopmentCredentialsInProduction(t *testing.T) {
 	t.Setenv("EDUGRADE_ENV", "production")
 	t.Setenv("EDUGRADE_SESSION_COOKIE_SECURE", "true")
 	t.Setenv("EDUGRADE_POSTGRES_DSN", "postgres://edugrade:edugrade_dev@db.internal:5432/edugrade?sslmode=disable")
-	t.Setenv("EDUGRADE_MINIO_ACCESS_KEY", "edugrade")
-	t.Setenv("EDUGRADE_MINIO_SECRET_KEY", "edugrade_dev_secret")
+	t.Setenv("EDUGRADE_MINIO_APP_ACCESS_KEY", "edugrade-app")
+	t.Setenv("EDUGRADE_MINIO_APP_SECRET_KEY", "edugrade_app_dev_secret")
 	t.Setenv("EDUGRADE_CORS_ALLOWED_ORIGINS", "http://localhost:5173")
 	if _, err := Load(""); err == nil {
 		t.Fatal("development credentials must be rejected in production")
+	}
+}
+
+func TestLoadRejectsPlaintextMinIOInProduction(t *testing.T) {
+	setSecureProductionEnvironment(t)
+	t.Setenv("EDUGRADE_ENV", "production")
+	t.Setenv("EDUGRADE_MINIO_USE_SSL", "false")
+	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "EDUGRADE_MINIO_USE_SSL must be true") {
+		t.Fatalf("production must reject plaintext MinIO, got %v", err)
+	}
+}
+
+func TestLoadRejectsPlaintextOrUnauthenticatedRedisInProduction(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+		want  string
+	}{
+		{name: "plaintext", key: "EDUGRADE_REDIS_TLS_ENABLED", value: "false", want: "EDUGRADE_REDIS_TLS_ENABLED must be true"},
+		{name: "missing username", key: "EDUGRADE_REDIS_USERNAME", value: "", want: "EDUGRADE_REDIS_USERNAME must be configured"},
+		{name: "missing password", key: "EDUGRADE_REDIS_PASSWORD", value: "", want: "EDUGRADE_REDIS_PASSWORD must be configured"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setSecureProductionEnvironment(t)
+			t.Setenv("EDUGRADE_ENV", "production")
+			t.Setenv(test.key, test.value)
+			if _, err := Load(""); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("production must reject unsafe Redis configuration, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsFailOpenAuthenticationLimiterInProduction(t *testing.T) {
+	setSecureProductionEnvironment(t)
+	t.Setenv("EDUGRADE_ENV", "production")
+	t.Setenv("EDUGRADE_AUTH_LIMITER_FAIL_CLOSED", "false")
+	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "EDUGRADE_AUTH_LIMITER_FAIL_CLOSED must be true") {
+		t.Fatalf("production must reject fail-open authentication limiting, got %v", err)
 	}
 }
 
@@ -307,13 +382,23 @@ func TestLoadRejectsMissingAIServiceInProduction(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsPlaintextRemoteAIServiceInProduction(t *testing.T) {
+	t.Setenv("EDUGRADE_ENV", "production")
+	setSecureProductionEnvironment(t)
+	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "true")
+	t.Setenv("EDUGRADE_AI_SERVICE_URL", "http://grading-agent:8100")
+	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "must use https outside loopback") {
+		t.Fatalf("production must reject plaintext grading-agent transport, got %v", err)
+	}
+}
+
 func TestLoadAllowsProductionWithAIGradingDisabled(t *testing.T) {
 	t.Setenv("EDUGRADE_ENV", "production")
 	t.Setenv("EDUGRADE_AI_GRADING_ENABLED", "false")
 	t.Setenv("EDUGRADE_ALLOW_MOCK_AI", "false")
 	setSecureProductionEnvironment(t)
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "")
-	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "")
+	t.Setenv("EDUGRADE_GRADING_AGENT_TOKEN", "")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -349,11 +434,18 @@ func TestLoadRequiresExplicitDemoMock(t *testing.T) {
 func setSecureProductionEnvironment(t *testing.T) {
 	t.Helper()
 	t.Setenv("EDUGRADE_AI_SERVICE_URL", "https://grading-agent.internal")
-	t.Setenv("EDUGRADE_AI_SERVICE_TOKEN", "production-service-token-with-at-least-32-characters")
+	t.Setenv("EDUGRADE_INTERNAL_TLS_PORT", "8443")
+	t.Setenv("EDUGRADE_INTERNAL_TLS_CERT_FILE", "/run/secrets/api-tls/server.crt")
+	t.Setenv("EDUGRADE_INTERNAL_TLS_KEY_FILE", "/run/secrets/api-tls/server.key")
+	t.Setenv("EDUGRADE_GRADING_AGENT_TOKEN", "production-service-token-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_POSTGRES_DSN", "postgres://edugrade:strong-password@db.internal:5432/edugrade?sslmode=require")
 	t.Setenv("EDUGRADE_POSTGRES_TENANT_RLS", "true")
-	t.Setenv("EDUGRADE_MINIO_ACCESS_KEY", "production-access")
-	t.Setenv("EDUGRADE_MINIO_SECRET_KEY", "production-secret")
+	t.Setenv("EDUGRADE_REDIS_PASSWORD", "production-redis-password-with-at-least-32-characters")
+	t.Setenv("EDUGRADE_REDIS_USERNAME", "edugrade-api")
+	t.Setenv("EDUGRADE_REDIS_TLS_ENABLED", "true")
+	t.Setenv("EDUGRADE_MINIO_APP_ACCESS_KEY", "production-app-access")
+	t.Setenv("EDUGRADE_MINIO_APP_SECRET_KEY", "production-app-secret")
+	t.Setenv("EDUGRADE_MINIO_USE_SSL", "true")
 	t.Setenv("EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY", "production-model-credential-key-with-at-least-32-characters")
 	t.Setenv("EDUGRADE_CORS_ALLOWED_ORIGINS", "https://grading.example.edu")
 	t.Setenv("EDUGRADE_BARCODE_ACTIVE_KEY_ID", "production-v1")

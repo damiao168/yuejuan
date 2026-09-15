@@ -7544,7 +7544,9 @@
     "BackmarkSummaryResponse": {
       "type": "object",
       "required": [
-        "backmark"
+        "backmark",
+        "next_cursor",
+        "has_more"
       ],
       "properties": {},
       "additionalProperties": false
@@ -7561,7 +7563,9 @@
     "BackmarkBatchListResponse": {
       "type": "object",
       "required": [
-        "backmark_batches"
+        "backmark_batches",
+        "next_cursor",
+        "has_more"
       ],
       "properties": {},
       "additionalProperties": false
@@ -7589,7 +7593,9 @@
     "BackmarkGraderItemListResponse": {
       "type": "object",
       "required": [
-        "backmark_items"
+        "backmark_items",
+        "next_cursor",
+        "has_more"
       ],
       "properties": {},
       "additionalProperties": false

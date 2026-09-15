@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log"
 	"net/http"
@@ -57,12 +58,32 @@ func main() {
 		IdleTimeout:       cfg.Service.IdleTimeout,
 		MaxHeaderBytes:    cfg.Security.MaxHeaderBytes,
 	}
+	servers := []*http.Server{httpServer}
+	if cfg.Service.InternalTLSPort > 0 {
+		servers = append(servers, &http.Server{
+			Addr:              cfg.Service.InternalTLSAddr(),
+			Handler:           srv.Handler(),
+			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
+			ReadHeaderTimeout: cfg.Service.ReadHeaderTimeout,
+			ReadTimeout:       cfg.Service.ReadTimeout,
+			WriteTimeout:      cfg.Service.WriteTimeout,
+			IdleTimeout:       cfg.Service.IdleTimeout,
+			MaxHeaderBytes:    cfg.Security.MaxHeaderBytes,
+		})
+	}
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, len(servers))
 	go func() {
 		logg.Info(context.Background(), "api gateway starting", map[string]any{"addr": cfg.Service.Addr()})
 		errCh <- httpServer.ListenAndServe()
 	}()
+	if len(servers) > 1 {
+		internalServer := servers[1]
+		go func() {
+			logg.Info(context.Background(), "api gateway internal TLS listener starting", map[string]any{"addr": cfg.Service.InternalTLSAddr()})
+			errCh <- internalServer.ListenAndServeTLS(cfg.Service.InternalTLSCertFile, cfg.Service.InternalTLSKeyFile)
+		}()
+	}
 
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
@@ -79,9 +100,11 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Service.ShutdownTimeout)
 	defer cancel()
-	if err := httpServer.Shutdown(ctx); err != nil {
-		logg.Error(context.Background(), "graceful shutdown failed", map[string]any{"error": err.Error()})
-		os.Exit(1)
+	for _, activeServer := range servers {
+		if err := activeServer.Shutdown(ctx); err != nil {
+			logg.Error(context.Background(), "graceful shutdown failed", map[string]any{"error": err.Error(), "addr": activeServer.Addr})
+			os.Exit(1)
+		}
 	}
 	logg.Info(context.Background(), "api gateway stopped", nil)
 }

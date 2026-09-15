@@ -5,6 +5,8 @@ import time
 from typing import Any
 from urllib import error, request
 
+from edugrade_worker_runtime import ResponseValidationError, read_json_response
+
 from .api import APIError
 from .recognition_router import RecognitionRouter, RegionKind
 from .runner import WorkerConfig, _LeaseHeartbeat
@@ -37,12 +39,12 @@ class MathVerificationClient:
         )
         try:
             with request.urlopen(req, timeout=self.timeout) as response:
-                return json.loads(response.read().decode())
+                return json.loads(read_json_response(response).decode())
         except error.HTTPError as exc:
             if exc.code == 422:
                 return {"status": "uncertain", "reason_code": "unsupported_expression"}
             raise APIError("math verification request failed") from exc
-        except OSError as exc:
+        except (OSError, ResponseValidationError) as exc:
             raise APIError("math verification unavailable") from exc
 
 
