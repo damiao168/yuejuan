@@ -6,6 +6,8 @@ from typing import Any
 from urllib import error, request
 from urllib.parse import urlsplit
 
+from edugrade_worker_runtime import ResponseValidationError, read_json_response
+
 
 class APIError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None) -> None:
@@ -89,12 +91,12 @@ class EduGradeClient:
         req = request.Request(url, data=json.dumps(payload).encode(), headers=headers, method=method)
         try:
             with request.urlopen(req, timeout=timeout) as response:
-                return json.loads(response.read().decode() or "{}")
+                return json.loads(read_json_response(response).decode() or "{}")
         except error.HTTPError as exc:
             if exc.code == 401:
                 raise AuthenticationError(f"unauthorized: {exc.code}", status_code=exc.code) from exc
             raise APIError(f"api request failed: {exc.code}", status_code=exc.code) from exc
-        except (OSError, ValueError) as exc:
+        except (OSError, ResponseValidationError, ValueError) as exc:
             raise APIError("api request failed") from exc
 
 

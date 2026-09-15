@@ -17,6 +17,7 @@ var (
 	ErrForbidden      = errors.New("file access forbidden")
 	ErrConflict       = errors.New("file revision conflict")
 	ErrObjectNotFound = errors.New("object not found")
+	ErrBucketMissing  = errors.New("object storage bucket is missing")
 )
 
 const (

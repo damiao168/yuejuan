@@ -7,6 +7,7 @@ from typing import ClassVar
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
+from edugrade_worker_runtime import ResponseValidationError, read_json_response
 from jsonschema import exceptions as schema_exceptions
 from jsonschema import validators
 
@@ -357,8 +358,15 @@ def _default_transport(url, payload, headers, timeout):
         "utf-8"
     )
     req = urlrequest.Request(url, data=body, headers=headers, method="POST")
-    with urlrequest.urlopen(req, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urlrequest.urlopen(req, timeout=timeout) as response:
+            return json.loads(read_json_response(response).decode("utf-8"))
+    except ResponseValidationError as exc:
+        raise AgentError(
+            "model_output_invalid",
+            "model response envelope is invalid",
+            status=502,
+        ) from exc
 
 
 class LocalLlamaCppAdapter:
@@ -611,13 +619,15 @@ class DashScopeNativeAdapter:
             )
         req = urlrequest.Request(url, data=body, headers=headers, method="POST")
         with urlrequest.urlopen(req, timeout=timeout) as response:
-            content_type = response.headers.get_content_type()
-            raw = response.read(MAX_DASHSCOPE_RESPONSE_BYTES + 1)
-            if (
-                content_type != "application/json"
-                or not raw
-                or len(raw) > MAX_DASHSCOPE_RESPONSE_BYTES
-            ):
+            try:
+                raw = read_json_response(response, MAX_DASHSCOPE_RESPONSE_BYTES)
+            except ResponseValidationError as exc:
+                raise AgentError(
+                    "model_output_invalid",
+                    "provider response envelope is invalid",
+                    status=502,
+                ) from exc
+            if not raw:
                 raise AgentError(
                     "model_output_invalid",
                     "provider response envelope is invalid",
@@ -646,12 +656,12 @@ class DashScopeNativeAdapter:
     @staticmethod
     def _read_error_payload(error):
         try:
-            raw = error.read(MAX_DASHSCOPE_RESPONSE_BYTES + 1)
-            if not raw or len(raw) > MAX_DASHSCOPE_RESPONSE_BYTES:
+            raw = read_json_response(error, MAX_DASHSCOPE_RESPONSE_BYTES)
+            if not raw:
                 return {}
             payload = json.loads(raw.decode("utf-8"))
             return payload if isinstance(payload, dict) else {}
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        except (OSError, ResponseValidationError, UnicodeDecodeError, json.JSONDecodeError):
             return {}
 
     def ready(self):

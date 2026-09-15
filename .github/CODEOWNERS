@@ -1,0 +1,7 @@
+# Security-sensitive delivery and runtime boundaries require repository-owner review.
+/.github/workflows/ @damiao168
+/services/api-gateway/migrations/ @damiao168
+/services/api-gateway/internal/auth/ @damiao168
+/services/api-gateway/internal/server/ @damiao168
+/infra/ @damiao168
+/contracts/ @damiao168

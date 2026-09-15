@@ -23,16 +23,21 @@ Set-Location infra\docker-compose
 Copy-Item .env.example .env
 ```
 
-至少替换：PostgreSQL、Redis、MinIO、Grafana 密码，`EDUGRADE_QDRANT_API_KEY`，以及长度不少于 32 字符的 `EDUGRADE_AI_SERVICE_TOKEN`。同时通过下文的同步脚本写入本地模型 `EDUGRADE_GRADING_MODEL_API_KEY`。令牌只放在未提交的 `.env`，API 网关和 `grading-agent` 使用同一服务令牌。
+至少替换：PostgreSQL、Redis、MinIO Root 与应用账号、Grafana 密码，`EDUGRADE_QDRANT_API_KEY`，以及长度不少于 32 字符且彼此不同的 `EDUGRADE_GRADING_AGENT_TOKEN`、`EDUGRADE_MATH_VERIFY_TOKEN`。同时通过下文的同步脚本写入本地模型 `EDUGRADE_GRADING_MODEL_API_KEY`。令牌只放在未提交的 `.env`，每个内部服务边界使用独立令牌。
 
 ### 从既有部署升级
 
 `.env` 不随仓库更新，升级后需要手工补齐以下新增项，否则 `preflight.ps1` 会直接拒绝启动：
 
 - `EDUGRADE_QDRANT_API_KEY`：**必填**。Qdrant 此前无鉴权，现在容器会读取该值；网关侧用同一个值发送 `api-key` 头，两端必须一致。
-- `EDUGRADE_REDIS_PASSWORD`：不能再留空。Redis 过去在空密码时会静默降级为无鉴权启动，现在会直接拒绝启动。
+- `EDUGRADE_REDIS_USERNAME` / `EDUGRADE_REDIS_PASSWORD`：API 使用独立 ACL 用户；容器关闭 Redis 默认用户，并拒绝空用户名或空密码启动。应用 ACL 禁止管理类和危险命令。
+- production-like 环境必须设置 `EDUGRADE_REDIS_TLS_ENABLED=true`。将 Redis 服务证书按 `server.crt` / `server.key` 与签发 CA 的 `ca.crt` 放入 `EDUGRADE_REDIS_CERTS_DIR`，另将 CA 的 `ca.crt` 放入 `EDUGRADE_REDIS_CA_DIR`；`EDUGRADE_REDIS_TLS_CA_FILE` 应指向容器内 `/run/secrets/redis-ca/ca.crt`。服务证书必须包含内部 DNS 名 `redis`（或同步调整 `EDUGRADE_REDIS_TLS_SERVER_NAME`）。
 - `EDUGRADE_POSTGRES_APP_USER` / `EDUGRADE_POSTGRES_APP_PASSWORD`：API 专用低权限登录账号；不能与迁移账号相同，密码至少 32 字符。
 - `EDUGRADE_POSTGRES_ADMIN_DSN`：仅供 `db-migrate` 使用的迁移账号 DSN。该账号必须能创建/修改角色并授予成员关系（自托管 PostgreSQL 通常需要 `CREATEROLE`）；托管数据库若限制角色管理，需由平台管理员预先创建同等账号与授权。`EDUGRADE_POSTGRES_DSN` 必须改为上述 API 账号的 DSN，不能继续让 API 以 PostgreSQL superuser 或 `BYPASSRLS` 身份连接。
+- `EDUGRADE_MINIO_ROOT_USER` / `EDUGRADE_MINIO_ROOT_PASSWORD`：只注入 MinIO 和 `minio-init`/备份恢复工具，不注入 API。
+- `EDUGRADE_MINIO_APP_ACCESS_KEY` / `EDUGRADE_MINIO_APP_SECRET_KEY`：由 `minio-init` 创建并绑定到 `EDUGRADE_FILE_BUCKET` 的读写删与列举策略，API 只使用这组凭据。升级既有部署后应立即轮换旧 Root 凭据。
+- production-like 环境必须设置 `EDUGRADE_MINIO_USE_SSL=true`。将 MinIO 服务证书按 `public.crt` / `private.key` 放入 `EDUGRADE_MINIO_CERTS_DIR`，将签发 CA 的 PEM 文件放入 `EDUGRADE_MINIO_CA_DIR`，并让 `EDUGRADE_MINIO_TLS_CA_FILE` 指向容器内的 `/run/secrets/minio-ca/ca.crt`。证书必须包含内部 DNS 名 `minio`（或同步调整 `EDUGRADE_MINIO_TLS_SERVER_NAME`）。证书目录已被 Git 忽略，禁止提交私钥。
+- production-like 环境的 Worker/AI 链路必须启用内部 TLS。把内部 CA 放到 `EDUGRADE_INTERNAL_CA_DIR/ca.crt`，并分别为 `api-gateway`、`grading-agent`、`math-verification-worker` 签发含对应 Docker DNS SAN 的证书。API 证书放在 `EDUGRADE_API_TLS_CERTS_DIR`，Grading Agent 与数学验证证书放在各自的 `*_TLS_CERTS_DIR`；容器内证书/私钥路径写入对应 `*_TLS_CERT_FILE` / `*_TLS_KEY_FILE`。设置 API 内部监听端口（建议 `EDUGRADE_INTERNAL_TLS_PORT=8443`），并将 `EDUGRADE_INTERNAL_API_BASE_URL`、`EDUGRADE_AI_SERVICE_URL`、`EDUGRADE_INTERNAL_MATH_VERIFY_BASE_URL` 和两个内部健康 URL 改为 `https://`。远端模型 URL 在 production-like 环境也必须使用 HTTPS；只有同一进程网络命名空间内的 loopback 模型例外。内部 CA 和服务私钥目录均已被 Git 忽略。
 
 以下新增项都有默认值，不填也能启动：`EDUGRADE_INTERNAL_BIND_HOST`（默认 `127.0.0.1`，数据面端口只监听回环，仅 nginx 对外）、`EDUGRADE_CONTAINER_LOG_MAX_*`、各 `EDUGRADE_*_MEM_LIMIT`、`EDUGRADE_PAGE_PROCESSING_HEARTBEAT_*`。若需要从其他机器直连数据库或 MinIO 控制台，显式设置 `EDUGRADE_INTERNAL_BIND_HOST=0.0.0.0`（生产环境 preflight 会拒绝该值）。
 

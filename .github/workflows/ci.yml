@@ -377,7 +377,7 @@ jobs:
             command: python -m pytest -q lab/evals/math-recognition/test_math_bench.py
           - name: ai-services
             package: ''
-            install: echo "No editable package required"
+            install: python -m pip install -e packages/worker-runtime-python
             command: python -m unittest discover -s ai-services/tests -p 'test_*.py'
           - name: ai-evaluation
             package: ''

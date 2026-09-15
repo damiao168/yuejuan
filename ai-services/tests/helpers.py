@@ -67,6 +67,7 @@ class FakeModel:
         self.outputs = list(outputs or [valid_raw_output()])
         self.calls = []
         self.ready_value = ready
+        self.ready_calls = 0
 
     @contextmanager
     def session(self, request_id):
@@ -83,4 +84,5 @@ class FakeModel:
         return copy.deepcopy(output)
 
     def ready(self):
+        self.ready_calls += 1
         return self.ready_value

@@ -225,23 +225,23 @@ func TestRequestTraceHeadersAndAccessLog(t *testing.T) {
 	var logs bytes.Buffer
 	router := NewRouter(testConfig(), logger.New(&logs, "info"), nil, testAuthStore(t), org.NewMemoryStore(), exam.NewMemoryStore(), paper.NewMemoryStore())
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
-	req.Header.Set("X-Request-ID", "req-story-038")
-	req.Header.Set("X-Trace-ID", "trace-story-038")
+	req.Header.Set("X-Request-ID", "018f47ad-9d77-7c71-b1f6-7d5d171ac342")
+	req.Header.Set("X-Trace-ID", "4bf92f3577b34da6a3ce929d0e0e4736")
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
 
-	if got := rec.Header().Get("X-Request-ID"); got != "req-story-038" {
+	if got := rec.Header().Get("X-Request-ID"); got != "018f47ad-9d77-7c71-b1f6-7d5d171ac342" {
 		t.Fatalf("expected propagated request id, got %q", got)
 	}
-	if got := rec.Header().Get("X-Trace-ID"); got != "trace-story-038" {
+	if got := rec.Header().Get("X-Trace-ID"); got != "4bf92f3577b34da6a3ce929d0e0e4736" {
 		t.Fatalf("expected propagated trace id, got %q", got)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &payload); err != nil {
 		t.Fatalf("decode access log: %v; raw=%s", err, logs.String())
 	}
-	if payload["request_id"] != "req-story-038" || payload["trace_id"] != "trace-story-038" {
+	if payload["request_id"] != "018f47ad-9d77-7c71-b1f6-7d5d171ac342" || payload["trace_id"] != "4bf92f3577b34da6a3ce929d0e0e4736" {
 		t.Fatalf("access log missing correlation ids: %#v", payload)
 	}
 	if payload["event"] != "api_request" || payload["log_stream"] != "system" {

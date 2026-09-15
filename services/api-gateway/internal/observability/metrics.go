@@ -34,15 +34,16 @@ type durationSeries struct {
 // Registry is a small Prometheus text exporter kept inside the gateway so the
 // production image has no separate metrics sidecar or global mutable registry.
 type Registry struct {
-	mu        sync.RWMutex
-	requests  map[requestKey]uint64
-	errors    map[routeValueKey]uint64
-	outcomes  map[routeValueKey]uint64
-	durations map[[2]string]durationSeries
-	dbQueries map[[2]string]durationSeries
-	dbSlow    map[string]uint64
-	inFlight  atomic.Int64
-	dbStats   func() DatabaseStats
+	mu                  sync.RWMutex
+	requests            map[requestKey]uint64
+	errors              map[routeValueKey]uint64
+	outcomes            map[routeValueKey]uint64
+	durations           map[[2]string]durationSeries
+	dbQueries           map[[2]string]durationSeries
+	dbSlow              map[string]uint64
+	inFlight            atomic.Int64
+	dbStats             func() DatabaseStats
+	authLimiterDegraded func() bool
 }
 
 type DatabaseStats struct {
@@ -91,6 +92,12 @@ func (r *Registry) SetDatabaseStats(provider func() DatabaseStats) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.dbStats = provider
+}
+
+func (r *Registry) SetAuthRateLimiterDegraded(provider func() bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.authLimiterDegraded = provider
 }
 
 func (r *Registry) ObserveRequest(method string, route string, status int, duration time.Duration) {
@@ -189,6 +196,7 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		dbSlow[key] = value
 	}
 	dbStats := r.dbStats
+	authLimiterDegraded := r.authLimiterDegraded
 	r.mu.RUnlock()
 
 	var output strings.Builder
@@ -221,6 +229,12 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		output.WriteString("# TYPE edugrade_postgres_connection_wait_seconds_total counter\n")
 		fmt.Fprintf(&output, "edugrade_postgres_connection_wait_seconds_total %g\n", stats.WaitDuration.Seconds())
 	}
+	output.WriteString("# HELP edugrade_auth_rate_limiter_degraded Whether distributed authentication rate limiting is degraded.\n# TYPE edugrade_auth_rate_limiter_degraded gauge\n")
+	degraded := 0
+	if authLimiterDegraded != nil && authLimiterDegraded() {
+		degraded = 1
+	}
+	fmt.Fprintf(&output, "edugrade_auth_rate_limiter_degraded %d\n", degraded)
 	output.WriteString("# HELP edugrade_postgres_query_duration_seconds PostgreSQL query duration without SQL text or parameters.\n# TYPE edugrade_postgres_query_duration_seconds histogram\n")
 	dbKeys := make([][2]string, 0, len(dbQueries))
 	for key := range dbQueries {

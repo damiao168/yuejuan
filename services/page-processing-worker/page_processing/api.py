@@ -10,6 +10,13 @@ from typing import Any
 from urllib import error, request
 from urllib.parse import urlsplit
 
+from edugrade_worker_runtime import (
+    MAX_DOCUMENT_RESPONSE_BYTES,
+    ResponseValidationError,
+    read_bounded,
+    read_json_response,
+)
+
 
 class APIError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None, retry_after: float | None = None) -> None:
@@ -62,7 +69,7 @@ class Client:
         req = self._request("GET", path, None)
         try:
             with request.urlopen(req, timeout=120) as response:
-                return response.read()
+                return read_bounded(response, MAX_DOCUMENT_RESPONSE_BYTES)
         except error.HTTPError as exc:
             if exc.code in {401, 403}:
                 code = "source_download_forbidden"
@@ -71,7 +78,7 @@ class Client:
             else:
                 code = "source_download_failed"
             raise APIError(code, status_code=exc.code, retry_after=_retry_after_seconds(exc.headers)) from exc
-        except OSError as exc:
+        except (OSError, ResponseValidationError) as exc:
             raise APIError("source_download_failed") from exc
 
     def upload_page(self, task: dict[str, Any], page_index: int, png: bytes) -> dict[str, Any]:
@@ -93,17 +100,19 @@ class Client:
         req.add_header("Content-Length", str(len(body)))
         try:
             with request.urlopen(req, timeout=180) as response:
-                result = json.loads(response.read().decode("utf-8"))
+                result = json.loads(read_json_response(response).decode("utf-8"))
         except error.HTTPError as exc:
             if exc.code == 409:
                 try:
-                    duplicate = json.loads(exc.read().decode("utf-8"))
+                    duplicate = json.loads(read_json_response(exc).decode("utf-8"))
                     existing = duplicate.get("existing_file") or {}
-                except (UnicodeDecodeError, json.JSONDecodeError):
+                except (ResponseValidationError, UnicodeDecodeError, json.JSONDecodeError):
                     existing = {}
                 if existing.get("id") and existing.get("hash_sha256"):
                     return existing
             raise APIError(f"decoded_page_upload_failed:{exc.code}") from exc
+        except ResponseValidationError as exc:
+            raise APIError("decoded_page_upload_invalid_response") from exc
         file_info = result.get("file") or {}
         if not file_info.get("id") or not file_info.get("hash_sha256"):
             raise APIError("decoded_page_upload_invalid_response")
@@ -153,14 +162,14 @@ class Client:
         req.add_header("Content-Type", "application/json")
         try:
             with request.urlopen(req, timeout=120 if timeout is None else timeout) as response:
-                raw = response.read()
+                raw = read_json_response(response)
         except error.HTTPError as exc:
             raise APIError(
                 f"api_request_failed:{exc.code}",
                 status_code=exc.code,
                 retry_after=_retry_after_seconds(exc.headers),
             ) from exc
-        except (error.URLError, OSError, TimeoutError) as exc:
+        except (error.URLError, OSError, ResponseValidationError, TimeoutError) as exc:
             raise APIError("api_request_failed:transport") from exc
         return json.loads(raw.decode("utf-8")) if raw else {}
 

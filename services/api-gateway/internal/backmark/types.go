@@ -21,6 +21,14 @@ var (
 	ErrAssigneeForbidden = errors.New("backmark item is not assigned to grader")
 	ErrNoAffectedTasks   = errors.New("backmark selector matched no completed review tasks")
 	ErrNoRegradeItems    = errors.New("backmark batch has no items that require regrade")
+	ErrTooManyItems      = errors.New("backmark batch exceeds synchronous item limit")
+)
+
+const (
+	DefaultPageSize     = 50
+	MaxPageSize         = 200
+	MaxSynchronousItems = 1000
+	MaxSelectorTaskIDs  = 1000
 )
 
 const (
@@ -193,6 +201,12 @@ type Summary struct {
 	Histogram []Histogram `json:"diff_histogram"`
 }
 
+type PageOptions struct {
+	Limit           int
+	CursorCreatedAt time.Time
+	CursorID        string
+}
+
 type CreateInput struct {
 	SourceIncidentID string   `json:"source_incident_id"`
 	Selector         Selector `json:"selector"`
@@ -208,12 +222,14 @@ type SubmitInput struct {
 }
 
 type Store interface {
-	SelectSourceTasks(context.Context, string, string, string, Selector) ([]SourceTask, error)
+	SelectSourceTasks(context.Context, string, string, string, Selector, int) ([]SourceTask, error)
 	CreateBatch(context.Context, string, string, string, string, CreateInput, []SourceTask) (Batch, []Item, error)
 	Preview(context.Context, string, string, string, Selector) (Preview, error)
-	GetSummary(context.Context, string, string) (Summary, error)
-	ListBatches(context.Context, string, string, string) ([]Batch, error)
-	ListAssigned(context.Context, string, string) ([]Item, error)
+	GetBatch(context.Context, string, string) (Batch, error)
+	ListBatchItems(context.Context, string, string, PageOptions) ([]Item, error)
+	GetHistogram(context.Context, string, string) ([]Histogram, error)
+	ListBatches(context.Context, string, string, string, PageOptions) ([]Batch, error)
+	ListAssigned(context.Context, string, string, PageOptions) ([]Item, error)
 	GetAssigned(context.Context, string, string, string) (Item, error)
 	Claim(context.Context, string, string, string) (Item, error)
 	Submit(context.Context, string, string, string, SubmitInput) (Item, Grade, error)

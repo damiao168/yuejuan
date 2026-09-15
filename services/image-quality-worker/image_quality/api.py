@@ -7,6 +7,13 @@ from typing import Any
 from urllib import error, request
 from urllib.parse import urlsplit
 
+from edugrade_worker_runtime import (
+    MAX_IMAGE_RESPONSE_BYTES,
+    ResponseValidationError,
+    read_bounded,
+    read_json_response,
+)
+
 
 class APIError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None) -> None:
@@ -85,12 +92,12 @@ class EduGradeImageQualityClient:
         req = self._build_request("GET", url, None)
         try:
             with request.urlopen(req, timeout=60) as response:
-                return response.read()
+                return read_bounded(response, MAX_IMAGE_RESPONSE_BYTES)
         except error.HTTPError as exc:
             if exc.code == 401:
                 raise AuthenticationError(f"download unauthorized: {exc.code}") from exc
             raise APIError(f"download failed: {exc.code}", status_code=exc.code) from exc
-        except OSError as exc:
+        except (OSError, ResponseValidationError) as exc:
             raise APIError("download failed") from exc
 
     def request_normalized_asset(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -112,9 +119,11 @@ class EduGradeImageQualityClient:
         req.add_header("Content-Length", str(len(body)))
         try:
             with request.urlopen(req, timeout=120) as response:
-                raw = response.read()
+                raw = read_json_response(response)
         except error.HTTPError as exc:
             raise APIError(f"normalized upload failed: {exc.code}") from exc
+        except ResponseValidationError as exc:
+            raise APIError("normalized upload returned an invalid response") from exc
         payload = json.loads(raw.decode("utf-8"))
         file_info = payload.get("file") or {}
         if file_info.get("hash_sha256") not in (sha256, "sha256:" + sha256):
@@ -134,12 +143,12 @@ class EduGradeImageQualityClient:
         req = self._build_request(method, path, payload if method != "GET" else None, require_auth=require_auth)
         try:
             with request.urlopen(req, timeout=timeout) as response:
-                raw = response.read()
+                raw = read_json_response(response)
         except error.HTTPError as exc:
             if exc.code == 401:
                 raise AuthenticationError(f"unauthorized: {exc.code}") from exc
             raise APIError(f"api request failed: {exc.code}", status_code=exc.code) from exc
-        except OSError as exc:
+        except (OSError, ResponseValidationError) as exc:
             raise APIError("api request failed") from exc
         if not raw:
             return {}

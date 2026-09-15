@@ -5,7 +5,9 @@ WORKDIR /app
 RUN addgroup -S edugrade && adduser -S -G edugrade -u 10001 edugrade
 
 COPY ai-services/requirements.txt /app/requirements.txt
+COPY packages/worker-runtime-python /tmp/worker-runtime-python
 RUN python -m pip install --no-cache-dir -r /app/requirements.txt \
+    && python -m pip install --no-cache-dir --no-deps /tmp/worker-runtime-python \
     && python -m pip uninstall -y pip
 
 COPY ai-services/grading_agent /app/grading_agent

@@ -41,14 +41,17 @@ def test_symbolic_http_client_uses_restricted_ast_and_real_domain(monkeypatch):
     sent = []
 
     class Response:
+        def __init__(self):
+            self.headers = {"Content-Type": "application/json"}
+
         def __enter__(self):
             return self
 
         def __exit__(self, *args):
             pass
 
-        def read(self):
-            return b'{"status":"verified"}'
+        def read(self, amount=-1):
+            return b'{"status":"verified"}'[:amount]
 
     def urlopen(req, timeout):
         sent.append((req.full_url, json.loads(req.data), req.headers, timeout))

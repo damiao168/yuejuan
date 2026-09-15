@@ -33,20 +33,42 @@ services:
   redis:
     image: ${EDUGRADE_REDIS_IMAGE:-redis:7-alpine}
     container_name: edugrade-redis
-    command: >
-      sh -c 'if [ -z "$${EDUGRADE_REDIS_PASSWORD}" ];
-      then echo "EDUGRADE_REDIS_PASSWORD is required; refusing to start an unauthenticated Redis" >&2; exit 1;
-      fi;
-      exec redis-server --appendonly yes --requirepass "$${EDUGRADE_REDIS_PASSWORD}"'
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -z "$${EDUGRADE_REDIS_USERNAME}" ] || [ -z "$${EDUGRADE_REDIS_PASSWORD}" ]; then
+          echo "Redis ACL username and password are required; refusing to start unauthenticated" >&2
+          exit 1
+        fi
+        case "$${EDUGRADE_REDIS_USERNAME}" in
+          *[!A-Za-z0-9._-]*) echo "Redis ACL username contains unsupported characters" >&2; exit 1 ;;
+        esac
+        password_hash="$$(printf '%s' "$${EDUGRADE_REDIS_PASSWORD}" | sha256sum | cut -d ' ' -f 1)"
+        printf 'user default off\nuser %s on #%s ~* +@all -@admin -@dangerous\n' \
+          "$${EDUGRADE_REDIS_USERNAME}" "$${password_hash}" > /tmp/users.acl
+        chmod 600 /tmp/users.acl
+        if [ "$${EDUGRADE_REDIS_TLS_ENABLED}" = "true" ]; then
+          exec redis-server --appendonly yes --aclfile /tmp/users.acl --port 0 --tls-port 6379 \
+            --tls-cert-file /run/secrets/redis/server.crt \
+            --tls-key-file /run/secrets/redis/server.key \
+            --tls-ca-cert-file /run/secrets/redis/ca.crt \
+            --tls-auth-clients no
+        fi
+        exec redis-server --appendonly yes --aclfile /tmp/users.acl
     environment:
+      EDUGRADE_REDIS_USERNAME: ${EDUGRADE_REDIS_USERNAME:-edugrade-api}
       EDUGRADE_REDIS_PASSWORD: ${EDUGRADE_REDIS_PASSWORD}
+      EDUGRADE_REDIS_TLS_ENABLED: ${EDUGRADE_REDIS_TLS_ENABLED:-false}
+      EDUGRADE_REDIS_TLS_SERVER_NAME: ${EDUGRADE_REDIS_TLS_SERVER_NAME:-redis}
     ports:
       - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
+      - ${EDUGRADE_REDIS_CERTS_DIR:-./certs/redis}:/run/secrets/redis:ro
     mem_limit: ${EDUGRADE_REDIS_MEM_LIMIT:-512m}
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$${EDUGRADE_REDIS_PASSWORD}\" ping | grep PONG"]
+      test: ["CMD-SHELL", "if [ \"$${EDUGRADE_REDIS_TLS_ENABLED}\" = \"true\" ]; then redis-cli --tls --cacert /run/secrets/redis/ca.crt --sni \"$${EDUGRADE_REDIS_TLS_SERVER_NAME}\" -h redis --user \"$${EDUGRADE_REDIS_USERNAME}\" -a \"$${EDUGRADE_REDIS_PASSWORD}\" ping; else redis-cli --user \"$${EDUGRADE_REDIS_USERNAME}\" -a \"$${EDUGRADE_REDIS_PASSWORD}\" ping; fi | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -56,18 +78,21 @@ services:
   minio:
     image: ${EDUGRADE_MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z}
     container_name: edugrade-minio
-    command: server /data --console-address ":9001"
+    command: server --certs-dir /root/.minio/certs /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${EDUGRADE_MINIO_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${EDUGRADE_MINIO_SECRET_KEY}
+      MINIO_ROOT_USER: ${EDUGRADE_MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${EDUGRADE_MINIO_ROOT_PASSWORD}
+      EDUGRADE_MINIO_USE_SSL: ${EDUGRADE_MINIO_USE_SSL:-false}
     ports:
       - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_MINIO_API_PORT:-9000}:9000"
       - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
+      - ${EDUGRADE_MINIO_CERTS_DIR:-./certs/minio}:/root/.minio/certs:ro
+      - ${EDUGRADE_MINIO_CA_DIR:-./certs/minio-ca}:/root/.mc/certs/CAs:ro
     mem_limit: ${EDUGRADE_MINIO_MEM_LIMIT:-1g}
     healthcheck:
-      test: ["CMD-SHELL", "mc ready local"]
+      test: ["CMD-SHELL", "scheme=http; if [ \"$${EDUGRADE_MINIO_USE_SSL}\" = \"true\" ]; then scheme=https; fi; mc alias set health \"$${scheme}://minio:9000\" \"$${MINIO_ROOT_USER}\" \"$${MINIO_ROOT_PASSWORD}\" >/dev/null && mc ready health"]
       interval: 10s
       timeout: 5s
       retries: 18
@@ -199,18 +224,31 @@ services:
     container_name: edugrade-minio-init
     profiles: ["tools"]
     environment:
-      EDUGRADE_MINIO_ACCESS_KEY: ${EDUGRADE_MINIO_ACCESS_KEY}
-      EDUGRADE_MINIO_SECRET_KEY: ${EDUGRADE_MINIO_SECRET_KEY}
+      EDUGRADE_MINIO_ROOT_USER: ${EDUGRADE_MINIO_ROOT_USER}
+      EDUGRADE_MINIO_ROOT_PASSWORD: ${EDUGRADE_MINIO_ROOT_PASSWORD}
+      EDUGRADE_MINIO_APP_ACCESS_KEY: ${EDUGRADE_MINIO_APP_ACCESS_KEY}
+      EDUGRADE_MINIO_APP_SECRET_KEY: ${EDUGRADE_MINIO_APP_SECRET_KEY}
+      EDUGRADE_MINIO_USE_SSL: ${EDUGRADE_MINIO_USE_SSL:-false}
       EDUGRADE_FILE_BUCKET: ${EDUGRADE_FILE_BUCKET}
+    volumes:
+      - ${EDUGRADE_MINIO_CA_DIR:-./certs/minio-ca}:/root/.mc/certs/CAs:ro
     depends_on:
       minio:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        mc alias set edugrade http://minio:9000 "$${EDUGRADE_MINIO_ACCESS_KEY}" "$${EDUGRADE_MINIO_SECRET_KEY}"
+        scheme=http
+        if [ "$${EDUGRADE_MINIO_USE_SSL}" = "true" ]; then scheme=https; fi
+        mc alias set edugrade "$${scheme}://minio:9000" "$${EDUGRADE_MINIO_ROOT_USER}" "$${EDUGRADE_MINIO_ROOT_PASSWORD}"
         mc mb --ignore-existing "edugrade/$${EDUGRADE_FILE_BUCKET}"
         mc anonymous set none "edugrade/$${EDUGRADE_FILE_BUCKET}"
+        cat >/tmp/edugrade-app-policy.json <<EOF
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation"],"Resource":["arn:aws:s3:::$${EDUGRADE_FILE_BUCKET}"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::$${EDUGRADE_FILE_BUCKET}/*"]}]}
+        EOF
+        mc admin policy create edugrade edugrade-app /tmp/edugrade-app-policy.json
+        mc admin user add edugrade "$${EDUGRADE_MINIO_APP_ACCESS_KEY}" "$${EDUGRADE_MINIO_APP_SECRET_KEY}"
+        mc admin policy attach edugrade edugrade-app --user "$${EDUGRADE_MINIO_APP_ACCESS_KEY}"
         mc ls "edugrade/$${EDUGRADE_FILE_BUCKET}"
 
   api-gateway:
@@ -257,6 +295,10 @@ services:
       EDUGRADE_HTTP_READ_TIMEOUT: ${EDUGRADE_HTTP_READ_TIMEOUT:-15s}
       EDUGRADE_HTTP_WRITE_TIMEOUT: ${EDUGRADE_HTTP_WRITE_TIMEOUT:-780s}
       EDUGRADE_HTTP_IDLE_TIMEOUT: ${EDUGRADE_HTTP_IDLE_TIMEOUT:-60s}
+      EDUGRADE_INTERNAL_TLS_PORT: ${EDUGRADE_INTERNAL_TLS_PORT:-0}
+      EDUGRADE_INTERNAL_TLS_CERT_FILE: ${EDUGRADE_INTERNAL_TLS_CERT_FILE:-}
+      EDUGRADE_INTERNAL_TLS_KEY_FILE: ${EDUGRADE_INTERNAL_TLS_KEY_FILE:-}
+      SSL_CERT_FILE: ${EDUGRADE_INTERNAL_CA_FILE:-}
       EDUGRADE_CORS_ALLOWED_ORIGINS: ${EDUGRADE_CORS_ALLOWED_ORIGINS}
       EDUGRADE_CORS_ALLOWED_METHODS: ${EDUGRADE_CORS_ALLOWED_METHODS}
       EDUGRADE_CORS_ALLOWED_HEADERS: ${EDUGRADE_CORS_ALLOWED_HEADERS}
@@ -270,15 +312,22 @@ services:
       EDUGRADE_POSTGRES_STATEMENT_TIMEOUT: ${EDUGRADE_POSTGRES_STATEMENT_TIMEOUT:-60s}
       EDUGRADE_POSTGRES_LOCK_TIMEOUT: ${EDUGRADE_POSTGRES_LOCK_TIMEOUT:-5s}
       EDUGRADE_REDIS_ADDR: redis:6379
+      EDUGRADE_REDIS_USERNAME: ${EDUGRADE_REDIS_USERNAME:-edugrade-api}
       EDUGRADE_REDIS_PASSWORD: ${EDUGRADE_REDIS_PASSWORD}
       EDUGRADE_REDIS_PASSWORD_FILE: ${EDUGRADE_REDIS_PASSWORD_FILE:-}
       EDUGRADE_REDIS_DB: ${EDUGRADE_REDIS_DB}
+      EDUGRADE_REDIS_TLS_ENABLED: ${EDUGRADE_REDIS_TLS_ENABLED:-false}
+      EDUGRADE_REDIS_TLS_CA_FILE: ${EDUGRADE_REDIS_TLS_CA_FILE:-}
+      EDUGRADE_REDIS_TLS_SERVER_NAME: ${EDUGRADE_REDIS_TLS_SERVER_NAME:-}
+      EDUGRADE_AUTH_LIMITER_FAIL_CLOSED: ${EDUGRADE_AUTH_LIMITER_FAIL_CLOSED:-false}
       EDUGRADE_MINIO_ENDPOINT: minio:9000
-      EDUGRADE_MINIO_ACCESS_KEY: ${EDUGRADE_MINIO_ACCESS_KEY}
-      EDUGRADE_MINIO_SECRET_KEY: ${EDUGRADE_MINIO_SECRET_KEY}
-      EDUGRADE_MINIO_ACCESS_KEY_FILE: ${EDUGRADE_MINIO_ACCESS_KEY_FILE:-}
-      EDUGRADE_MINIO_SECRET_KEY_FILE: ${EDUGRADE_MINIO_SECRET_KEY_FILE:-}
-      EDUGRADE_MINIO_USE_SSL: "false"
+      EDUGRADE_MINIO_APP_ACCESS_KEY: ${EDUGRADE_MINIO_APP_ACCESS_KEY}
+      EDUGRADE_MINIO_APP_SECRET_KEY: ${EDUGRADE_MINIO_APP_SECRET_KEY}
+      EDUGRADE_MINIO_APP_ACCESS_KEY_FILE: ${EDUGRADE_MINIO_APP_ACCESS_KEY_FILE:-}
+      EDUGRADE_MINIO_APP_SECRET_KEY_FILE: ${EDUGRADE_MINIO_APP_SECRET_KEY_FILE:-}
+      EDUGRADE_MINIO_USE_SSL: ${EDUGRADE_MINIO_USE_SSL:-false}
+      EDUGRADE_MINIO_TLS_CA_FILE: ${EDUGRADE_MINIO_TLS_CA_FILE:-}
+      EDUGRADE_MINIO_TLS_SERVER_NAME: ${EDUGRADE_MINIO_TLS_SERVER_NAME:-}
       EDUGRADE_FILE_BUCKET: ${EDUGRADE_FILE_BUCKET}
       EDUGRADE_FILE_MAX_UPLOAD_BYTES: ${EDUGRADE_FILE_MAX_UPLOAD_BYTES}
       EDUGRADE_FILE_ALLOWED_EXTENSIONS: ${EDUGRADE_FILE_ALLOWED_EXTENSIONS}
@@ -296,8 +345,8 @@ services:
       EDUGRADE_MATH_GRADING_V2_ENABLED: ${EDUGRADE_MATH_GRADING_V2_ENABLED:-false}
       EDUGRADE_ALLOW_MOCK_AI: ${EDUGRADE_ALLOW_MOCK_AI:-false}
       EDUGRADE_AI_SERVICE_URL: ${EDUGRADE_AI_SERVICE_URL}
-      EDUGRADE_AI_SERVICE_TOKEN: ${EDUGRADE_AI_SERVICE_TOKEN}
-      EDUGRADE_AI_SERVICE_TOKEN_FILE: ${EDUGRADE_AI_SERVICE_TOKEN_FILE:-}
+      EDUGRADE_GRADING_AGENT_TOKEN: ${EDUGRADE_GRADING_AGENT_TOKEN}
+      EDUGRADE_GRADING_AGENT_TOKEN_FILE: ${EDUGRADE_GRADING_AGENT_TOKEN_FILE:-}
       EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY: ${EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY:-edugrade-local-model-credential-key-change-before-production}
       EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY_FILE: ${EDUGRADE_MODEL_CREDENTIAL_MASTER_KEY_FILE:-}
       EDUGRADE_AI_SERVICE_TIMEOUT: ${EDUGRADE_AI_SERVICE_TIMEOUT:-750s}
@@ -317,6 +366,11 @@ services:
       EDUGRADE_BOOTSTRAP_USERNAME: ${EDUGRADE_BOOTSTRAP_USERNAME:-platform_admin}
       EDUGRADE_BOOTSTRAP_DISPLAY_NAME: ${EDUGRADE_BOOTSTRAP_DISPLAY_NAME:-Platform Admin}
       EDUGRADE_BOOTSTRAP_PASSWORD: ${EDUGRADE_BOOTSTRAP_PASSWORD:-}
+    volumes:
+      - ${EDUGRADE_MINIO_CA_DIR:-./certs/minio-ca}:/run/secrets/minio-ca:ro
+      - ${EDUGRADE_REDIS_CA_DIR:-./certs/redis-ca}:/run/secrets/redis-ca:ro
+      - ${EDUGRADE_INTERNAL_CA_DIR:-./certs/internal-ca}:/run/secrets/internal-ca:ro
+      - ${EDUGRADE_API_TLS_CERTS_DIR:-./certs/api-gateway}:/run/secrets/api-tls:ro
     ports:
       - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_API_PORT:-8080}:8080"
     mem_limit: ${EDUGRADE_API_MEM_LIMIT:-1g}
@@ -366,9 +420,10 @@ services:
     image: ${EDUGRADE_GRADING_AGENT_IMAGE:-edugrade/grading-agent:local}
     container_name: edugrade-grading-agent
     environment:
+      EDUGRADE_ENV: ${EDUGRADE_ENV}
       EDUGRADE_GRADING_AGENT_HOST: 0.0.0.0
       EDUGRADE_GRADING_AGENT_PORT: 8100
-      EDUGRADE_GRADING_AGENT_TOKEN: ${EDUGRADE_AI_SERVICE_TOKEN}
+      EDUGRADE_GRADING_AGENT_TOKEN: ${EDUGRADE_GRADING_AGENT_TOKEN}
       EDUGRADE_GRADING_MODEL_BASE_URL: ${EDUGRADE_GRADING_MODEL_BASE_URL}
       EDUGRADE_GRADING_MODEL_API_KEY: ${EDUGRADE_GRADING_MODEL_API_KEY}
       EDUGRADE_GRADING_MODEL_NAME: ${EDUGRADE_GRADING_MODEL_NAME:-qwen3-4b-q4-k-m}
@@ -382,13 +437,21 @@ services:
       EDUGRADE_GRADING_MODEL_TIMEOUT_SECONDS: ${EDUGRADE_GRADING_MODEL_TIMEOUT_SECONDS:-600}
       EDUGRADE_GRADING_MODEL_MAX_OUTPUT_TOKENS: ${EDUGRADE_GRADING_MODEL_MAX_OUTPUT_TOKENS:-512}
       EDUGRADE_GRADING_MODEL_READY_TIMEOUT_SECONDS: ${EDUGRADE_GRADING_MODEL_READY_TIMEOUT_SECONDS:-3}
+      EDUGRADE_GRADING_MODEL_READINESS_CACHE_SECONDS: ${EDUGRADE_GRADING_MODEL_READINESS_CACHE_SECONDS:-10}
       EDUGRADE_GRADING_MODEL_QUEUE_TIMEOUT_SECONDS: ${EDUGRADE_GRADING_MODEL_QUEUE_TIMEOUT_SECONDS:-5}
       EDUGRADE_GRADING_MODEL_MAX_RETRIES: ${EDUGRADE_GRADING_MODEL_MAX_RETRIES:-1}
+      EDUGRADE_GRADING_AGENT_TLS_CERT_FILE: ${EDUGRADE_GRADING_AGENT_TLS_CERT_FILE:-}
+      EDUGRADE_GRADING_AGENT_TLS_KEY_FILE: ${EDUGRADE_GRADING_AGENT_TLS_KEY_FILE:-}
+      EDUGRADE_GRADING_AGENT_HEALTH_URL: ${EDUGRADE_GRADING_AGENT_HEALTH_URL:-http://127.0.0.1:8100/health}
+      SSL_CERT_FILE: ${EDUGRADE_INTERNAL_CA_FILE:-}
+    volumes:
+      - ${EDUGRADE_INTERNAL_CA_DIR:-./certs/internal-ca}:/run/secrets/internal-ca:ro
+      - ${EDUGRADE_GRADING_AGENT_TLS_CERTS_DIR:-./certs/grading-agent}:/run/secrets/grading-agent-tls:ro
     mem_limit: ${EDUGRADE_GRADING_AGENT_MEM_LIMIT:-2g}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8100/health | grep -q healthy"]
+      test: ["CMD-SHELL", "python -c \"import os,urllib.request; urllib.request.urlopen(os.environ.get('EDUGRADE_GRADING_AGENT_HEALTH_URL','http://127.0.0.1:8100/health'),timeout=3).read()\""]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -410,7 +473,9 @@ services:
     container_name: edugrade-ocr-worker
     profiles: ["ocr"]
     environment:
-      EDUGRADE_API_BASE_URL: http://api-gateway:8080
+      EDUGRADE_ENV: ${EDUGRADE_ENV}
+      EDUGRADE_API_BASE_URL: ${EDUGRADE_INTERNAL_API_BASE_URL:-http://api-gateway:8080}
+      SSL_CERT_FILE: ${EDUGRADE_INTERNAL_CA_FILE:-}
       EDUGRADE_OCR_WORKER_TENANT_CODE: ${EDUGRADE_OCR_WORKER_TENANT_CODE}
       EDUGRADE_OCR_WORKER_USERNAME: ${EDUGRADE_OCR_WORKER_USERNAME}
       EDUGRADE_OCR_WORKER_PASSWORD: ${EDUGRADE_OCR_WORKER_PASSWORD}
@@ -435,13 +500,14 @@ services:
       EDUGRADE_OCR_HEARTBEAT_TIMEOUT: ${EDUGRADE_OCR_HEARTBEAT_TIMEOUT:-3}
       EDUGRADE_OCR_RUNTIME_ENABLED: "true"
       EDUGRADE_MATH_RUNTIME_ENABLED: "false"
-      EDUGRADE_MATH_VERIFY_BASE_URL: http://math-verification-worker:8092
-      EDUGRADE_MATH_VERIFY_TOKEN: ${EDUGRADE_AI_SERVICE_TOKEN}
+      EDUGRADE_MATH_VERIFY_BASE_URL: ${EDUGRADE_INTERNAL_MATH_VERIFY_BASE_URL:-http://math-verification-worker:8092}
+      EDUGRADE_MATH_VERIFY_TOKEN: ${EDUGRADE_MATH_VERIFY_TOKEN}
       EDUGRADE_FORMULA_MODEL_VERSION: ${EDUGRADE_FORMULA_MODEL_VERSION:-PP-FormulaNet_plus-M}
     mem_limit: ${EDUGRADE_OCR_WORKER_MEM_LIMIT:-4g}
     cpus: ${EDUGRADE_OCR_WORKER_CPU_LIMIT:-4.0}
     volumes:
       - ${EDUGRADE_OCR_MODEL_CACHE_DIR:-../../.cache/ocr-models}:/home/ocr-worker/.paddlex
+      - ${EDUGRADE_INTERNAL_CA_DIR:-./certs/internal-ca}:/run/secrets/internal-ca:ro
     depends_on:
       api-gateway:
         condition: service_healthy
@@ -455,7 +521,9 @@ services:
     container_name: edugrade-math-recognition-worker
     profiles: ["ocr"]
     environment:
-      EDUGRADE_API_BASE_URL: http://api-gateway:8080
+      EDUGRADE_ENV: ${EDUGRADE_ENV}
+      EDUGRADE_API_BASE_URL: ${EDUGRADE_INTERNAL_API_BASE_URL:-http://api-gateway:8080}
+      SSL_CERT_FILE: ${EDUGRADE_INTERNAL_CA_FILE:-}
       EDUGRADE_OCR_WORKER_TENANT_CODE: ${EDUGRADE_OCR_WORKER_TENANT_CODE}
       EDUGRADE_OCR_WORKER_USERNAME: ${EDUGRADE_OCR_WORKER_USERNAME}
       EDUGRADE_OCR_WORKER_PASSWORD: ${EDUGRADE_OCR_WORKER_PASSWORD}
@@ -473,13 +541,14 @@ services:
       EDUGRADE_OCR_HEARTBEAT_TIMEOUT: ${EDUGRADE_OCR_HEARTBEAT_TIMEOUT:-3}
       EDUGRADE_OCR_RUNTIME_ENABLED: "false"
       EDUGRADE_MATH_RUNTIME_ENABLED: ${EDUGRADE_MATH_RUNTIME_ENABLED:-true}
-      EDUGRADE_MATH_VERIFY_BASE_URL: http://math-verification-worker:8092
-      EDUGRADE_MATH_VERIFY_TOKEN: ${EDUGRADE_AI_SERVICE_TOKEN}
+      EDUGRADE_MATH_VERIFY_BASE_URL: ${EDUGRADE_INTERNAL_MATH_VERIFY_BASE_URL:-http://math-verification-worker:8092}
+      EDUGRADE_MATH_VERIFY_TOKEN: ${EDUGRADE_MATH_VERIFY_TOKEN}
       EDUGRADE_FORMULA_MODEL_VERSION: ${EDUGRADE_FORMULA_MODEL_VERSION:-PP-FormulaNet_plus-M}
     mem_limit: ${EDUGRADE_MATH_RECOGNITION_WORKER_MEM_LIMIT:-4g}
     cpus: ${EDUGRADE_MATH_RECOGNITION_WORKER_CPU_LIMIT:-4.0}
     volumes:
       - ${EDUGRADE_OCR_MODEL_CACHE_DIR:-../../.cache/ocr-models}:/home/ocr-worker/.paddlex
+      - ${EDUGRADE_INTERNAL_CA_DIR:-./certs/internal-ca}:/run/secrets/internal-ca:ro
     depends_on:
       api-gateway:
         condition: service_healthy
@@ -493,7 +562,9 @@ services:
     container_name: edugrade-paper-formula-worker
     profiles: ["ocr"]
     environment:
-      EDUGRADE_API_BASE_URL: http://api-gateway:8080
+      EDUGRADE_ENV: ${EDUGRADE_ENV}
+      EDUGRADE_API_BASE_URL: ${EDUGRADE_INTERNAL_API_BASE_URL:-http://api-gateway:8080}
+      SSL_CERT_FILE: ${EDUGRADE_INTERNAL_CA_FILE:-}
       EDUGRADE_OCR_WORKER_TENANT_CODE: ${EDUGRADE_OCR_WORKER_TENANT_CODE}
       EDUGRADE_OCR_WORKER_USERNAME: ${EDUGRADE_OCR_WORKER_USERNAME}
       EDUGRADE_OCR_WORKER_PASSWORD: ${EDUGRADE_OCR_WORKER_PASSWORD}
@@ -527,6 +598,7 @@ services:
     cpus: ${EDUGRADE_PAPER_FORMULA_WORKER_CPU_LIMIT:-4.0}
     volumes:
       - ${EDUGRADE_OCR_MODEL_CACHE_DIR:-../../.cache/ocr-models}:/home/ocr-worker/.paddlex
+      - ${EDUGRADE_INTERNAL_CA_DIR:-./certs/internal-ca}:/run/secrets/internal-ca:ro
     depends_on:
       api-gateway:
         condition: service_healthy
@@ -543,7 +615,9 @@ services:
     container_name: edugrade-image-quality-worker
     profiles: ["quality"]
     environment:
-      EDUGRADE_API_BASE_URL: http://api-gateway:8080
+      EDUGRADE_ENV: ${EDUGRADE_ENV}
+      EDUGRADE_API_BASE_URL: ${EDUGRADE_INTERNAL_API_BASE_URL:-http://api-gateway:8080}
+      SSL_CERT_FILE: ${EDUGRADE_INTERNAL_CA_FILE:-}
       EDUGRADE_IMAGE_QUALITY_TENANT_CODE: ${EDUGRADE_IMAGE_QUALITY_TENANT_CODE}
       EDUGRADE_IMAGE_QUALITY_USERNAME: ${EDUGRADE_IMAGE_QUALITY_USERNAME}
       EDUGRADE_IMAGE_QUALITY_PASSWORD: ${EDUGRADE_IMAGE_QUALITY_PASSWORD}
@@ -551,6 +625,8 @@ services:
       EDUGRADE_IMAGE_QUALITY_LEASE_SECONDS: ${EDUGRADE_IMAGE_QUALITY_LEASE_SECONDS}
       EDUGRADE_IMAGE_QUALITY_POLL_INTERVAL: ${EDUGRADE_IMAGE_QUALITY_POLL_INTERVAL}
       EDUGRADE_IMAGE_QUALITY_WORKER_ID: ${EDUGRADE_IMAGE_QUALITY_WORKER_ID}
+    volumes:
+      - ${EDUGRADE_INTERNAL_CA_DIR:-./certs/internal-ca}:/run/secrets/internal-ca:ro
     mem_limit: ${EDUGRADE_IMAGE_QUALITY_MEM_LIMIT:-2g}
     depends_on:
       api-gateway:
@@ -568,7 +644,9 @@ services:
     container_name: edugrade-subjective-grading-worker
     profiles: ["subjective-grading"]
     environment:
-      EDUGRADE_API_BASE_URL: http://api-gateway:8080
+      EDUGRADE_ENV: ${EDUGRADE_ENV}
+      EDUGRADE_API_BASE_URL: ${EDUGRADE_INTERNAL_API_BASE_URL:-http://api-gateway:8080}
+      SSL_CERT_FILE: ${EDUGRADE_INTERNAL_CA_FILE:-}
       EDUGRADE_SUBJECTIVE_WORKER_TENANT_CODE: ${EDUGRADE_SUBJECTIVE_WORKER_TENANT_CODE}
       EDUGRADE_SUBJECTIVE_WORKER_USERNAME: ${EDUGRADE_SUBJECTIVE_WORKER_USERNAME}
       EDUGRADE_SUBJECTIVE_WORKER_PASSWORD: ${EDUGRADE_SUBJECTIVE_WORKER_PASSWORD}
@@ -579,6 +657,8 @@ services:
       EDUGRADE_SUBJECTIVE_WORKER_HEARTBEAT_TIMEOUT: ${EDUGRADE_SUBJECTIVE_WORKER_HEARTBEAT_TIMEOUT:-3}
       EDUGRADE_SUBJECTIVE_WORKER_EXECUTE_TIMEOUT: ${EDUGRADE_SUBJECTIVE_WORKER_EXECUTE_TIMEOUT:-810}
       EDUGRADE_SUBJECTIVE_WORKER_HEALTH_MAX_AGE: ${EDUGRADE_SUBJECTIVE_WORKER_HEALTH_MAX_AGE:-120}
+    volumes:
+      - ${EDUGRADE_INTERNAL_CA_DIR:-./certs/internal-ca}:/run/secrets/internal-ca:ro
     mem_limit: ${EDUGRADE_SUBJECTIVE_WORKER_MEM_LIMIT:-1g}
     depends_on:
       api-gateway:
@@ -596,13 +676,21 @@ services:
     container_name: edugrade-math-verification-worker
     profiles: ["math", "ocr"]
     environment:
-      EDUGRADE_MATH_VERIFY_TOKEN: ${EDUGRADE_AI_SERVICE_TOKEN}
+      EDUGRADE_ENV: ${EDUGRADE_ENV}
+      EDUGRADE_MATH_VERIFY_TOKEN: ${EDUGRADE_MATH_VERIFY_TOKEN}
       EDUGRADE_MATH_VERIFY_PORT: 8092
       EDUGRADE_MATH_VERIFY_TIMEOUT_SECONDS: ${EDUGRADE_MATH_VERIFY_TIMEOUT_SECONDS:-3}
+      EDUGRADE_MATH_VERIFY_TLS_CERT_FILE: ${EDUGRADE_MATH_VERIFY_TLS_CERT_FILE:-}
+      EDUGRADE_MATH_VERIFY_TLS_KEY_FILE: ${EDUGRADE_MATH_VERIFY_TLS_KEY_FILE:-}
+      EDUGRADE_MATH_VERIFY_HEALTH_URL: ${EDUGRADE_MATH_VERIFY_HEALTH_URL:-http://127.0.0.1:8092/healthz}
+      SSL_CERT_FILE: ${EDUGRADE_INTERNAL_CA_FILE:-}
+    volumes:
+      - ${EDUGRADE_INTERNAL_CA_DIR:-./certs/internal-ca}:/run/secrets/internal-ca:ro
+      - ${EDUGRADE_MATH_VERIFY_TLS_CERTS_DIR:-./certs/math-verifier}:/run/secrets/math-verifier-tls:ro
     expose: ["8092"]
     mem_limit: ${EDUGRADE_MATH_VERIFY_MEM_LIMIT:-1g}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/healthz', timeout=2).read()"]
+      test: ["CMD-SHELL", "python -c \"import os,urllib.request; urllib.request.urlopen(os.environ.get('EDUGRADE_MATH_VERIFY_HEALTH_URL','http://127.0.0.1:8092/healthz'),timeout=2).read()\""]
       interval: 15s
       timeout: 3s
       retries: 5
@@ -620,7 +708,9 @@ services:
     container_name: edugrade-page-processing-worker
     profiles: ["processing"]
     environment:
-      EDUGRADE_API_BASE_URL: http://api-gateway:8080
+      EDUGRADE_ENV: ${EDUGRADE_ENV}
+      EDUGRADE_API_BASE_URL: ${EDUGRADE_INTERNAL_API_BASE_URL:-http://api-gateway:8080}
+      SSL_CERT_FILE: ${EDUGRADE_INTERNAL_CA_FILE:-}
       EDUGRADE_PAGE_PROCESSING_TENANT_CODE: ${EDUGRADE_PAGE_PROCESSING_TENANT_CODE}
       EDUGRADE_PAGE_PROCESSING_USERNAME: ${EDUGRADE_PAGE_PROCESSING_USERNAME}
       EDUGRADE_PAGE_PROCESSING_PASSWORD: ${EDUGRADE_PAGE_PROCESSING_PASSWORD}
@@ -633,6 +723,8 @@ services:
       EDUGRADE_PAGE_PROCESSING_WORKER_ID: ${EDUGRADE_PAGE_PROCESSING_WORKER_ID:-compose-page-processing-1}
       EDUGRADE_PAGE_PROCESSING_HEARTBEAT_INTERVAL: ${EDUGRADE_PAGE_PROCESSING_HEARTBEAT_INTERVAL:-30}
       EDUGRADE_PAGE_PROCESSING_HEARTBEAT_TIMEOUT: ${EDUGRADE_PAGE_PROCESSING_HEARTBEAT_TIMEOUT:-10}
+    volumes:
+      - ${EDUGRADE_INTERNAL_CA_DIR:-./certs/internal-ca}:/run/secrets/internal-ca:ro
     mem_limit: ${EDUGRADE_PAGE_PROCESSING_MEM_LIMIT:-8g}
     depends_on:
       api-gateway:
@@ -669,6 +761,7 @@ services:
       - "--storage.tsdb.path=/prometheus"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     ports:
       - "${EDUGRADE_INTERNAL_BIND_HOST:-127.0.0.1}:${EDUGRADE_PROMETHEUS_PORT:-9090}:9090"

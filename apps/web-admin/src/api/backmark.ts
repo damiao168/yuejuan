@@ -18,6 +18,11 @@ const generatedApi = new EduGradeApi(apiClient);
 
 export type { BackmarkBatch, BackmarkGraderContext, BackmarkGraderItem, BackmarkPolicy, BackmarkPreview, BackmarkSelector, BackmarkSummary, BackmarkRegradeInput };
 
+export interface BackmarkPageOptions {
+  limit?: number;
+  cursor?: string;
+}
+
 export function previewBackmarkBatch(examId: string, questionId: string, selector: BackmarkSelector) {
   return generatedApi.previewBackmarkBatch({ path: { examId, questionId }, body: { selector } });
 }
@@ -30,12 +35,12 @@ export function createBackmarkBatch(
   return generatedApi.createBackmarkBatch({ path: { examId, questionId }, body: payload });
 }
 
-export function listBackmarkBatches(examId: string, questionId?: string) {
-  return generatedApi.listBackmarkBatches({ query: { exam_id: examId, question_id: questionId } });
+export function listBackmarkBatches(examId: string, questionId?: string, page: BackmarkPageOptions = {}) {
+  return generatedApi.listBackmarkBatches({ query: { exam_id: examId, question_id: questionId, ...page } });
 }
 
-export function getBackmarkBatch(batchId: string) {
-  return generatedApi.getBackmarkBatch({ path: { batchId } });
+export function getBackmarkBatch(batchId: string, page: BackmarkPageOptions = {}) {
+  return generatedApi.getBackmarkBatch({ path: { batchId }, query: page });
 }
 
 export function previewBackmarkBatchRegrade(batchId: string, payload: BackmarkRegradeInput): Promise<{ preview: RegradePreview }> {
@@ -46,8 +51,8 @@ export function createBackmarkBatchRegradeJob(batchId: string, payload: Backmark
   return generatedApi.createBackmarkBatchRegradeJob({ path: { batchId }, body: payload });
 }
 
-export function listMyBackmarkItems() {
-  return generatedApi.listMyBackmarkItems();
+export function listMyBackmarkItems(page: BackmarkPageOptions = {}) {
+  return generatedApi.listMyBackmarkItems({ query: page });
 }
 
 export function claimBackmarkItem(itemId: string) {

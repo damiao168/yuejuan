@@ -6,6 +6,13 @@ from typing import Any
 from urllib import error, request
 from urllib.parse import urlsplit
 
+from edugrade_worker_runtime import (
+    MAX_DOCUMENT_RESPONSE_BYTES,
+    ResponseValidationError,
+    read_bounded,
+    read_json_response,
+)
+
 PAPER_IMPORT_COMPLETION_TIMEOUT_SECONDS = 720
 
 
@@ -251,12 +258,12 @@ class EduGradeClient:
         req = self._build_request("GET", url, None, tenant_id=tenant_id)
         try:
             with request.urlopen(req, timeout=60) as response:
-                return response.read()
+                return read_bounded(response, MAX_DOCUMENT_RESPONSE_BYTES)
         except error.HTTPError as exc:
             if exc.code == 401:
                 raise AuthenticationError(f"download unauthorized: {exc.code}") from exc
             raise APIError(f"download failed: {exc.code}", status_code=exc.code) from exc
-        except OSError as exc:
+        except (OSError, ResponseValidationError) as exc:
             raise APIError("download failed") from exc
 
     def _request(
@@ -277,12 +284,12 @@ class EduGradeClient:
         )
         try:
             with request.urlopen(req, timeout=timeout) as response:
-                raw = response.read()
+                raw = read_json_response(response)
         except error.HTTPError as exc:
             if exc.code == 401:
                 raise AuthenticationError(f"unauthorized: {exc.code}") from exc
             raise APIError(f"api request failed: {exc.code}", status_code=exc.code) from exc
-        except OSError as exc:
+        except (OSError, ResponseValidationError) as exc:
             raise APIError("api request failed") from exc
         if not raw:
             return {}

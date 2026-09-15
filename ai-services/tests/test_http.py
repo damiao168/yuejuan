@@ -31,6 +31,11 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(health["mode"], "shadow")
         self.assertEqual(ready["status"], "ready")
 
+        with urlrequest.urlopen(f"{self.base_url}/ready", timeout=2) as response:
+            repeated = json.loads(response.read())
+        self.assertEqual(repeated["status"], "ready")
+        self.assertEqual(self.app.model.ready_calls, 1)
+
     def test_grade_requires_service_auth_and_idempotency(self):
         body = json.dumps(valid_request(), ensure_ascii=False).encode("utf-8")
         unauthorized = urlrequest.Request(

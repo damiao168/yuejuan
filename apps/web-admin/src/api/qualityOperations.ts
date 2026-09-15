@@ -25,6 +25,6 @@ export function putSeedPolicy(examId: string, questionId: string, body: Omit<See
   });
 }
 
-export function listBackmarkBatches(examId: string) {
-  return listGeneratedBackmarkBatches(examId);
+export function listBackmarkBatches(examId: string, cursor?: string) {
+  return listGeneratedBackmarkBatches(examId, undefined, { limit: 50, cursor });
 }

@@ -39,6 +39,8 @@ production-like 环境必须同时满足：
 - `EDUGRADE_POSTGRES_TENANT_RLS=true`
 - API 使用独立的 `EDUGRADE_POSTGRES_APP_USER` 与 `EDUGRADE_POSTGRES_DSN`；迁移专用账号只出现在 `EDUGRADE_POSTGRES_ADMIN_DSN`，两者不得相同；迁移账号必须具备角色管理能力，或由托管数据库管理员预先完成等价授权
 - PostgreSQL 使用非示例凭据，DSN 不得包含 `sslmode=disable`
+- Redis 使用独立 ACL 用户与非示例密码，并设置 `EDUGRADE_REDIS_TLS_ENABLED=true`；服务证书和 API 信任的 CA 按 Compose 部署说明挂载
+- API Gateway 到 Worker/Grading Agent/数学验证及远端模型的非 loopback 链路使用内部 CA 验证的 HTTPS；API 的 Worker 专用 TLS 监听、三个服务端证书和内部健康 URL 均已配置
 - MinIO 使用非示例 access key/secret
 - CORS 不包含 localhost/127.0.0.1
 - `.env.example` 列出的运行时镜像与构建基础镜像全部使用 `repository@sha256:<digest>`，应用镜像 digest 与发布证据一致

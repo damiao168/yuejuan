@@ -8166,6 +8166,12 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
           }
         ],
         "responses": {
@@ -8199,6 +8205,12 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
           }
         ],
         "responses": {
@@ -8380,6 +8392,14 @@
     "/api/v1/backmark-items/mine": {
       "get": {
         "operationId": "listMyBackmarkItems",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Blind backmark queue",
@@ -26702,11 +26722,19 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "backmark"
+          "backmark",
+          "next_cursor",
+          "has_more"
         ],
         "properties": {
           "backmark": {
             "$ref": "#/components/schemas/BackmarkSummary"
+          },
+          "next_cursor": {
+            "type": "string"
+          },
+          "has_more": {
+            "type": "boolean"
           }
         }
       },
@@ -26730,7 +26758,9 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "backmark_batches"
+          "backmark_batches",
+          "next_cursor",
+          "has_more"
         ],
         "properties": {
           "backmark_batches": {
@@ -26738,6 +26768,12 @@
             "items": {
               "$ref": "#/components/schemas/BackmarkBatch"
             }
+          },
+          "next_cursor": {
+            "type": "string"
+          },
+          "has_more": {
+            "type": "boolean"
           }
         }
       },
@@ -26790,7 +26826,9 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "backmark_items"
+          "backmark_items",
+          "next_cursor",
+          "has_more"
         ],
         "properties": {
           "backmark_items": {
@@ -26798,6 +26836,12 @@
             "items": {
               "$ref": "#/components/schemas/BackmarkGraderItem"
             }
+          },
+          "next_cursor": {
+            "type": "string"
+          },
+          "has_more": {
+            "type": "boolean"
           }
         }
       },

@@ -1028,6 +1028,32 @@ func TestLoginStoreFailureReturnsUnavailableWithoutRateLimiting(t *testing.T) {
 	}
 }
 
+func TestLoginFailsClosedWhenDistributedLimiterIsDegraded(t *testing.T) {
+	handler := auth.NewHandler(newTestStore(t), time.Hour, auth.HandlerOptions{
+		LoginGuard:             degradedLoginGuard{},
+		LoginLimiterFailClosed: true,
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"tenant_code":"demo","username":"teacher","password":"ChangeMe123!"}`))
+	response := httptest.NewRecorder()
+
+	handler.Login(response, request)
+
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("X-EduGrade-Error-Code") != "auth_rate_limiter_unavailable" {
+		t.Fatalf("degraded limiter must fail closed, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
+type degradedLoginGuard struct{}
+
+func (degradedLoginGuard) Check(context.Context, auth.LoginAttempt, time.Time) (auth.LoginLimit, bool) {
+	return auth.LoginLimit{}, false
+}
+func (degradedLoginGuard) RegisterFailure(context.Context, auth.LoginAttempt, time.Time) (auth.LoginLimit, bool) {
+	return auth.LoginLimit{}, false
+}
+func (degradedLoginGuard) RegisterSuccess(context.Context, auth.LoginAttempt) {}
+func (degradedLoginGuard) Degraded() bool                                     { return true }
+
 type loginErrorStore struct {
 	auth.Store
 	err error

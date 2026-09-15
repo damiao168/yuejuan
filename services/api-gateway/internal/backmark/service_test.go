@@ -3,12 +3,59 @@ package backmark
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"edugrade-enterprise/services/api-gateway/internal/paper"
 	"edugrade-enterprise/services/api-gateway/internal/review"
 )
+
+func TestBackmarkListsAreCursorPaginated(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, 8, 14, 9, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	for index := 0; index < DefaultPageSize+5; index++ {
+		id := fmt.Sprintf("task-%03d", index)
+		store.SeedSource(SourceTask{ReviewTaskID: id, OriginalGradeID: "grade-" + id, OriginalReviewer: "grader-a", OriginalScore: 1, MaxScore: 2, GradedAt: now})
+	}
+	service := NewService(store)
+	summary, err := service.Create(context.Background(), "tenant-1", "exam-1", "question-1", "manager-1", CreateInput{
+		SourceIncidentID: "incident-page", ReassignedTo: "grader-b", Policy: Policy{Disposition: DispositionConfirm},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Get(context.Background(), "tenant-1", summary.Batch.ID)
+	if err != nil || len(first.Items) != DefaultPageSize {
+		t.Fatalf("first page items=%d err=%v", len(first.Items), err)
+	}
+	last := first.Items[len(first.Items)-1]
+	second, err := service.GetPage(context.Background(), "tenant-1", summary.Batch.ID, PageOptions{
+		Limit: DefaultPageSize, CursorCreatedAt: last.CreatedAt, CursorID: last.ID,
+	})
+	if err != nil || len(second.Items) != 5 {
+		t.Fatalf("second page items=%d err=%v", len(second.Items), err)
+	}
+	if second.Items[0].ID == first.Items[0].ID {
+		t.Fatal("cursor page repeated an item")
+	}
+	assigned, err := service.ListAssigned(context.Background(), "tenant-1", "grader-b")
+	if err != nil || len(assigned) != DefaultPageSize {
+		t.Fatalf("assigned first page items=%d err=%v", len(assigned), err)
+	}
+}
+
+func TestBackmarkRejectsOversizedExplicitSelector(t *testing.T) {
+	ids := make([]string, MaxSelectorTaskIDs+1)
+	for index := range ids {
+		ids[index] = fmt.Sprintf("task-%d", index)
+	}
+	_, err := NewService(NewMemoryStore()).Preview(context.Background(), "tenant-1", "exam-1", "question-1", Selector{TaskIDs: ids})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("oversized selector error=%v", err)
+	}
+}
 
 func TestBackmarkSeparatesCandidateGradeFromOriginalFact(t *testing.T) {
 	store := NewMemoryStore()
@@ -45,7 +92,7 @@ func TestBackmarkSeparatesCandidateGradeFromOriginalFact(t *testing.T) {
 	}
 	// The original source remains an immutable selection fact; only a separate
 	// backmark_grade is written until an explicit later regrade/release path.
-	selected, err := store.SelectSourceTasks(context.Background(), "tenant-1", "exam-1", "question-1", Selector{TaskIDs: []string{"task-1"}})
+	selected, err := store.SelectSourceTasks(context.Background(), "tenant-1", "exam-1", "question-1", Selector{TaskIDs: []string{"task-1"}}, MaxSynchronousItems)
 	if err != nil || selected[0].OriginalGradeID != "grade-1" || selected[0].OriginalScore != 4 {
 		t.Fatalf("source fact mutated: %#v, %v", selected, err)
 	}

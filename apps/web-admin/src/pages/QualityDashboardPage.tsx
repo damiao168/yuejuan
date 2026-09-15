@@ -41,11 +41,13 @@ export function QualityDashboardPage({ examId, canManage = false }: { examId: st
   const [seedPolicy, setSeedPolicy] = useState<SeedPolicy>();
   const [seedLoading, setSeedLoading] = useState(false);
   const [backmarkBatches, setBackmarkBatches] = useState<BackmarkBatch[]>([]);
+  const [backmarkBatchesNextCursor, setBackmarkBatchesNextCursor] = useState("");
   const [backmarkLoading, setBackmarkLoading] = useState(false);
   const [backmarkQuestionId, setBackmarkQuestionId] = useState("");
   const [backmarkPreview, setBackmarkPreview] = useState<BackmarkPreview>();
   const [backmarkReviewers, setBackmarkReviewers] = useState<ManagedUser[]>([]);
   const [backmarkSummary, setBackmarkSummary] = useState<BackmarkSummary>();
+  const [backmarkSummaryNextCursor, setBackmarkSummaryNextCursor] = useState("");
   const [backmarkSummaryOpen, setBackmarkSummaryOpen] = useState(false);
   const [backmarkRegradePreview, setBackmarkRegradePreview] = useState<RegradePreview>();
   const [backmarkRegradeAssignee, setBackmarkRegradeAssignee] = useState("");
@@ -137,6 +139,7 @@ export function QualityDashboardPage({ examId, canManage = false }: { examId: st
     void Promise.all([listBackmarkBatches(examId), listManagedUsers({ limit: 200 })])
       .then(([response, users]) => {
         setBackmarkBatches(response.backmark_batches);
+        setBackmarkBatchesNextCursor(response.has_more ? response.next_cursor : "");
         setBackmarkReviewers(users.users.filter((user) => user.status === "active" && user.roles.includes("grader")));
         const questionId = backmarkQuestionId || data.questions[0]?.question.id || "";
         setBackmarkQuestionId(questionId);
@@ -144,6 +147,19 @@ export function QualityDashboardPage({ examId, canManage = false }: { examId: st
       })
       .catch((reason) => message.error(errorMessage(reason)))
       .finally(() => setBackmarkLoading(false));
+  };
+  const loadMoreBackmarkBatches = async () => {
+    if (!backmarkBatchesNextCursor) return;
+    setBackmarkLoading(true);
+    try {
+      const response = await listBackmarkBatches(examId, backmarkBatchesNextCursor);
+      setBackmarkBatches((current) => [...current, ...response.backmark_batches]);
+      setBackmarkBatchesNextCursor(response.has_more ? response.next_cursor : "");
+    } catch (reason) {
+      message.error(errorMessage(reason));
+    } finally {
+      setBackmarkLoading(false);
+    }
   };
   const selectorFromForm = (values: ReturnType<typeof backmarkForm.getFieldsValue>): BackmarkSelector => ({
     time_range: values.date_range ? { from: values.date_range[0].startOf("day").toISOString(), to: values.date_range[1].endOf("day").toISOString() } : undefined,
@@ -237,12 +253,27 @@ export function QualityDashboardPage({ examId, canManage = false }: { examId: st
         listManagedUsers({ limit: 200 })
       ]);
       setBackmarkSummary(summaryResponse.backmark);
+      setBackmarkSummaryNextCursor(summaryResponse.has_more ? summaryResponse.next_cursor : "");
       const published = releasesResponse.score_releases.filter((release) => release.status === "published");
       setBackmarkRegradeReleases(published);
       setBackmarkRegradeReleaseID(published[0]?.id ?? "");
       const graders = usersResponse.users.filter((user) => user.status === "active" && user.roles.includes("grader"));
       setBackmarkReviewers(graders);
       setBackmarkRegradeAssignee(graders[0]?.id ?? "");
+    } catch (reason) {
+      message.error(errorMessage(reason));
+    } finally {
+      setBackmarkRegradeLoading(false);
+    }
+  };
+
+  const loadMoreBackmarkSummary = async () => {
+    if (!backmarkSummary || !backmarkSummaryNextCursor) return;
+    setBackmarkRegradeLoading(true);
+    try {
+      const response = await getBackmarkBatch(backmarkSummary.batch.id, { limit: 50, cursor: backmarkSummaryNextCursor });
+      setBackmarkSummary((current) => current ? { ...response.backmark, items: [...current.items, ...response.backmark.items] } : response.backmark);
+      setBackmarkSummaryNextCursor(response.has_more ? response.next_cursor : "");
     } catch (reason) {
       message.error(errorMessage(reason));
     } finally {
@@ -381,7 +412,7 @@ export function QualityDashboardPage({ examId, canManage = false }: { examId: st
         </Form>
         <Alert type="info" showIcon message="盲测题通过正常阅卷入口呈现；阅卷员不会看到标准卷答案或参考分。" />
       </Drawer>
-      <Drawer title="创建回标批次" width={720} open={backmarkOpen} onClose={() => setBackmarkOpen(false)} extra={<Button icon={<RefreshCw size={15} />} loading={backmarkLoading} onClick={openBackmark}>刷新</Button>}>
+      <Drawer title="创建回标批次" width={720} open={backmarkOpen} onClose={() => setBackmarkOpen(false)} extra={<Button icon={<RefreshCw size={15} />} loading={backmarkLoading} onClick={() => openBackmark()}>刷新</Button>}>
         <Alert type="info" showIcon message="独立回标不会直接改分" description="先确认影响范围，再分配给非原阅卷人独立评分；差异只进入后续仲裁或重评流程。" />
         <Form form={backmarkForm} layout="vertical" disabled={backmarkLoading} initialValues={{ disposition: "arbitrate", arbitration_delta: 1 }}>
           <Form.Item name="question_id" label="题目" rules={[{ required: true, message: "请选择题目" }]}><Select options={data.questions.map((item) => ({ value: item.question.id, label: `${item.question.question_no} · ${item.question.archetype_code || "未配置"}` }))} onChange={() => setBackmarkPreview(undefined)} /></Form.Item>
@@ -404,7 +435,7 @@ export function QualityDashboardPage({ examId, canManage = false }: { examId: st
         </Form>
         <Space><Button onClick={() => setBackmarkOpen(false)}>取消</Button><Button type="primary" disabled={!backmarkPreview?.affected_count} loading={backmarkLoading} onClick={() => void createBackmark()}>创建并分配回标</Button></Space>
         <div className="section-header backmark-batch-history"><div><h3>已有回标批次</h3></div></div>
-        <Table rowKey="id" loading={backmarkLoading} pagination={false} dataSource={backmarkBatches} columns={[
+        <Table rowKey="id" loading={backmarkLoading} pagination={false} dataSource={backmarkBatches} footer={backmarkBatchesNextCursor ? () => <Button block loading={backmarkLoading} onClick={() => void loadMoreBackmarkBatches()}>加载更多批次</Button> : undefined} columns={[
           { title: "批次", dataIndex: "id", ellipsis: true },
           { title: "题目", dataIndex: "question_id", ellipsis: true },
           { title: "影响答卷", dataIndex: "affected_count" },
@@ -435,6 +466,7 @@ export function QualityDashboardPage({ examId, canManage = false }: { examId: st
             { title: "分差", dataIndex: "diff", render: (value?: number) => value === undefined ? "-" : `${value > 0 ? "+" : ""}${value}` },
             { title: "状态", dataIndex: "status", render: () => <Tag color="error">需重评</Tag> }
           ]} locale={{ emptyText: "没有需要题目复评的严重差异" }} />
+          {backmarkSummaryNextCursor ? <Button block loading={backmarkRegradeLoading} onClick={() => void loadMoreBackmarkSummary()}>加载更多回标结果</Button> : null}
           {canManage && hasRegradeCandidates ? <>
             <div className="section-header backmark-batch-history"><div><h3>转入题目复评</h3><p>系统将从已发布成绩版本重新冻结本批次对应的学生范围；不会直接采用回标候选分。</p></div></div>
             {backmarkSummary.batch.status !== "ready_for_confirmation" ? <Alert type="warning" showIcon message="回标批次尚未完成" description="请等待所有回标项结束，再创建稳定的复评范围。" /> : <>

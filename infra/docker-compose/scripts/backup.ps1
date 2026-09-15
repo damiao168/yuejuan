@@ -61,7 +61,7 @@ try {
 
   New-Item -ItemType Directory -Force -Path (Join-Path $backupDir "minio-$stamp") | Out-Null
   $backupMount = (Resolve-Path $backupDir).Path
-  $minioScript = 'mc alias set edugrade http://minio:9000 "$EDUGRADE_MINIO_ACCESS_KEY" "$EDUGRADE_MINIO_SECRET_KEY"; mc mirror --overwrite "edugrade/$EDUGRADE_FILE_BUCKET" "/backup/minio-{0}"' -f $stamp
+  $minioScript = 'scheme=http; if [ "$EDUGRADE_MINIO_USE_SSL" = "true" ]; then scheme=https; fi; mc alias set edugrade "$scheme://minio:9000" "$EDUGRADE_MINIO_ROOT_USER" "$EDUGRADE_MINIO_ROOT_PASSWORD"; mc mirror --overwrite "edugrade/$EDUGRADE_FILE_BUCKET" "/backup/minio-{0}"' -f $stamp
   & docker compose --env-file $envPath -f $composePath --profile tools run --rm -v "${backupMount}:/backup" --entrypoint /bin/sh minio-init -ec $minioScript
   if ($LASTEXITCODE -ne 0) { throw "MinIO backup failed." }
 

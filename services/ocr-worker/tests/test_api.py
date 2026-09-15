@@ -10,14 +10,17 @@ from ocr_worker.api import (
 
 
 class FakeResponse:
+    def __init__(self):
+        self.headers = {"Content-Type": "application/json"}
+
     def __enter__(self):
         return self
 
     def __exit__(self, _exc_type, _exc, _traceback):
         return None
 
-    def read(self):
-        return b"{}"
+    def read(self, amount=-1):
+        return b"{}"[:amount]
 
 
 class APITests(unittest.TestCase):

@@ -5,7 +5,7 @@ import os
 import socket
 from dataclasses import dataclass
 
-from edugrade_worker_runtime import validate_lease_timing
+from edugrade_worker_runtime import validate_lease_timing, validate_service_url
 
 
 @dataclass(frozen=True)
@@ -25,8 +25,7 @@ class Config:
     heartbeat_timeout: float = 10.0
 
     def __post_init__(self) -> None:
-        if not self.base_url.startswith(("http://", "https://")):
-            raise ValueError("base_url must use http or https")
+        validate_service_url("EDUGRADE_API_BASE_URL", self.base_url, os.getenv("EDUGRADE_ENV", "development"))
         if not self.tenant_code.strip() or not self.worker_id.strip():
             raise ValueError("tenant_code and worker_id must not be empty")
         # A heartbeat starts only when a task is processed. Claiming multiple

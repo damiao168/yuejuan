@@ -8,6 +8,8 @@ import ssl
 from dataclasses import replace
 from urllib.parse import urlsplit
 
+from edugrade_worker_runtime import ResponseValidationError, read_json_response
+
 from .errors import AgentError
 from .model import DashScopeNativeAdapter, LocalLlamaCppAdapter
 
@@ -47,9 +49,10 @@ def public_json_transport(url, payload, headers, timeout):
         if not 200 <= response.status < 300:
             code = "model_auth_failed" if response.status in {401, 403} else "model_rate_limited" if response.status == 429 else "model_request_rejected"
             raise AgentError(code, f"provider returned HTTP {response.status}", status=502)
-        raw = response.read(4_000_001)
-        if len(raw) > 4_000_000:
-            raise AgentError("model_output_invalid", "provider response is too large", status=502)
+        try:
+            raw = read_json_response(response, 4_000_000)
+        except ResponseValidationError as exc:
+            raise AgentError("model_output_invalid", "provider response is invalid", status=502) from exc
         return json.loads(raw)
     finally:
         connection.close()

@@ -4,7 +4,7 @@ import math
 import os
 from dataclasses import dataclass
 
-from edugrade_worker_runtime import validate_lease_timing
+from edugrade_worker_runtime import validate_lease_timing, validate_service_url
 
 from .deployment_profile import FormulaRuntimePlan, resolve_formula_runtime_plan
 
@@ -105,8 +105,8 @@ def load_settings() -> Settings:
 
 
 def _validate_settings(settings: Settings) -> None:
-    if not settings.api_base_url.startswith(("http://", "https://")):
-        raise ValueError("EDUGRADE_API_BASE_URL must use http or https")
+    environment = os.environ.get("EDUGRADE_ENV", "development")
+    validate_service_url("EDUGRADE_API_BASE_URL", settings.api_base_url, environment)
     for name, value in (
         ("EDUGRADE_OCR_WORKER_TENANT_CODE", settings.tenant_code),
         ("EDUGRADE_OCR_WORKER_USERNAME", settings.username),
@@ -155,8 +155,7 @@ def _validate_settings(settings: Settings) -> None:
     if not settings.ocr_runtime_enabled and not settings.math_runtime_enabled and not settings.paper_formula_runtime_enabled:
         raise ValueError("at least one OCR worker runtime must be enabled")
     if settings.math_runtime_enabled:
-        if not settings.math_verify_base_url.startswith(("http://", "https://")):
-            raise ValueError("EDUGRADE_MATH_VERIFY_BASE_URL must use http or https")
+        validate_service_url("EDUGRADE_MATH_VERIFY_BASE_URL", settings.math_verify_base_url, environment)
         if len(settings.math_verify_token) < 32:
             raise ValueError("EDUGRADE_MATH_VERIFY_TOKEN must contain at least 32 characters")
         if settings.formula_model_version not in {"PP-FormulaNet_plus-M", "PP-FormulaNet_plus-L"}:

@@ -4,7 +4,25 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
+
+func TestRedisLoginLimiterReportsDegradedState(t *testing.T) {
+	client := redis.NewClient(&redis.Options{
+		Addr:        "127.0.0.1:1",
+		DialTimeout: 20 * time.Millisecond,
+		ReadTimeout: 20 * time.Millisecond,
+	})
+	defer client.Close()
+	guard := NewRedisLoginAttemptGuard(client, 2, time.Minute)
+
+	guard.Check(context.Background(), LoginAttempt{TenantCode: "demo", Identifier: "teacher", IPAddress: "127.0.0.1"}, time.Now())
+
+	if !guard.Degraded() {
+		t.Fatal("Redis failure must mark distributed login limiting as degraded")
+	}
+}
 
 func TestLayeredLoginLimiterBlocksDistributedAttackAgainstAccount(t *testing.T) {
 	guard := NewLayeredLoginAttemptGuard(

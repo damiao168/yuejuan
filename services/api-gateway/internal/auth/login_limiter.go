@@ -34,14 +34,35 @@ type LoginAttemptGuard interface {
 	RegisterSuccess(ctx context.Context, attempt LoginAttempt)
 }
 
+type LoginLimiterStatus interface {
+	Degraded() bool
+}
+
+type LoginLimiterProber interface {
+	Probe(context.Context) error
+}
+
 type LayeredLoginAttemptGuard struct {
-	account LoginLimiter
-	source  LoginLimiter
-	pair    LoginLimiter
+	account  LoginLimiter
+	source   LoginLimiter
+	pair     LoginLimiter
+	degraded func() bool
+	probe    func(context.Context) error
 }
 
 func NewLayeredLoginAttemptGuard(account, source, pair LoginLimiter) *LayeredLoginAttemptGuard {
 	return &LayeredLoginAttemptGuard{account: account, source: source, pair: pair}
+}
+
+func (l *LayeredLoginAttemptGuard) Degraded() bool {
+	return l != nil && l.degraded != nil && l.degraded()
+}
+
+func (l *LayeredLoginAttemptGuard) Probe(ctx context.Context) error {
+	if l != nil && l.probe != nil {
+		return l.probe(ctx)
+	}
+	return nil
 }
 
 func NewMemoryLoginAttemptGuard(limit int, window time.Duration) *LayeredLoginAttemptGuard {

@@ -82,8 +82,8 @@ services:
   minio-init:
     image: ${EDUGRADE_MINIO_MC_IMAGE:-quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z}
     environment:
-      EDUGRADE_MINIO_ACCESS_KEY: story056e2e
-      EDUGRADE_MINIO_SECRET_KEY: story056_e2e_minio_only_secret
+      EDUGRADE_MINIO_APP_ACCESS_KEY: story056e2e
+      EDUGRADE_MINIO_APP_SECRET_KEY: story056_e2e_minio_only_secret
       EDUGRADE_FILE_BUCKET: story056-e2e-files
     depends_on:
       minio:
@@ -91,7 +91,7 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        mc alias set e2e http://minio:9000 "$${EDUGRADE_MINIO_ACCESS_KEY}" "$${EDUGRADE_MINIO_SECRET_KEY}"
+        mc alias set e2e http://minio:9000 "$${EDUGRADE_MINIO_APP_ACCESS_KEY}" "$${EDUGRADE_MINIO_APP_SECRET_KEY}"
         mc mb --ignore-existing "e2e/$${EDUGRADE_FILE_BUCKET}"
         mc anonymous set none "e2e/$${EDUGRADE_FILE_BUCKET}"
     restart: "no"
@@ -105,8 +105,8 @@ services:
       EDUGRADE_ENV: test
       EDUGRADE_LOG_LEVEL: error
       EDUGRADE_POSTGRES_DSN: postgres://edugrade:story056_e2e_postgres_only@postgres:5432/edugrade?sslmode=disable
-      EDUGRADE_MINIO_ACCESS_KEY: story056e2e
-      EDUGRADE_MINIO_SECRET_KEY: story056_e2e_minio_only_secret
+      EDUGRADE_MINIO_APP_ACCESS_KEY: story056e2e
+      EDUGRADE_MINIO_APP_SECRET_KEY: story056_e2e_minio_only_secret
       EDUGRADE_BOOTSTRAP_TENANT_CODE: platform
       EDUGRADE_BOOTSTRAP_ROLE_CODE: platform_admin
       EDUGRADE_BOOTSTRAP_USERNAME: platform_admin
@@ -135,8 +135,8 @@ services:
       EDUGRADE_REDIS_PASSWORD: ""
       EDUGRADE_REDIS_DB: "0"
       EDUGRADE_MINIO_ENDPOINT: minio:9000
-      EDUGRADE_MINIO_ACCESS_KEY: story056e2e
-      EDUGRADE_MINIO_SECRET_KEY: story056_e2e_minio_only_secret
+      EDUGRADE_MINIO_APP_ACCESS_KEY: story056e2e
+      EDUGRADE_MINIO_APP_SECRET_KEY: story056_e2e_minio_only_secret
       EDUGRADE_MINIO_USE_SSL: "false"
       EDUGRADE_FILE_BUCKET: story056-e2e-files
       EDUGRADE_FILE_MAX_UPLOAD_BYTES: "10485760"

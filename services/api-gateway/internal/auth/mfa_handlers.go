@@ -76,7 +76,11 @@ func (h *Handler) mfaLimit(w http.ResponseWriter, r *http.Request, limit LoginLi
 }
 
 func (h *Handler) mfaGuard(w http.ResponseWriter, r *http.Request, user User) bool {
-	if limit, blocked := h.loginGuard.Check(r.Context(), h.mfaAttempt(user, r), time.Now().UTC()); blocked {
+	limit, blocked := h.loginGuard.Check(r.Context(), h.mfaAttempt(user, r), time.Now().UTC())
+	if !h.loginLimiterAvailable(w, r) {
+		return false
+	}
+	if blocked {
 		h.mfaLimit(w, r, limit)
 		return false
 	}
@@ -89,7 +93,11 @@ func (h *Handler) mfaFailure(w http.ResponseWriter, r *http.Request, user User, 
 		return
 	}
 	h.mfaAudit(r, user, "auth.mfa_verification_failed", "")
-	if limit, blocked := h.loginGuard.RegisterFailure(r.Context(), h.mfaAttempt(user, r), time.Now().UTC()); blocked {
+	limit, blocked := h.loginGuard.RegisterFailure(r.Context(), h.mfaAttempt(user, r), time.Now().UTC())
+	if !h.loginLimiterAvailable(w, r) {
+		return
+	}
+	if blocked {
 		h.mfaLimit(w, r, limit)
 		return
 	}

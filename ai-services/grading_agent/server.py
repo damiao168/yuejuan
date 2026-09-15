@@ -1,6 +1,8 @@
 import hmac
 import json
+import ssl
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .app import GradingAgentApplication
@@ -17,6 +19,25 @@ class GradingAgentHTTPServer(ThreadingHTTPServer):
     def __init__(self, address, application):
         super().__init__(address, GradingAgentHandler)
         self.application = application
+        self._readiness_stop = threading.Event()
+        self.application.refresh_readiness()
+        self._readiness_thread = threading.Thread(
+            target=self._refresh_readiness,
+            name="grading-agent-readiness",
+            daemon=True,
+        )
+        self._readiness_thread.start()
+
+    def _refresh_readiness(self):
+        interval = self.application.settings.model_readiness_cache_seconds
+        while not self._readiness_stop.wait(interval):
+            self.application.refresh_readiness()
+
+    def server_close(self):
+        self._readiness_stop.set()
+        if self._readiness_thread is not threading.current_thread():
+            self._readiness_thread.join(timeout=1)
+        super().server_close()
 
 
 class GradingAgentHandler(BaseHTTPRequestHandler):
@@ -208,4 +229,9 @@ def serve(settings=None):
     settings = settings or Settings.from_env()
     application = GradingAgentApplication(settings)
     server = GradingAgentHTTPServer((settings.host, settings.port), application)
+    if settings.tls_cert_file:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(settings.tls_cert_file, settings.tls_key_file)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
     server.serve_forever()

@@ -47,7 +47,7 @@ try {
   }
 
   $backupObjectCount = @(Get-ChildItem -LiteralPath $minioPath -File -Recurse).Count
-  $minioScript = 'mc alias set edugrade http://minio:9000 "$EDUGRADE_MINIO_ACCESS_KEY" "$EDUGRADE_MINIO_SECRET_KEY" >/dev/null; mc find "edugrade/{0}" --type f | wc -l' -f $targetBucket
+  $minioScript = 'scheme=http; if [ "$EDUGRADE_MINIO_USE_SSL" = "true" ]; then scheme=https; fi; mc alias set edugrade "$scheme://minio:9000" "$EDUGRADE_MINIO_ROOT_USER" "$EDUGRADE_MINIO_ROOT_PASSWORD" >/dev/null; mc find "edugrade/{0}" --type f | wc -l' -f $targetBucket
   $restoredObjectCount = (& docker compose --env-file $envPath -f $composePath --profile tools run --rm --entrypoint /bin/sh minio-init -ec $minioScript | Select-Object -Last 1).Trim()
   if ($LASTEXITCODE -ne 0 -or [int]$restoredObjectCount -ne $backupObjectCount) { throw "Restore drill MinIO object count validation failed." }
 
@@ -66,7 +66,7 @@ try {
       & docker compose --env-file $envPath -f $composePath exec -T postgres dropdb -U $postgresUser --if-exists $targetDatabase | Out-Null
     }
     if ($targetBucket -match '^edugrade-restore-drill-[a-f0-9]{12}$') {
-      $cleanupScript = 'mc alias set edugrade http://minio:9000 "$EDUGRADE_MINIO_ACCESS_KEY" "$EDUGRADE_MINIO_SECRET_KEY" >/dev/null; mc rb --force "edugrade/{0}"' -f $targetBucket
+      $cleanupScript = 'scheme=http; if [ "$EDUGRADE_MINIO_USE_SSL" = "true" ]; then scheme=https; fi; mc alias set edugrade "$scheme://minio:9000" "$EDUGRADE_MINIO_ROOT_USER" "$EDUGRADE_MINIO_ROOT_PASSWORD" >/dev/null; mc rb --force "edugrade/{0}"' -f $targetBucket
       & docker compose --env-file $envPath -f $composePath --profile tools run --rm --entrypoint /bin/sh minio-init -ec $cleanupScript | Out-Null
     }
   }
